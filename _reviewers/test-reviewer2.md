@@ -5,6 +5,7 @@ repository: "langchain-ai/langchain"
 label: "Error handling"
 language: "Python"
 comments_count: 325
+repository_stars: 10
 ---
 
 Choose log levels based on event frequency and operational impact, not just severity.

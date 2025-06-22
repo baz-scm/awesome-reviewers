@@ -19,15 +19,22 @@ module Jekyll
     private
 
     def read_reviewers(site, reviewers_dir)
-      Dir.foreach(reviewers_dir) do |repo_folder|
-        next if repo_folder == '.' || repo_folder == '..'
+      Dir.foreach(reviewers_dir) do |owner_folder|
+        next if owner_folder == '.' || owner_folder == '..'
 
-        repo_path = File.join(reviewers_dir, repo_folder)
-        next unless File.directory?(repo_path)
+        owner_path = File.join(reviewers_dir, owner_folder)
+        next unless File.directory?(owner_path)
 
-        # Process each markdown file in the repository folder
-        Dir.glob(File.join(repo_path, '*.md')).each do |file_path|
-          process_reviewer_file(site, file_path, repo_folder)
+        Dir.foreach(owner_path) do |repo_folder|
+          next if repo_folder == '.' || repo_folder == '..'
+
+          repo_path = File.join(owner_path, repo_folder)
+          next unless File.directory?(repo_path)
+
+          # Process each markdown file in the repository folder
+          Dir.glob(File.join(repo_path, '*.md')).each do |file_path|
+            process_reviewer_file(site, file_path, "#{owner_folder}/#{repo_folder}")
+          end
         end
       end
     end

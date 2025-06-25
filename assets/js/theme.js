@@ -5,12 +5,10 @@ function setTheme(theme){
   light.classList.remove('active');
   dark.classList.remove('active');
   if(theme==='light'){
-    html.classList.remove('theme-dark');
-    html.classList.add('theme-light');
+    html.classList.remove('dark-mode');
     light.classList.add('active');
   }else{
-    html.classList.remove('theme-light');
-    html.classList.add('theme-dark');
+    html.classList.add('dark-mode');
     dark.classList.add('active');
   }
   localStorage.setItem('theme',theme);

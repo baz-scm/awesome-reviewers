@@ -2,10 +2,10 @@
 title: "Choose optimal data structures"
 description: "Select data structures based on their performance characteristics and actual usage patterns. When implementing algorithms, consider usage patterns, understand API differences, and match data structures to access patterns."
 repository: "vercel/next.js"
-label: "algorithms"
+label: "Algorithms"
 language: "Rust"
 comments_count: 2
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 Select data structures based on their performance characteristics and actual usage patterns. When implementing algorithms:

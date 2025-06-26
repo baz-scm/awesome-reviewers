@@ -2,10 +2,10 @@
 title: "Proper panic chains"
 description: "When implementing panic handlers, follow these critical practices to ensure robust error handling: register panic handlers early, chain new handlers with existing ones, and use appropriate error type downcasting methods."
 repository: "vercel/next.js"
-label: "error handling"
+label: "Error Handling"
 language: "Rust"
 comments_count: 2
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 When implementing panic handlers, follow these critical practices to ensure robust error handling:

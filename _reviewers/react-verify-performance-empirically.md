@@ -2,10 +2,10 @@
 title: "Verify performance empirically"
 description: "Always validate performance optimizations through measurement rather than assumptions. Run multiple iterations of performance tests to ensure statistical significance and reduce noise in your metrics."
 repository: "facebook/react"
-label: "performance optimization"
+label: "Performance Optimization"
 language: "Typescript"
 comments_count: 3
-repository_stars: 220000
+repository_stars: 237000
 ---
 
 Always validate performance optimizations through measurement rather than assumptions. Run multiple iterations of performance tests to ensure statistical significance and reduce noise in your metrics.

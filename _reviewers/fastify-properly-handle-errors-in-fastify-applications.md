@@ -2,10 +2,10 @@
 title: "Properly Handle Errors in Fastify Applications"
 description: "When implementing error handling in Fastify applications, it is important to always throw instances of the Error class rather than primitive values or non-Error objects. This ensures that errors are properly propagated through the Fastify error handling chain."
 repository: "fastify/fastify"
-label: "fastify"
+label: "Fastify"
 language: "Typescript"
 comments_count: 5
-repository_stars: 30000
+repository_stars: 34000
 ---
 
 When implementing error handling in Fastify applications, it is important to always throw instances of the Error class rather than primitive values or non-Error objects. This ensures that errors are properly propagated through the Fastify error handling chain.

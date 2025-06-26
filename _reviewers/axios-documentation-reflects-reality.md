@@ -2,10 +2,10 @@
 title: "Documentation reflects reality"
 description: "Always ensure documentation accurately represents the actual code behavior and implementation details. Include important contextual information such as platform-specific limitations, explanations for deprecated features with recommended alternatives, precise descriptions of function parameters and behaviors, and concise, merged code examples to demonstrate functionality."
 repository: "axios/axios"
-label: "documentation"
+label: "Documentation"
 language: "Markdown"
 comments_count: 5
-repository_stars: 100000
+repository_stars: 107000
 ---
 
 Always ensure documentation accurately represents the actual code behavior and implementation details. Include important contextual information such as:

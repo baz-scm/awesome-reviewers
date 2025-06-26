@@ -2,10 +2,10 @@
 title: "Implement Distributed Tracing in Axum Applications"
 description: "As an Axum code reviewer, I recommend implementing proper distributed tracing in your Axum-based web applications to ensure observability across service boundaries. Use Axum's built-in middleware layers to consistently instrument your code."
 repository: "tokio-rs/axum"
-label: "axum"
+label: "Axum"
 language: "Typescript"
 comments_count: 2
-repository_stars: 15000
+repository_stars: 22100
 ---
 
 As an Axum code reviewer, I recommend implementing proper distributed tracing in your Axum-based web applications to ensure observability across service boundaries. Use Axum's built-in middleware layers to consistently instrument your code:

@@ -2,10 +2,10 @@
 title: "Proxy protocol handling"
 description: "When implementing HTTP clients with proxy support, ensure the connection to the proxy uses the protocol specified in the proxy configuration (not the request protocol). This is crucial for scenarios like accessing HTTPS resources through an HTTP proxy."
 repository: "axios/axios"
-label: "networking"
+label: "Networking"
 language: "Javascript"
 comments_count: 5
-repository_stars: 100000
+repository_stars: 107000
 ---
 
 When implementing HTTP clients with proxy support, ensure the connection to the proxy uses the protocol specified in the proxy configuration (not the request protocol). This is crucial for scenarios like accessing HTTPS resources through an HTTP proxy.

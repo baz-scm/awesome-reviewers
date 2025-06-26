@@ -2,10 +2,10 @@
 title: "Prefer descriptive over brief"
 description: "Choose clear, descriptive names over abbreviated or shortened versions. Names should be self-documenting and follow Rust conventions. While brevity can be tempting, the clarity and maintainability benefits of descriptive names outweigh the extra characters."
 repository: "tokio-rs/axum"
-label: "naming conventions"
+label: "Naming Conventions"
 language: "Rust"
 comments_count: 5
-repository_stars: 15000
+repository_stars: 22100
 ---
 
 Choose clear, descriptive names over abbreviated or shortened versions. Names should be self-documenting and follow Rust conventions. While brevity can be tempting, the clarity and maintainability benefits of descriptive names outweigh the extra characters.

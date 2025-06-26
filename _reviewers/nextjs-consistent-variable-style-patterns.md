@@ -2,10 +2,10 @@
 title: "Consistent variable style patterns"
 description: "Maintain consistent patterns for variable declarations and naming conventions: use const by default for variable declarations, use clear complete words in variable names instead of abbreviations, and for truthiness checks prefer simple boolean conditions unless explicit null/undefined checks are required."
 repository: "vercel/next.js"
-label: "code style"
+label: "Code Style"
 language: "Typescript"
 comments_count: 3
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 Maintain consistent patterns for variable declarations and naming conventions:

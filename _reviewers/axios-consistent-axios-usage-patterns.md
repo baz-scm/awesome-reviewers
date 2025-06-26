@@ -2,10 +2,10 @@
 title: "Consistent Axios Usage Patterns"
 description: "Maintain consistent usage of the Axios library throughout your Typescript codebase. Pay special attention to consistent error handling, Axios configuration options, Axios request patterns, and Axios response handling."
 repository: "axios/axios"
-label: "axios"
+label: "Axios"
 language: "Typescript"
 comments_count: 2
-repository_stars: 100000
+repository_stars: 107000
 ---
 
 Maintain consistent usage of the Axios library throughout your Typescript codebase. Pay special attention to the following:

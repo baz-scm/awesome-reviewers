@@ -2,10 +2,10 @@
 title: "Maintain Consistent Naming Conventions in Next.js Code"
 description: "As a code reviewer for Next.js projects, ensure that all code artifacts, including component names, file names, and configuration keys, adhere to consistent naming conventions."
 repository: "vercel/next.js"
-label: "next.js"
+label: "Next.js"
 language: "Javascript"
 comments_count: 4
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 As a code reviewer for Next.js projects, ensure that all code artifacts, including component names, file names, and configuration keys, adhere to consistent naming conventions. This helps improve code readability, maintainability, and alignment with the Next.js framework's best practices.

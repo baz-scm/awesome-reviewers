@@ -2,10 +2,10 @@
 title: "Handle protocol headers properly"
 description: "When implementing network services, especially proxies and protocol handlers, proper HTTP header management is critical for correct functionality, compatibility, and diagnostics."
 repository: "tokio-rs/axum"
-label: "networking"
+label: "Networking"
 language: "Rust"
 comments_count: 4
-repository_stars: 15000
+repository_stars: 22100
 ---
 
 When implementing network services, especially proxies and protocol handlers, proper HTTP header management is critical for correct functionality, compatibility, and diagnostics.

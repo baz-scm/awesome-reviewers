@@ -2,10 +2,10 @@
 title: "Lock carefully in async"
 description: "When using locks in async code, follow critical guidelines to avoid deadlocks. Never hold std::sync::Mutex locks across .await points as this can cause deadlocks even in single-threaded runtimes. Use tokio::sync::Mutex when the lock needs to be held across await points."
 repository: "tokio-rs/axum"
-label: "concurrency"
+label: "Concurrency"
 language: "Rust"
 comments_count: 4
-repository_stars: 15000
+repository_stars: 22100
 ---
 
 When using locks in async code, follow these critical guidelines:

@@ -2,10 +2,10 @@
 title: "Consistent method behaviors"
 description: "Design API methods with predictable behavior patterns that follow common conventions. Methods that modify objects directly should not return values unless supporting method chaining. Methods that retrieve or transform data should return new objects without modifying inputs."
 repository: "axios/axios"
-label: "api"
+label: "API"
 language: "Javascript"
 comments_count: 5
-repository_stars: 100000
+repository_stars: 107000
 ---
 
 Design API methods with predictable behavior patterns that follow common conventions. Methods that modify objects directly (`setSth()`) should not return values unless supporting method chaining. Methods that retrieve or transform data (`getSth()`) should return new objects without modifying inputs. Public class interfaces should maintain backward compatibility even if not all functionality is used internally. Ensure method signatures clearly indicate whether they accept request bodies:

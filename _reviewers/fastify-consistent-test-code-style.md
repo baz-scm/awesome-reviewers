@@ -2,10 +2,10 @@
 title: " Consistent test code style"
 description: "Maintain consistent and clear testing patterns by following these guidelines: use strict equality assertions, prefer variable reassignment over block scoping for multiple sequential requests, and maintain consistent formatting to improve code readability and reduce unnecessary indentation."
 repository: "fastify/fastify"
-label: "code style"
+label: "Code Style"
 language: "Javascript"
 comments_count: 6
-repository_stars: 30000
+repository_stars: 34000
 ---
 
 Maintain consistent and clear testing patterns by following these guidelines:

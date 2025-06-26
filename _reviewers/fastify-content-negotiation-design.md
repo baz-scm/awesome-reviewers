@@ -2,10 +2,10 @@
 title: "Content negotiation design"
 description: "When building APIs, implement proper content negotiation to handle various media types in both requests and responses. This ensures your API can work with different client requirements and maintain compatibility with diverse ecosystems."
 repository: "fastify/fastify"
-label: "api"
+label: "API"
 language: "Javascript"
 comments_count: 4
-repository_stars: 30000
+repository_stars: 34000
 ---
 
 When building APIs, implement proper content negotiation to handle various media types in both requests and responses. This ensures your API can work with different client requirements and maintain compatibility with diverse ecosystems.

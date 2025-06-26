@@ -2,10 +2,10 @@
 title: "Optimize Next.js Resource Utilization"
 description: "As a code reviewer, I recommend the following practices to optimize resource utilization when implementing Next.js applications."
 repository: "vercel/next.js"
-label: "next.js"
+label: "Next.js"
 language: "Javascript"
 comments_count: 5
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 As a code reviewer, I recommend the following practices to optimize resource utilization when implementing Next.js applications:

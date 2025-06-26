@@ -2,10 +2,10 @@
 title: "Configuration property standards"
 description: "Always define configuration properties with sensible defaults and consistent naming conventions. When adding new configurable features, establish clear defaults that follow platform conventions and document their purpose."
 repository: "axios/axios"
-label: "configurations"
+label: "Configurations"
 language: "Javascript"
 comments_count: 3
-repository_stars: 100000
+repository_stars: 107000
 ---
 
 Always define configuration properties with sensible defaults and consistent naming conventions. When adding new configurable features, establish clear defaults that follow platform conventions and document their purpose.

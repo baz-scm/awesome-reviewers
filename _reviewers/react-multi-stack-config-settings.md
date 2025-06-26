@@ -2,10 +2,10 @@
 title: "Multi-stack config settings"
 description: "When creating configuration files for development environments that use multiple technology stacks, ensure settings are properly scoped to accommodate different file types and tools within the same project."
 repository: "facebook/react"
-label: "configurations"
+label: "Configurations"
 language: "Other"
 comments_count: 2
-repository_stars: 220000
+repository_stars: 237000
 ---
 
 When creating configuration files for development environments that use multiple technology stacks, ensure settings are properly scoped to accommodate different file types and tools within the same project. This prevents validation errors and improves developer productivity.

@@ -2,10 +2,10 @@
 title: "User-friendly error messages"
 description: "Error messages should be concise and clearly communicate what went wrong without unnecessary verbosity. When implementing error handling, maintain consistent code style and organize related operations logically within appropriate blocks."
 repository: "axios/axios"
-label: "error handling"
+label: "Error Handling"
 language: "Html"
 comments_count: 2
-repository_stars: 100000
+repository_stars: 107000
 ---
 
 Error messages should be concise and clearly communicate what went wrong without unnecessary verbosity. When implementing error handling, maintain consistent code style and organize related operations logically within appropriate blocks.

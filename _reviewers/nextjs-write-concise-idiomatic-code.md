@@ -2,10 +2,10 @@
 title: "Write concise idiomatic code"
 description: "Favor concise and idiomatic expressions in your Rust code to improve readability and maintainability."
 repository: "vercel/next.js"
-label: "code style"
+label: "Code Style"
 language: "Rust"
 comments_count: 3
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 Favor concise and idiomatic expressions in your Rust code to improve readability and maintainability. Specifically:

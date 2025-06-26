@@ -2,10 +2,10 @@
 title: "Defensive Handling of Nullable React Components"
 description: "When working with React components that may return null or undefined values, implement defensive coding patterns to prevent runtime errors and improve code reliability."
 repository: "facebook/react"
-label: "react"
+label: "React"
 language: "Typescript"
 comments_count: 2
-repository_stars: 220000
+repository_stars: 237000
 ---
 
 When working with React components that may return null or undefined values, implement defensive coding patterns to prevent runtime errors and improve code reliability.

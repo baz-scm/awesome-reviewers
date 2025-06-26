@@ -2,10 +2,10 @@
 title: "Documentation consistency standards"
 description: "Maintain consistent documentation formatting standards across all project files, especially in changelogs, code examples, and technical documentation. This ensures readability and prevents confusion when documentation is viewed in different contexts."
 repository: "tokio-rs/axum"
-label: "documentation"
+label: "Documentation"
 language: "Markdown"
 comments_count: 5
-repository_stars: 15000
+repository_stars: 22100
 ---
 
 Maintain consistent documentation formatting standards across all project files, especially in changelogs, code examples, and technical documentation. This ensures readability and prevents confusion when documentation is viewed in different contexts.

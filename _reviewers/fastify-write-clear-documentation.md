@@ -2,10 +2,10 @@
 title: "Write clear documentation"
 description: "Documentation should be clear, precise, and self-contained while following established style conventions. When writing technical documentation, use precise language, make documentation self-contained, follow style conventions, and create accessible links."
 repository: "fastify/fastify"
-label: "documentation"
+label: "Documentation"
 language: "Markdown"
 comments_count: 8
-repository_stars: 30000
+repository_stars: 34000
 ---
 
 Documentation should be clear, precise, and self-contained while following established style conventions. When writing technical documentation:

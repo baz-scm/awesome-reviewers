@@ -2,10 +2,10 @@
 title: "Verify documentation references"
 description: "When writing or updating documentation, ensure all code examples, installation commands, and project references accurately reflect the current codebase."
 repository: "vercel/next.js"
-label: "documentation"
+label: "Documentation"
 language: "Markdown"
 comments_count: 4
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 When writing or updating documentation, ensure all code examples, installation commands, and project references accurately reflect the current codebase. This includes:

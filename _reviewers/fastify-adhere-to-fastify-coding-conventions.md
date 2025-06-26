@@ -2,10 +2,10 @@
 title: "Adhere to Fastify Coding Conventions"
 description: "When implementing code that uses the Fastify package in Typescript, ensure the following conventions are followed: avoid contractions, use Oxford commas, and maintain consistent formatting."
 repository: "fastify/fastify"
-label: "fastify"
+label: "Fastify"
 language: "Typescript"
 comments_count: 5
-repository_stars: 30000
+repository_stars: 34000
 ---
 
 When implementing code that uses the Fastify package in Typescript, ensure the following conventions are followed:

@@ -2,10 +2,10 @@
 title: "Dependency conscious APIs"
 description: "Design APIs with dependency implications in mind. Carefully consider how your API design choices might force dependencies on consumers, which can lead to dependency bloat or tight coupling between components."
 repository: "vercel/next.js"
-label: "api"
+label: "API"
 language: "Rust"
 comments_count: 2
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 Design APIs with dependency implications in mind. Carefully consider how your API design choices might force dependencies on consumers, which can lead to dependency bloat or tight coupling between components.

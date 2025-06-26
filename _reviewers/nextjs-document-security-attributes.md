@@ -2,10 +2,10 @@
 title: "Document security attributes"
 description: "When handling security-related attributes (like nonces, integrity hashes, or CSP directives), always document the logic and prioritize explicitly passed values over automatically provided ones."
 repository: "vercel/next.js"
-label: "security"
+label: "Security"
 language: "TSX"
 comments_count: 1
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 When handling security-related attributes (like nonces, integrity hashes, or CSP directives), always document the logic and prioritize explicitly passed values over automatically provided ones. This ensures that security intentions are clear and that developers can override default security configurations when necessary.

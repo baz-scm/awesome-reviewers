@@ -2,10 +2,10 @@
 title: "Complete hook dependencies"
 description: "Always specify complete dependency arrays in React hooks to prevent bugs from stale closures and avoid unnecessary rerenders. When using hooks like useEffect, useMemo, or useCallback, include all values from the component scope that are referenced inside the hook's callback function."
 repository: "facebook/react"
-label: "react"
+label: "React"
 language: "Javascript"
 comments_count: 3
-repository_stars: 220000
+repository_stars: 237000
 ---
 
 Always specify complete dependency arrays in React hooks to prevent bugs from stale closures and avoid unnecessary rerenders. When using hooks like `useEffect`, `useMemo`, or `useCallback`, include all values from the component scope that are referenced inside the hook's callback function.

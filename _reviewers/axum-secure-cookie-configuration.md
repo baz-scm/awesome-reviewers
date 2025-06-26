@@ -2,10 +2,10 @@
 title: "Secure cookie configuration"
 description: "Always set appropriate security flags on cookies, especially those used for authentication or session management. At minimum, include HttpOnly, Secure, and SameSite flags to prevent cookie theft, session hijacking, and cross-site request forgery attacks."
 repository: "tokio-rs/axum"
-label: "security"
+label: "Security"
 language: "Rust"
 comments_count: 1
-repository_stars: 15000
+repository_stars: 22100
 ---
 
 Always set appropriate security flags on cookies, especially those used for authentication or session management. At minimum, include:

@@ -2,10 +2,10 @@
 title: "Dry configuration patterns"
 description: "Apply DRY (Don't Repeat Yourself) principles to all configuration files to improve maintainability. Extract shared configuration options into reusable constants, especially for values used across multiple environments or settings."
 repository: "facebook/react"
-label: "configurations"
+label: "Configurations"
 language: "Javascript"
 comments_count: 2
-repository_stars: 220000
+repository_stars: 237000
 ---
 
 Apply DRY (Don't Repeat Yourself) principles to all configuration files to improve maintainability. Extract shared configuration options into reusable constants, especially for values used across multiple environments or settings. This pattern reduces errors when configurations need updating and makes your codebase more maintainable.

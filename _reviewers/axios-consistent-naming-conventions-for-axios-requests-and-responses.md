@@ -2,10 +2,10 @@
 title: "Consistent Naming Conventions for Axios Requests and Responses"
 description: "When using the Axios library in Typescript, it is important to follow consistent naming conventions to improve code readability and maintainability. Use the 'on' prefix for Axios event handlers and callbacks, use domain-specific prefixes like 'response' to clarify scope, maintain consistent naming patterns for similar functionality, and align with established conventions."
 repository: "axios/axios"
-label: "axios"
+label: "Axios"
 language: "Typescript"
 comments_count: 3
-repository_stars: 100000
+repository_stars: 107000
 ---
 
 When using the Axios library in Typescript, it is important to follow consistent naming conventions to improve code readability and maintainability. Specifically:

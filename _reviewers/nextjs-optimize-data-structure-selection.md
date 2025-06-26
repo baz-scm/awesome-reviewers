@@ -2,10 +2,10 @@
 title: "Optimize data structure selection"
 description: "Choose data structures that match your specific access patterns and performance requirements. The right data structure can significantly improve performance without requiring algorithm changes."
 repository: "vercel/next.js"
-label: "performance optimization"
+label: "Performance Optimization"
 language: "Rust"
 comments_count: 3
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 Choose data structures that match your specific access patterns and performance requirements. The right data structure can significantly improve performance without requiring algorithm changes.

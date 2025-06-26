@@ -2,10 +2,10 @@
 title: "Prefer simpler code constructs"
 description: "Always opt for simpler, more idiomatic code constructs over complex or verbose alternatives. This includes using built-in Rust patterns instead of manual implementations, leveraging pattern matching for cleaner control flow, using method chaining when it improves readability, and maintaining consistent formatting."
 repository: "tokio-rs/axum"
-label: "code style"
+label: "Code Style"
 language: "Rust"
 comments_count: 6
-repository_stars: 15000
+repository_stars: 22100
 ---
 
 Always opt for simpler, more idiomatic code constructs over complex or verbose alternatives. This includes:

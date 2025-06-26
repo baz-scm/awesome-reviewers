@@ -2,10 +2,10 @@
 title: "Support flexible logging"
 description: "When designing logging interfaces, create flexible APIs that accommodate both standard and custom logging needs. This includes supporting custom log levels, allowing message format customization, and enabling level selection based on context."
 repository: "fastify/fastify"
-label: "logging"
+label: "Logging"
 language: "Javascript"
 comments_count: 2
-repository_stars: 30000
+repository_stars: 34000
 ---
 
 When designing logging interfaces, create flexible APIs that accommodate both standard and custom logging needs. This includes:

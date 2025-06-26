@@ -2,10 +2,10 @@
 title: "Separate conditional paths"
 description: "When working with concurrent operations, separate conditional logic from potentially expensive or suspenseful execution paths. This improves performance, prevents race conditions, and makes concurrent code more predictable and maintainable."
 repository: "facebook/react"
-label: "concurrency"
+label: "Concurrency"
 language: "Javascript"
 comments_count: 3
-repository_stars: 220000
+repository_stars: 237000
 ---
 
 When working with concurrent operations, separate conditional logic from potentially expensive or suspenseful execution paths. This improves performance, prevents race conditions, and makes concurrent code more predictable and maintainable.

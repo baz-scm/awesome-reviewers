@@ -2,10 +2,10 @@
 title: "Proper Error Handling in Axios Typescript Code"
 description: "As a code reviewer, it is important to ensure that Axios-based Typescript code properly handles and propagates errors. Key recommendations include using console.error() instead of console.log() when logging errors, preserving the full error object rather than just the error message, and following established Axios error handling patterns."
 repository: "axios/axios"
-label: "axios"
+label: "Axios"
 language: "Typescript"
 comments_count: 4
-repository_stars: 100000
+repository_stars: 107000
 ---
 
 As a code reviewer, it is important to ensure that Axios-based Typescript code properly handles and propagates errors. Key recommendations:

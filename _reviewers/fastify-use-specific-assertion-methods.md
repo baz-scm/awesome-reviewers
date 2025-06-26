@@ -2,10 +2,10 @@
 title: "Use specific assertion methods"
 description: "Choose the appropriate assertion method based on the data type being tested. This improves test readability and provides clearer error messages when tests fail."
 repository: "fastify/fastify"
-label: "testing"
+label: "Testing"
 language: "Javascript"
 comments_count: 15
-repository_stars: 30000
+repository_stars: 34000
 ---
 
 Choose the appropriate assertion method based on the data type being tested. This improves test readability and provides clearer error messages when tests fail.

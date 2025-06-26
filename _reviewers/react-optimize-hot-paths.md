@@ -2,10 +2,10 @@
 title: "Optimize hot paths"
 description: "In performance-critical code paths that execute frequently, optimize to reduce unnecessary operations that can impact runtime performance."
 repository: "facebook/react"
-label: "performance optimization"
+label: "Performance Optimization"
 language: "Javascript"
 comments_count: 4
-repository_stars: 220000
+repository_stars: 237000
 ---
 
 In performance-critical code paths that execute frequently, optimize to reduce unnecessary operations that can impact runtime performance:

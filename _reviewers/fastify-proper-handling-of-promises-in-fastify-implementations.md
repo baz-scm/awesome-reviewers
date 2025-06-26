@@ -2,10 +2,10 @@
 title: "Proper Handling of Promises in Fastify Implementations"
 description: "When implementing Fastify applications in TypeScript, it is important to follow consistent patterns for handling promises and respecting the framework's specific constraints. Avoid mixing async/await with callback styles, especially when registering routes, plugins, or parsers."
 repository: "fastify/fastify"
-label: "fastify"
+label: "Fastify"
 language: "Typescript"
 comments_count: 4
-repository_stars: 30000
+repository_stars: 34000
 ---
 
 When implementing Fastify applications in TypeScript, it is important to follow consistent patterns for handling promises and respecting the framework's specific constraints. Avoid mixing async/await with callback styles, especially when registering routes, plugins, or parsers. Be aware that some Fastify methods are designed as thenables and do not require explicit awaiting.

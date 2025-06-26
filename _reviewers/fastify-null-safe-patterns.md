@@ -2,10 +2,10 @@
 title: " Null safe patterns"
 description: "Use concise null checking patterns to prevent runtime errors and improve code readability when handling potentially undefined values."
 repository: "fastify/fastify"
-label: "null handling"
+label: "Null Handling"
 language: "Javascript"
 comments_count: 5
-repository_stars: 30000
+repository_stars: 34000
 ---
 
 Use concise null checking patterns to prevent runtime errors and improve code readability when handling potentially undefined values. 

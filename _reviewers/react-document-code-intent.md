@@ -2,10 +2,10 @@
 title: "Document code intent"
 description: "Add clear comments that explain the intent and behavior of code that might not be immediately obvious to other developers. Meaningful comments should provide context about why the code exists and how it works."
 repository: "facebook/react"
-label: "documentation"
+label: "Documentation"
 language: "Javascript"
 comments_count: 2
-repository_stars: 220000
+repository_stars: 237000
 ---
 
 Add clear comments that explain the intent and behavior of code that might not be immediately obvious to other developers. Meaningful comments should provide context about why the code exists and how it works, especially for:

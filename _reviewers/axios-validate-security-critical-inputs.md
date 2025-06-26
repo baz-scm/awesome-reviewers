@@ -2,10 +2,10 @@
 title: "Validate security-critical inputs"
 description: "Always validate and sanitize user-supplied inputs before using them in security-sensitive operations. This helps prevent multiple types of vulnerabilities including Server-Side Request Forgery (SSRF), prototype pollution, and command injection."
 repository: "axios/axios"
-label: "security"
+label: "Security"
 language: "Javascript"
 comments_count: 4
-repository_stars: 100000
+repository_stars: 107000
 ---
 
 Always validate and sanitize user-supplied inputs before using them in security-sensitive operations. This helps prevent multiple types of vulnerabilities including Server-Side Request Forgery (SSRF), prototype pollution, and command injection.

@@ -2,10 +2,10 @@
 title: "Proper Use of Suspense in Next.js Components"
 description: "When building Next.js applications that leverage server-side rendering (SSR) or Partial Prerendering (PPR), it is essential to wrap components that access dynamic or non-deterministic values in Suspense boundaries with appropriate fallbacks."
 repository: "vercel/next.js"
-label: "next.js"
+label: "Next.js"
 language: "Javascript"
 comments_count: 4
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 When building Next.js applications that leverage server-side rendering (SSR) or Partial Prerendering (PPR), it is essential to wrap components that access dynamic or non-deterministic values (e.g. random values, current time, request-specific data) in Suspense boundaries with appropriate fallbacks. This ensures proper handling of components that cannot be statically prerendered, preventing hydration mismatches and improving performance.

@@ -2,10 +2,10 @@
 title: "Verify workflow configuration integrity"
 description: "Carefully review GitHub Actions workflow configurations to prevent subtle errors that can cause CI/CD pipeline failures or unexpected behavior."
 repository: "vercel/next.js"
-label: "ci/cd"
+label: "CI/CD"
 language: "Yaml"
 comments_count: 3
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 Carefully review GitHub Actions workflow configurations to prevent subtle errors that can cause CI/CD pipeline failures or unexpected behavior:

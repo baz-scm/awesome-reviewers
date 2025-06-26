@@ -2,10 +2,10 @@
 title: "Comprehensive documentation standards"
 description: "Create clear, well-structured API documentation following proper formatting, correct references, informative examples, and completeness standards. Documentation should be treated as a first-class feature - it's often the first interaction users have with your API."
 repository: "tokio-rs/axum"
-label: "documentation"
+label: "Documentation"
 language: "Rust"
 comments_count: 16
-repository_stars: 15000
+repository_stars: 22100
 ---
 
 Create clear, well-structured API documentation following these practices:

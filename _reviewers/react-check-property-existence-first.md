@@ -2,10 +2,10 @@
 title: "Check property existence first"
 description: "Always verify that an object and its properties exist before accessing them to prevent 'cannot read property of undefined/null' errors. This is especially important when dealing with objects that might come from different build environments or third-party libraries."
 repository: "facebook/react"
-label: "null handling"
+label: "Null Handling"
 language: "Javascript"
 comments_count: 3
-repository_stars: 220000
+repository_stars: 237000
 ---
 
 Always verify that an object and its properties exist before accessing them to prevent "cannot read property of undefined/null" errors. This is especially important when dealing with objects that might come from different build environments (dev vs. production) or third-party libraries.

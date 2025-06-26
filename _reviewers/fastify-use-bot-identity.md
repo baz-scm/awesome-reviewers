@@ -2,10 +2,10 @@
 title: "Use bot identity"
 description: "When configuring Git operations in GitHub Actions workflows, especially for automated commits, use the GitHub Actions bot identity instead of personal user accounts. This clearly distinguishes automated actions from manual ones, provides better audit trails, and avoids personal attribution for system-generated changes."
 repository: "fastify/fastify"
-label: "ci/cd"
+label: "CI/CD"
 language: "Yaml"
 comments_count: 2
-repository_stars: 30000
+repository_stars: 34000
 ---
 
 When configuring Git operations in GitHub Actions workflows, especially for automated commits, use the GitHub Actions bot identity instead of personal user accounts. This clearly distinguishes automated actions from manual ones, provides better audit trails, and avoids personal attribution for system-generated changes.

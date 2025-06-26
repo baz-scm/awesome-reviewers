@@ -2,10 +2,10 @@
 title: "Validate Next.js Configuration Usage"
 description: "When implementing Next.js in your application, ensure that you are correctly using the framework's documented configuration options and patterns. Configuration in Next.js is handled in specific ways, and improper usage can lead to runtime errors or unexpected behavior."
 repository: "vercel/next.js"
-label: "next.js"
+label: "Next.js"
 language: "Javascript"
 comments_count: 2
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 When implementing Next.js in your application, ensure that you are correctly using the framework's documented configuration options and patterns. Configuration in Next.js is handled in specific ways, and improper usage can lead to runtime errors or unexpected behavior.

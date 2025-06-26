@@ -2,10 +2,10 @@
 title: "Decode before validation"
 description: "Always decode URL paths before performing security validations to prevent bypass attacks using URL encoding. Security mechanisms that rely on string pattern matching can be circumvented when attackers use URL-encoded characters."
 repository: "vercel/next.js"
-label: "security"
+label: "Security"
 language: "Typescript"
 comments_count: 1
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 Always decode URL paths before performing security validations to prevent bypass attacks using URL encoding. Security mechanisms that rely on string pattern matching (like `includes()`, `startsWith()`, or regular expressions) can be circumvented when attackers use URL-encoded characters.

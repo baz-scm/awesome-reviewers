@@ -2,10 +2,10 @@
 title: "Use Option combinators"
 description: "Instead of verbose conditional logic, prefer Rust's Option combinators like map, and_then, and filter for handling potentially null values. This creates more concise, readable code that expresses intent clearly and reduces the chance of null-related bugs."
 repository: "tokio-rs/axum"
-label: "null handling"
+label: "Null Handling"
 language: "Rust"
 comments_count: 4
-repository_stars: 15000
+repository_stars: 22100
 ---
 
 Instead of verbose conditional logic, prefer Rust's Option combinators like `map`, `and_then`, and `filter` for handling potentially null values. This creates more concise, readable code that expresses intent clearly and reduces the chance of null-related bugs.

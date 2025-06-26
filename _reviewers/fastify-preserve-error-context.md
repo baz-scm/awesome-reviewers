@@ -2,10 +2,10 @@
 title: " Preserve error context"
 description: "When handling errors, always ensure the original error context is preserved and properly surfaced. Error information should never be silently swallowed in try/catch blocks, as this makes debugging extremely difficult and can lead to unexpected system behavior."
 repository: "fastify/fastify"
-label: "error handling"
+label: "Error Handling"
 language: "Javascript"
 comments_count: 5
-repository_stars: 30000
+repository_stars: 34000
 ---
 
 When handling errors, always ensure the original error context is preserved and properly surfaced. Error information should never be silently swallowed in try/catch blocks, as this makes debugging extremely difficult and can lead to unexpected system behavior.

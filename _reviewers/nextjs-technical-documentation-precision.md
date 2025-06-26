@@ -2,10 +2,10 @@
 title: "Technical documentation precision"
 description: "Ensure technical documentation is precise, accurate, and correctly formatted to prevent confusion and improve developer experience."
 repository: "vercel/next.js"
-label: "documentation"
+label: "Documentation"
 language: "Mdx"
 comments_count: 8
-repository_stars: 120000
+repository_stars: 133000
 ---
 
 Ensure technical documentation is precise, accurate, and correctly formatted to prevent confusion and improve developer experience. Focus on these key aspects:

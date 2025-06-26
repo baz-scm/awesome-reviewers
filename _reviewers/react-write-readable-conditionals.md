@@ -2,10 +2,10 @@
 title: "Write readable conditionals"
 description: "Structure conditionals for maximum clarity and comprehension. Avoid unnecessary negation in boolean expressions, use else clauses appropriately, and organize compound conditions to reduce cognitive load."
 repository: "facebook/react"
-label: "code style"
+label: "Code Style"
 language: "Javascript"
 comments_count: 2
-repository_stars: 220000
+repository_stars: 237000
 ---
 
 Structure conditionals for maximum clarity and comprehension. Avoid unnecessary negation in boolean expressions, use else clauses appropriately, and organize compound conditions to reduce cognitive load.

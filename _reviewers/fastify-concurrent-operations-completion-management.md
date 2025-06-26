@@ -2,10 +2,10 @@
 title: " Concurrent operations completion management"
 description: "When running concurrent operations in tests, ensure all operations complete before concluding the test. Race conditions occur when your test calls done() or resolves before all async operations finish, leading to flaky tests or missed assertions."
 repository: "fastify/fastify"
-label: "concurrency"
+label: "Concurrency"
 language: "Javascript"
 comments_count: 6
-repository_stars: 30000
+repository_stars: 34000
 ---
 
 When running concurrent operations in tests, ensure all operations complete before concluding the test. Race conditions occur when your test calls `done()` or resolves before all async operations finish, leading to flaky tests or missed assertions.

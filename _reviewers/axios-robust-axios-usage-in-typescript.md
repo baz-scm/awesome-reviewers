@@ -2,10 +2,10 @@
 title: "Robust Axios Usage in Typescript"
 description: "This review focuses on ensuring robust and type-safe usage of the Axios library in Typescript codebases. Key recommendations include leveraging Axios' built-in type-checking utilities, properly handling Content-Type headers when sending data, and standardizing serialization patterns for complex data types."
 repository: "axios/axios"
-label: "axios"
+label: "Axios"
 language: "Typescript"
 comments_count: 4
-repository_stars: 100000
+repository_stars: 107000
 ---
 
 This review focuses on ensuring robust and type-safe usage of the Axios library in Typescript codebases. Key recommendations:

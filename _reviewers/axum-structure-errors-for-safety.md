@@ -2,10 +2,10 @@
 title: "Structure errors for safety"
 description: "Create specific error types with appropriate status codes while ensuring sensitive details are logged but not exposed to clients. Follow guidelines for defining specific error types, implementing proper status codes, logging detailed errors internally, and returning sanitized error messages to clients."
 repository: "tokio-rs/axum"
-label: "error handling"
+label: "Error Handling"
 language: "Rust"
 comments_count: 4
-repository_stars: 15000
+repository_stars: 22100
 ---
 
 Create specific error types with appropriate status codes while ensuring sensitive details are logged but not exposed to clients. Follow these guidelines:

@@ -2,10 +2,10 @@
 title: "Type-safe flexible APIs"
 description: "Design APIs that favor both type safety and flexibility. Use strongly typed wrappers instead of primitive types, but accept generic parameters where flexibility is beneficial."
 repository: "tokio-rs/axum"
-label: "api"
+label: "API"
 language: "Rust"
 comments_count: 10
-repository_stars: 15000
+repository_stars: 22100
 ---
 
 Design APIs that favor both type safety and flexibility. Use strongly typed wrappers instead of primitive types, but accept generic parameters where flexibility is beneficial.

@@ -2,10 +2,10 @@
 title: "Minimize memory allocation overhead"
 description: "Optimize performance by minimizing unnecessary memory allocations and using allocation-efficient APIs. Key practices include using static data when possible instead of dynamic allocations, leveraging specialized types and methods that minimize copies, and considering allocation patterns in data transformations."
 repository: "tokio-rs/axum"
-label: "performance optimization"
+label: "Performance Optimization"
 language: "Rust"
 comments_count: 4
-repository_stars: 15000
+repository_stars: 22100
 ---
 
 Optimize performance by minimizing unnecessary memory allocations and using allocation-efficient APIs. Key practices:

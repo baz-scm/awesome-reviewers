@@ -3,7 +3,7 @@ title: "Benchmark before choosing methods"
 description: "Always benchmark different implementation approaches for performance-critical operations before selecting a method. Different approaches (like array operations, string parsing, or data iteration) can have significant performance implications that may not be intuitive."
 repository: "fastify/fastify"
 label: "Performance Optimization"
-language: "Javascript"
+language: "JavaScript"
 comments_count: 4
 repository_stars: 34000
 ---

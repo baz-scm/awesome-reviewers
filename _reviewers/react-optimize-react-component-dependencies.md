@@ -3,7 +3,7 @@ title: "Optimize React Component Dependencies"
 description: "When implementing React components, ensure that dependencies between component state, props, and side effects are accurately tracked to prevent missed updates and unnecessary re-renders."
 repository: "facebook/react"
 label: "React"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 3
 repository_stars: 237000
 ---

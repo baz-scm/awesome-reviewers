@@ -3,7 +3,7 @@ title: "Prefer Existence Checks in Next.js Components"
 description: "When working with props, state, or other values in Next.js components that may be null, undefined, or contain error states, use existence checks rather than direct property access or value comparisons."
 repository: "vercel/next.js"
 label: "Next.js"
-language: "Javascript"
+language: "JavaScript"
 comments_count: 3
 repository_stars: 133000
 ---

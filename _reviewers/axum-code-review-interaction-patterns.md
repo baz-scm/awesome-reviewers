@@ -3,7 +3,7 @@ title: "Axum Code Review: Interaction Patterns"
 description: "When implementing Axum-based applications, it is crucial to ensure that the interaction patterns between components are well-designed and clearly documented. This includes understanding edge cases, limitations, and best practices around state sharing, router nesting, and extractor ordering."
 repository: "tokio-rs/axum"
 label: "Axum"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 9
 repository_stars: 22100
 ---

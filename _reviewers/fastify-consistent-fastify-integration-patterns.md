@@ -3,7 +3,7 @@ title: "Consistent Fastify Integration Patterns"
 description: "When implementing integrations and plugins using the Fastify framework, maintain consistent coding patterns and conventions: follow Fastify's recommended package naming conventions, ensure integrations provide clear and comprehensive documentation, use Fastify's built-in type definitions and decorators consistently, and include full RFC references when referencing external protocol standards."
 repository: "fastify/fastify"
 label: "Fastify"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 3
 repository_stars: 34000
 ---

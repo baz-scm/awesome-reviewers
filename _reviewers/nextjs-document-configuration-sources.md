@@ -3,7 +3,7 @@ title: "Document configuration sources"
 description: "When providing configuration instructions, document the exact location and method to obtain required values. Include specific paths, URLs, or UI navigation steps needed to find configuration settings."
 repository: "vercel/next.js"
 label: "Configurations"
-language: "Json"
+language: "JSON"
 comments_count: 2
 repository_stars: 133000
 ---

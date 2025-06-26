@@ -3,7 +3,7 @@ title: "Document feature flags"
 description: "When configuring feature flags in Cargo.toml, ensure they are properly structured and documented. Chain feature dependencies correctly, document non-obvious configuration choices with comments, and use appropriate syntax for conditional feature activation."
 repository: "tokio-rs/axum"
 label: "Configurations"
-language: "Toml"
+language: "TOML"
 comments_count: 3
 repository_stars: 22100
 ---

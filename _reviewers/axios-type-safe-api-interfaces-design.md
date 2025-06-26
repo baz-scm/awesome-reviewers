@@ -3,7 +3,7 @@ title: "Type-safe API interfaces design"
 description: "Design API interfaces with strong type safety while maintaining excellent developer experience. Prefer explicit types over loose ones to enable better IDE support and catch errors at compile time."
 repository: "axios/axios"
 label: "API"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 5
 repository_stars: 107000
 ---

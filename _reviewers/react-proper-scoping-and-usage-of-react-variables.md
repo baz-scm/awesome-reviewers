@@ -3,7 +3,7 @@ title: "Proper Scoping and Usage of React Variables"
 description: "When implementing React components, it is important to ensure that variables are properly scoped and used throughout the component lifecycle. This reviewer provides guidance on best practices for managing variable declarations and usage in React code."
 repository: "facebook/react"
 label: "React"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 2
 repository_stars: 237000
 ---

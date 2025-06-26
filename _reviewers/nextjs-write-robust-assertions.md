@@ -3,7 +3,7 @@ title: "Write robust assertions"
 description: "When writing tests, ensure assertions can handle non-deterministic content while providing clear failure context: use targeted assertions for non-deterministic content, use specialized tools like cheerio for DOM testing, and include contextual information in diagnostic tests."
 repository: "vercel/next.js"
 label: "Testing"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 5
 repository_stars: 133000
 ---

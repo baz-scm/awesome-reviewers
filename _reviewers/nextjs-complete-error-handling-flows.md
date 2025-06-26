@@ -3,7 +3,7 @@ title: "Complete error handling flows"
 description: "Implement robust error handling patterns that ensure both proper resource cleanup and error context preservation."
 repository: "vercel/next.js"
 label: "Error Handling"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 2
 repository_stars: 133000
 ---

@@ -3,7 +3,7 @@ title: "Use appropriate testing methods"
 description: "When writing tests, use the appropriate testing utilities and ensure proper test isolation. For testing warning behaviors, use assertConsoleErrorDev instead of environment flags. For testing sequential actions, use logging utilities with corresponding assertions. Always clean up after tests that use mocks."
 repository: "facebook/react"
 label: "Testing"
-language: "Javascript"
+language: "JavaScript"
 comments_count: 3
 repository_stars: 237000
 ---

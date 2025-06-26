@@ -3,7 +3,7 @@ title: "Use Appropriate Concurrency Patterns with Axum"
 description: "When building asynchronous Axum applications that share mutable state, it's important to select the right concurrency mechanisms. Use Axum's built-in Mutex or RwLock for general shared state, prefer connection pools for shared I/O resources, and consider the actor pattern for complex shared operations."
 repository: "tokio-rs/axum"
 label: "Axum"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 2
 repository_stars: 22100
 ---

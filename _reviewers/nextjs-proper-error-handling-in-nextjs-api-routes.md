@@ -3,7 +3,7 @@ title: "Proper Error Handling in Next.js API Routes"
 description: "This review focuses on ensuring proper error handling in Next.js API routes. Key principles include validating incoming request data, using consistent error response structures, and sanitizing error messages."
 repository: "vercel/next.js"
 label: "Next.js"
-language: "Javascript"
+language: "JavaScript"
 comments_count: 4
 repository_stars: 133000
 ---

@@ -3,7 +3,7 @@ title: "Extract for better readability"
 description: "Complex expressions and repeated code should be extracted into well-named variables to improve readability and maintainability. This applies to repeated string/value combinations, complex conditional logic, array transformations, and URL or path constructions."
 repository: "axios/axios"
 label: "Code Style"
-language: "Javascript"
+language: "JavaScript"
 comments_count: 4
 repository_stars: 107000
 ---

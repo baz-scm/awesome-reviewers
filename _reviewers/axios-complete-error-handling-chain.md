@@ -6,6 +6,8 @@ label: "Error Handling"
 language: "JavaScript"
 comments_count: 5
 repository_stars: 107000
+categories:
+  - Stability
 ---
 
 Implement comprehensive error handling throughout the codebase by ensuring all error scenarios are properly caught, typed, and propagated. This includes:

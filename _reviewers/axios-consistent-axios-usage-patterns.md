@@ -6,6 +6,8 @@ label: "Axios"
 language: "TypeScript"
 comments_count: 2
 repository_stars: 107000
+categories:
+  - Best Practices
 ---
 
 Maintain consistent usage of the Axios library throughout your Typescript codebase. Pay special attention to the following:

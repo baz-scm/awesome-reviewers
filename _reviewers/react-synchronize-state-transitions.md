@@ -1,45 +1,49 @@
 ---
 title: Synchronize state transitions
 description: When implementing asynchronous operations, ensure that state transitions
-  complete fully before proceeding with dependent operations. This prevents race conditions
-  where subsequent code might interact with intermediate or inconsistent states, leading
-  to unpredictable behavior.
+  are fully completed before allowing dependent operations to proceed. This prevents
+  race conditions where subsequent operations might make incorrect assumptions about
+  the system state.
 repository: facebook/react
 label: Concurrency
 language: Javascript
 comments_count: 2
-repository_stars: 236851
+repository_stars: 236852
 ---
 
-When implementing asynchronous operations, ensure that state transitions complete fully before proceeding with dependent operations. This prevents race conditions where subsequent code might interact with intermediate or inconsistent states, leading to unpredictable behavior.
+When implementing asynchronous operations, ensure that state transitions are fully completed before allowing dependent operations to proceed. This prevents race conditions where subsequent operations might make incorrect assumptions about the system state.
 
-In React components or data processing pipelines, verify that a component or data chunk has reached its intended state before triggering the next operation in the sequence:
-
+For example, when processing streams or iterables of data:
 ```javascript
-// Potentially unsafe approach
-function processStream(chunk, nextOperation) {
-  initiateStateTransition(chunk);
-  // Race condition potential: nextOperation may run before state transition completes
-  nextOperation(chunk);
+// AVOID: This may cause race conditions
+function resolveNextChunk(chunks, id, stream) {
+  const nextChunk = createStreamChunk(stream);
+  chunks.set(id, nextChunk);
+  processNextChunkImmediately(); // Danger: May execute before state is stable
 }
 
-// Safer approach
-function processStream(chunk, nextOperation) {
-  initiateStateTransition(chunk).then(() => {
-    // Only proceed when transition is complete
-    nextOperation(chunk);
-  });
+// BETTER: Ensure state is properly synchronized
+function resolveNextChunk(chunks, id, stream) {
+  const nextChunk = createStreamChunk(stream);
+  chunks.set(id, nextChunk);
+  
+  // Only proceed when chunk is in non-pending state
+  if (nextChunk.status !== PENDING) {
+    processNextChunkSafely();
+  } else {
+    // Register a callback to run after state transition completes
+    nextChunk.onStateTransitionComplete(() => {
+      processNextChunkSafely();
+    });
+  }
 }
 ```
 
-This pattern is especially important when:
-1. Multiple asynchronous operations depend on each other
-2. The order of execution affects the outcome
-3. Debugging or logging requires accurate state representation
+Additionally, use consistent patterns for aborting or canceling asynchronous operations to maintain predictable concurrency behavior across the codebase. This reduces the risk of race conditions, resource leaks, and unexpected system behavior.
 
 ## Discussions
 
-## thread:2173885122
+## packages/react-client/src/ReactFlightClient.js, https://github.com/facebook/react/pull/33665
 
 @@ -2229,6 +2250,22 @@ function resolveStream<T: ReadableStream | $AsyncIterable<any, any, void>>(
      chunks.set(id, createInitializedStreamChunk(response, stream, controller));
@@ -62,21 +66,44 @@ This pattern is especially important when:
 
 I don't think this is safe because the chunk needs to enter a non-pending state before the next chunk is resolved. Otherwise the next chunk doesn't know it's a stream entry.
 
-## thread:2159425945
+## packages/react-server/src/ReactFlightServer.js, https://github.com/facebook/react/pull/33633
 
-@@ -266,7 +266,11 @@ ReactPromise.prototype.then = function <T>(
-       initializeModuleChunk(chunk);
-       break;
+@@ -1110,16 +1103,18 @@ function serializeAsyncIterable(
+       iterator.throw(reason).then(error, error);
+     }
    }
--  if (__DEV__ && enableAsyncDebugInfo) {
-+  if (
-+    __DEV__ &&
-+    enableAsyncDebugInfo &&
-+    (typeof resolve !== 'function' || !(resolve: any).isReactInternalListener)
+-  function abortIterable(reason: mixed) {
+-    if (aborted) {
++  function abortIterable() {
++    if (streamTask.status !== PENDING) {
+       return;
+     }
+-    aborted = true;
+-    request.abortListeners.delete(abortIterable);
++    const signal = request.cacheController.signal;
++    signal.removeEventListener('abort', abortIterable);
++    const reason = signal.reason;
+     if (enableHalt && request.type === PRERENDER) {
+-      request.pendingChunks--;
++      haltTask(streamTask, request);
++      request.abortableTasks.delete(streamTask);
+     } else {
+-      erroredTask(request, streamTask, reason);
++      erroredTask(request, streamTask, signal.reason);
+
+### unstubbable
+
+Why aren't we using `abortTask` here? (same question for streams)
 
 ### sebmarkbage
 
-The microtask here means that cycles don't resolve synchronously which means that console logs can miss them. This is not the only thing that can be async though. If you console log a client reference that hasn't loaded yet you get the same problem.
+Yea I noticed that. We probably should.  
 
-In the future, we should really make sure that the debug info can be parsed async while retaining console log order. 
+### sebmarkbage
+
+I think the reason we didn't originally is because we don't have access to the `errorId` here so it would be different copy of the error object regardless.
+
+If we tried to share it with the root, we'd need some way to signal back that we used the shared one with is more complicated.
+
+I'll leave this as an issue for now.
 

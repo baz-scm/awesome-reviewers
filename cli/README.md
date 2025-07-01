@@ -41,9 +41,23 @@ creates files in its own format:
 - **codex** → `reviewers.ts` exporting a map of prompts
 - **windsurf**, **augment** → JSON files listing prompts
 
+### List reviewers
+
+```bash
+python cli/cli.py list --language TypeScript
+```
+
+Filters are available for `--language`, `--repo`, and `--category`.
+
+### Add reviewers by language, repo, or category
+
+```bash
+python cli/cli.py add --target cursor --language TypeScript
+```
+
 ### Tips
 
 - Reviewers missing the `## System Prompt` section are skipped with a warning.
-- When using `--all`, only reviewers containing the target name in their
-  `tools` frontmatter field are included.
+- When filtering or using `--all`, only reviewers containing the target name in
+  their `tools` frontmatter field are included.
 

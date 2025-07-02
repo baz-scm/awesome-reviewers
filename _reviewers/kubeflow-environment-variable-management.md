@@ -1,0 +1,238 @@
+---
+title: Environment variable management
+description: 'Manage environment variables in Docker configurations with appropriate
+  scope, placement, and documentation:
+
+
+  1. **Set environment variables with appropriate scope**:'
+repository: kubeflow/kubeflow
+label: Configurations
+language: Dockerfile
+comments_count: 5
+repository_stars: 15064
+---
+
+Manage environment variables in Docker configurations with appropriate scope, placement, and documentation:
+
+1. **Set environment variables with appropriate scope**:
+   - Use variables only where needed, not globally
+   - Set temporary variables like `DEBIAN_FRONTEND` only within the commands that need them:
+   ```dockerfile
+   # Do this:
+   RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+       package1 package2
+   
+   # Not this:
+   ENV DEBIAN_FRONTEND=noninteractive
+   RUN apt-get update && apt-get install -y package1 package2
+   ```
+
+2. **Place variables logically**:
+   - Group related variables under descriptive comments
+   - Place variables near their related commands
+   - Use ARG instead of ENV for build-time values, especially versions:
+   ```dockerfile
+   # version details
+   ARG LIBFABRIC_VERSION="1.20.0"
+   ARG PYTORCH_VERSION="2.2.2"
+   ```
+
+3. **Document variables properly**:
+   - Add comments explaining non-obvious configurations
+   - Include links to relevant documentation when appropriate
+   - Document compatibility requirements:
+   ```dockerfile
+   # Gaudi does not currently support Python 3.11, so we downgrade to 3.10
+   # https://docs.habana.ai/en/latest/Support_Matrix/Support_Matrix.html
+   ```
+
+4. **Clean up unnecessary variables**:
+   - Remove obsolete or unused environment variables
+   - Consider using dedicated configuration files under /etc/ instead of environment variables when appropriate
+
+
+[
+  {
+    "discussion_id": "1720455821",
+    "pr_number": 7635,
+    "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+    "created_at": "2024-08-16T23:18:57+00:00",
+    "commented_code": "#\n# NOTE: Use the Makefiles to build this image correctly.\n#\n\nARG BASE_IMG=<jupyter>\nFROM $BASE_IMG\n\n# Content below is extracted from scripts/Dockerfiles here:\n# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n\n# version details\nARG ARTIFACTORY_URL=vault.habana.ai\nARG VERSION=1.16.2\nARG REVISION=2\nARG PYTORCH_VERSION=2.2.2\nARG OS_NUMBER=2204\n\n# runtime variables\nENV DEBIAN_FRONTEND=noninteractive",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1720455821",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7635,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+        "discussion_id": "1720455821",
+        "commented_code": "@@ -0,0 +1,143 @@\n+#\n+# NOTE: Use the Makefiles to build this image correctly.\n+#\n+\n+ARG BASE_IMG=<jupyter>\n+FROM $BASE_IMG\n+\n+# Content below is extracted from scripts/Dockerfiles here:\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n+\n+# version details\n+ARG ARTIFACTORY_URL=vault.habana.ai\n+ARG VERSION=1.16.2\n+ARG REVISION=2\n+ARG PYTORCH_VERSION=2.2.2\n+ARG OS_NUMBER=2204\n+\n+# runtime variables\n+ENV DEBIAN_FRONTEND=noninteractive",
+        "comment_created_at": "2024-08-16T23:18:57+00:00",
+        "comment_author": "thesuperzapper",
+        "comment_body": "Is there a particular reason `DEBIAN_FRONTEND` is being set on the overall container, rather than within the steps which need it? Because the container is sort of \"interactive\" once the notebook is actually running.\r\n\r\nRight now, we only do this on the base image [during the `apt-get` commands](https://github.com/kubeflow/kubeflow/blob/f6563b293808c771db05023bccdd793528c53745/components/example-notebook-servers/base/Dockerfile#L47), but you might also need to do it on your install script steps, if they check for this variable.\r\n\r\nI think we should either:\r\n\r\n1. Decide that all images need this, and set it in the base image as an `ENV`\r\n2. Set it only on RUN commands which need it.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1724980190",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7635,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+        "discussion_id": "1720455821",
+        "commented_code": "@@ -0,0 +1,143 @@\n+#\n+# NOTE: Use the Makefiles to build this image correctly.\n+#\n+\n+ARG BASE_IMG=<jupyter>\n+FROM $BASE_IMG\n+\n+# Content below is extracted from scripts/Dockerfiles here:\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n+\n+# version details\n+ARG ARTIFACTORY_URL=vault.habana.ai\n+ARG VERSION=1.16.2\n+ARG REVISION=2\n+ARG PYTORCH_VERSION=2.2.2\n+ARG OS_NUMBER=2204\n+\n+# runtime variables\n+ENV DEBIAN_FRONTEND=noninteractive",
+        "comment_created_at": "2024-08-21T12:38:01+00:00",
+        "comment_author": "tkatila",
+        "comment_body": "I'll move the env variable inside the RUNs that run apt-get.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1720483506",
+    "pr_number": 7635,
+    "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+    "created_at": "2024-08-17T00:10:54+00:00",
+    "commented_code": "#\n# NOTE: Use the Makefiles to build this image correctly.\n#\n\nARG BASE_IMG=<jupyter>\nFROM $BASE_IMG\n\n# Content below is extracted from scripts/Dockerfiles here:\n# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n\n# version details\nARG ARTIFACTORY_URL=vault.habana.ai\nARG VERSION=1.16.2\nARG REVISION=2\nARG PYTORCH_VERSION=2.2.2\nARG OS_NUMBER=2204\n\n# runtime variables\nENV DEBIAN_FRONTEND=noninteractive\nENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\nENV HABANA_LOGS=/var/log/habana_logs/\nENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\nENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\nENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768\nENV PYTHONPATH=/home/$NB_UID:/usr/lib/habanalabs/\n\n# There is no need to store pip installation files inside docker image\nENV PIP_NO_CACHE_DIR=on\nENV PIP_DISABLE_PIP_VERSION_CHECK=1\n\n# libfabric and scaling variables\nENV LIBFABRIC_VERSION=\"1.20.0\"\nENV LIBFABRIC_ROOT=\"/opt/habanalabs/libfabric-${LIBFABRIC_VERSION}\"\nENV MPI_ROOT=/opt/amazon/openmpi\nENV LD_LIBRARY_PATH=$LIBFABRIC_ROOT/lib:${MPI_ROOT}/lib:/usr/lib/habanalabs:$LD_LIBRARY_PATH\nENV PATH=${LIBFABRIC_ROOT}/bin:${MPI_ROOT}/bin:$PATH\nENV MPICC=${MPI_ROOT}/bin/mpicc\nENV OPAL_PREFIX=${MPI_ROOT}\nENV RDMAV_FORK_SAFE=1\nENV FI_EFA_USE_DEVICE_RDMA=1\nENV RDMA_CORE_ROOT=/opt/habanalabs/rdma-core/src\nENV RDMA_CORE_LIB=${RDMA_CORE_ROOT}/build/lib",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1720483506",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7635,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+        "discussion_id": "1720483506",
+        "commented_code": "@@ -0,0 +1,143 @@\n+#\n+# NOTE: Use the Makefiles to build this image correctly.\n+#\n+\n+ARG BASE_IMG=<jupyter>\n+FROM $BASE_IMG\n+\n+# Content below is extracted from scripts/Dockerfiles here:\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n+\n+# version details\n+ARG ARTIFACTORY_URL=vault.habana.ai\n+ARG VERSION=1.16.2\n+ARG REVISION=2\n+ARG PYTORCH_VERSION=2.2.2\n+ARG OS_NUMBER=2204\n+\n+# runtime variables\n+ENV DEBIAN_FRONTEND=noninteractive\n+ENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\n+ENV HABANA_LOGS=/var/log/habana_logs/\n+ENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\n+ENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\n+ENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768\n+ENV PYTHONPATH=/home/$NB_UID:/usr/lib/habanalabs/\n+\n+# There is no need to store pip installation files inside docker image\n+ENV PIP_NO_CACHE_DIR=on\n+ENV PIP_DISABLE_PIP_VERSION_CHECK=1\n+\n+# libfabric and scaling variables\n+ENV LIBFABRIC_VERSION=\"1.20.0\"\n+ENV LIBFABRIC_ROOT=\"/opt/habanalabs/libfabric-${LIBFABRIC_VERSION}\"\n+ENV MPI_ROOT=/opt/amazon/openmpi\n+ENV LD_LIBRARY_PATH=$LIBFABRIC_ROOT/lib:${MPI_ROOT}/lib:/usr/lib/habanalabs:$LD_LIBRARY_PATH\n+ENV PATH=${LIBFABRIC_ROOT}/bin:${MPI_ROOT}/bin:$PATH\n+ENV MPICC=${MPI_ROOT}/bin/mpicc\n+ENV OPAL_PREFIX=${MPI_ROOT}\n+ENV RDMAV_FORK_SAFE=1\n+ENV FI_EFA_USE_DEVICE_RDMA=1\n+ENV RDMA_CORE_ROOT=/opt/habanalabs/rdma-core/src\n+ENV RDMA_CORE_LIB=${RDMA_CORE_ROOT}/build/lib",
+        "comment_created_at": "2024-08-17T00:10:54+00:00",
+        "comment_author": "thesuperzapper",
+        "comment_body": "As there are a lot of envs being set here, some suggestions:\r\n\r\n1. If they are doing things like updating the PATH or setting configs, please place them above/below the `RUN` command which is adding that package (rather than in a common section at the top of the file).\r\n2. For the ones which are left (e.g. not related to installing a package), please group them logically underneath `#` comments which explain why they are needed and if necessary link to some external docs.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1724994936",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7635,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+        "discussion_id": "1720483506",
+        "commented_code": "@@ -0,0 +1,143 @@\n+#\n+# NOTE: Use the Makefiles to build this image correctly.\n+#\n+\n+ARG BASE_IMG=<jupyter>\n+FROM $BASE_IMG\n+\n+# Content below is extracted from scripts/Dockerfiles here:\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n+\n+# version details\n+ARG ARTIFACTORY_URL=vault.habana.ai\n+ARG VERSION=1.16.2\n+ARG REVISION=2\n+ARG PYTORCH_VERSION=2.2.2\n+ARG OS_NUMBER=2204\n+\n+# runtime variables\n+ENV DEBIAN_FRONTEND=noninteractive\n+ENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\n+ENV HABANA_LOGS=/var/log/habana_logs/\n+ENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\n+ENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\n+ENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768\n+ENV PYTHONPATH=/home/$NB_UID:/usr/lib/habanalabs/\n+\n+# There is no need to store pip installation files inside docker image\n+ENV PIP_NO_CACHE_DIR=on\n+ENV PIP_DISABLE_PIP_VERSION_CHECK=1\n+\n+# libfabric and scaling variables\n+ENV LIBFABRIC_VERSION=\"1.20.0\"\n+ENV LIBFABRIC_ROOT=\"/opt/habanalabs/libfabric-${LIBFABRIC_VERSION}\"\n+ENV MPI_ROOT=/opt/amazon/openmpi\n+ENV LD_LIBRARY_PATH=$LIBFABRIC_ROOT/lib:${MPI_ROOT}/lib:/usr/lib/habanalabs:$LD_LIBRARY_PATH\n+ENV PATH=${LIBFABRIC_ROOT}/bin:${MPI_ROOT}/bin:$PATH\n+ENV MPICC=${MPI_ROOT}/bin/mpicc\n+ENV OPAL_PREFIX=${MPI_ROOT}\n+ENV RDMAV_FORK_SAFE=1\n+ENV FI_EFA_USE_DEVICE_RDMA=1\n+ENV RDMA_CORE_ROOT=/opt/habanalabs/rdma-core/src\n+ENV RDMA_CORE_LIB=${RDMA_CORE_ROOT}/build/lib",
+        "comment_created_at": "2024-08-21T12:48:30+00:00",
+        "comment_author": "tkatila",
+        "comment_body": "sure, I'll move these so that they are next to the relevant RUNs",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1720484378",
+    "pr_number": 7635,
+    "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+    "created_at": "2024-08-17T00:13:54+00:00",
+    "commented_code": "#\n# NOTE: Use the Makefiles to build this image correctly.\n#\n\nARG BASE_IMG=<jupyter>\nFROM $BASE_IMG\n\n# Content below is extracted from scripts/Dockerfiles here:\n# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n\n# version details\nARG ARTIFACTORY_URL=vault.habana.ai\nARG VERSION=1.16.2\nARG REVISION=2\nARG PYTORCH_VERSION=2.2.2\nARG OS_NUMBER=2204\n\n# runtime variables\nENV DEBIAN_FRONTEND=noninteractive\nENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\nENV HABANA_LOGS=/var/log/habana_logs/\nENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\nENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\nENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768\nENV PYTHONPATH=/home/$NB_UID:/usr/lib/habanalabs/\n\n# There is no need to store pip installation files inside docker image\nENV PIP_NO_CACHE_DIR=on\nENV PIP_DISABLE_PIP_VERSION_CHECK=1\n\n# libfabric and scaling variables\nENV LIBFABRIC_VERSION=\"1.20.0\"",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1720484378",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7635,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+        "discussion_id": "1720484378",
+        "commented_code": "@@ -0,0 +1,143 @@\n+#\n+# NOTE: Use the Makefiles to build this image correctly.\n+#\n+\n+ARG BASE_IMG=<jupyter>\n+FROM $BASE_IMG\n+\n+# Content below is extracted from scripts/Dockerfiles here:\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n+\n+# version details\n+ARG ARTIFACTORY_URL=vault.habana.ai\n+ARG VERSION=1.16.2\n+ARG REVISION=2\n+ARG PYTORCH_VERSION=2.2.2\n+ARG OS_NUMBER=2204\n+\n+# runtime variables\n+ENV DEBIAN_FRONTEND=noninteractive\n+ENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\n+ENV HABANA_LOGS=/var/log/habana_logs/\n+ENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\n+ENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\n+ENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768\n+ENV PYTHONPATH=/home/$NB_UID:/usr/lib/habanalabs/\n+\n+# There is no need to store pip installation files inside docker image\n+ENV PIP_NO_CACHE_DIR=on\n+ENV PIP_DISABLE_PIP_VERSION_CHECK=1\n+\n+# libfabric and scaling variables\n+ENV LIBFABRIC_VERSION=\"1.20.0\"",
+        "comment_created_at": "2024-08-17T00:13:54+00:00",
+        "comment_author": "thesuperzapper",
+        "comment_body": "Is it possible to factor this into an `ARG` rather than an `ENV`, as we do for all other versions?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1724977244",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7635,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+        "discussion_id": "1720484378",
+        "commented_code": "@@ -0,0 +1,143 @@\n+#\n+# NOTE: Use the Makefiles to build this image correctly.\n+#\n+\n+ARG BASE_IMG=<jupyter>\n+FROM $BASE_IMG\n+\n+# Content below is extracted from scripts/Dockerfiles here:\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n+\n+# version details\n+ARG ARTIFACTORY_URL=vault.habana.ai\n+ARG VERSION=1.16.2\n+ARG REVISION=2\n+ARG PYTORCH_VERSION=2.2.2\n+ARG OS_NUMBER=2204\n+\n+# runtime variables\n+ENV DEBIAN_FRONTEND=noninteractive\n+ENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\n+ENV HABANA_LOGS=/var/log/habana_logs/\n+ENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\n+ENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\n+ENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768\n+ENV PYTHONPATH=/home/$NB_UID:/usr/lib/habanalabs/\n+\n+# There is no need to store pip installation files inside docker image\n+ENV PIP_NO_CACHE_DIR=on\n+ENV PIP_DISABLE_PIP_VERSION_CHECK=1\n+\n+# libfabric and scaling variables\n+ENV LIBFABRIC_VERSION=\"1.20.0\"",
+        "comment_created_at": "2024-08-21T12:35:53+00:00",
+        "comment_author": "tkatila",
+        "comment_body": "yes, I'll change it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1720486507",
+    "pr_number": 7635,
+    "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+    "created_at": "2024-08-17T00:18:49+00:00",
+    "commented_code": "#\n# NOTE: Use the Makefiles to build this image correctly.\n#\n\nARG BASE_IMG=<jupyter>\nFROM $BASE_IMG\n\n# Content below is extracted from scripts/Dockerfiles here:\n# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n\n# version details\nARG ARTIFACTORY_URL=vault.habana.ai\nARG VERSION=1.16.2\nARG REVISION=2\nARG PYTORCH_VERSION=2.2.2\nARG OS_NUMBER=2204\n\n# runtime variables\nENV DEBIAN_FRONTEND=noninteractive\nENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\nENV HABANA_LOGS=/var/log/habana_logs/\nENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\nENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\nENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768\nENV PYTHONPATH=/home/$NB_UID:/usr/lib/habanalabs/",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1720486507",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7635,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+        "discussion_id": "1720486507",
+        "commented_code": "@@ -0,0 +1,143 @@\n+#\n+# NOTE: Use the Makefiles to build this image correctly.\n+#\n+\n+ARG BASE_IMG=<jupyter>\n+FROM $BASE_IMG\n+\n+# Content below is extracted from scripts/Dockerfiles here:\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n+\n+# version details\n+ARG ARTIFACTORY_URL=vault.habana.ai\n+ARG VERSION=1.16.2\n+ARG REVISION=2\n+ARG PYTORCH_VERSION=2.2.2\n+ARG OS_NUMBER=2204\n+\n+# runtime variables\n+ENV DEBIAN_FRONTEND=noninteractive\n+ENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\n+ENV HABANA_LOGS=/var/log/habana_logs/\n+ENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\n+ENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\n+ENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768\n+ENV PYTHONPATH=/home/$NB_UID:/usr/lib/habanalabs/",
+        "comment_created_at": "2024-08-17T00:18:49+00:00",
+        "comment_author": "thesuperzapper",
+        "comment_body": "Is setting `PYTHONPATH` still necessary when we are sourcing `/etc/profile.d/habanalabs.sh` in bashrc/profile?\r\n\r\nI only ask because having `PYTHONPATH` set can break things for end users in unexpected ways.\r\n\r\nIf it turns out to still be necessary, please move this it closer to the `RUN` where we install the files under `/usr/lib/habanalabs/`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1724976985",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7635,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+        "discussion_id": "1720486507",
+        "commented_code": "@@ -0,0 +1,143 @@\n+#\n+# NOTE: Use the Makefiles to build this image correctly.\n+#\n+\n+ARG BASE_IMG=<jupyter>\n+FROM $BASE_IMG\n+\n+# Content below is extracted from scripts/Dockerfiles here:\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n+\n+# version details\n+ARG ARTIFACTORY_URL=vault.habana.ai\n+ARG VERSION=1.16.2\n+ARG REVISION=2\n+ARG PYTORCH_VERSION=2.2.2\n+ARG OS_NUMBER=2204\n+\n+# runtime variables\n+ENV DEBIAN_FRONTEND=noninteractive\n+ENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\n+ENV HABANA_LOGS=/var/log/habana_logs/\n+ENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\n+ENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\n+ENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768\n+ENV PYTHONPATH=/home/$NB_UID:/usr/lib/habanalabs/",
+        "comment_created_at": "2024-08-21T12:35:42+00:00",
+        "comment_author": "tkatila",
+        "comment_body": "PYTHONPATH is not set in the `habanalabs.sh` but I'll need to double check if it's really needed.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1728862104",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7635,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+        "discussion_id": "1720486507",
+        "commented_code": "@@ -0,0 +1,143 @@\n+#\n+# NOTE: Use the Makefiles to build this image correctly.\n+#\n+\n+ARG BASE_IMG=<jupyter>\n+FROM $BASE_IMG\n+\n+# Content below is extracted from scripts/Dockerfiles here:\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n+\n+# version details\n+ARG ARTIFACTORY_URL=vault.habana.ai\n+ARG VERSION=1.16.2\n+ARG REVISION=2\n+ARG PYTORCH_VERSION=2.2.2\n+ARG OS_NUMBER=2204\n+\n+# runtime variables\n+ENV DEBIAN_FRONTEND=noninteractive\n+ENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\n+ENV HABANA_LOGS=/var/log/habana_logs/\n+ENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\n+ENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\n+ENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768\n+ENV PYTHONPATH=/home/$NB_UID:/usr/lib/habanalabs/",
+        "comment_created_at": "2024-08-23T12:04:00+00:00",
+        "comment_author": "tkatila",
+        "comment_body": "PYTHONPATH was necessary for normal functionality.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1720488961",
+    "pr_number": 7635,
+    "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+    "created_at": "2024-08-17T00:27:41+00:00",
+    "commented_code": "#\n# NOTE: Use the Makefiles to build this image correctly.\n#\n\nARG BASE_IMG=<jupyter>\nFROM $BASE_IMG\n\n# Content below is extracted from scripts/Dockerfiles here:\n# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n\n# version details\nARG ARTIFACTORY_URL=vault.habana.ai\nARG VERSION=1.16.2\nARG REVISION=2\nARG PYTORCH_VERSION=2.2.2\nARG OS_NUMBER=2204\n\n# runtime variables\nENV DEBIAN_FRONTEND=noninteractive\nENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\nENV HABANA_LOGS=/var/log/habana_logs/\nENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\nENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\nENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1720488961",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7635,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+        "discussion_id": "1720488961",
+        "commented_code": "@@ -0,0 +1,143 @@\n+#\n+# NOTE: Use the Makefiles to build this image correctly.\n+#\n+\n+ARG BASE_IMG=<jupyter>\n+FROM $BASE_IMG\n+\n+# Content below is extracted from scripts/Dockerfiles here:\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n+\n+# version details\n+ARG ARTIFACTORY_URL=vault.habana.ai\n+ARG VERSION=1.16.2\n+ARG REVISION=2\n+ARG PYTORCH_VERSION=2.2.2\n+ARG OS_NUMBER=2204\n+\n+# runtime variables\n+ENV DEBIAN_FRONTEND=noninteractive\n+ENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\n+ENV HABANA_LOGS=/var/log/habana_logs/\n+ENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\n+ENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\n+ENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768",
+        "comment_created_at": "2024-08-17T00:27:41+00:00",
+        "comment_author": "thesuperzapper",
+        "comment_body": "These should probably be under a `# configs - habana` section.\r\n\r\nAlso, feel like `TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD` needs an explanation of what it's for and why it's necessary in that comment.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1724974865",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7635,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-gaudi/Dockerfile",
+        "discussion_id": "1720488961",
+        "commented_code": "@@ -0,0 +1,143 @@\n+#\n+# NOTE: Use the Makefiles to build this image correctly.\n+#\n+\n+ARG BASE_IMG=<jupyter>\n+FROM $BASE_IMG\n+\n+# Content below is extracted from scripts/Dockerfiles here:\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/base\n+# https://github.com/HabanaAI/Setup_and_Install/tree/main/dockerfiles/pytorch\n+\n+# version details\n+ARG ARTIFACTORY_URL=vault.habana.ai\n+ARG VERSION=1.16.2\n+ARG REVISION=2\n+ARG PYTORCH_VERSION=2.2.2\n+ARG OS_NUMBER=2204\n+\n+# runtime variables\n+ENV DEBIAN_FRONTEND=noninteractive\n+ENV GC_KERNEL_PATH=/usr/lib/habanalabs/libtpc_kernels.so\n+ENV HABANA_LOGS=/var/log/habana_logs/\n+ENV HABANA_SCAL_BIN_PATH=/opt/habanalabs/engines_fw\n+ENV HABANA_PLUGINS_LIB_PATH=/opt/habanalabs/habana_plugins\n+ENV TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD=7516192768",
+        "comment_created_at": "2024-08-21T12:34:15+00:00",
+        "comment_author": "tkatila",
+        "comment_body": "Top four variables are actually set in habanalab.sh which is sourced, so I'll drop them from the Dockerfile.\r\nThe TCMALLOC env variable is obsolete and I'll remove it.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,119 @@
+---
+title: Stable configuration management
+description: "Always ensure configuration values are managed consistently and sourced\
+  \ from stable locations. \n\n1. Use defined constants instead of string literals\
+  \ for configuration values to improve maintainability and reduce errors when values\
+  \ change"
+repository: kubeflow/kubeflow
+label: Configurations
+language: TSX
+comments_count: 2
+repository_stars: 15064
+---
+
+Always ensure configuration values are managed consistently and sourced from stable locations. 
+
+1. Use defined constants instead of string literals for configuration values to improve maintainability and reduce errors when values change
+2. Source configuration files from stable branches or tagged releases rather than potentially unstable sources like master
+3. Clearly document when configuration values are environment-specific or will be overridden
+
+Example:
+```typescript
+// ❌ Poor configuration management
+enum ConfigPath {
+  V05 = 'v0.5-branch/config/kfctl_config.yaml',
+  V06 = 'master/bootstrap/config/kfctl_gcp_iap.yaml'  // Unstable source
+}
+
+const versionList = ['v0.7.0', 'v0.6.0'];  // Hard-coded literals
+
+// ✅ Better configuration management
+enum Version {
+  V05 = 'v0.5.0',
+  V06 = 'v0.6.0',
+  V07 = 'v0.7.0'
+}
+
+enum ConfigPath {
+  V05 = 'v0.5-branch/config/kfctl_config.yaml',
+  V06 = 'v0.6-branch/config/kfctl_gcp_iap.0.6.yaml'  // Stable source
+}
+
+// Use constants and document environment-specific values
+const versionList = [
+  Version.V07,  // For local testing, will be overwritten by env vars
+  Version.V06
+];
+```
+
+
+[
+  {
+    "discussion_id": "350458713",
+    "pr_number": 4487,
+    "pr_file": "components/gcp-click-to-deploy/src/DeployForm.tsx",
+    "created_at": "2019-11-25T22:34:34+00:00",
+    "commented_code": "kfctlLib: false,\n            kfversion: Version.V06,\n            // Version for local test. Staging and Prod with overwrite with their env vars.\n            kfversionList: [Version.V06, Version.V05],\n            kfversionList: ['v0.7.0', Version.V06],",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "350458713",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4487,
+        "pr_file": "components/gcp-click-to-deploy/src/DeployForm.tsx",
+        "discussion_id": "350458713",
+        "commented_code": "@@ -221,7 +259,7 @@ export default class DeployForm extends React.Component<any, DeployFormState> {\n             kfctlLib: false,\n             kfversion: Version.V06,\n             // Version for local test. Staging and Prod with overwrite with their env vars.\n-            kfversionList: [Version.V06, Version.V05],\n+            kfversionList: ['v0.7.0', Version.V06],",
+        "comment_created_at": "2019-11-25T22:34:34+00:00",
+        "comment_author": "abhi-g",
+        "comment_body": "why not use the constant defined above for 0.7?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "350459520",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4487,
+        "pr_file": "components/gcp-click-to-deploy/src/DeployForm.tsx",
+        "discussion_id": "350458713",
+        "commented_code": "@@ -221,7 +259,7 @@ export default class DeployForm extends React.Component<any, DeployFormState> {\n             kfctlLib: false,\n             kfversion: Version.V06,\n             // Version for local test. Staging and Prod with overwrite with their env vars.\n-            kfversionList: [Version.V06, Version.V05],\n+            kfversionList: ['v0.7.0', Version.V06],",
+        "comment_created_at": "2019-11-25T22:37:05+00:00",
+        "comment_author": "kunmingg",
+        "comment_body": "The version here `v0.7.0` is for local test, version will be over written by env vars.\r\nAbove was a prefix `v0.7` to match v0.7.0 and sub-releases to new backend.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "311760821",
+    "pr_number": 3599,
+    "pr_file": "components/gcp-click-to-deploy/src/DeployForm.tsx",
+    "created_at": "2019-08-07T21:00:18+00:00",
+    "commented_code": "import * as request from 'request';\n\nimport Gapi from './Gapi';\nimport {encryptPassword, flattenDeploymentOperationError, getFileContentsFromGitHub, log, wait} from './Utils';\nimport {\n    encryptPassword, flattenDeploymentOperationError,\n    getFileContentsFromGitHub, log, wait\n} from './Utils';\n\n/** Relative paths from the root of the repository. */\nenum ConfigPath {\n    V05 = 'v0.5-branch/components/gcp-click-to-deploy/app-config.yaml',\n    V06 = 'v0.6-branch/bootstrap/config/kfctl_gcp_iap.0.6.yaml'\n    V06 = 'master/bootstrap/config/kfctl_gcp_iap.yaml'",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "311760821",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 3599,
+        "pr_file": "components/gcp-click-to-deploy/src/DeployForm.tsx",
+        "discussion_id": "311760821",
+        "commented_code": "@@ -14,31 +14,33 @@ import * as React from 'react';\n import * as request from 'request';\n \n import Gapi from './Gapi';\n-import {encryptPassword, flattenDeploymentOperationError, getFileContentsFromGitHub, log, wait} from './Utils';\n+import {\n+    encryptPassword, flattenDeploymentOperationError,\n+    getFileContentsFromGitHub, log, wait\n+} from './Utils';\n \n /** Relative paths from the root of the repository. */\n enum ConfigPath {\n     V05 = 'v0.5-branch/components/gcp-click-to-deploy/app-config.yaml',\n-    V06 = 'v0.6-branch/bootstrap/config/kfctl_gcp_iap.0.6.yaml'\n+    V06 = 'master/bootstrap/config/kfctl_gcp_iap.yaml'",
+        "comment_created_at": "2019-08-07T21:00:18+00:00",
+        "comment_author": "kunmingg",
+        "comment_body": "`v0.6-branch` should be more stable compared to `master`\r\n`master` branch could be broken at any time.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "312060561",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 3599,
+        "pr_file": "components/gcp-click-to-deploy/src/DeployForm.tsx",
+        "discussion_id": "311760821",
+        "commented_code": "@@ -14,31 +14,33 @@ import * as React from 'react';\n import * as request from 'request';\n \n import Gapi from './Gapi';\n-import {encryptPassword, flattenDeploymentOperationError, getFileContentsFromGitHub, log, wait} from './Utils';\n+import {\n+    encryptPassword, flattenDeploymentOperationError,\n+    getFileContentsFromGitHub, log, wait\n+} from './Utils';\n \n /** Relative paths from the root of the repository. */\n enum ConfigPath {\n     V05 = 'v0.5-branch/components/gcp-click-to-deploy/app-config.yaml',\n-    V06 = 'v0.6-branch/bootstrap/config/kfctl_gcp_iap.0.6.yaml'\n+    V06 = 'master/bootstrap/config/kfctl_gcp_iap.yaml'",
+        "comment_created_at": "2019-08-08T14:17:35+00:00",
+        "comment_author": "prodonjs",
+        "comment_body": "Yes I agree. But [v0.6-branch/bootstrap/config/kfctl_gcp_iap.0.6.yaml](https://github.com/kubeflow/kubeflow/blob/v0.6-branch/bootstrap/config/kfctl_gcp_iap.0.6.yaml)  doesn't have the `applications` section set. [master/bootstrap/config/kfctl_gcp_iap.yaml](https://github.com/kubeflow/kubeflow/blob/master/bootstrap/config/kfctl_gcp_iap.yaml) has `applications` but not `components`, `componentParams`, or `packages`.\r\n\r\nIf possible, we should check a base config file into the v0.6-branch that has the main structure that needs to be in the request body so that the UI doesn't have to build any new elements but simply replace parameter values. Alternatively, we could revert to the mechanism used in the current deployment UI where we provide the config file at deployment time, but pulling from GitHub definitely reduces the deployment complexity.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

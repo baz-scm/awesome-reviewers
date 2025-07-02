@@ -1,0 +1,122 @@
+---
+title: Centralize dependency configurations
+description: When adding or updating package dependencies, place them in centralized
+  configuration files rather than duplicating them across multiple services. Keep
+  dependencies up-to-date with the latest stable versions and replace deprecated packages
+  with their recommended successors. Always verify backward compatibility when upgrading
+  dependency versions.
+repository: kubeflow/kubeflow
+label: Configurations
+language: Txt
+comments_count: 2
+repository_stars: 15064
+---
+
+When adding or updating package dependencies, place them in centralized configuration files rather than duplicating them across multiple services. Keep dependencies up-to-date with the latest stable versions and replace deprecated packages with their recommended successors. Always verify backward compatibility when upgrading dependency versions.
+
+Example for centralization:
+```python
+# Instead of:
+# Adding to components/crud-web-apps/jupyter/backend/requirements.txt
+# kubernetes==v22.6.0
+
+# Do this:
+# Update in components/crud-web-apps/common/backend/setup.py
+install_requires=[
+    "kubernetes>=22.6.0",
+    # other dependencies
+]
+```
+
+Example for replacing deprecated packages:
+```
+# Don't:
+kfserving==0.5.1  # deprecated package
+
+# Do:
+kserve==0.11.1  # recommended successor
+```
+
+
+[
+  {
+    "discussion_id": "1356977840",
+    "pr_number": 7303,
+    "pr_file": "components/example-notebook-servers/jupyter-pytorch-full/requirements.txt",
+    "created_at": "2023-10-12T15:11:47+00:00",
+    "commented_code": "# kubeflow packages\nkfp==1.6.3\nkfp-server-api==1.6.0\nkfserving==0.5.1\nkfp==2.3.0\nkfp-server-api==2.0.1\nkfserving==0.6.1",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1356977840",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7303,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-full/requirements.txt",
+        "discussion_id": "1356977840",
+        "commented_code": "@@ -1,23 +1,23 @@\n # kubeflow packages\n-kfp==1.6.3\n-kfp-server-api==1.6.0\n-kfserving==0.5.1\n+kfp==2.3.0\n+kfp-server-api==2.0.1\n+kfserving==0.6.1",
+        "comment_created_at": "2023-10-12T15:11:47+00:00",
+        "comment_author": "kimwnasptd",
+        "comment_body": "Should we drop this package and install the corresponding kserve package instead?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1360925751",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7303,
+        "pr_file": "components/example-notebook-servers/jupyter-pytorch-full/requirements.txt",
+        "discussion_id": "1356977840",
+        "commented_code": "@@ -1,23 +1,23 @@\n # kubeflow packages\n-kfp==1.6.3\n-kfp-server-api==1.6.0\n-kfserving==0.5.1\n+kfp==2.3.0\n+kfp-server-api==2.0.1\n+kfserving==0.6.1",
+        "comment_created_at": "2023-10-16T16:20:55+00:00",
+        "comment_author": "juliusvonkohout",
+        "comment_body": "yes drop kfserving and install 0.11.1 from here https://pypi.org/project/kserve/",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "850324947",
+    "pr_number": 6422,
+    "pr_file": "components/crud-web-apps/jupyter/backend/requirements.txt",
+    "created_at": "2022-04-14T10:50:25+00:00",
+    "commented_code": "kubernetes==v22.6.0",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "850324947",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 6422,
+        "pr_file": "components/crud-web-apps/jupyter/backend/requirements.txt",
+        "discussion_id": "850324947",
+        "commented_code": "@@ -1 +1,2 @@\n+kubernetes==v22.6.0",
+        "comment_created_at": "2022-04-14T10:50:25+00:00",
+        "comment_author": "kimwnasptd",
+        "comment_body": "Could you instead make this change into the common code, so that it takes effect for all the web apps?\r\n\r\nhttps://github.com/kubeflow/kubeflow/blob/master/components/crud-web-apps/common/backend/setup.py#L6",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "851208458",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 6422,
+        "pr_file": "components/crud-web-apps/jupyter/backend/requirements.txt",
+        "discussion_id": "850324947",
+        "commented_code": "@@ -1 +1,2 @@\n+kubernetes==v22.6.0",
+        "comment_created_at": "2022-04-15T10:48:38+00:00",
+        "comment_author": "benjamintanweihao",
+        "comment_body": "> @benjamintanweihao could you verify that deleting objects [i.e. Notebooks] also works as expected?\r\n> \r\n> I remember that there was a change in the newer version of the library on how to pass the deletion-policy, but I might be wrong.\r\n\r\nJust tried deleting the notebook and it's working :D. Sure thing, I'll also make the change everywhere.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "851995813",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 6422,
+        "pr_file": "components/crud-web-apps/jupyter/backend/requirements.txt",
+        "discussion_id": "850324947",
+        "commented_code": "@@ -1 +1,2 @@\n+kubernetes==v22.6.0",
+        "comment_created_at": "2022-04-18T09:17:19+00:00",
+        "comment_author": "benjamintanweihao",
+        "comment_body": "Done. :) ",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

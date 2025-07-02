@@ -1,0 +1,120 @@
+---
+title: Reduce nesting depth
+description: Improve code readability by reducing nesting depth with early returns
+  and functional approaches. Use early returns to handle edge cases first, and prefer
+  functional operators over nested conditionals when working with streams or collections.
+repository: kubeflow/kubeflow
+label: Code Style
+language: Typescript
+comments_count: 2
+repository_stars: 15064
+---
+
+Improve code readability by reducing nesting depth with early returns and functional approaches. Use early returns to handle edge cases first, and prefer functional operators over nested conditionals when working with streams or collections.
+
+Example for early return:
+```typescript
+// Instead of this
+selectType(event): void {
+  this.typeSelected = event.value;
+  if (this.typeSelected === 'New') {
+    this.volume.controls.name.setValue(this.currentVolName);
+  }
+}
+
+// Prefer this
+selectType(event): void {
+  this.typeSelected = event.value;
+  if (this.typeSelected !== 'New') return;
+  this.volume.controls.name.setValue(this.currentVolName);
+}
+```
+
+Example for functional approach:
+```typescript
+// Instead of this
+this.router.events.subscribe(event => {
+  if (event instanceof NavigationEnd) {
+    // Do something
+  }
+});
+
+// Prefer this
+this.router.events
+  .pipe(filter(event => event instanceof NavigationEnd))
+  .subscribe(event => {
+    // Do something
+  });
+```
+
+
+[
+  {
+    "discussion_id": "1135937150",
+    "pr_number": 7030,
+    "pr_file": "components/centraldashboard-angular/frontend/src/app/services/namespace.service.ts",
+    "created_at": "2023-03-14T17:18:35+00:00",
+    "commented_code": "import { Injectable } from '@angular/core';\nimport { ActivatedRoute, NavigationEnd, Params, Router } from '@angular/router';\nimport { ReplaySubject } from 'rxjs';\nimport { getQueryParams, getUrlFragment } from '../shared/utils';\nimport { Namespace } from '../types/namespace';\nimport { EnvironmentService } from './environment.service';\nimport { LocalStorageService } from './local-storage.service';\n\n@Injectable({\n  providedIn: 'root',\n})\nexport class CDBNamespaceService {\n  public namespacesSubject = new ReplaySubject<Namespace[]>();\n  public currentNamespaceSubject = new ReplaySubject<Namespace>();\n  public allNamespacesAllowedSubject = new ReplaySubject<boolean>();\n\n  private namespaces: Namespace[];\n  private user: string;\n  private allNamespacesAllowed: boolean;\n  private currentNamespace: Namespace | undefined;\n\n  readonly ALL_NAMESPACES_ALLOWED_LIST = [\n    'jupyter',\n    'volumes',\n    'tensorboards',\n    'katib',\n    'models',\n  ];\n  readonly ALL_NAMESPACES = 'All namespaces';\n  readonly allNamespacesOption: Namespace = {\n    namespace: this.ALL_NAMESPACES,\n    role: '',\n    user: '',\n  };\n\n  constructor(\n    private env: EnvironmentService,\n    private localStorage: LocalStorageService,\n    private router: Router,\n    private route: ActivatedRoute,\n  ) {\n    this.env.user.subscribe((user: string) => {\n      this.user = user;\n    });\n\n    this.env.namespaces.subscribe((namespaces: Namespace[]) => {\n      namespaces = [this.allNamespacesOption, ...namespaces];\n      this.namespaces = namespaces;\n      this.namespacesSubject.next(namespaces);\n\n      this.allNamespacesAllowed = this.calcAllNamespacesOption(this.router.url);\n      this.allNamespacesAllowedSubject.next(this.allNamespacesAllowed);\n\n      this.setCurrentNamespace(namespaces, this.user);\n    });\n\n    this.router.events.subscribe(event => {\n      if (event instanceof NavigationEnd) {",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1135937150",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7030,
+        "pr_file": "components/centraldashboard-angular/frontend/src/app/services/namespace.service.ts",
+        "discussion_id": "1135937150",
+        "commented_code": "@@ -0,0 +1,199 @@\n+import { Injectable } from '@angular/core';\n+import { ActivatedRoute, NavigationEnd, Params, Router } from '@angular/router';\n+import { ReplaySubject } from 'rxjs';\n+import { getQueryParams, getUrlFragment } from '../shared/utils';\n+import { Namespace } from '../types/namespace';\n+import { EnvironmentService } from './environment.service';\n+import { LocalStorageService } from './local-storage.service';\n+\n+@Injectable({\n+  providedIn: 'root',\n+})\n+export class CDBNamespaceService {\n+  public namespacesSubject = new ReplaySubject<Namespace[]>();\n+  public currentNamespaceSubject = new ReplaySubject<Namespace>();\n+  public allNamespacesAllowedSubject = new ReplaySubject<boolean>();\n+\n+  private namespaces: Namespace[];\n+  private user: string;\n+  private allNamespacesAllowed: boolean;\n+  private currentNamespace: Namespace | undefined;\n+\n+  readonly ALL_NAMESPACES_ALLOWED_LIST = [\n+    'jupyter',\n+    'volumes',\n+    'tensorboards',\n+    'katib',\n+    'models',\n+  ];\n+  readonly ALL_NAMESPACES = 'All namespaces';\n+  readonly allNamespacesOption: Namespace = {\n+    namespace: this.ALL_NAMESPACES,\n+    role: '',\n+    user: '',\n+  };\n+\n+  constructor(\n+    private env: EnvironmentService,\n+    private localStorage: LocalStorageService,\n+    private router: Router,\n+    private route: ActivatedRoute,\n+  ) {\n+    this.env.user.subscribe((user: string) => {\n+      this.user = user;\n+    });\n+\n+    this.env.namespaces.subscribe((namespaces: Namespace[]) => {\n+      namespaces = [this.allNamespacesOption, ...namespaces];\n+      this.namespaces = namespaces;\n+      this.namespacesSubject.next(namespaces);\n+\n+      this.allNamespacesAllowed = this.calcAllNamespacesOption(this.router.url);\n+      this.allNamespacesAllowedSubject.next(this.allNamespacesAllowed);\n+\n+      this.setCurrentNamespace(namespaces, this.user);\n+    });\n+\n+    this.router.events.subscribe(event => {\n+      if (event instanceof NavigationEnd) {",
+        "comment_created_at": "2023-03-14T17:18:35+00:00",
+        "comment_author": "tasos-ale",
+        "comment_body": "We can use a `filter()` and remove the `if statement` since we only care for `NavigationEnd` ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "443845848",
+    "pr_number": 5086,
+    "pr_file": "components/jupyter-web-app/frontend/src/app/resource-form/volume/volume.component.ts",
+    "created_at": "2020-06-22T21:50:01+00:00",
+    "commented_code": "}\n  }\n\n// ----- onChange of the New / Existing Volume -----\n  selectType(event): void {\n    this.typeSelected = event.value;\n    if (this.typeSelected === 'New') {\n      this.volume.controls.name.setValue(this.currentVolName);\n    }",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "443845848",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5086,
+        "pr_file": "components/jupyter-web-app/frontend/src/app/resource-form/volume/volume.component.ts",
+        "discussion_id": "443845848",
+        "commented_code": "@@ -58,6 +63,14 @@ export class VolumeComponent implements OnInit, OnDestroy {\n     }\n   }\n \n+// ----- onChange of the New / Existing Volume -----\n+  selectType(event): void {\n+    this.typeSelected = event.value;\n+    if (this.typeSelected === 'New') {\n+      this.volume.controls.name.setValue(this.currentVolName);\n+    }",
+        "comment_created_at": "2020-06-22T21:50:01+00:00",
+        "comment_author": "avdaredevil",
+        "comment_body": "*nit*: Prevent unnecessary code depth\r\n```suggestion\r\n    if (this.typeSelected !== 'New') return;\r\n    this.volume.controls.name.setValue(this.currentVolName);\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "443890027",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5086,
+        "pr_file": "components/jupyter-web-app/frontend/src/app/resource-form/volume/volume.component.ts",
+        "discussion_id": "443845848",
+        "commented_code": "@@ -58,6 +63,14 @@ export class VolumeComponent implements OnInit, OnDestroy {\n     }\n   }\n \n+// ----- onChange of the New / Existing Volume -----\n+  selectType(event): void {\n+    this.typeSelected = event.value;\n+    if (this.typeSelected === 'New') {\n+      this.volume.controls.name.setValue(this.currentVolName);\n+    }",
+        "comment_created_at": "2020-06-23T00:08:14+00:00",
+        "comment_author": "lalithvaka",
+        "comment_body": "Will test this and commit again",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "443902905",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5086,
+        "pr_file": "components/jupyter-web-app/frontend/src/app/resource-form/volume/volume.component.ts",
+        "discussion_id": "443845848",
+        "commented_code": "@@ -58,6 +63,14 @@ export class VolumeComponent implements OnInit, OnDestroy {\n     }\n   }\n \n+// ----- onChange of the New / Existing Volume -----\n+  selectType(event): void {\n+    this.typeSelected = event.value;\n+    if (this.typeSelected === 'New') {\n+      this.volume.controls.name.setValue(this.currentVolName);\n+    }",
+        "comment_created_at": "2020-06-23T00:57:33+00:00",
+        "comment_author": "lalithvaka",
+        "comment_body": "Updated and submitted the commit",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

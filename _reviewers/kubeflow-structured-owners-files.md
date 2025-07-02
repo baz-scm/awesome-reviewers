@@ -1,0 +1,161 @@
+---
+title: Structured OWNERS files
+description: 'OWNERS files must follow project documentation standards to properly
+  reflect component ownership and maintainership. When creating or updating these
+  files:'
+repository: kubeflow/kubeflow
+label: Documentation
+language: Other
+comments_count: 3
+repository_stars: 15064
+---
+
+OWNERS files must follow project documentation standards to properly reflect component ownership and maintainership. When creating or updating these files:
+
+1. List approvers who are actively driving the component and have explicitly agreed to participate
+2. Do not duplicate people between approver and reviewer sections
+3. Leave sections empty if there are no appropriate people to list rather than filling them incorrectly
+4. Reference project guidelines for file structure (e.g., Kubeflow documentation standards)
+
+Example of a properly structured OWNERS file:
+```yaml
+approvers:
+  - developer1
+  - developer2
+  - developer3
+reviewers:
+  - reviewer1
+  - reviewer2
+```
+
+If someone should be both an approver and a reviewer, only list them as an approver. This ensures clear documentation of component ownership and streamlines the review process.
+
+
+[
+  {
+    "discussion_id": "1215392226",
+    "pr_number": 6876,
+    "pr_file": "components/pvc-viewer/OWNERS",
+    "created_at": "2023-06-03T09:54:07+00:00",
+    "commented_code": "approvers:",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1215392226",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 6876,
+        "pr_file": "components/pvc-viewer/OWNERS",
+        "discussion_id": "1215392226",
+        "commented_code": "@@ -0,0 +1,7 @@\n+approvers:",
+        "comment_created_at": "2023-06-03T09:54:07+00:00",
+        "comment_author": "kimwnasptd",
+        "comment_body": "@TobiasGoerke why are you not an approver? :) \r\n\r\nWe want the OWNERS file to depict the folks that are driving the component. Considering that you, @apo-ger and I have worked on the proposal of this I'd create the OWNERS file like this:\r\n\r\n```yaml\r\napprovers:\r\n  - apo-ger\r\n  - kimwnasptd\r\n  - TobiasGoerke\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "465339868",
+    "pr_number": 5184,
+    "pr_file": "components/web-apps/OWNERS",
+    "created_at": "2020-08-04T21:26:35+00:00",
+    "commented_code": "approvers:\n  - elikatsis\n  - kimwnasptd\n  - StefanoFioravanzo\nreviewers:\n  - avdaredevil",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "465339868",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5184,
+        "pr_file": "components/web-apps/OWNERS",
+        "discussion_id": "465339868",
+        "commented_code": "@@ -0,0 +1,11 @@\n+approvers:\n+  - elikatsis\n+  - kimwnasptd\n+  - StefanoFioravanzo\n+reviewers:\n+  - avdaredevil",
+        "comment_created_at": "2020-08-04T21:26:35+00:00",
+        "comment_author": "jlewi",
+        "comment_body": "Have @avdaredevil and @prodonjs agreed to participate in this? \r\n\r\nDo not duplicate reviewers and approvers. Please refer to\r\nhttps://www.kubeflow.org/docs/about/contributing/#maintaining-owners-files",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "465645242",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5184,
+        "pr_file": "components/web-apps/OWNERS",
+        "discussion_id": "465339868",
+        "commented_code": "@@ -0,0 +1,11 @@\n+approvers:\n+  - elikatsis\n+  - kimwnasptd\n+  - StefanoFioravanzo\n+reviewers:\n+  - avdaredevil",
+        "comment_created_at": "2020-08-05T11:03:12+00:00",
+        "comment_author": "kimwnasptd",
+        "comment_body": "My bad, I just copied the reviewers from the jupyter web app.\r\nLets start with an empty list of reviewers for now",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "444207757",
+    "pr_number": 5088,
+    "pr_file": "components/tensorboard-controller/OWNERS",
+    "created_at": "2020-06-23T13:06:10+00:00",
+    "commented_code": "approvers:\n  - elikatsis\n  - kandrio98\n  - kimwnasptd\n  - quanjielin\nreviewers:",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "444207757",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5088,
+        "pr_file": "components/tensorboard-controller/OWNERS",
+        "discussion_id": "444207757",
+        "commented_code": "@@ -0,0 +1,10 @@\n+approvers:\n+  - elikatsis\n+  - kandrio98\n+  - kimwnasptd\n+  - quanjielin\n+reviewers:",
+        "comment_created_at": "2020-06-23T13:06:10+00:00",
+        "comment_author": "jlewi",
+        "comment_body": "approvers shouldn't be listed as approvers",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "444210570",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5088,
+        "pr_file": "components/tensorboard-controller/OWNERS",
+        "discussion_id": "444207757",
+        "commented_code": "@@ -0,0 +1,10 @@\n+approvers:\n+  - elikatsis\n+  - kandrio98\n+  - kimwnasptd\n+  - quanjielin\n+reviewers:",
+        "comment_created_at": "2020-06-23T13:10:28+00:00",
+        "comment_author": "kimwnasptd",
+        "comment_body": "I think I'm missing something here, where should approvers be listed?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "444519651",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5088,
+        "pr_file": "components/tensorboard-controller/OWNERS",
+        "discussion_id": "444207757",
+        "commented_code": "@@ -0,0 +1,10 @@\n+approvers:\n+  - elikatsis\n+  - kandrio98\n+  - kimwnasptd\n+  - quanjielin\n+reviewers:",
+        "comment_created_at": "2020-06-23T21:29:42+00:00",
+        "comment_author": "jlewi",
+        "comment_body": "My bad typo; meant to say that approvers should be listed as reviewers.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "444720070",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5088,
+        "pr_file": "components/tensorboard-controller/OWNERS",
+        "discussion_id": "444207757",
+        "commented_code": "@@ -0,0 +1,10 @@\n+approvers:\n+  - elikatsis\n+  - kandrio98\n+  - kimwnasptd\n+  - quanjielin\n+reviewers:",
+        "comment_created_at": "2020-06-24T08:10:41+00:00",
+        "comment_author": "kimwnasptd",
+        "comment_body": "I see. Which people should I assign as reviewers?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "446243147",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5088,
+        "pr_file": "components/tensorboard-controller/OWNERS",
+        "discussion_id": "444207757",
+        "commented_code": "@@ -0,0 +1,10 @@\n+approvers:\n+  - elikatsis\n+  - kandrio98\n+  - kimwnasptd\n+  - quanjielin\n+reviewers:",
+        "comment_created_at": "2020-06-26T15:10:01+00:00",
+        "comment_author": "jlewi",
+        "comment_body": "@kimwnasptd You can just leave it blank if there is no one that makes sense to add as a reviewer.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

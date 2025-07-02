@@ -1,0 +1,69 @@
+---
+title: Enforce HTTPS protocol
+description: Always validate that URLs use the HTTPS protocol in both implementation
+  code and validation error messages. Even if your application might handle HTTP-to-HTTPS
+  redirects, enforce HTTPS from the outset as a security best practice to prevent
+  man-in-the-middle attacks and data exposure.
+repository: kubeflow/kubeflow
+label: Security
+language: Typescript
+comments_count: 1
+repository_stars: 15064
+---
+
+Always validate that URLs use the HTTPS protocol in both implementation code and validation error messages. Even if your application might handle HTTP-to-HTTPS redirects, enforce HTTPS from the outset as a security best practice to prevent man-in-the-middle attacks and data exposure.
+
+Example:
+```javascript
+// Incorrect - allows HTTP
+if (!/^https?:\/\/\S+/.test(url)) {
+  console.log('Invalid URL provided, must be like http*://*');
+  return false;
+}
+
+// Correct - enforces HTTPS only
+if (!/^https:\/\/\S+/.test(url)) {
+  console.log('Invalid URL provided, must use HTTPS protocol');
+  return false;
+}
+```
+
+This helps ensure all communications are encrypted and prevents security vulnerabilities that can arise from initial insecure connections.
+
+
+[
+  {
+    "discussion_id": "382068193",
+    "pr_number": 4780,
+    "pr_file": "components/centraldashboard/test/e2e.test.ts",
+    "created_at": "2020-02-20T15:21:29+00:00",
+    "commented_code": "import 'jasmine';\n\nimport {Credentials, JWT} from 'google-auth-library';\nimport {launch, Page} from 'puppeteer';\nimport request from 'request';\n\n\n/**\n * Look here to see setup instructions for Environment Setup for Cluster Auth:\n *   https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform\n * \n * Use Scope: Owner\n */ \nconst ORIGINAL_TIMEOUT = jasmine.DEFAULT_TIMEOUT_INTERVAL;\nconst {\n    KF_HOST,   // The url to your cluster, usually: https://<cluster>.endpoints.<project>.cloud.goog/\n    CLIENT_ID, // This is the CLIENT_ID token used to create the cluster (used in http://deploy.kubeflow.cloud/)\n    SERVICE_ACCOUNT_EMAIL, // The email address for the service account you created <name>@<project>.iam.gserviceaccount.com\n    SERVICE_ACCOUNT_KEY,   // Should be a JSON file downloaded from cloud console service accounts\n} = process.env;\n\n['KF_HOST', 'CLIENT_ID', 'SERVICE_ACCOUNT_EMAIL', 'SERVICE_ACCOUNT_KEY'].forEach(envVar => {\n    if (!process.env[envVar]) {console.log(`${envVar} environment variable must be set`);process.exit(1);}\n});\nif (!/^https?:\\/\\/\\S+/.test(KF_HOST)) {console.log('Invalid HOST url provided, must be like http*://*');process.exit(1);}",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "382068193",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4780,
+        "pr_file": "components/centraldashboard/test/e2e.test.ts",
+        "discussion_id": "382068193",
+        "commented_code": "@@ -0,0 +1,144 @@\n+import 'jasmine';\n+\n+import {Credentials, JWT} from 'google-auth-library';\n+import {launch, Page} from 'puppeteer';\n+import request from 'request';\n+\n+\n+/**\n+ * Look here to see setup instructions for Environment Setup for Cluster Auth:\n+ *   https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform\n+ * \n+ * Use Scope: Owner\n+ */ \n+const ORIGINAL_TIMEOUT = jasmine.DEFAULT_TIMEOUT_INTERVAL;\n+const {\n+    KF_HOST,   // The url to your cluster, usually: https://<cluster>.endpoints.<project>.cloud.goog/\n+    CLIENT_ID, // This is the CLIENT_ID token used to create the cluster (used in http://deploy.kubeflow.cloud/)\n+    SERVICE_ACCOUNT_EMAIL, // The email address for the service account you created <name>@<project>.iam.gserviceaccount.com\n+    SERVICE_ACCOUNT_KEY,   // Should be a JSON file downloaded from cloud console service accounts\n+} = process.env;\n+\n+['KF_HOST', 'CLIENT_ID', 'SERVICE_ACCOUNT_EMAIL', 'SERVICE_ACCOUNT_KEY'].forEach(envVar => {\n+    if (!process.env[envVar]) {console.log(`${envVar} environment variable must be set`);process.exit(1);}\n+});\n+if (!/^https?:\\/\\/\\S+/.test(KF_HOST)) {console.log('Invalid HOST url provided, must be like http*://*');process.exit(1);}",
+        "comment_created_at": "2020-02-20T15:21:29+00:00",
+        "comment_author": "kimwnasptd",
+        "comment_body": "nit: `Invalid HOST url provided, must be like https*://*` (the protocol should be https in the end)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "382317648",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4780,
+        "pr_file": "components/centraldashboard/test/e2e.test.ts",
+        "discussion_id": "382068193",
+        "commented_code": "@@ -0,0 +1,144 @@\n+import 'jasmine';\n+\n+import {Credentials, JWT} from 'google-auth-library';\n+import {launch, Page} from 'puppeteer';\n+import request from 'request';\n+\n+\n+/**\n+ * Look here to see setup instructions for Environment Setup for Cluster Auth:\n+ *   https://cloud.google.com/kubernetes-engine/docs/tutorials/authenticating-to-cloud-platform\n+ * \n+ * Use Scope: Owner\n+ */ \n+const ORIGINAL_TIMEOUT = jasmine.DEFAULT_TIMEOUT_INTERVAL;\n+const {\n+    KF_HOST,   // The url to your cluster, usually: https://<cluster>.endpoints.<project>.cloud.goog/\n+    CLIENT_ID, // This is the CLIENT_ID token used to create the cluster (used in http://deploy.kubeflow.cloud/)\n+    SERVICE_ACCOUNT_EMAIL, // The email address for the service account you created <name>@<project>.iam.gserviceaccount.com\n+    SERVICE_ACCOUNT_KEY,   // Should be a JSON file downloaded from cloud console service accounts\n+} = process.env;\n+\n+['KF_HOST', 'CLIENT_ID', 'SERVICE_ACCOUNT_EMAIL', 'SERVICE_ACCOUNT_KEY'].forEach(envVar => {\n+    if (!process.env[envVar]) {console.log(`${envVar} environment variable must be set`);process.exit(1);}\n+});\n+if (!/^https?:\\/\\/\\S+/.test(KF_HOST)) {console.log('Invalid HOST url provided, must be like http*://*');process.exit(1);}",
+        "comment_created_at": "2020-02-20T23:31:51+00:00",
+        "comment_author": "avdaredevil",
+        "comment_body": "Right, usually clusters redirect, so I allowed users to pass in `http` or `https`, but I've changed the log statement AND regex to simply only allow `https`",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

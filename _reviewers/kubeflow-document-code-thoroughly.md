@@ -1,0 +1,141 @@
+---
+title: Document code thoroughly
+description: 'Always include appropriate documentation in your code to improve readability,
+  maintainability, and usability:
+
+
+  1. **Document all public APIs** with Go doc comments:'
+repository: kubeflow/kubeflow
+label: Documentation
+language: Go
+comments_count: 4
+repository_stars: 15064
+---
+
+Always include appropriate documentation in your code to improve readability, maintainability, and usability:
+
+1. **Document all public APIs** with Go doc comments:
+   ```go
+   // MetricsExporter provides functionality for exporting metrics to Prometheus
+   // and managing metrics collection within the application.
+   type MetricsExporter struct {
+       // fields...
+   }
+   
+   // IncRequestCounter increments the request counter for the specified kind.
+   // It tracks API usage patterns for monitoring purposes.
+   func IncRequestCounter(kind string) {
+       // implementation...
+   }
+   ```
+
+2. **Explain complex logic** with inline comments, especially when there are relationships between components or non-obvious behaviors:
+   ```go
+   // Update the CR status based on the ContainerState of the container
+   // that has the same name as the CR
+   if len(pod.Status.ContainerStatuses) > 0 {
+       // implementation...
+   }
+   ```
+
+3. **Document code modifications** by adding TODOs with context for commented-out or temporary code:
+   ```go
+   // TODO(user): This endpoint is temporarily disabled until issue #123 is resolved
+   // which addresses the race condition in the deployment creation process.
+   //
+   //// GetLatestKfdef returns latest kfdef status.
+   ```
+
+Following these practices ensures code is understandable to new team members, facilitates easier maintenance, and helps API consumers use your code correctly. Run tools like `go vet ./...` regularly to catch missing documentation on public elements.
+
+
+[
+  {
+    "discussion_id": "491874831",
+    "pr_number": 5314,
+    "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+    "created_at": "2020-09-21T08:38:29+00:00",
+    "commented_code": "} else {\n\t\t// Got the pod\n\t\tpodFound = true\n\t\tif len(pod.Status.ContainerStatuses) > 0 &&\n\t\t\tpod.Status.ContainerStatuses[0].State != instance.Status.ContainerState {\n\t\t\tlog.Info(\"Updating container state: \", \"namespace\", instance.Namespace, \"name\", instance.Name)\n\t\t\tcs := pod.Status.ContainerStatuses[0].State\n\t\t\tinstance.Status.ContainerState = cs\n\t\t\toldConditions := instance.Status.Conditions\n\t\t\tnewCondition := getNextCondition(cs)\n\t\t\t// Append new condition\n\t\t\tif len(oldConditions) == 0 || oldConditions[0].Type != newCondition.Type ||\n\t\t\t\toldConditions[0].Reason != newCondition.Reason ||\n\t\t\t\toldConditions[0].Message != newCondition.Message {\n\t\t\t\tlog.Info(\"Appending to conditions: \", \"namespace\", instance.Namespace, \"name\", instance.Name, \"type\", newCondition.Type, \"reason\", newCondition.Reason, \"message\", newCondition.Message)\n\t\t\t\tinstance.Status.Conditions = append([]v1beta1.NotebookCondition{newCondition}, oldConditions...)\n\n\t\tif len(pod.Status.ContainerStatuses) > 0 {\n\t\t\tnotebookContainerFound := false\n\t\t\tfor i := range pod.Status.ContainerStatuses {",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "491874831",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5314,
+        "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+        "discussion_id": "491874831",
+        "commented_code": "@@ -206,23 +206,34 @@ func (r *NotebookReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {\n \t} else {\n \t\t// Got the pod\n \t\tpodFound = true\n-\t\tif len(pod.Status.ContainerStatuses) > 0 &&\n-\t\t\tpod.Status.ContainerStatuses[0].State != instance.Status.ContainerState {\n-\t\t\tlog.Info(\"Updating container state: \", \"namespace\", instance.Namespace, \"name\", instance.Name)\n-\t\t\tcs := pod.Status.ContainerStatuses[0].State\n-\t\t\tinstance.Status.ContainerState = cs\n-\t\t\toldConditions := instance.Status.Conditions\n-\t\t\tnewCondition := getNextCondition(cs)\n-\t\t\t// Append new condition\n-\t\t\tif len(oldConditions) == 0 || oldConditions[0].Type != newCondition.Type ||\n-\t\t\t\toldConditions[0].Reason != newCondition.Reason ||\n-\t\t\t\toldConditions[0].Message != newCondition.Message {\n-\t\t\t\tlog.Info(\"Appending to conditions: \", \"namespace\", instance.Namespace, \"name\", instance.Name, \"type\", newCondition.Type, \"reason\", newCondition.Reason, \"message\", newCondition.Message)\n-\t\t\t\tinstance.Status.Conditions = append([]v1beta1.NotebookCondition{newCondition}, oldConditions...)\n+\n+\t\tif len(pod.Status.ContainerStatuses) > 0 {\n+\t\t\tnotebookContainerFound := false\n+\t\t\tfor i := range pod.Status.ContainerStatuses {",
+        "comment_created_at": "2020-09-21T08:38:29+00:00",
+        "comment_author": "kimwnasptd",
+        "comment_body": "Could you add a comment here to document that the status of the CR will be updated based on the `ContainerState` of the container that has the same name with the CR?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "332759147",
+    "pr_number": 4251,
+    "pr_file": "components/kf-monitoring/MetricsExporter.go",
+    "created_at": "2019-10-08T22:22:03+00:00",
+    "commented_code": "package monitoring_util\n\nimport (\n\t\"fmt\"\n\t\"time\"\n\n\t\"github.com/prometheus/client_golang/prometheus\"\n\t\"github.com/prometheus/client_golang/prometheus/promhttp\"\n\t\"github.com/prometheus/common/log\"\n\t\"net\"\n\t\"net/http\"\n)\n\n// Common label keys for all metrics signals\n// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n// COMPONENT: name of Component outputing the metrics, eg. \"tf-operator\"\nconst COMPONENT = \"Component\"\n// KIND: each componenet can label their metrics with custom tag \"kind\". Suggest keeping \"kind\" value to be CONSTANT PER METRICS.\nconst KIND = \"kind\"\nconst NAMESPACE = \"namespace\"\n// ACTION: request action type of the metrics, eg. \"CRUD\"\nconst ACTION = \"action\"\n// SEVERITY: level of importance, used to filter alerts\nconst SEVERITY  = \"severity\"\n// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n\n// Alerting metrics severity levels\n// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\nconst SEVERITY_MINOR = \"Minor\"\nconst SEVERITY_MAJOR = \"Major\"\nconst SEVERITY_CRITICAL = \"Critical\"\n// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n\n// Util const values\n// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\nconst METRICSPORT = 8079\nconst METRICSPATH = \"/metrics\"\n// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n\nvar (\n\t// Counter metrics\n\t// num of requests counter vec\n\trequestCounter = prometheus.NewCounterVec(\n\t\tprometheus.CounterOpts{\n\t\t\tName: \"request_counter\",\n\t\t\tHelp: \"Number of request_counter\",\n\t\t},\n\t\t[]string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY},\n\t)\n\t// Counter metrics for failed requests\n\trequestFailureCounter = prometheus.NewCounterVec(prometheus.CounterOpts{\n\t\tName: \"request_failure_counter\",\n\t\tHelp: \"Number of request_failure_counter\",\n\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n\n\t// Gauge metrics\n\trequestGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{\n\t\tName: \"requests_gauge\",\n\t\tHelp: \"Number of requests_gauge\",\n\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n\n\t// Gauge metrics for failed requests\n\trequestFailureGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{\n\t\tName: \"requests_failure_gauge\",\n\t\tHelp: \"Number of requests_failure_gauge\",\n\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n\n\t// Linear latencies\n\trequestLinearLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{\n\t\tName:    \"request_linear_latency\",\n\t\tHelp:    \"A histogram of request_linear_latency\",\n\t\tBuckets: prometheus.LinearBuckets(1, 1, 15),\n\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n\n\t// Exponential latencies\n\trequestExponentialLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{\n\t\tName:    \"request_exponential_latency\",\n\t\tHelp:    \"A histogram of request_exponential_latency\",\n\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n\n\tserviceHeartbeat = prometheus.NewCounterVec(prometheus.CounterOpts{\n\t\tName: \"service_heartbeat\",\n\t\tHelp: \"Heartbeat signal every 10 seconds indicating pods are alive.\",\n\t}, []string{COMPONENT, SEVERITY})\n)\n\nfunc init() {\n\t// Register prometheus counters\n\tprometheus.MustRegister(requestCounter)\n\tprometheus.MustRegister(requestFailureCounter)\n\tprometheus.MustRegister(requestGauge)\n\tprometheus.MustRegister(requestFailureGauge)\n\tprometheus.MustRegister(requestLinearLatency)\n\tprometheus.MustRegister(requestExponentialLatency)\n\tprometheus.MustRegister(serviceHeartbeat)\n}\n\ntype MetricsExporter struct {",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "332759147",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4251,
+        "pr_file": "components/kf-monitoring/MetricsExporter.go",
+        "discussion_id": "332759147",
+        "commented_code": "@@ -0,0 +1,161 @@\n+package monitoring_util\n+\n+import (\n+\t\"fmt\"\n+\t\"time\"\n+\n+\t\"github.com/prometheus/client_golang/prometheus\"\n+\t\"github.com/prometheus/client_golang/prometheus/promhttp\"\n+\t\"github.com/prometheus/common/log\"\n+\t\"net\"\n+\t\"net/http\"\n+)\n+\n+// Common label keys for all metrics signals\n+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n+// COMPONENT: name of Component outputing the metrics, eg. \"tf-operator\"\n+const COMPONENT = \"Component\"\n+// KIND: each componenet can label their metrics with custom tag \"kind\". Suggest keeping \"kind\" value to be CONSTANT PER METRICS.\n+const KIND = \"kind\"\n+const NAMESPACE = \"namespace\"\n+// ACTION: request action type of the metrics, eg. \"CRUD\"\n+const ACTION = \"action\"\n+// SEVERITY: level of importance, used to filter alerts\n+const SEVERITY  = \"severity\"\n+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n+\n+// Alerting metrics severity levels\n+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n+const SEVERITY_MINOR = \"Minor\"\n+const SEVERITY_MAJOR = \"Major\"\n+const SEVERITY_CRITICAL = \"Critical\"\n+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n+\n+// Util const values\n+// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n+const METRICSPORT = 8079\n+const METRICSPATH = \"/metrics\"\n+// <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<\n+\n+var (\n+\t// Counter metrics\n+\t// num of requests counter vec\n+\trequestCounter = prometheus.NewCounterVec(\n+\t\tprometheus.CounterOpts{\n+\t\t\tName: \"request_counter\",\n+\t\t\tHelp: \"Number of request_counter\",\n+\t\t},\n+\t\t[]string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY},\n+\t)\n+\t// Counter metrics for failed requests\n+\trequestFailureCounter = prometheus.NewCounterVec(prometheus.CounterOpts{\n+\t\tName: \"request_failure_counter\",\n+\t\tHelp: \"Number of request_failure_counter\",\n+\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n+\n+\t// Gauge metrics\n+\trequestGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{\n+\t\tName: \"requests_gauge\",\n+\t\tHelp: \"Number of requests_gauge\",\n+\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n+\n+\t// Gauge metrics for failed requests\n+\trequestFailureGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{\n+\t\tName: \"requests_failure_gauge\",\n+\t\tHelp: \"Number of requests_failure_gauge\",\n+\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n+\n+\t// Linear latencies\n+\trequestLinearLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{\n+\t\tName:    \"request_linear_latency\",\n+\t\tHelp:    \"A histogram of request_linear_latency\",\n+\t\tBuckets: prometheus.LinearBuckets(1, 1, 15),\n+\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n+\n+\t// Exponential latencies\n+\trequestExponentialLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{\n+\t\tName:    \"request_exponential_latency\",\n+\t\tHelp:    \"A histogram of request_exponential_latency\",\n+\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n+\n+\tserviceHeartbeat = prometheus.NewCounterVec(prometheus.CounterOpts{\n+\t\tName: \"service_heartbeat\",\n+\t\tHelp: \"Heartbeat signal every 10 seconds indicating pods are alive.\",\n+\t}, []string{COMPONENT, SEVERITY})\n+)\n+\n+func init() {\n+\t// Register prometheus counters\n+\tprometheus.MustRegister(requestCounter)\n+\tprometheus.MustRegister(requestFailureCounter)\n+\tprometheus.MustRegister(requestGauge)\n+\tprometheus.MustRegister(requestFailureGauge)\n+\tprometheus.MustRegister(requestLinearLatency)\n+\tprometheus.MustRegister(requestExponentialLatency)\n+\tprometheus.MustRegister(serviceHeartbeat)\n+}\n+\n+type MetricsExporter struct {",
+        "comment_created_at": "2019-10-08T22:22:03+00:00",
+        "comment_author": "zhenghuiwang",
+        "comment_body": "A public struct (and method) should have a comment like \"// MetricsExporter ...\".\r\nCan you run `go vet ./...`?\r\n\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "369340848",
+    "pr_number": 4676,
+    "pr_file": "components/profile-controller/controllers/moniotring.go",
+    "created_at": "2020-01-22T02:14:40+00:00",
+    "commented_code": "package controllers\n\nimport (\n\t\"time\"\n\n\t\"github.com/prometheus/client_golang/prometheus\"\n\tlog \"github.com/sirupsen/logrus\"\n)\n\nconst PROFILE = \"profile_controller\"\nconst COMPONENT = \"component\"\nconst KIND = \"kind\"\n// User that make the request\nconst REQUSER = \"user\"\nconst ACTION = \"action\"\nconst PATH = \"path\"\nconst SEVERITY  = \"severity\"\nconst SEVERITY_MINOR = \"minor\"\nconst SEVERITY_MAJOR = \"major\"\nconst SEVERITY_CRITICAL = \"critical\"\nconst MAX_TAG_LEN = 30\n\nvar (\n\t// Counter metrics\n\t// num of requests counter vec\n\trequestCounter = prometheus.NewCounterVec(\n\t\tprometheus.CounterOpts{\n\t\t\tName: \"request_kf\",\n\t\t\tHelp: \"Number of request_counter\",\n\t\t},\n\t\t[]string{COMPONENT, KIND, REQUSER, ACTION, PATH},\n\t)\n\t// Counter metrics for failed requests\n\trequestErrorCounter = prometheus.NewCounterVec(prometheus.CounterOpts{\n\t\tName: \"request_kf_failure\",\n\t\tHelp: \"Number of request_failure_counter\",\n\t}, []string{COMPONENT, KIND, REQUSER, ACTION, PATH, SEVERITY})\n\n\tserviceHeartbeat = prometheus.NewCounterVec(prometheus.CounterOpts{\n\t\tName: \"service_heartbeat\",\n\t\tHelp: \"Heartbeat signal every 10 seconds indicating pods are alive.\",\n\t}, []string{COMPONENT, SEVERITY})\n)\n\nfunc init() {\n\t// Register prometheus counters\n\tprometheus.MustRegister(requestCounter)\n\tprometheus.MustRegister(requestErrorCounter)\n\tprometheus.MustRegister(serviceHeartbeat)\n\t// Count heartbeat\n\tgo func() {\n\t\tlabels := prometheus.Labels{COMPONENT: PROFILE, SEVERITY: SEVERITY_CRITICAL}\n\t\tfor {\n\t\t\ttime.Sleep(10 * time.Second)\n\t\t\tserviceHeartbeat.With(labels).Inc()\n\t\t}\n\t}()\n}\n\nfunc IncRequestCounter(kind string) {",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "369340848",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4676,
+        "pr_file": "components/profile-controller/controllers/moniotring.go",
+        "discussion_id": "369340848",
+        "commented_code": "@@ -0,0 +1,75 @@\n+package controllers\n+\n+import (\n+\t\"time\"\n+\n+\t\"github.com/prometheus/client_golang/prometheus\"\n+\tlog \"github.com/sirupsen/logrus\"\n+)\n+\n+const PROFILE = \"profile_controller\"\n+const COMPONENT = \"component\"\n+const KIND = \"kind\"\n+// User that make the request\n+const REQUSER = \"user\"\n+const ACTION = \"action\"\n+const PATH = \"path\"\n+const SEVERITY  = \"severity\"\n+const SEVERITY_MINOR = \"minor\"\n+const SEVERITY_MAJOR = \"major\"\n+const SEVERITY_CRITICAL = \"critical\"\n+const MAX_TAG_LEN = 30\n+\n+var (\n+\t// Counter metrics\n+\t// num of requests counter vec\n+\trequestCounter = prometheus.NewCounterVec(\n+\t\tprometheus.CounterOpts{\n+\t\t\tName: \"request_kf\",\n+\t\t\tHelp: \"Number of request_counter\",\n+\t\t},\n+\t\t[]string{COMPONENT, KIND, REQUSER, ACTION, PATH},\n+\t)\n+\t// Counter metrics for failed requests\n+\trequestErrorCounter = prometheus.NewCounterVec(prometheus.CounterOpts{\n+\t\tName: \"request_kf_failure\",\n+\t\tHelp: \"Number of request_failure_counter\",\n+\t}, []string{COMPONENT, KIND, REQUSER, ACTION, PATH, SEVERITY})\n+\n+\tserviceHeartbeat = prometheus.NewCounterVec(prometheus.CounterOpts{\n+\t\tName: \"service_heartbeat\",\n+\t\tHelp: \"Heartbeat signal every 10 seconds indicating pods are alive.\",\n+\t}, []string{COMPONENT, SEVERITY})\n+)\n+\n+func init() {\n+\t// Register prometheus counters\n+\tprometheus.MustRegister(requestCounter)\n+\tprometheus.MustRegister(requestErrorCounter)\n+\tprometheus.MustRegister(serviceHeartbeat)\n+\t// Count heartbeat\n+\tgo func() {\n+\t\tlabels := prometheus.Labels{COMPONENT: PROFILE, SEVERITY: SEVERITY_CRITICAL}\n+\t\tfor {\n+\t\t\ttime.Sleep(10 * time.Second)\n+\t\t\tserviceHeartbeat.With(labels).Inc()\n+\t\t}\n+\t}()\n+}\n+\n+func IncRequestCounter(kind string) {",
+        "comment_created_at": "2020-01-22T02:14:40+00:00",
+        "comment_author": "jlewi",
+        "comment_body": "Can you add go doc strings please for these public methods?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "339181399",
+    "pr_number": 4399,
+    "pr_file": "bootstrap/cmd/bootstrap/app/router.go",
+    "created_at": "2019-10-25T18:21:59+00:00",
+    "commented_code": "// Continue request process in separate thread.\n\tgo c.CreateDeployment(context.Background(), req)\n\treturn &req, nil\n}\n\n// GetLatestKfdef returns latest kfdef status.\nfunc (r *kfctlRouter) GetLatestKfdef(req kfdefs.KfDef) (*kfdefs.KfDef, error) {\n\tname, err := k8sName(req.Name, req.Spec.Project)\n\tif err != nil {\n\t\tlog.Errorf(\"Could not generate the name; error %v\", err)\n\t\treturn nil, err\n\t}\n\taddress := fmt.Sprintf(\"http://%v.%v.svc.cluster.local:80\", name, r.namespace)\n\tlog.Infof(\"Creating client for %v\", address)\n\tc, err := NewKfctlClient(address)\n\treturn c.GetLatestKfdef(req)\n\t// TODO\n\treturn &kfdefs.KfDef{}, nil\n}\n//\n//// GetLatestKfdef returns latest kfdef status.",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "339181399",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4399,
+        "pr_file": "bootstrap/cmd/bootstrap/app/router.go",
+        "discussion_id": "339181399",
+        "commented_code": "@@ -439,18 +468,19 @@ func (r *kfctlRouter) CreateDeployment(ctx context.Context, req kfdefs.KfDef) (*\n \n \t// Continue request process in separate thread.\n \tgo c.CreateDeployment(context.Background(), req)\n-\treturn &req, nil\n-}\n-\n-// GetLatestKfdef returns latest kfdef status.\n-func (r *kfctlRouter) GetLatestKfdef(req kfdefs.KfDef) (*kfdefs.KfDef, error) {\n-\tname, err := k8sName(req.Name, req.Spec.Project)\n-\tif err != nil {\n-\t\tlog.Errorf(\"Could not generate the name; error %v\", err)\n-\t\treturn nil, err\n-\t}\n-\taddress := fmt.Sprintf(\"http://%v.%v.svc.cluster.local:80\", name, r.namespace)\n-\tlog.Infof(\"Creating client for %v\", address)\n-\tc, err := NewKfctlClient(address)\n-\treturn c.GetLatestKfdef(req)\n+\t// TODO\n+\treturn &kfdefs.KfDef{}, nil\n }\n+//\n+//// GetLatestKfdef returns latest kfdef status.",
+        "comment_created_at": "2019-10-25T18:21:59+00:00",
+        "comment_author": "jlewi",
+        "comment_body": "Please add a TODO explaining why this is commented out.\r\n\r\nThe best thing would be to link to an issue.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

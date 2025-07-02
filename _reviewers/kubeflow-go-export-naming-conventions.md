@@ -1,0 +1,274 @@
+---
+title: Go export naming conventions
+description: 'In Go, the first letter of an identifier (function, variable, struct
+  field, etc.) determines its visibility outside the package:
+
+
+  1. **Uppercase first letter**: The identifier is exported and accessible from other
+  packages'
+repository: kubeflow/kubeflow
+label: Naming Conventions
+language: Go
+comments_count: 7
+repository_stars: 15064
+---
+
+In Go, the first letter of an identifier (function, variable, struct field, etc.) determines its visibility outside the package:
+
+1. **Uppercase first letter**: The identifier is exported and accessible from other packages
+2. **Lowercase first letter**: The identifier is non-exported and only accessible within its package
+
+Always follow these rules:
+
+- Use uppercase for functions intended as public API:
+```go
+// Exported - can be called from other packages
+func DisableCullingAnnotationIsSet(meta metav1.ObjectMeta) bool {
+    // implementation
+}
+```
+
+- Use lowercase for functions meant for internal use only:
+```go
+// Non-exported - only callable within the same package
+func exists(slice []string, val string) bool {
+    for _, item := range slice {
+        if item == val {
+            return true
+        }
+    }
+    return false
+}
+```
+
+- Name functions to accurately reflect their purpose and return type. Boolean functions should use predicate naming (is*, has*, can*).
+
+- For struct fields, use uppercase to allow external access and lowercase to restrict access:
+```go
+type MetricsExporter struct {
+    Component string    // Exported - accessible
+    metricsPort int     // Non-exported - internal only
+}
+```
+
+- Use consistent error variable names, typically `err` rather than custom names like `kfErr`, `generateErr`, etc.
+
+This convention is a critical part of Go's visibility system and module design - it's not just a style preference but affects how your code can be used by others.
+
+
+[
+  {
+    "discussion_id": "1373286709",
+    "pr_number": 7365,
+    "pr_file": "components/notebook-controller/controllers/culling_controller.go",
+    "created_at": "2023-10-26T14:36:41+00:00",
+    "commented_code": "return false\n}\n\nfunc DisableCullingAnnotationIsSet(meta metav1.ObjectMeta) bool {",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1373286709",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7365,
+        "pr_file": "components/notebook-controller/controllers/culling_controller.go",
+        "discussion_id": "1373286709",
+        "commented_code": "@@ -381,6 +388,16 @@ func StopAnnotationIsSet(meta metav1.ObjectMeta) bool {\n \treturn false\n }\n \n+func DisableCullingAnnotationIsSet(meta metav1.ObjectMeta) bool {",
+        "comment_created_at": "2023-10-26T14:36:41+00:00",
+        "comment_author": "kimwnasptd",
+        "comment_body": "small nit, shouldn't this function start from lowercase since it's not meant to be used from outside this go module?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1373310284",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7365,
+        "pr_file": "components/notebook-controller/controllers/culling_controller.go",
+        "discussion_id": "1373286709",
+        "commented_code": "@@ -381,6 +388,16 @@ func StopAnnotationIsSet(meta metav1.ObjectMeta) bool {\n \treturn false\n }\n \n+func DisableCullingAnnotationIsSet(meta metav1.ObjectMeta) bool {",
+        "comment_created_at": "2023-10-26T14:51:59+00:00",
+        "comment_author": "omrishiv",
+        "comment_body": "I was following the style of the current code using `StopAnnotationIsSet` above. Agreed it should be lowercase",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "592236690",
+    "pr_number": 5660,
+    "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+    "created_at": "2021-03-11T10:21:18+00:00",
+    "commented_code": "return fmt.Sprintf(\"notebook-%s-%s\", namespace, kfName)\n}\n\n// Function for the VirtualService header blacklist\nfunc Find(slice []string, val string) (int, bool) {",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "592236690",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5660,
+        "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+        "discussion_id": "592236690",
+        "commented_code": "@@ -395,12 +395,35 @@ func virtualServiceName(kfName string, namespace string) string {\n \treturn fmt.Sprintf(\"notebook-%s-%s\", namespace, kfName)\n }\n \n+// Function for the VirtualService header blacklist\n+func Find(slice []string, val string) (int, bool) {",
+        "comment_created_at": "2021-03-11T10:21:18+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "Two comments here:\r\n1. nit: Let's use lowercase function names for functions that we do not export (uppercase functions are exported and become part of the package api in Go)\r\n2. The function is called `Find`, but you only use its second argument. I think what you want is a function that checks for existence, cause that's what you check. So how about renaming this to `exists` and returning only a bool? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "592269369",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5660,
+        "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+        "discussion_id": "592236690",
+        "commented_code": "@@ -395,12 +395,35 @@ func virtualServiceName(kfName string, namespace string) string {\n \treturn fmt.Sprintf(\"notebook-%s-%s\", namespace, kfName)\n }\n \n+// Function for the VirtualService header blacklist\n+func Find(slice []string, val string) (int, bool) {",
+        "comment_created_at": "2021-03-11T11:08:19+00:00",
+        "comment_author": "davidspek",
+        "comment_body": "How do you want it to return only the bool?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "592283008",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5660,
+        "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+        "discussion_id": "592236690",
+        "commented_code": "@@ -395,12 +395,35 @@ func virtualServiceName(kfName string, namespace string) string {\n \treturn fmt.Sprintf(\"notebook-%s-%s\", namespace, kfName)\n }\n \n+// Function for the VirtualService header blacklist\n+func Find(slice []string, val string) (int, bool) {",
+        "comment_created_at": "2021-03-11T11:28:56+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "This is what I mean:\r\n```go\r\nfunc exists(slice []string, val string) bool {\r\n\tfor i, item := range slice {\r\n\t\tif item == val {\r\n\t\t\treturn true\r\n\t\t}\r\n\t}\r\n\treturn false\r\n}\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "332287666",
+    "pr_number": 4251,
+    "pr_file": "components/kf-monitoring/MetricsExporter.go",
+    "created_at": "2019-10-08T00:01:00+00:00",
+    "commented_code": "package monitoring_util\n\nimport (\n\t\"fmt\"\n\t\"time\"\n\n\t\"github.com/prometheus/client_golang/prometheus\"\n\t\"github.com/prometheus/client_golang/prometheus/promhttp\"\n\t\"github.com/prometheus/common/log\"\n\t\"net\"\n\t\"net/http\"\n)\n\n// Common label keys for all metrics signals\n// COMPONENT: name of component outputing the metrics, eg. \"tf-operator\"\nconst COMPONENT = \"component\"\n// KIND: each componenet can label their metrics with custom tag \"kind\". Suggest keeping \"kind\" value to be CONSTANT PER METRICS.\nconst KIND = \"kind\"\nconst NAMESPACE = \"namespace\"\n// ACTION: request action type of the metrics, eg. \"CRUD\"\nconst ACTION = \"action\"\n// SEVERITY: level of importance, used to filter alerts\nconst SEVERITY  = \"severity\"\n\nconst SEVERITY_MINOR = \"Minor\"\nconst SEVERITY_MAJOR = \"Major\"\nconst SEVERITY_CRITICAL = \"Critical\"\n\nconst METRICSPORT = 8079\nconst METRICSPATH = \"/metrics\"\n\nvar (\n\t// Counter metrics\n\t// num of requests counter vec\n\trequestCounter = prometheus.NewCounterVec(\n\t\tprometheus.CounterOpts{\n\t\t\tName: \"request_counter\",\n\t\t\tHelp: \"Number of request_counter\",\n\t\t},\n\t\t[]string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY},\n\t)\n\t// Counter metrics for failed requests\n\trequestFailureCounter = prometheus.NewCounterVec(prometheus.CounterOpts{\n\t\tName: \"request_failure_counter\",\n\t\tHelp: \"Number of request_failure_counter\",\n\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n\n\t// Gauge metrics\n\trequestGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{\n\t\tName: \"requests_gauge\",\n\t\tHelp: \"Number of requests_gauge\",\n\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n\n\t// Gauge metrics for failed requests\n\trequestFailureGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{\n\t\tName: \"requests_failure_gauge\",\n\t\tHelp: \"Number of requests_failure_gauge\",\n\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n\n\t// Linear latencies\n\trequestLinearLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{\n\t\tName:    \"request_linear_latency\",\n\t\tHelp:    \"A histogram of request_linear_latency\",\n\t\tBuckets: prometheus.LinearBuckets(1, 1, 15),\n\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n\n\t// Exponential latencies\n\trequestExponentialLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{\n\t\tName:    \"request_exponential_latency\",\n\t\tHelp:    \"A histogram of request_exponential_latency\",\n\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n\n\tserviceHeartbeat = prometheus.NewCounter(prometheus.CounterOpts{\n\t\tName: \"service_heartbeat\",\n\t\tHelp: \"Heartbeat signal every 10 seconds indicating pods are alive.\",\n\t})\n)\n\nfunc init() {\n\t// Register prometheus counters\n\tprometheus.MustRegister(requestCounter)\n\tprometheus.MustRegister(requestFailureCounter)\n\tprometheus.MustRegister(requestGauge)\n\tprometheus.MustRegister(requestFailureGauge)\n\tprometheus.MustRegister(requestLinearLatency)\n\tprometheus.MustRegister(requestExponentialLatency)\n\tprometheus.MustRegister(serviceHeartbeat)\n}\n\ntype MetricsExporter struct {\n\tcomponent\tstring\n\t// Add error channel so that kf_monitor user can get notified when monitoring thread is down.\n\tErrChan     chan error\n\tmetricsPort int\n}\n\nfunc NewMetricsExporter(component string) *MetricsExporter {\n\treturn &MetricsExporter{\n\t\tcomponent: component,\n\t\tErrChan: make(chan error),\n\t\tmetricsPort: METRICSPORT,\n\t}\n}\n\nfunc (me *MetricsExporter) SetPort(port int) *MetricsExporter {",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "332287666",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4251,
+        "pr_file": "components/kf-monitoring/MetricsExporter.go",
+        "discussion_id": "332287666",
+        "commented_code": "@@ -0,0 +1,161 @@\n+package monitoring_util\n+\n+import (\n+\t\"fmt\"\n+\t\"time\"\n+\n+\t\"github.com/prometheus/client_golang/prometheus\"\n+\t\"github.com/prometheus/client_golang/prometheus/promhttp\"\n+\t\"github.com/prometheus/common/log\"\n+\t\"net\"\n+\t\"net/http\"\n+)\n+\n+// Common label keys for all metrics signals\n+// COMPONENT: name of component outputing the metrics, eg. \"tf-operator\"\n+const COMPONENT = \"component\"\n+// KIND: each componenet can label their metrics with custom tag \"kind\". Suggest keeping \"kind\" value to be CONSTANT PER METRICS.\n+const KIND = \"kind\"\n+const NAMESPACE = \"namespace\"\n+// ACTION: request action type of the metrics, eg. \"CRUD\"\n+const ACTION = \"action\"\n+// SEVERITY: level of importance, used to filter alerts\n+const SEVERITY  = \"severity\"\n+\n+const SEVERITY_MINOR = \"Minor\"\n+const SEVERITY_MAJOR = \"Major\"\n+const SEVERITY_CRITICAL = \"Critical\"\n+\n+const METRICSPORT = 8079\n+const METRICSPATH = \"/metrics\"\n+\n+var (\n+\t// Counter metrics\n+\t// num of requests counter vec\n+\trequestCounter = prometheus.NewCounterVec(\n+\t\tprometheus.CounterOpts{\n+\t\t\tName: \"request_counter\",\n+\t\t\tHelp: \"Number of request_counter\",\n+\t\t},\n+\t\t[]string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY},\n+\t)\n+\t// Counter metrics for failed requests\n+\trequestFailureCounter = prometheus.NewCounterVec(prometheus.CounterOpts{\n+\t\tName: \"request_failure_counter\",\n+\t\tHelp: \"Number of request_failure_counter\",\n+\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n+\n+\t// Gauge metrics\n+\trequestGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{\n+\t\tName: \"requests_gauge\",\n+\t\tHelp: \"Number of requests_gauge\",\n+\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n+\n+\t// Gauge metrics for failed requests\n+\trequestFailureGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{\n+\t\tName: \"requests_failure_gauge\",\n+\t\tHelp: \"Number of requests_failure_gauge\",\n+\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n+\n+\t// Linear latencies\n+\trequestLinearLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{\n+\t\tName:    \"request_linear_latency\",\n+\t\tHelp:    \"A histogram of request_linear_latency\",\n+\t\tBuckets: prometheus.LinearBuckets(1, 1, 15),\n+\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n+\n+\t// Exponential latencies\n+\trequestExponentialLatency = prometheus.NewHistogramVec(prometheus.HistogramOpts{\n+\t\tName:    \"request_exponential_latency\",\n+\t\tHelp:    \"A histogram of request_exponential_latency\",\n+\t}, []string{COMPONENT, KIND, NAMESPACE, ACTION, SEVERITY})\n+\n+\tserviceHeartbeat = prometheus.NewCounter(prometheus.CounterOpts{\n+\t\tName: \"service_heartbeat\",\n+\t\tHelp: \"Heartbeat signal every 10 seconds indicating pods are alive.\",\n+\t})\n+)\n+\n+func init() {\n+\t// Register prometheus counters\n+\tprometheus.MustRegister(requestCounter)\n+\tprometheus.MustRegister(requestFailureCounter)\n+\tprometheus.MustRegister(requestGauge)\n+\tprometheus.MustRegister(requestFailureGauge)\n+\tprometheus.MustRegister(requestLinearLatency)\n+\tprometheus.MustRegister(requestExponentialLatency)\n+\tprometheus.MustRegister(serviceHeartbeat)\n+}\n+\n+type MetricsExporter struct {\n+\tcomponent\tstring\n+\t// Add error channel so that kf_monitor user can get notified when monitoring thread is down.\n+\tErrChan     chan error\n+\tmetricsPort int\n+}\n+\n+func NewMetricsExporter(component string) *MetricsExporter {\n+\treturn &MetricsExporter{\n+\t\tcomponent: component,\n+\t\tErrChan: make(chan error),\n+\t\tmetricsPort: METRICSPORT,\n+\t}\n+}\n+\n+func (me *MetricsExporter) SetPort(port int) *MetricsExporter {",
+        "comment_created_at": "2019-10-08T00:01:00+00:00",
+        "comment_author": "zhenghuiwang",
+        "comment_body": "If port can be changed, why not simply export the field as `Port`?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "320269639",
+    "pr_number": 4040,
+    "pr_file": "bootstrap/pkg/kfapp/apply/apply.go",
+    "created_at": "2019-09-03T13:25:22+00:00",
+    "commented_code": "package apply\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"io\"\n\t\"os\"\n\n\tkftypes \"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps\"\n\tkfdefsv3 \"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps/kfdef/v1alpha1\"\n\t\"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/kfapp/coordinator\"\n\tlog \"github.com/sirupsen/logrus\"\n)\n\n// BootstrapKubeflow is used by the kfctl apply sub-command to take in a configfile\n// as a flag and boostrap a KfApp and deploy it\nfunc BootstrapKubeflow(configFilePath string, kfResource kftypes.ResourceEnum) error {\n\t// Set default app name to kf-app\n\tappName := \"kf-app\"\n\n\t// Construct KfDef from the configFilePath provided\n\tkfDef := &kfdefsv3.KfDef{}\n\tkfDef, err := kfdefsv3.LoadKFDefFromURI(configFilePath)\n\tif err != nil {\n\t\tlog.Printf(\"Unable to create KfDef from config file: %v\", err)\n\t}\n\tif kfDef.Name != \"\" {\n\t\tlog.Warnf(\"Overriding KfDef.Spec.Name; old value %v; new value %v\", kfDef.Name, appName)\n\t}\n\tkfDef.Name = appName\n\tisValid, msg := kfDef.IsValid()\n\tif !isValid {\n\t\tlog.Printf(\"Invalid kfdef: %v\", isValid)\n\t\tlog.Printf(\"Error validating generated KfDef, please check config file validity: %v\", msg)\n\t}\n\tcwd, err := os.Getwd()\n\tif err != nil {\n\t\tlog.Printf(\"Error getting current working directory: %v\", err)\n\t}\n\tfmt.Println(\"Present working directory is: %v\", cwd)\n\t// Check if current directory is empty and if it is error out\n\tisEmpty, err := IsCwdEmpty(cwd)\n\tif !isEmpty && err != nil {\n\t\treturn fmt.Errorf(\"Current directory is not empty, please try again in an empty directory: %v\", err)\n\t}\n\tkfDef.Spec.AppDir = cwd\n\tif kfDef.Spec.AppDir == \"\" {\n\t\treturn errors.New(\"kfDef App Dir not set\")\n\t}\n\tlog.Warnf(\"App directory name: %v\", kfDef.Spec.AppDir)\n\tcfgFilePath, err := coordinator.CreateKfAppCfgFile(kfDef)\n\tif err != nil {\n\t\tlog.Errorf(\"Error creating app.yaml from KfDef: %v\", err)\n\t\treturn err\n\t}\n\n\tlog.Printf(\"Syncing Cache\")\n\terr = kfDef.SyncCache()\n\tif err != nil {\n\t\tlog.Errorf(\"Failed to synchronize the cache; error: %v\", err)\n\t\treturn err\n\t}\n\t// Save app.yaml because we need to preserve information about the cache.\n\tif err := kfDef.WriteToFile(cfgFilePath); err != nil {\n\t\tlog.Errorf(\"Failed to save KfDef to %v; error %v\", cfgFilePath, err)\n\t\treturn err\n\t}\n\tlog.Infof(\"Saved configfile as kfdef in path: %v\", cfgFilePath)\n\n\t// Load KfApp for Generate and Apply\n\tKfApp, KfErr := coordinator.LoadKfAppCfgFile(cfgFilePath)\n\tif KfErr != nil {\n\t\tlog.Printf(\"Error loading KfApp from configfilepath: %v\", KfErr)\n\t}\n\t// Once init is done, we generate and apply subsequently\n\tlog.Println(\"Kubeflow Generate...\")\n\tgenerateErr := KfApp.Generate(kfResource)\n\tif generateErr != nil {\n\t\tlog.Println(\"Unable to generate resources for KfApp\", generateErr)\n\t\treturn generateErr\n\t}\n\tlog.Println(\"Kubeflow Apply...\")\n\tapplyErr := KfApp.Apply(kfResource)\n\tif applyErr != nil {\n\t\tlog.Println(\"Unable to apply resources for KfApp\", applyErr)\n\t}\n\treturn nil\n}\n\n// IsCwdEmpty - quick check to determine if the working directory is empty\nfunc IsCwdEmpty(name string) (bool, error) {",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "320269639",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4040,
+        "pr_file": "bootstrap/pkg/kfapp/apply/apply.go",
+        "discussion_id": "320269639",
+        "commented_code": "@@ -0,0 +1,103 @@\n+package apply\n+\n+import (\n+\t\"errors\"\n+\t\"fmt\"\n+\t\"io\"\n+\t\"os\"\n+\n+\tkftypes \"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps\"\n+\tkfdefsv3 \"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps/kfdef/v1alpha1\"\n+\t\"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/kfapp/coordinator\"\n+\tlog \"github.com/sirupsen/logrus\"\n+)\n+\n+// BootstrapKubeflow is used by the kfctl apply sub-command to take in a configfile\n+// as a flag and boostrap a KfApp and deploy it\n+func BootstrapKubeflow(configFilePath string, kfResource kftypes.ResourceEnum) error {\n+\t// Set default app name to kf-app\n+\tappName := \"kf-app\"\n+\n+\t// Construct KfDef from the configFilePath provided\n+\tkfDef := &kfdefsv3.KfDef{}\n+\tkfDef, err := kfdefsv3.LoadKFDefFromURI(configFilePath)\n+\tif err != nil {\n+\t\tlog.Printf(\"Unable to create KfDef from config file: %v\", err)\n+\t}\n+\tif kfDef.Name != \"\" {\n+\t\tlog.Warnf(\"Overriding KfDef.Spec.Name; old value %v; new value %v\", kfDef.Name, appName)\n+\t}\n+\tkfDef.Name = appName\n+\tisValid, msg := kfDef.IsValid()\n+\tif !isValid {\n+\t\tlog.Printf(\"Invalid kfdef: %v\", isValid)\n+\t\tlog.Printf(\"Error validating generated KfDef, please check config file validity: %v\", msg)\n+\t}\n+\tcwd, err := os.Getwd()\n+\tif err != nil {\n+\t\tlog.Printf(\"Error getting current working directory: %v\", err)\n+\t}\n+\tfmt.Println(\"Present working directory is: %v\", cwd)\n+\t// Check if current directory is empty and if it is error out\n+\tisEmpty, err := IsCwdEmpty(cwd)\n+\tif !isEmpty && err != nil {\n+\t\treturn fmt.Errorf(\"Current directory is not empty, please try again in an empty directory: %v\", err)\n+\t}\n+\tkfDef.Spec.AppDir = cwd\n+\tif kfDef.Spec.AppDir == \"\" {\n+\t\treturn errors.New(\"kfDef App Dir not set\")\n+\t}\n+\tlog.Warnf(\"App directory name: %v\", kfDef.Spec.AppDir)\n+\tcfgFilePath, err := coordinator.CreateKfAppCfgFile(kfDef)\n+\tif err != nil {\n+\t\tlog.Errorf(\"Error creating app.yaml from KfDef: %v\", err)\n+\t\treturn err\n+\t}\n+\n+\tlog.Printf(\"Syncing Cache\")\n+\terr = kfDef.SyncCache()\n+\tif err != nil {\n+\t\tlog.Errorf(\"Failed to synchronize the cache; error: %v\", err)\n+\t\treturn err\n+\t}\n+\t// Save app.yaml because we need to preserve information about the cache.\n+\tif err := kfDef.WriteToFile(cfgFilePath); err != nil {\n+\t\tlog.Errorf(\"Failed to save KfDef to %v; error %v\", cfgFilePath, err)\n+\t\treturn err\n+\t}\n+\tlog.Infof(\"Saved configfile as kfdef in path: %v\", cfgFilePath)\n+\n+\t// Load KfApp for Generate and Apply\n+\tKfApp, KfErr := coordinator.LoadKfAppCfgFile(cfgFilePath)\n+\tif KfErr != nil {\n+\t\tlog.Printf(\"Error loading KfApp from configfilepath: %v\", KfErr)\n+\t}\n+\t// Once init is done, we generate and apply subsequently\n+\tlog.Println(\"Kubeflow Generate...\")\n+\tgenerateErr := KfApp.Generate(kfResource)\n+\tif generateErr != nil {\n+\t\tlog.Println(\"Unable to generate resources for KfApp\", generateErr)\n+\t\treturn generateErr\n+\t}\n+\tlog.Println(\"Kubeflow Apply...\")\n+\tapplyErr := KfApp.Apply(kfResource)\n+\tif applyErr != nil {\n+\t\tlog.Println(\"Unable to apply resources for KfApp\", applyErr)\n+\t}\n+\treturn nil\n+}\n+\n+// IsCwdEmpty - quick check to determine if the working directory is empty\n+func IsCwdEmpty(name string) (bool, error) {",
+        "comment_created_at": "2019-09-03T13:25:22+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "Can you make this a non-exported function? (non-capital first letter: isCwdEmpty)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "618194134",
+    "pr_number": 5761,
+    "pr_file": "components/profile-controller/controllers/profile_controller.go",
+    "created_at": "2021-04-22T08:31:24+00:00",
+    "commented_code": "return\n}\n\nfunc updateNamespaceLabels(ns *corev1.Namespace) bool {\n\tupdated := false\nfunc setNamespaceLabelsFromConfig(ns *corev1.Namespace) {",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "618194134",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5761,
+        "pr_file": "components/profile-controller/controllers/profile_controller.go",
+        "discussion_id": "618194134",
+        "commented_code": "@@ -617,16 +621,23 @@ func removeString(slice []string, s string) (result []string) {\n \treturn\n }\n \n-func updateNamespaceLabels(ns *corev1.Namespace) bool {\n-\tupdated := false\n+func setNamespaceLabelsFromConfig(ns *corev1.Namespace) {",
+        "comment_created_at": "2021-04-22T08:31:24+00:00",
+        "comment_author": "Bobgy",
+        "comment_body": "nit: maybe we should rename now? because we no longer read config here",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "618735512",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5761,
+        "pr_file": "components/profile-controller/controllers/profile_controller.go",
+        "discussion_id": "618194134",
+        "commented_code": "@@ -617,16 +621,23 @@ func removeString(slice []string, s string) (result []string) {\n \treturn\n }\n \n-func updateNamespaceLabels(ns *corev1.Namespace) bool {\n-\tupdated := false\n+func setNamespaceLabelsFromConfig(ns *corev1.Namespace) {",
+        "comment_created_at": "2021-04-22T21:00:44+00:00",
+        "comment_author": "zijianjoy",
+        "comment_body": "Sounds good, I have renamed this function.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "426264174",
+    "pr_number": 4979,
+    "pr_file": "components/access-management/kfam/bindings_test.go",
+    "created_at": "2020-05-17T13:52:27+00:00",
+    "commented_code": "package kfam\n\nimport (\n\t\"testing\"\n\n\trbacv1 \"k8s.io/api/rbac/v1\"\n)\n\n// Building Binding Object from k8s.io/api/rbac/v1\nfunc getBindingObject(binding string) *Binding {\n\n\treturn &Binding{\n\t\tUser: &rbacv1.Subject{\n\t\t\tKind: \"user\",\n\t\t\tName: binding,\n\t\t},\n\t\tRoleRef: &rbacv1.RoleRef{\n\t\t\tKind: \"clusterrole\",\n\t\t\tName: \"edit\",\n\t\t},\n\t}\n\n}\n\n//Table driven tests\nvar tests = []struct {\n\tin       *Binding\n\tout      string\n\thasError bool\n}{\n\t{getBindingObject(\"lalith.vaka@zq.msds.kp.org\"), \"user-lalith-vaka-zq-msds-kp-org-clusterrole-edit\", false},\n\t{getBindingObject(\"397401@zq.msds.kp.org\"), \"user-397401-zq-msds-kp-org-clusterrole-edit\", false},\n\t{getBindingObject(\"lalith.397401@zq.msds.kp.org\"), \"user-lalith-397401-zq-msds-kp-org-clusterrole-edit\", false},\n\t{getBindingObject(\"397401.vaka@zq.msds.kp.org\"), \"user-397401-vaka-zq-msds-kp-org-clusterrole-edit\", false},\n\t{getBindingObject(\"i397401@zq.msds.kp.org\"), \"user-i397401-zq-msds-kp-org-clusterrole-edit\", false},\n}\n\nfunc TestGetBindingName(t *testing.T) {\n\n\t/* Read the test data from a file if needed\n\n\t// create a testdata folder under this package and add files as needed\n\tfile, err := os.Open(\"./testdata/file.go\")\n\tif err != nil {\n\t\tlog.Fatal(err)\n\t}\n\n\t*/\n\t//format := \"--- %s: %s (%s)\\n\"\n\tfor _, tt := range tests {\n\n\t\ts, error := getBindingName(tt.in)",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "426264174",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4979,
+        "pr_file": "components/access-management/kfam/bindings_test.go",
+        "discussion_id": "426264174",
+        "commented_code": "@@ -0,0 +1,72 @@\n+package kfam\n+\n+import (\n+\t\"testing\"\n+\n+\trbacv1 \"k8s.io/api/rbac/v1\"\n+)\n+\n+// Building Binding Object from k8s.io/api/rbac/v1\n+func getBindingObject(binding string) *Binding {\n+\n+\treturn &Binding{\n+\t\tUser: &rbacv1.Subject{\n+\t\t\tKind: \"user\",\n+\t\t\tName: binding,\n+\t\t},\n+\t\tRoleRef: &rbacv1.RoleRef{\n+\t\t\tKind: \"clusterrole\",\n+\t\t\tName: \"edit\",\n+\t\t},\n+\t}\n+\n+}\n+\n+//Table driven tests\n+var tests = []struct {\n+\tin       *Binding\n+\tout      string\n+\thasError bool\n+}{\n+\t{getBindingObject(\"lalith.vaka@zq.msds.kp.org\"), \"user-lalith-vaka-zq-msds-kp-org-clusterrole-edit\", false},\n+\t{getBindingObject(\"397401@zq.msds.kp.org\"), \"user-397401-zq-msds-kp-org-clusterrole-edit\", false},\n+\t{getBindingObject(\"lalith.397401@zq.msds.kp.org\"), \"user-lalith-397401-zq-msds-kp-org-clusterrole-edit\", false},\n+\t{getBindingObject(\"397401.vaka@zq.msds.kp.org\"), \"user-397401-vaka-zq-msds-kp-org-clusterrole-edit\", false},\n+\t{getBindingObject(\"i397401@zq.msds.kp.org\"), \"user-i397401-zq-msds-kp-org-clusterrole-edit\", false},\n+}\n+\n+func TestGetBindingName(t *testing.T) {\n+\n+\t/* Read the test data from a file if needed\n+\n+\t// create a testdata folder under this package and add files as needed\n+\tfile, err := os.Open(\"./testdata/file.go\")\n+\tif err != nil {\n+\t\tlog.Fatal(err)\n+\t}\n+\n+\t*/\n+\t//format := \"--- %s: %s (%s)\\n\"\n+\tfor _, tt := range tests {\n+\n+\t\ts, error := getBindingName(tt.in)",
+        "comment_created_at": "2020-05-17T13:52:27+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "Since `error` is an already declared interface type, let's use a different name for this variable.\r\nA common name for error variables in Go is `err`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "426272904",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4979,
+        "pr_file": "components/access-management/kfam/bindings_test.go",
+        "discussion_id": "426264174",
+        "commented_code": "@@ -0,0 +1,72 @@\n+package kfam\n+\n+import (\n+\t\"testing\"\n+\n+\trbacv1 \"k8s.io/api/rbac/v1\"\n+)\n+\n+// Building Binding Object from k8s.io/api/rbac/v1\n+func getBindingObject(binding string) *Binding {\n+\n+\treturn &Binding{\n+\t\tUser: &rbacv1.Subject{\n+\t\t\tKind: \"user\",\n+\t\t\tName: binding,\n+\t\t},\n+\t\tRoleRef: &rbacv1.RoleRef{\n+\t\t\tKind: \"clusterrole\",\n+\t\t\tName: \"edit\",\n+\t\t},\n+\t}\n+\n+}\n+\n+//Table driven tests\n+var tests = []struct {\n+\tin       *Binding\n+\tout      string\n+\thasError bool\n+}{\n+\t{getBindingObject(\"lalith.vaka@zq.msds.kp.org\"), \"user-lalith-vaka-zq-msds-kp-org-clusterrole-edit\", false},\n+\t{getBindingObject(\"397401@zq.msds.kp.org\"), \"user-397401-zq-msds-kp-org-clusterrole-edit\", false},\n+\t{getBindingObject(\"lalith.397401@zq.msds.kp.org\"), \"user-lalith-397401-zq-msds-kp-org-clusterrole-edit\", false},\n+\t{getBindingObject(\"397401.vaka@zq.msds.kp.org\"), \"user-397401-vaka-zq-msds-kp-org-clusterrole-edit\", false},\n+\t{getBindingObject(\"i397401@zq.msds.kp.org\"), \"user-i397401-zq-msds-kp-org-clusterrole-edit\", false},\n+}\n+\n+func TestGetBindingName(t *testing.T) {\n+\n+\t/* Read the test data from a file if needed\n+\n+\t// create a testdata folder under this package and add files as needed\n+\tfile, err := os.Open(\"./testdata/file.go\")\n+\tif err != nil {\n+\t\tlog.Fatal(err)\n+\t}\n+\n+\t*/\n+\t//format := \"--- %s: %s (%s)\\n\"\n+\tfor _, tt := range tests {\n+\n+\t\ts, error := getBindingName(tt.in)",
+        "comment_created_at": "2020-05-17T15:18:42+00:00",
+        "comment_author": "lalithvaka",
+        "comment_body": "Changed the error name",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "320268163",
+    "pr_number": 4040,
+    "pr_file": "bootstrap/pkg/kfapp/apply/apply.go",
+    "created_at": "2019-09-03T13:22:23+00:00",
+    "commented_code": "package apply\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"io\"\n\t\"os\"\n\n\tkftypes \"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps\"\n\tkfdefsv3 \"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps/kfdef/v1alpha1\"\n\t\"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/kfapp/coordinator\"\n\tlog \"github.com/sirupsen/logrus\"\n)\n\n// BootstrapKubeflow is used by the kfctl apply sub-command to take in a configfile\n// as a flag and boostrap a KfApp and deploy it\nfunc BootstrapKubeflow(configFilePath string, kfResource kftypes.ResourceEnum) error {\n\t// Set default app name to kf-app\n\tappName := \"kf-app\"\n\n\t// Construct KfDef from the configFilePath provided\n\tkfDef := &kfdefsv3.KfDef{}\n\tkfDef, err := kfdefsv3.LoadKFDefFromURI(configFilePath)\n\tif err != nil {\n\t\tlog.Printf(\"Unable to create KfDef from config file: %v\", err)\n\t}\n\tif kfDef.Name != \"\" {\n\t\tlog.Warnf(\"Overriding KfDef.Spec.Name; old value %v; new value %v\", kfDef.Name, appName)\n\t}\n\tkfDef.Name = appName\n\tisValid, msg := kfDef.IsValid()\n\tif !isValid {\n\t\tlog.Printf(\"Invalid kfdef: %v\", isValid)\n\t\tlog.Printf(\"Error validating generated KfDef, please check config file validity: %v\", msg)\n\t}\n\tcwd, err := os.Getwd()\n\tif err != nil {\n\t\tlog.Printf(\"Error getting current working directory: %v\", err)\n\t}\n\tfmt.Println(\"Present working directory is: %v\", cwd)\n\t// Check if current directory is empty and if it is error out\n\tisEmpty, err := IsCwdEmpty(cwd)\n\tif !isEmpty && err != nil {\n\t\treturn fmt.Errorf(\"Current directory is not empty, please try again in an empty directory: %v\", err)\n\t}\n\tkfDef.Spec.AppDir = cwd\n\tif kfDef.Spec.AppDir == \"\" {\n\t\treturn errors.New(\"kfDef App Dir not set\")\n\t}\n\tlog.Warnf(\"App directory name: %v\", kfDef.Spec.AppDir)\n\tcfgFilePath, err := coordinator.CreateKfAppCfgFile(kfDef)\n\tif err != nil {\n\t\tlog.Errorf(\"Error creating app.yaml from KfDef: %v\", err)\n\t\treturn err\n\t}\n\n\tlog.Printf(\"Syncing Cache\")\n\terr = kfDef.SyncCache()\n\tif err != nil {\n\t\tlog.Errorf(\"Failed to synchronize the cache; error: %v\", err)\n\t\treturn err\n\t}\n\t// Save app.yaml because we need to preserve information about the cache.\n\tif err := kfDef.WriteToFile(cfgFilePath); err != nil {\n\t\tlog.Errorf(\"Failed to save KfDef to %v; error %v\", cfgFilePath, err)\n\t\treturn err\n\t}\n\tlog.Infof(\"Saved configfile as kfdef in path: %v\", cfgFilePath)\n\n\t// Load KfApp for Generate and Apply\n\tKfApp, KfErr := coordinator.LoadKfAppCfgFile(cfgFilePath)\n\tif KfErr != nil {",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "320268163",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4040,
+        "pr_file": "bootstrap/pkg/kfapp/apply/apply.go",
+        "discussion_id": "320268163",
+        "commented_code": "@@ -0,0 +1,103 @@\n+package apply\n+\n+import (\n+\t\"errors\"\n+\t\"fmt\"\n+\t\"io\"\n+\t\"os\"\n+\n+\tkftypes \"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps\"\n+\tkfdefsv3 \"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps/kfdef/v1alpha1\"\n+\t\"github.com/kubeflow/kubeflow/bootstrap/v3/pkg/kfapp/coordinator\"\n+\tlog \"github.com/sirupsen/logrus\"\n+)\n+\n+// BootstrapKubeflow is used by the kfctl apply sub-command to take in a configfile\n+// as a flag and boostrap a KfApp and deploy it\n+func BootstrapKubeflow(configFilePath string, kfResource kftypes.ResourceEnum) error {\n+\t// Set default app name to kf-app\n+\tappName := \"kf-app\"\n+\n+\t// Construct KfDef from the configFilePath provided\n+\tkfDef := &kfdefsv3.KfDef{}\n+\tkfDef, err := kfdefsv3.LoadKFDefFromURI(configFilePath)\n+\tif err != nil {\n+\t\tlog.Printf(\"Unable to create KfDef from config file: %v\", err)\n+\t}\n+\tif kfDef.Name != \"\" {\n+\t\tlog.Warnf(\"Overriding KfDef.Spec.Name; old value %v; new value %v\", kfDef.Name, appName)\n+\t}\n+\tkfDef.Name = appName\n+\tisValid, msg := kfDef.IsValid()\n+\tif !isValid {\n+\t\tlog.Printf(\"Invalid kfdef: %v\", isValid)\n+\t\tlog.Printf(\"Error validating generated KfDef, please check config file validity: %v\", msg)\n+\t}\n+\tcwd, err := os.Getwd()\n+\tif err != nil {\n+\t\tlog.Printf(\"Error getting current working directory: %v\", err)\n+\t}\n+\tfmt.Println(\"Present working directory is: %v\", cwd)\n+\t// Check if current directory is empty and if it is error out\n+\tisEmpty, err := IsCwdEmpty(cwd)\n+\tif !isEmpty && err != nil {\n+\t\treturn fmt.Errorf(\"Current directory is not empty, please try again in an empty directory: %v\", err)\n+\t}\n+\tkfDef.Spec.AppDir = cwd\n+\tif kfDef.Spec.AppDir == \"\" {\n+\t\treturn errors.New(\"kfDef App Dir not set\")\n+\t}\n+\tlog.Warnf(\"App directory name: %v\", kfDef.Spec.AppDir)\n+\tcfgFilePath, err := coordinator.CreateKfAppCfgFile(kfDef)\n+\tif err != nil {\n+\t\tlog.Errorf(\"Error creating app.yaml from KfDef: %v\", err)\n+\t\treturn err\n+\t}\n+\n+\tlog.Printf(\"Syncing Cache\")\n+\terr = kfDef.SyncCache()\n+\tif err != nil {\n+\t\tlog.Errorf(\"Failed to synchronize the cache; error: %v\", err)\n+\t\treturn err\n+\t}\n+\t// Save app.yaml because we need to preserve information about the cache.\n+\tif err := kfDef.WriteToFile(cfgFilePath); err != nil {\n+\t\tlog.Errorf(\"Failed to save KfDef to %v; error %v\", cfgFilePath, err)\n+\t\treturn err\n+\t}\n+\tlog.Infof(\"Saved configfile as kfdef in path: %v\", cfgFilePath)\n+\n+\t// Load KfApp for Generate and Apply\n+\tKfApp, KfErr := coordinator.LoadKfAppCfgFile(cfgFilePath)\n+\tif KfErr != nil {",
+        "comment_created_at": "2019-09-03T13:22:23+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "Can you change all of these to just err? (kfErr, generateErr, applyErr, ...)",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

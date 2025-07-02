@@ -1,0 +1,321 @@
+---
+title: Follow API conventions
+description: When designing APIs, adhere to established API conventions, particularly
+  Kubernetes API conventions when working within the Kubernetes ecosystem. This improves
+  API clarity, maintainability, and future compatibility.
+repository: kubeflow/kubeflow
+label: API
+language: Go
+comments_count: 4
+repository_stars: 15064
+---
+
+When designing APIs, adhere to established API conventions, particularly Kubernetes API conventions when working within the Kubernetes ecosystem. This improves API clarity, maintainability, and future compatibility.
+
+Key practices:
+1. **Use standard data formats** instead of custom parsing methods
+   ```go
+   // Instead of custom string parsing:
+   requestHeaders := strings.Split(annotations["notebooks.kubeflow.org/http-headers-request-set"], "\n")
+   
+   // Prefer using standard JSON:
+   var requestHeaders map[string]string
+   if err := json.Unmarshal([]byte(annotations["notebooks.kubeflow.org/http-headers-request-set"]), &requestHeaders); err != nil {
+       // Handle error
+   }
+   ```
+
+2. **Use explicit field definitions** rather than embedding complex objects
+   ```go
+   // Instead of embedding the entire ObjectMeta:
+   type PodDefaultSpec struct {
+       // ObjectMeta defines the metadata to inject into the pod
+       metav1.ObjectMeta `json:"metadata,omitempty"`
+   }
+   
+   // Be specific about which fields you need:
+   type PodDefaultSpec struct {
+       // Labels to inject into pod metadata
+       Labels map[string]string `json:"labels,omitempty"`
+       // Annotations to inject into pod metadata
+       Annotations map[string]string `json:"annotations,omitempty"`
+   }
+   ```
+
+3. **Use conditions instead of enums** for representing status
+   ```go
+   // Instead of enum-style status:
+   type ProfileState string
+   
+   // Use standard Kubernetes condition pattern:
+   type ProfileCondition struct {
+       Type    string `json:"type"`
+       Status  v1.ConditionStatus `json:"status"`
+       LastUpdateTime metav1.Time `json:"lastUpdateTime,omitempty"`
+       LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
+       Reason string `json:"reason,omitempty"`
+       Message string `json:"message,omitempty"`
+   }
+   ```
+
+Following these conventions enhances API clarity, avoids reinventing the wheel, and ensures your APIs evolve gracefully as requirements change.
+
+
+[
+  {
+    "discussion_id": "592260994",
+    "pr_number": 5660,
+    "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+    "created_at": "2021-03-11T10:55:40+00:00",
+    "commented_code": "\"timeout\": \"300s\",\n\t\t},\n\t}\n\n\t// Create a template map for the headers section\n\t// of the Istio VirtualService\n\theaders := map[string]interface{}{\n\t\t\"request\": map[string]interface{}{\n\t\t\t\"set\": map[string]interface{}{},\n\t\t},\n\t}\n\n\t// Blacklist for request headers that are not allowed to be set\n\tblacklist := []string{\"userid-header\", \"X-Forwarded-Proto\"}\n\n\t// If key \"notebooks.kubeflow.org/http-headers-request-set\" is present on the notebook resource,\n\t// split the literal string into keys and values and add them\n\t// to the headers variable. Finally, add the headers section to\n\t// the variable with the http spec.\n\tif _, ok := annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]; ok && len(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]) > 0 {\n\t\trequestHeaders := strings.Split(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"], \"\\n\")\n\t\tfor _, kv := range requestHeaders {\n\t\t\tif len(strings.Split(kv, \": \")) == 2 {\n\t\t\t\tk := strings.Split(kv, \": \")[0]\n\t\t\t\tv := strings.Split(kv, \": \")[1]",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "592260994",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5660,
+        "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+        "discussion_id": "592260994",
+        "commented_code": "@@ -449,6 +473,39 @@ func generateVirtualService(instance *v1beta1.Notebook) (*unstructured.Unstructu\n \t\t\t\"timeout\": \"300s\",\n \t\t},\n \t}\n+\n+\t// Create a template map for the headers section\n+\t// of the Istio VirtualService\n+\theaders := map[string]interface{}{\n+\t\t\"request\": map[string]interface{}{\n+\t\t\t\"set\": map[string]interface{}{},\n+\t\t},\n+\t}\n+\n+\t// Blacklist for request headers that are not allowed to be set\n+\tblacklist := []string{\"userid-header\", \"X-Forwarded-Proto\"}\n+\n+\t// If key \"notebooks.kubeflow.org/http-headers-request-set\" is present on the notebook resource,\n+\t// split the literal string into keys and values and add them\n+\t// to the headers variable. Finally, add the headers section to\n+\t// the variable with the http spec.\n+\tif _, ok := annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]; ok && len(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]) > 0 {\n+\t\trequestHeaders := strings.Split(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"], \"\\n\")\n+\t\tfor _, kv := range requestHeaders {\n+\t\t\tif len(strings.Split(kv, \": \")) == 2 {\n+\t\t\t\tk := strings.Split(kv, \": \")[0]\n+\t\t\t\tv := strings.Split(kv, \": \")[1]",
+        "comment_created_at": "2021-03-11T10:55:40+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "I believe we shouldn't use our own serialization format, but instead take a page from Kubernetes' book.\r\nKubernetes uses annotations for alpha features. How are those annotations written? With JSON. For example, the `scheduler.alpha.kubernetes.io/affinity` annotation.\r\n\r\nUsing JSON allows us to leverage existing battle-tested parsers and not implement our own. What do you think?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "592267539",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5660,
+        "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+        "discussion_id": "592260994",
+        "commented_code": "@@ -449,6 +473,39 @@ func generateVirtualService(instance *v1beta1.Notebook) (*unstructured.Unstructu\n \t\t\t\"timeout\": \"300s\",\n \t\t},\n \t}\n+\n+\t// Create a template map for the headers section\n+\t// of the Istio VirtualService\n+\theaders := map[string]interface{}{\n+\t\t\"request\": map[string]interface{}{\n+\t\t\t\"set\": map[string]interface{}{},\n+\t\t},\n+\t}\n+\n+\t// Blacklist for request headers that are not allowed to be set\n+\tblacklist := []string{\"userid-header\", \"X-Forwarded-Proto\"}\n+\n+\t// If key \"notebooks.kubeflow.org/http-headers-request-set\" is present on the notebook resource,\n+\t// split the literal string into keys and values and add them\n+\t// to the headers variable. Finally, add the headers section to\n+\t// the variable with the http spec.\n+\tif _, ok := annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]; ok && len(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]) > 0 {\n+\t\trequestHeaders := strings.Split(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"], \"\\n\")\n+\t\tfor _, kv := range requestHeaders {\n+\t\t\tif len(strings.Split(kv, \": \")) == 2 {\n+\t\t\t\tk := strings.Split(kv, \": \")[0]\n+\t\t\t\tv := strings.Split(kv, \": \")[1]",
+        "comment_created_at": "2021-03-11T11:05:32+00:00",
+        "comment_author": "davidspek",
+        "comment_body": "I have no idea how to start implementing this, and I don't believe there is enough time to do so anymore either. I'm mainly following what is already being done in the code elsewhere. If you want to improve the code, I'm happy to include it in the PR. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "592284821",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5660,
+        "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+        "discussion_id": "592260994",
+        "commented_code": "@@ -449,6 +473,39 @@ func generateVirtualService(instance *v1beta1.Notebook) (*unstructured.Unstructu\n \t\t\t\"timeout\": \"300s\",\n \t\t},\n \t}\n+\n+\t// Create a template map for the headers section\n+\t// of the Istio VirtualService\n+\theaders := map[string]interface{}{\n+\t\t\"request\": map[string]interface{}{\n+\t\t\t\"set\": map[string]interface{}{},\n+\t\t},\n+\t}\n+\n+\t// Blacklist for request headers that are not allowed to be set\n+\tblacklist := []string{\"userid-header\", \"X-Forwarded-Proto\"}\n+\n+\t// If key \"notebooks.kubeflow.org/http-headers-request-set\" is present on the notebook resource,\n+\t// split the literal string into keys and values and add them\n+\t// to the headers variable. Finally, add the headers section to\n+\t// the variable with the http spec.\n+\tif _, ok := annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]; ok && len(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]) > 0 {\n+\t\trequestHeaders := strings.Split(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"], \"\\n\")\n+\t\tfor _, kv := range requestHeaders {\n+\t\t\tif len(strings.Split(kv, \": \")) == 2 {\n+\t\t\t\tk := strings.Split(kv, \": \")[0]\n+\t\t\t\tv := strings.Split(kv, \": \")[1]",
+        "comment_created_at": "2021-03-11T11:31:55+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "@DavidSpek it's a small change. Here is an example you can follow to unmarshal a json map (the use-case we have here):\r\nhttps://play.golang.org/p/TR-6kdk6s91",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "593057363",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5660,
+        "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+        "discussion_id": "592260994",
+        "commented_code": "@@ -449,6 +473,39 @@ func generateVirtualService(instance *v1beta1.Notebook) (*unstructured.Unstructu\n \t\t\t\"timeout\": \"300s\",\n \t\t},\n \t}\n+\n+\t// Create a template map for the headers section\n+\t// of the Istio VirtualService\n+\theaders := map[string]interface{}{\n+\t\t\"request\": map[string]interface{}{\n+\t\t\t\"set\": map[string]interface{}{},\n+\t\t},\n+\t}\n+\n+\t// Blacklist for request headers that are not allowed to be set\n+\tblacklist := []string{\"userid-header\", \"X-Forwarded-Proto\"}\n+\n+\t// If key \"notebooks.kubeflow.org/http-headers-request-set\" is present on the notebook resource,\n+\t// split the literal string into keys and values and add them\n+\t// to the headers variable. Finally, add the headers section to\n+\t// the variable with the http spec.\n+\tif _, ok := annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]; ok && len(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]) > 0 {\n+\t\trequestHeaders := strings.Split(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"], \"\\n\")\n+\t\tfor _, kv := range requestHeaders {\n+\t\t\tif len(strings.Split(kv, \": \")) == 2 {\n+\t\t\t\tk := strings.Split(kv, \": \")[0]\n+\t\t\t\tv := strings.Split(kv, \": \")[1]",
+        "comment_created_at": "2021-03-12T10:11:24+00:00",
+        "comment_author": "kimwnasptd",
+        "comment_body": "@DavidSpek show your comment below about the error with Unmarshal https://github.com/kubeflow/kubeflow/pull/5660#issuecomment-797378906. Writing it here to keep it in one place.\r\n\r\nI'm not sure how you used the Unmarshal function but I believe you could also try and catch the error and not let it panic. Here's a very similar code I've seen https://github.com/kubeflow/katib/blob/master/pkg/new-ui/v1beta1/backend.go#L73",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "593072068",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5660,
+        "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+        "discussion_id": "592260994",
+        "commented_code": "@@ -449,6 +473,39 @@ func generateVirtualService(instance *v1beta1.Notebook) (*unstructured.Unstructu\n \t\t\t\"timeout\": \"300s\",\n \t\t},\n \t}\n+\n+\t// Create a template map for the headers section\n+\t// of the Istio VirtualService\n+\theaders := map[string]interface{}{\n+\t\t\"request\": map[string]interface{}{\n+\t\t\t\"set\": map[string]interface{}{},\n+\t\t},\n+\t}\n+\n+\t// Blacklist for request headers that are not allowed to be set\n+\tblacklist := []string{\"userid-header\", \"X-Forwarded-Proto\"}\n+\n+\t// If key \"notebooks.kubeflow.org/http-headers-request-set\" is present on the notebook resource,\n+\t// split the literal string into keys and values and add them\n+\t// to the headers variable. Finally, add the headers section to\n+\t// the variable with the http spec.\n+\tif _, ok := annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]; ok && len(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]) > 0 {\n+\t\trequestHeaders := strings.Split(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"], \"\\n\")\n+\t\tfor _, kv := range requestHeaders {\n+\t\t\tif len(strings.Split(kv, \": \")) == 2 {\n+\t\t\t\tk := strings.Split(kv, \": \")[0]\n+\t\t\t\tv := strings.Split(kv, \": \")[1]",
+        "comment_created_at": "2021-03-12T10:34:35+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "@DavidSpek in the example I gave you, I omitted the error handling. Let me give you an example with error handling. This way you can catch the bad case in the controller, log it and emit an event:\r\nhttps://play.golang.org/p/nxmAh3VaNZr",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "593074840",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5660,
+        "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+        "discussion_id": "592260994",
+        "commented_code": "@@ -449,6 +473,39 @@ func generateVirtualService(instance *v1beta1.Notebook) (*unstructured.Unstructu\n \t\t\t\"timeout\": \"300s\",\n \t\t},\n \t}\n+\n+\t// Create a template map for the headers section\n+\t// of the Istio VirtualService\n+\theaders := map[string]interface{}{\n+\t\t\"request\": map[string]interface{}{\n+\t\t\t\"set\": map[string]interface{}{},\n+\t\t},\n+\t}\n+\n+\t// Blacklist for request headers that are not allowed to be set\n+\tblacklist := []string{\"userid-header\", \"X-Forwarded-Proto\"}\n+\n+\t// If key \"notebooks.kubeflow.org/http-headers-request-set\" is present on the notebook resource,\n+\t// split the literal string into keys and values and add them\n+\t// to the headers variable. Finally, add the headers section to\n+\t// the variable with the http spec.\n+\tif _, ok := annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]; ok && len(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]) > 0 {\n+\t\trequestHeaders := strings.Split(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"], \"\\n\")\n+\t\tfor _, kv := range requestHeaders {\n+\t\t\tif len(strings.Split(kv, \": \")) == 2 {\n+\t\t\t\tk := strings.Split(kv, \": \")[0]\n+\t\t\t\tv := strings.Split(kv, \": \")[1]",
+        "comment_created_at": "2021-03-12T10:38:47+00:00",
+        "comment_author": "davidspek",
+        "comment_body": "@yanniszark Thanks for the example. I just noticed the actual latest changes were not pushed yesterday. I just pushed them and I believe the error handling from you example is included in there. However, the controller crashing is still a problem.  ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "593087493",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 5660,
+        "pr_file": "components/notebook-controller/controllers/notebook_controller.go",
+        "discussion_id": "592260994",
+        "commented_code": "@@ -449,6 +473,39 @@ func generateVirtualService(instance *v1beta1.Notebook) (*unstructured.Unstructu\n \t\t\t\"timeout\": \"300s\",\n \t\t},\n \t}\n+\n+\t// Create a template map for the headers section\n+\t// of the Istio VirtualService\n+\theaders := map[string]interface{}{\n+\t\t\"request\": map[string]interface{}{\n+\t\t\t\"set\": map[string]interface{}{},\n+\t\t},\n+\t}\n+\n+\t// Blacklist for request headers that are not allowed to be set\n+\tblacklist := []string{\"userid-header\", \"X-Forwarded-Proto\"}\n+\n+\t// If key \"notebooks.kubeflow.org/http-headers-request-set\" is present on the notebook resource,\n+\t// split the literal string into keys and values and add them\n+\t// to the headers variable. Finally, add the headers section to\n+\t// the variable with the http spec.\n+\tif _, ok := annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]; ok && len(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"]) > 0 {\n+\t\trequestHeaders := strings.Split(annotations[\"notebooks.kubeflow.org/http-headers-request-set\"], \"\\n\")\n+\t\tfor _, kv := range requestHeaders {\n+\t\t\tif len(strings.Split(kv, \": \")) == 2 {\n+\t\t\t\tk := strings.Split(kv, \": \")[0]\n+\t\t\t\tv := strings.Split(kv, \": \")[1]",
+        "comment_created_at": "2021-03-12T10:59:39+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "Then we need to find the cause. Can you point to the exact line in your code that crashes?\r\nWhat have you tried / what do you think is wrong?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "352725761",
+    "pr_number": 4539,
+    "pr_file": "components/admission-webhook/pkg/apis/settings/v1alpha1/poddefault_types.go",
+    "created_at": "2019-12-02T17:23:05+00:00",
+    "commented_code": "// VolumeMounts defines the collection of VolumeMount to inject into containers.\n\t// +optional\n\tVolumeMounts []v1.VolumeMount `json:\"volumeMounts,omitempty\"`\n\n\t// ObjectMeta defines the metadata to inject labels and annotations from into the metadata field of a pod.\n\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "352725761",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4539,
+        "pr_file": "components/admission-webhook/pkg/apis/settings/v1alpha1/poddefault_types.go",
+        "discussion_id": "352725761",
+        "commented_code": "@@ -53,6 +53,9 @@ type PodDefaultSpec struct {\n \t// VolumeMounts defines the collection of VolumeMount to inject into containers.\n \t// +optional\n \tVolumeMounts []v1.VolumeMount `json:\"volumeMounts,omitempty\"`\n+\n+\t// ObjectMeta defines the metadata to inject labels and annotations from into the metadata field of a pod.\n+\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`",
+        "comment_created_at": "2019-12-02T17:23:05+00:00",
+        "comment_author": "jlewi",
+        "comment_body": "Did you consider having separate fields for labels & annotations rather than a metadata field?\r\nmetadata has a bunch of fields\r\nhttps://kubernetes.io/docs/reference/generated/kubernetes-api/v1.15/#objectmeta-v1-meta\r\n\r\nIf we include ObjectMeta does that create confusion about what happens for other fields (e.g. name, namespace, ownerReferences, finalizers etc...)?\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "352733846",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4539,
+        "pr_file": "components/admission-webhook/pkg/apis/settings/v1alpha1/poddefault_types.go",
+        "discussion_id": "352725761",
+        "commented_code": "@@ -53,6 +53,9 @@ type PodDefaultSpec struct {\n \t// VolumeMounts defines the collection of VolumeMount to inject into containers.\n \t// +optional\n \tVolumeMounts []v1.VolumeMount `json:\"volumeMounts,omitempty\"`\n+\n+\t// ObjectMeta defines the metadata to inject labels and annotations from into the metadata field of a pod.\n+\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`",
+        "comment_created_at": "2019-12-02T17:39:44+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "How about introducing the whole field but only use those certain parts?\r\neg StatefulSet uses PersistentVolumeClaim as the type for volumeClaimTemplates, even if it doesn't use all the fields.\r\n\r\nWe could also maybe use some of them in the future?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "352749580",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4539,
+        "pr_file": "components/admission-webhook/pkg/apis/settings/v1alpha1/poddefault_types.go",
+        "discussion_id": "352725761",
+        "commented_code": "@@ -53,6 +53,9 @@ type PodDefaultSpec struct {\n \t// VolumeMounts defines the collection of VolumeMount to inject into containers.\n \t// +optional\n \tVolumeMounts []v1.VolumeMount `json:\"volumeMounts,omitempty\"`\n+\n+\t// ObjectMeta defines the metadata to inject labels and annotations from into the metadata field of a pod.\n+\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`",
+        "comment_created_at": "2019-12-02T18:13:37+00:00",
+        "comment_author": "jlewi",
+        "comment_body": "The downside of using ObjectMeta is that the API is no longer self-specifying and well defined. A user has to read the docs in order to understand the behavior; i.e. which fields are copied and which are ignored. Whereas if we have fields labels and annotations that are copied then it is arguably more self explanatory.\r\n\r\nFurthermore we are in effect saying that the behavior for other fields e.g \"finalizers, name, namespace, ownerReferences\" are undefined. Its not clear whether these fields are intentionally excluded or they are excluded only because we did a partial implementation in the need of expediency.\r\n\r\nDo we have a strong reason to expect that we will want to include these fields in the future? finalizers seems like the only other field that we might need to set in the future. Even then I'm not sure if setting finalizers on pods as opposed to the owning object is common.\r\n\r\nFor all the other fields (name, uid, ownerReferences) etc... setting them in podDefaults seems incorrect.\r\n\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "352861812",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4539,
+        "pr_file": "components/admission-webhook/pkg/apis/settings/v1alpha1/poddefault_types.go",
+        "discussion_id": "352725761",
+        "commented_code": "@@ -53,6 +53,9 @@ type PodDefaultSpec struct {\n \t// VolumeMounts defines the collection of VolumeMount to inject into containers.\n \t// +optional\n \tVolumeMounts []v1.VolumeMount `json:\"volumeMounts,omitempty\"`\n+\n+\t// ObjectMeta defines the metadata to inject labels and annotations from into the metadata field of a pod.\n+\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`",
+        "comment_created_at": "2019-12-02T21:24:50+00:00",
+        "comment_author": "discordianfish",
+        "comment_body": "Yeah I wasn't sure either about using ObjectMeta but with only the annotations/labels fields (what I'm doing here and what @yanniszark describes unless I'm mistaken), or add annotations/labels as separate fields. I've went with using ObjectMeta because having a struct for metadata as oppose to just two map[string]string seemed nicer, but not feeling strongly that way.\r\nI'll update the PR to use Annotations and Labels fields instead.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "353298581",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4539,
+        "pr_file": "components/admission-webhook/pkg/apis/settings/v1alpha1/poddefault_types.go",
+        "discussion_id": "352725761",
+        "commented_code": "@@ -53,6 +53,9 @@ type PodDefaultSpec struct {\n \t// VolumeMounts defines the collection of VolumeMount to inject into containers.\n \t// +optional\n \tVolumeMounts []v1.VolumeMount `json:\"volumeMounts,omitempty\"`\n+\n+\t// ObjectMeta defines the metadata to inject labels and annotations from into the metadata field of a pod.\n+\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`",
+        "comment_created_at": "2019-12-03T16:50:46+00:00",
+        "comment_author": "jlewi",
+        "comment_body": "Thanks. I think this is better. Expanding an API is always easier than shrinking it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "326742755",
+    "pr_number": 4155,
+    "pr_file": "components/profile-controller/pkg/apis/kubeflow/v1beta1/profile_types.go",
+    "created_at": "2019-09-20T18:04:45+00:00",
+    "commented_code": "/*\nCopyright 2019 The Kubeflow Authors.\n\nLicensed under the Apache License, Version 2.0 (the \"License\");\nyou may not use this file except in compliance with the License.\nYou may obtain a copy of the License at\n\n    http://www.apache.org/licenses/LICENSE-2.0\n\nUnless required by applicable law or agreed to in writing, software\ndistributed under the License is distributed on an \"AS IS\" BASIS,\nWITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\nSee the License for the specific language governing permissions and\nlimitations under the License.\n*/\n\npackage v1beta1\n\nimport (\n\t\"k8s.io/api/core/v1\"\n\trbacv1 \"k8s.io/api/rbac/v1\"\n\tmetav1 \"k8s.io/apimachinery/pkg/apis/meta/v1\"\n\t\"k8s.io/apimachinery/pkg/runtime\"\n)\n\n// Plugin is for customize actions on different platform.\ntype Plugin struct {\n\tmetav1.TypeMeta   `json:\",inline\"`\n\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`\n\tSpec              *runtime.RawExtension `json:\"spec,omitempty\"`\n}\n\n// ProfileSpec defines the desired state of Profile\ntype ProfileSpec struct {\n\t// The profile owner\n\tOwner   rbacv1.Subject `json:\"owner,omitempty\"`\n\tPlugins []Plugin       `json:\"plugins,omitempty\"`\n\t// Resourcequota that will be applied to target namespace\n\tResourceQuotaSpec v1.ResourceQuotaSpec `json:\"resourcequotaspec,omitempty\"`\n}\n\ntype ProfileState string",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "326742755",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4155,
+        "pr_file": "components/profile-controller/pkg/apis/kubeflow/v1beta1/profile_types.go",
+        "discussion_id": "326742755",
+        "commented_code": "@@ -0,0 +1,83 @@\n+/*\n+Copyright 2019 The Kubeflow Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package v1beta1\n+\n+import (\n+\t\"k8s.io/api/core/v1\"\n+\trbacv1 \"k8s.io/api/rbac/v1\"\n+\tmetav1 \"k8s.io/apimachinery/pkg/apis/meta/v1\"\n+\t\"k8s.io/apimachinery/pkg/runtime\"\n+)\n+\n+// Plugin is for customize actions on different platform.\n+type Plugin struct {\n+\tmetav1.TypeMeta   `json:\",inline\"`\n+\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`\n+\tSpec              *runtime.RawExtension `json:\"spec,omitempty\"`\n+}\n+\n+// ProfileSpec defines the desired state of Profile\n+type ProfileSpec struct {\n+\t// The profile owner\n+\tOwner   rbacv1.Subject `json:\"owner,omitempty\"`\n+\tPlugins []Plugin       `json:\"plugins,omitempty\"`\n+\t// Resourcequota that will be applied to target namespace\n+\tResourceQuotaSpec v1.ResourceQuotaSpec `json:\"resourcequotaspec,omitempty\"`\n+}\n+\n+type ProfileState string",
+        "comment_created_at": "2019-09-20T18:04:45+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "I would suggest we avoid using enum fields in status, as they break if we add new possible values.\r\nInstead, the K8s api convention advises one to use Conditions.\r\nhttps://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "326834486",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4155,
+        "pr_file": "components/profile-controller/pkg/apis/kubeflow/v1beta1/profile_types.go",
+        "discussion_id": "326742755",
+        "commented_code": "@@ -0,0 +1,83 @@\n+/*\n+Copyright 2019 The Kubeflow Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package v1beta1\n+\n+import (\n+\t\"k8s.io/api/core/v1\"\n+\trbacv1 \"k8s.io/api/rbac/v1\"\n+\tmetav1 \"k8s.io/apimachinery/pkg/apis/meta/v1\"\n+\t\"k8s.io/apimachinery/pkg/runtime\"\n+)\n+\n+// Plugin is for customize actions on different platform.\n+type Plugin struct {\n+\tmetav1.TypeMeta   `json:\",inline\"`\n+\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`\n+\tSpec              *runtime.RawExtension `json:\"spec,omitempty\"`\n+}\n+\n+// ProfileSpec defines the desired state of Profile\n+type ProfileSpec struct {\n+\t// The profile owner\n+\tOwner   rbacv1.Subject `json:\"owner,omitempty\"`\n+\tPlugins []Plugin       `json:\"plugins,omitempty\"`\n+\t// Resourcequota that will be applied to target namespace\n+\tResourceQuotaSpec v1.ResourceQuotaSpec `json:\"resourcequotaspec,omitempty\"`\n+}\n+\n+type ProfileState string",
+        "comment_created_at": "2019-09-20T23:50:32+00:00",
+        "comment_author": "kunmingg",
+        "comment_body": "ProfileState is saved as plain string, adding new values should not change existing messages.\r\nWe can use conditions in followup PRs if needed.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "326863827",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4155,
+        "pr_file": "components/profile-controller/pkg/apis/kubeflow/v1beta1/profile_types.go",
+        "discussion_id": "326742755",
+        "commented_code": "@@ -0,0 +1,83 @@\n+/*\n+Copyright 2019 The Kubeflow Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package v1beta1\n+\n+import (\n+\t\"k8s.io/api/core/v1\"\n+\trbacv1 \"k8s.io/api/rbac/v1\"\n+\tmetav1 \"k8s.io/apimachinery/pkg/apis/meta/v1\"\n+\t\"k8s.io/apimachinery/pkg/runtime\"\n+)\n+\n+// Plugin is for customize actions on different platform.\n+type Plugin struct {\n+\tmetav1.TypeMeta   `json:\",inline\"`\n+\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`\n+\tSpec              *runtime.RawExtension `json:\"spec,omitempty\"`\n+}\n+\n+// ProfileSpec defines the desired state of Profile\n+type ProfileSpec struct {\n+\t// The profile owner\n+\tOwner   rbacv1.Subject `json:\"owner,omitempty\"`\n+\tPlugins []Plugin       `json:\"plugins,omitempty\"`\n+\t// Resourcequota that will be applied to target namespace\n+\tResourceQuotaSpec v1.ResourceQuotaSpec `json:\"resourcequotaspec,omitempty\"`\n+}\n+\n+type ProfileState string",
+        "comment_created_at": "2019-09-21T15:28:41+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "@kunmingg I'm a bit hesitant to go forward with a Phase enum-type status, because this is the pattern that Kubernetes used and then decided explicitly against it, in favor of conditions.\r\nSee [this section](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties) for more information: \r\n\r\n> pattern of using phase is deprecated. Newer API types should use conditions instead. Phase was essentially a state-machine enumeration field, that contradicted system-design principles and hampered evolution, since adding new enum values breaks backward compatibility. \r\n\r\n\r\n/cc @jlewi @kkasravi ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "328205201",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4155,
+        "pr_file": "components/profile-controller/pkg/apis/kubeflow/v1beta1/profile_types.go",
+        "discussion_id": "326742755",
+        "commented_code": "@@ -0,0 +1,83 @@\n+/*\n+Copyright 2019 The Kubeflow Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package v1beta1\n+\n+import (\n+\t\"k8s.io/api/core/v1\"\n+\trbacv1 \"k8s.io/api/rbac/v1\"\n+\tmetav1 \"k8s.io/apimachinery/pkg/apis/meta/v1\"\n+\t\"k8s.io/apimachinery/pkg/runtime\"\n+)\n+\n+// Plugin is for customize actions on different platform.\n+type Plugin struct {\n+\tmetav1.TypeMeta   `json:\",inline\"`\n+\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`\n+\tSpec              *runtime.RawExtension `json:\"spec,omitempty\"`\n+}\n+\n+// ProfileSpec defines the desired state of Profile\n+type ProfileSpec struct {\n+\t// The profile owner\n+\tOwner   rbacv1.Subject `json:\"owner,omitempty\"`\n+\tPlugins []Plugin       `json:\"plugins,omitempty\"`\n+\t// Resourcequota that will be applied to target namespace\n+\tResourceQuotaSpec v1.ResourceQuotaSpec `json:\"resourcequotaspec,omitempty\"`\n+}\n+\n+type ProfileState string",
+        "comment_created_at": "2019-09-25T15:54:59+00:00",
+        "comment_author": "jlewi",
+        "comment_body": "+1 to using conditions. \r\n\r\n@kunmingg are there problems with using conditions rather than enums?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "328288394",
+    "pr_number": 4155,
+    "pr_file": "components/profile-controller/pkg/apis/kubeflow/v1beta1/profile_types.go",
+    "created_at": "2019-09-25T18:58:07+00:00",
+    "commented_code": "/*\nCopyright 2019 The Kubeflow Authors.\n\nLicensed under the Apache License, Version 2.0 (the \"License\");\nyou may not use this file except in compliance with the License.\nYou may obtain a copy of the License at\n\n    http://www.apache.org/licenses/LICENSE-2.0\n\nUnless required by applicable law or agreed to in writing, software\ndistributed under the License is distributed on an \"AS IS\" BASIS,\nWITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\nSee the License for the specific language governing permissions and\nlimitations under the License.\n*/\n\npackage v1beta1\n\nimport (\n\t\"k8s.io/api/core/v1\"\n\trbacv1 \"k8s.io/api/rbac/v1\"\n\tmetav1 \"k8s.io/apimachinery/pkg/apis/meta/v1\"\n\t\"k8s.io/apimachinery/pkg/runtime\"\n)\n\n// Plugin is for customize actions on different platform.\ntype Plugin struct {\n\tmetav1.TypeMeta   `json:\",inline\"`\n\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`\n\tSpec\t*runtime.RawExtension `json:\"spec,omitempty\"`\n}\n\ntype ProfileCondition struct {\n\tMessage\tstring `json:\"message,omitempty\"`\n\tStatus\tstring `json:\"status,omitempty\"`",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "328288394",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4155,
+        "pr_file": "components/profile-controller/pkg/apis/kubeflow/v1beta1/profile_types.go",
+        "discussion_id": "328288394",
+        "commented_code": "@@ -0,0 +1,83 @@\n+/*\n+Copyright 2019 The Kubeflow Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package v1beta1\n+\n+import (\n+\t\"k8s.io/api/core/v1\"\n+\trbacv1 \"k8s.io/api/rbac/v1\"\n+\tmetav1 \"k8s.io/apimachinery/pkg/apis/meta/v1\"\n+\t\"k8s.io/apimachinery/pkg/runtime\"\n+)\n+\n+// Plugin is for customize actions on different platform.\n+type Plugin struct {\n+\tmetav1.TypeMeta   `json:\",inline\"`\n+\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`\n+\tSpec\t*runtime.RawExtension `json:\"spec,omitempty\"`\n+}\n+\n+type ProfileCondition struct {\n+\tMessage\tstring `json:\"message,omitempty\"`\n+\tStatus\tstring `json:\"status,omitempty\"`",
+        "comment_created_at": "2019-09-25T18:58:07+00:00",
+        "comment_author": "yanniszark",
+        "comment_body": "I believe it's better to follow the standard condition fields here as well.\r\nhttps://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties\r\n\r\n/cc @jlewi ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "328377372",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 4155,
+        "pr_file": "components/profile-controller/pkg/apis/kubeflow/v1beta1/profile_types.go",
+        "discussion_id": "328288394",
+        "commented_code": "@@ -0,0 +1,83 @@\n+/*\n+Copyright 2019 The Kubeflow Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package v1beta1\n+\n+import (\n+\t\"k8s.io/api/core/v1\"\n+\trbacv1 \"k8s.io/api/rbac/v1\"\n+\tmetav1 \"k8s.io/apimachinery/pkg/apis/meta/v1\"\n+\t\"k8s.io/apimachinery/pkg/runtime\"\n+)\n+\n+// Plugin is for customize actions on different platform.\n+type Plugin struct {\n+\tmetav1.TypeMeta   `json:\",inline\"`\n+\tmetav1.ObjectMeta `json:\"metadata,omitempty\"`\n+\tSpec\t*runtime.RawExtension `json:\"spec,omitempty\"`\n+}\n+\n+type ProfileCondition struct {\n+\tMessage\tstring `json:\"message,omitempty\"`\n+\tStatus\tstring `json:\"status,omitempty\"`",
+        "comment_created_at": "2019-09-25T23:12:50+00:00",
+        "comment_author": "jlewi",
+        "comment_body": "+1",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

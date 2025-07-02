@@ -1,0 +1,98 @@
+---
+title: Private variable naming convention
+description: Use the 'prv' prefix for private class members and ensure they're explicitly
+  declared with the 'private' access modifier. This maintains consistency with established
+  team conventions and improves code readability by clearly indicating variable scope.
+repository: kubeflow/kubeflow
+label: Naming Conventions
+language: Typescript
+comments_count: 2
+repository_stars: 15064
+---
+
+Use the 'prv' prefix for private class members and ensure they're explicitly declared with the 'private' access modifier. This maintains consistency with established team conventions and improves code readability by clearly indicating variable scope.
+
+```typescript
+export class MyComponent {
+  // Correct: prefix matches access modifier
+  private prvUserData: UserData;
+  
+  // Incorrect: prefix doesn't match access modifier
+  public prvConfig: Config;
+  
+  // Incorrect: no prefix but is private
+  private userData: UserData;
+}
+```
+
+When refactoring existing code, update variable declarations to follow this pattern consistently. For observable patterns, public-facing properties should have clean names without implementation details while their corresponding subjects should use the 'prv' prefix:
+
+```typescript
+export class MyService {
+  // Private subjects
+  private prvDataSubject = new ReplaySubject<Data>(1);
+  
+  // Public observable (clean naming)
+  data = this.prvDataSubject.asObservable();
+}
+```
+
+
+[
+  {
+    "discussion_id": "1147731722",
+    "pr_number": 7030,
+    "pr_file": "components/centraldashboard-angular/frontend/src/app/services/namespace.service.ts",
+    "created_at": "2023-03-24T15:20:07+00:00",
+    "commented_code": "import { Injectable } from '@angular/core';\nimport { ActivatedRoute, NavigationEnd, Router } from '@angular/router';\nimport { ReplaySubject } from 'rxjs';\nimport { filter, map, switchMap, take } from 'rxjs/operators';\nimport { getQueryParams, getUrlFragment } from '../shared/utils';\nimport { Namespace } from '../types/namespace';\nimport { EnvironmentService } from './environment.service';\nimport { LocalStorageService } from './local-storage.service';\n\n@Injectable({\n  providedIn: 'root',\n})\nexport class CDBNamespaceService {\n  private _namespacesSubject = new ReplaySubject<Namespace[]>(1);\n  private _currentNamespaceSubject = new ReplaySubject<Namespace>(1);\n\n  namespacesSubject = this._namespacesSubject.asObservable();\n  currentNamespaceSubject = this._currentNamespaceSubject.asObservable();\n\n  private user: string;\n  private currentNamespace: Namespace | undefined;",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1147731722",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7030,
+        "pr_file": "components/centraldashboard-angular/frontend/src/app/services/namespace.service.ts",
+        "discussion_id": "1147731722",
+        "commented_code": "@@ -0,0 +1,201 @@\n+import { Injectable } from '@angular/core';\n+import { ActivatedRoute, NavigationEnd, Router } from '@angular/router';\n+import { ReplaySubject } from 'rxjs';\n+import { filter, map, switchMap, take } from 'rxjs/operators';\n+import { getQueryParams, getUrlFragment } from '../shared/utils';\n+import { Namespace } from '../types/namespace';\n+import { EnvironmentService } from './environment.service';\n+import { LocalStorageService } from './local-storage.service';\n+\n+@Injectable({\n+  providedIn: 'root',\n+})\n+export class CDBNamespaceService {\n+  private _namespacesSubject = new ReplaySubject<Namespace[]>(1);\n+  private _currentNamespaceSubject = new ReplaySubject<Namespace>(1);\n+\n+  namespacesSubject = this._namespacesSubject.asObservable();\n+  currentNamespaceSubject = this._currentNamespaceSubject.asObservable();\n+\n+  private user: string;\n+  private currentNamespace: Namespace | undefined;",
+        "comment_created_at": "2023-03-24T15:20:07+00:00",
+        "comment_author": "tasos-ale",
+        "comment_body": "Maybe we can do this:\r\n```suggestion\r\n  namespaces = this._namespacesSubject.asObservable();\r\n  currentNamespace = this._currentNamespaceSubject.asObservable();\r\n\r\n  private _user: string;\r\n  private _currentNamespace: Namespace | undefined;\r\n```\r\nwdyt @orfeas-k ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1147753168",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 7030,
+        "pr_file": "components/centraldashboard-angular/frontend/src/app/services/namespace.service.ts",
+        "discussion_id": "1147731722",
+        "commented_code": "@@ -0,0 +1,201 @@\n+import { Injectable } from '@angular/core';\n+import { ActivatedRoute, NavigationEnd, Router } from '@angular/router';\n+import { ReplaySubject } from 'rxjs';\n+import { filter, map, switchMap, take } from 'rxjs/operators';\n+import { getQueryParams, getUrlFragment } from '../shared/utils';\n+import { Namespace } from '../types/namespace';\n+import { EnvironmentService } from './environment.service';\n+import { LocalStorageService } from './local-storage.service';\n+\n+@Injectable({\n+  providedIn: 'root',\n+})\n+export class CDBNamespaceService {\n+  private _namespacesSubject = new ReplaySubject<Namespace[]>(1);\n+  private _currentNamespaceSubject = new ReplaySubject<Namespace>(1);\n+\n+  namespacesSubject = this._namespacesSubject.asObservable();\n+  currentNamespaceSubject = this._currentNamespaceSubject.asObservable();\n+\n+  private user: string;\n+  private currentNamespace: Namespace | undefined;",
+        "comment_created_at": "2023-03-24T15:35:45+00:00",
+        "comment_author": "orfeas-k",
+        "comment_body": "Sure, but I 'll rename them from `_variable` to `prvVariable` because that's what we do the in the rest of KF WAs as well.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1065742934",
+    "pr_number": 6856,
+    "pr_file": "components/centraldashboard-angular/frontend/src/app/pages/iframe-wrapper/iframe-wrapper.component.ts",
+    "created_at": "2023-01-10T12:45:55+00:00",
+    "commented_code": "import {\n  AfterViewInit,\n  Component,\n  ElementRef,\n  OnDestroy,\n  ViewChild,\n} from '@angular/core';\nimport { NavigationEnd, Router } from '@angular/router';\nimport { Subscription } from 'rxjs';\n\n@Component({\n  selector: 'app-iframe-wrapper',\n  templateUrl: './iframe-wrapper.component.html',\n  styleUrls: ['./iframe-wrapper.component.scss'],\n})\nexport class IframeWrapperComponent implements AfterViewInit, OnDestroy {\n  @ViewChild('iframe') iframe: ElementRef<HTMLIFrameElement>;\n\n  public prvSrcPath: string;",
+    "repo_full_name": "kubeflow/kubeflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1065742934",
+        "repo_full_name": "kubeflow/kubeflow",
+        "pr_number": 6856,
+        "pr_file": "components/centraldashboard-angular/frontend/src/app/pages/iframe-wrapper/iframe-wrapper.component.ts",
+        "discussion_id": "1065742934",
+        "commented_code": "@@ -0,0 +1,121 @@\n+import {\n+  AfterViewInit,\n+  Component,\n+  ElementRef,\n+  OnDestroy,\n+  ViewChild,\n+} from '@angular/core';\n+import { NavigationEnd, Router } from '@angular/router';\n+import { Subscription } from 'rxjs';\n+\n+@Component({\n+  selector: 'app-iframe-wrapper',\n+  templateUrl: './iframe-wrapper.component.html',\n+  styleUrls: ['./iframe-wrapper.component.scss'],\n+})\n+export class IframeWrapperComponent implements AfterViewInit, OnDestroy {\n+  @ViewChild('iframe') iframe: ElementRef<HTMLIFrameElement>;\n+\n+  public prvSrcPath: string;",
+        "comment_created_at": "2023-01-10T12:45:55+00:00",
+        "comment_author": "kimwnasptd",
+        "comment_body": "let's make this `private`, to comply with the var's name",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

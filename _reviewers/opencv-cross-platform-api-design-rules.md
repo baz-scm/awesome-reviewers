@@ -1,0 +1,201 @@
+---
+title: Cross-platform API design rules
+description: 'Design public APIs to work seamlessly across different programming languages
+  and platforms. Follow these key principles:
+
+
+  1. Use platform-agnostic types in public interfaces:'
+repository: opencv/opencv
+label: API
+language: Other
+comments_count: 6
+repository_stars: 82865
+---
+
+Design public APIs to work seamlessly across different programming languages and platforms. Follow these key principles:
+
+1. Use platform-agnostic types in public interfaces:
+   - Prefer `int` over `size_t` for array sizes and indices
+   - Avoid unsigned types that don't translate well to other languages
+   - Use explicit size types (int32_t, int64_t) when specific sizes are required
+
+2. Add proper binding annotations for cross-language support:
+```cpp
+class CV_EXPORTS_W MyClass {
+public:
+    CV_WRAP void process(int size);  // Not size_t
+    CV_WRAP_AS(processBytes) Mat process(InputArray data);  // Alias for clarity
+};
+```
+
+3. Avoid passing language-specific objects through plugin/module boundaries:
+   - Don't pass STL containers or C++ objects through plugin APIs
+   - Use C-style interfaces or abstract base classes for plugin APIs
+   - Consider providing factory functions for complex objects
+
+4. Maintain binary compatibility:
+   - Don't modify existing function signatures
+   - Create new overloads or functions for extended functionality
+   - Document API version changes clearly
+
+Following these guidelines ensures your API works reliably across Python, Java, and C++ while maintaining long-term stability.
+
+
+[
+  {
+    "discussion_id": "2179518705",
+    "pr_number": 27496,
+    "pr_file": "modules/imgcodecs/include/opencv2/imgcodecs.hpp",
+    "created_at": "2025-07-02T09:00:11+00:00",
+    "commented_code": "int m_curr;\n    };\n\n    ImageCollection();\n    ImageCollection(const String& filename, int flags);\n    void init(const String& img, int flags);\n    size_t size() const;\n    const Mat& at(int index);\n    CV_WRAP ImageCollection();\n    CV_WRAP ImageCollection(const String& filename, int flags = IMREAD_UNCHANGED);\n    CV_WRAP void init(const String& img, int flags);\n    CV_WRAP size_t size() const;",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "2179518705",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27496,
+        "pr_file": "modules/imgcodecs/include/opencv2/imgcodecs.hpp",
+        "discussion_id": "2179518705",
+        "commented_code": "@@ -711,13 +711,15 @@ class CV_EXPORTS ImageCollection {\n         int m_curr;\n     };\n \n-    ImageCollection();\n-    ImageCollection(const String& filename, int flags);\n-    void init(const String& img, int flags);\n-    size_t size() const;\n-    const Mat& at(int index);\n+    CV_WRAP ImageCollection();\n+    CV_WRAP ImageCollection(const String& filename, int flags = IMREAD_UNCHANGED);\n+    CV_WRAP void init(const String& img, int flags);\n+    CV_WRAP size_t size() const;",
+        "comment_created_at": "2025-07-02T09:00:11+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "size_t is not wrapped to Python and Java correctly. Java even does not support unsigned types. Please use int instead.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2179548324",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27496,
+        "pr_file": "modules/imgcodecs/include/opencv2/imgcodecs.hpp",
+        "discussion_id": "2179518705",
+        "commented_code": "@@ -711,13 +711,15 @@ class CV_EXPORTS ImageCollection {\n         int m_curr;\n     };\n \n-    ImageCollection();\n-    ImageCollection(const String& filename, int flags);\n-    void init(const String& img, int flags);\n-    size_t size() const;\n-    const Mat& at(int index);\n+    CV_WRAP ImageCollection();\n+    CV_WRAP ImageCollection(const String& filename, int flags = IMREAD_UNCHANGED);\n+    CV_WRAP void init(const String& img, int flags);\n+    CV_WRAP size_t size() const;",
+        "comment_created_at": "2025-07-02T09:14:01+00:00",
+        "comment_author": "sturkmen72",
+        "comment_body": "> size_t is not wrapped to Python and Java correctly. Java even does not support unsigned types. Please use int instead.\r\n\r\nplease check the last commit. i created size32() for wrapping",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2172533185",
+    "pr_number": 27460,
+    "pr_file": "modules/gapi/include/opencv2/gapi/infer/ov.hpp",
+    "created_at": "2025-06-27T17:34:53+00:00",
+    "commented_code": "*/\nstruct benchmark_mode { };\n\nstruct workload_type {\n    using callback = std::function<void(const std::string &type)>;\n    using listener = std::pair<int, callback>;\n    std::shared_ptr<void> addListener(callback cb){\n        int id = nextId++;\n        listeners.emplace_back(id, std::move(cb));\n\n        auto remover = [this, id](void*){ removeListener(id);};\n\n        return std::shared_ptr<void>(nullptr, remover);",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "2172533185",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27460,
+        "pr_file": "modules/gapi/include/opencv2/gapi/infer/ov.hpp",
+        "discussion_id": "2172533185",
+        "commented_code": "@@ -691,6 +691,29 @@ namespace wip { namespace ov {\n  */\n struct benchmark_mode { };\n \n+struct workload_type {\n+    using callback = std::function<void(const std::string &type)>;\n+    using listener = std::pair<int, callback>;\n+    std::shared_ptr<void> addListener(callback cb){\n+        int id = nextId++;\n+        listeners.emplace_back(id, std::move(cb));\n+\n+        auto remover = [this, id](void*){ removeListener(id);};\n+\n+        return std::shared_ptr<void>(nullptr, remover);",
+        "comment_created_at": "2025-06-27T17:34:53+00:00",
+        "comment_author": "AsyaPronina",
+        "comment_body": "I don't think it is a good idea to remove listeners that way. It seems a bit tricky. I understand that this variable may outlive G-API OV backend. But, might be, we can clean this variable's listeners in the destructor of G-API OV backend itself. Please note that we are the \"users\" of given API to add listeners and we 100% know when we add a listener and when we can remove it, so there is no need for some RAII idiom for remove. If this is allowable, we can preserve these compile args somewhere in backend to access variable in the destructor.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1327872439",
+    "pr_number": 24151,
+    "pr_file": "modules/imgproc/include/opencv2/imgproc/hal/hal.hpp",
+    "created_at": "2023-09-16T00:07:56+00:00",
+    "commented_code": "CV_EXPORTS void resize(int src_type,\n                       const uchar * src_data, size_t src_step, int src_width, int src_height,\n                       uchar * dst_data, size_t dst_step, int dst_width, int dst_height,\n                       double inv_scale_x, double inv_scale_y, int interpolation);\n                       double inv_scale_x, double inv_scale_y, int interpolation, int coordinate);",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1327872439",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24151,
+        "pr_file": "modules/imgproc/include/opencv2/imgproc/hal/hal.hpp",
+        "discussion_id": "1327872439",
+        "commented_code": "@@ -101,7 +101,7 @@ CV_EXPORTS void morph(int op, int src_type, int dst_type,\n CV_EXPORTS void resize(int src_type,\n                        const uchar * src_data, size_t src_step, int src_width, int src_height,\n                        uchar * dst_data, size_t dst_step, int dst_width, int dst_height,\n-                       double inv_scale_x, double inv_scale_y, int interpolation);\n+                       double inv_scale_x, double inv_scale_y, int interpolation, int coordinate);",
+        "comment_created_at": "2023-09-16T00:07:56+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "We should not break HAL API/ABI.\r\nDon't modify exited function, create a new function instead.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1959486582",
+    "pr_number": 26934,
+    "pr_file": "modules/objdetect/include/opencv2/objdetect/aruco_detector.hpp",
+    "created_at": "2025-02-18T10:39:42+00:00",
+    "commented_code": "* If camera parameters and distortion coefficients are provided, missing markers are reprojected\n     * using projectPoint function. If not, missing marker projections are interpolated using global\n     * homography, and all the marker corners in the board must have the same Z coordinate.\n     * @note This function assumes that the board only contains markers from one dictionary, so only the\n     * first configured dictionary is used.\n     */\n    CV_WRAP void refineDetectedMarkers(InputArray image, const Board &board,\n                                       InputOutputArrayOfArrays detectedCorners,\n                                       InputOutputArray detectedIds, InputOutputArrayOfArrays rejectedCorners,\n                                       InputArray cameraMatrix = noArray(), InputArray distCoeffs = noArray(),\n                                       OutputArray recoveredIdxs = noArray()) const;\n\n    CV_WRAP const Dictionary& getDictionary() const;\n    CV_WRAP void setDictionary(const Dictionary& dictionary);\n    CV_WRAP const Dictionary& getDictionary(size_t index = 0) const;\n    CV_WRAP void setDictionary(const Dictionary& dictionary, size_t index = 0);\n    CV_WRAP const std::vector<Dictionary>& getDictionaries() const;\n    CV_WRAP void setDictionaries(const std::vector<Dictionary>& dictionaries);\n    CV_WRAP void addDictionary(const Dictionary& dictionary);\n    CV_WRAP void removeDictionary(size_t index);",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1959486582",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26934,
+        "pr_file": "modules/objdetect/include/opencv2/objdetect/aruco_detector.hpp",
+        "discussion_id": "1959486582",
+        "commented_code": "@@ -329,15 +341,21 @@ class CV_EXPORTS_W ArucoDetector : public Algorithm\n      * If camera parameters and distortion coefficients are provided, missing markers are reprojected\n      * using projectPoint function. If not, missing marker projections are interpolated using global\n      * homography, and all the marker corners in the board must have the same Z coordinate.\n+     * @note This function assumes that the board only contains markers from one dictionary, so only the\n+     * first configured dictionary is used.\n      */\n     CV_WRAP void refineDetectedMarkers(InputArray image, const Board &board,\n                                        InputOutputArrayOfArrays detectedCorners,\n                                        InputOutputArray detectedIds, InputOutputArrayOfArrays rejectedCorners,\n                                        InputArray cameraMatrix = noArray(), InputArray distCoeffs = noArray(),\n                                        OutputArray recoveredIdxs = noArray()) const;\n \n-    CV_WRAP const Dictionary& getDictionary() const;\n-    CV_WRAP void setDictionary(const Dictionary& dictionary);\n+    CV_WRAP const Dictionary& getDictionary(size_t index = 0) const;\n+    CV_WRAP void setDictionary(const Dictionary& dictionary, size_t index = 0);\n+    CV_WRAP const std::vector<Dictionary>& getDictionaries() const;\n+    CV_WRAP void setDictionaries(const std::vector<Dictionary>& dictionaries);\n+    CV_WRAP void addDictionary(const Dictionary& dictionary);\n+    CV_WRAP void removeDictionary(size_t index);",
+        "comment_created_at": "2025-02-18T10:39:42+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "size_t does not work well with Java and Python bindings. let's use just int.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1865541230",
+    "pr_number": 25584,
+    "pr_file": "modules/videoio/src/plugin_capture_api.hpp",
+    "created_at": "2024-12-02T09:47:31+00:00",
+    "commented_code": "CV_OUT CvPluginCapture* handle);\n}; // OpenCV_VideoIO_Capture_Plugin_API_v1_1_api_entries\n\nstruct OpenCV_VideoIO_Capture_Plugin_API_v1_2_api_entries\n{\n    /** @brief Open video capture from buffer with parameters\n\n    @param buffer Memory buffer\n    @param params pointer on 2*n_params array of 'key,value' pairs\n    @param n_params number of passed parameters\n    @param[out] handle pointer on Capture handle\n\n    @note API-CALL 9, API-Version == 2\n     */\n    CvResult (CV_API_CALL *Capture_open_buffer)(\n        std::streambuf& buffer,",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1865541230",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 25584,
+        "pr_file": "modules/videoio/src/plugin_capture_api.hpp",
+        "discussion_id": "1865541230",
+        "commented_code": "@@ -121,6 +121,23 @@ struct OpenCV_VideoIO_Capture_Plugin_API_v1_1_api_entries\n         CV_OUT CvPluginCapture* handle);\n }; // OpenCV_VideoIO_Capture_Plugin_API_v1_1_api_entries\n \n+struct OpenCV_VideoIO_Capture_Plugin_API_v1_2_api_entries\n+{\n+    /** @brief Open video capture from buffer with parameters\n+\n+    @param buffer Memory buffer\n+    @param params pointer on 2*n_params array of 'key,value' pairs\n+    @param n_params number of passed parameters\n+    @param[out] handle pointer on Capture handle\n+\n+    @note API-CALL 9, API-Version == 2\n+     */\n+    CvResult (CV_API_CALL *Capture_open_buffer)(\n+        std::streambuf& buffer,",
+        "comment_created_at": "2024-12-02T09:47:31+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "We should not pass C++ objects through low level plugin API. They are not usable in general.\r\n\r\nDifferent C++ ABIs are possible for OpenCV and plugin parts:\r\n- MSVS vs MinGW\r\n- GCC/Clang with different C++ standards\r\n- libc++ (GCC) / libstdc++ (Clang)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1865665628",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 25584,
+        "pr_file": "modules/videoio/src/plugin_capture_api.hpp",
+        "discussion_id": "1865541230",
+        "commented_code": "@@ -121,6 +121,23 @@ struct OpenCV_VideoIO_Capture_Plugin_API_v1_1_api_entries\n         CV_OUT CvPluginCapture* handle);\n }; // OpenCV_VideoIO_Capture_Plugin_API_v1_1_api_entries\n \n+struct OpenCV_VideoIO_Capture_Plugin_API_v1_2_api_entries\n+{\n+    /** @brief Open video capture from buffer with parameters\n+\n+    @param buffer Memory buffer\n+    @param params pointer on 2*n_params array of 'key,value' pairs\n+    @param n_params number of passed parameters\n+    @param[out] handle pointer on Capture handle\n+\n+    @note API-CALL 9, API-Version == 2\n+     */\n+    CvResult (CV_API_CALL *Capture_open_buffer)(\n+        std::streambuf& buffer,",
+        "comment_created_at": "2024-12-02T11:11:38+00:00",
+        "comment_author": "dkurt",
+        "comment_body": "Thanks! That was my concern. Is that a good idea to replace with functions pointers for required methods like `seek` and `read`?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1259277978",
+    "pr_number": 23960,
+    "pr_file": "modules/video/include/opencv2/video/tracking.hpp",
+    "created_at": "2023-07-11T07:02:13+00:00",
+    "commented_code": "//bool update(InputArray image, CV_OUT Rect& boundingBox) CV_OVERRIDE;\n};\n\nenum TrackState { New = 0, Tracked, Lost};\n\nclass CV_EXPORTS Detection\n{\npublic:\n    int classId;\n    float confidence;\n    cv::Rect box;\n};\n\nclass CV_EXPORTS Strack {",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1259277978",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 23960,
+        "pr_file": "modules/video/include/opencv2/video/tracking.hpp",
+        "discussion_id": "1259277978",
+        "commented_code": "@@ -887,6 +888,89 @@ class CV_EXPORTS_W TrackerNano : public Tracker\n     //bool update(InputArray image, CV_OUT Rect& boundingBox) CV_OVERRIDE;\n };\n \n+enum TrackState { New = 0, Tracked, Lost};\n+\n+class CV_EXPORTS Detection\n+{\n+public:\n+    int classId;\n+    float confidence;\n+    cv::Rect box;\n+};\n+\n+class CV_EXPORTS Strack {",
+        "comment_created_at": "2023-07-11T07:02:13+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "Please use `CV_EXPORTS_W` and `CV_WRAP` to make it available from Python,  Java and other binded languages.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

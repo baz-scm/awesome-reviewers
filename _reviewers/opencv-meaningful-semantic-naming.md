@@ -1,0 +1,134 @@
+---
+title: Meaningful semantic naming
+description: 'Choose names that clearly communicate purpose and follow consistent
+  patterns across the codebase:
+
+
+  1. Use generic function names when the functionality is reusable, with parameters
+  for specific values:'
+repository: opencv/opencv
+label: Naming Conventions
+language: Python
+comments_count: 3
+repository_stars: 82865
+---
+
+Choose names that clearly communicate purpose and follow consistent patterns across the codebase:
+
+1. Use generic function names when the functionality is reusable, with parameters for specific values:
+   ```python
+   # Instead of:
+   def check_have_ipp_flag(cmake_file):
+       # Check specifically for HAVE_IPP flag
+   
+   # Prefer:
+   def check_cmake_flag_enabled(cmake_file, flag_name):
+       # Check for any flag
+   ```
+
+2. When extending functionality that changes a method's signature, create a new method with a descriptive name rather than modifying the existing one:
+   ```python
+   # Instead of changing:
+   corners, ids, rejected = aruco_detector.detectMarkers(img)
+   # To:
+   corners, ids, rejected, extra = aruco_detector.detectMarkers(img)
+   
+   # Create a new method:
+   corners, ids, rejected, extra = aruco_detector.detectMarkersMultiDict(img)
+   ```
+
+3. Apply naming conventions consistently using established patterns in the codebase rather than creating special cases. If a mechanism exists for handling naming scenarios (like namespace prefixing for functions), use it for similar cases too.
+
+
+[
+  {
+    "discussion_id": "2050236607",
+    "pr_number": 27239,
+    "pr_file": "platforms/android/build_sdk.py",
+    "created_at": "2025-04-18T07:23:29+00:00",
+    "commented_code": "return android_sdk_ndk_bundle\n    return None\n\n\ndef check_have_ipp_flag(cmake_file):\n    print(\"Checking build flag in:\", cmake_file)\n    if not os.path.isfile(cmake_file):\n        print(f\" ERROR: File {cmake_file} does not exist.\")\n        sys.exit(1)\n        \n    with open(cmake_file, 'r') as file:\n        for line in file:\n            if line.strip().startswith(\"HAVE_IPP=\"):",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "2050236607",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27239,
+        "pr_file": "platforms/android/build_sdk.py",
+        "discussion_id": "2050236607",
+        "commented_code": "@@ -380,7 +380,25 @@ def get_ndk_dir():\n         return android_sdk_ndk_bundle\n     return None\n \n-\n+def check_have_ipp_flag(cmake_file):\n+    print(\"Checking build flag in:\", cmake_file)\n+    if not os.path.isfile(cmake_file):\n+        print(f\" ERROR: File {cmake_file} does not exist.\")\n+        sys.exit(1)\n+        \n+    with open(cmake_file, 'r') as file:\n+        for line in file:\n+            if line.strip().startswith(\"HAVE_IPP=\"):",
+        "comment_created_at": "2025-04-18T07:23:29+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "It makes sense to move key name to the function parameters. E.g.\r\ncheck_cmake_flag_enabled(cmake_file, \"HAVE_IPP\")\r\n\r\nThe same function may be used for KleidiCV and other dependencies.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1960066488",
+    "pr_number": 26934,
+    "pr_file": "modules/objdetect/misc/python/test/test_objdetect_aruco.py",
+    "created_at": "2025-02-18T16:09:34+00:00",
+    "commented_code": "gold_corners = np.array([[offset, offset],[marker_size+offset-1.0,offset],\n                                 [marker_size+offset-1.0,marker_size+offset-1.0],\n                                 [offset, marker_size+offset-1.0]], dtype=np.float32)\n        corners, ids, rejected = aruco_detector.detectMarkers(img_marker)\n        corners, ids, rejected, _ = aruco_detector.detectMarkers(img_marker)",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1960066488",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26934,
+        "pr_file": "modules/objdetect/misc/python/test/test_objdetect_aruco.py",
+        "discussion_id": "1960066488",
+        "commented_code": "@@ -156,7 +156,7 @@ def test_aruco_detector(self):\n         gold_corners = np.array([[offset, offset],[marker_size+offset-1.0,offset],\n                                  [marker_size+offset-1.0,marker_size+offset-1.0],\n                                  [offset, marker_size+offset-1.0]], dtype=np.float32)\n-        corners, ids, rejected = aruco_detector.detectMarkers(img_marker)\n+        corners, ids, rejected, _ = aruco_detector.detectMarkers(img_marker)",
+        "comment_created_at": "2025-02-18T16:09:34+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "It breaks compatibility. M.b. rename the method to detectMarkersMultiDict?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1962131512",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26934,
+        "pr_file": "modules/objdetect/misc/python/test/test_objdetect_aruco.py",
+        "discussion_id": "1960066488",
+        "commented_code": "@@ -156,7 +156,7 @@ def test_aruco_detector(self):\n         gold_corners = np.array([[offset, offset],[marker_size+offset-1.0,offset],\n                                  [marker_size+offset-1.0,marker_size+offset-1.0],\n                                  [offset, marker_size+offset-1.0]], dtype=np.float32)\n-        corners, ids, rejected = aruco_detector.detectMarkers(img_marker)\n+        corners, ids, rejected, _ = aruco_detector.detectMarkers(img_marker)",
+        "comment_created_at": "2025-02-19T17:53:15+00:00",
+        "comment_author": "BenjaminKnecht",
+        "comment_body": "Unfortunate, but I managed to do create a detectMarkersMultiDict function with relative little redundant code.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1760580610",
+    "pr_number": 26147,
+    "pr_file": "modules/js/generator/embindgen.py",
+    "created_at": "2024-09-16T06:12:24+00:00",
+    "commented_code": "for ns_name, ns in sorted(self.namespaces.items()):\n                if ns_name.split('.')[0] != 'cv':\n                    continue\n                # TODO CALIB_FIX_FOCAL_LENGTH is defined both in cv:: and cv::fisheye\n                prefix = 'FISHEYE_' if 'fisheye' in ns_name else ''\n                for name, const in sorted(ns.consts.items()):\n                    name = prefix + name",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1760580610",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26147,
+        "pr_file": "modules/js/generator/embindgen.py",
+        "discussion_id": "1760580610",
+        "commented_code": "@@ -936,7 +937,10 @@ def gen(self, dst_file, src_files, core_bindings):\n             for ns_name, ns in sorted(self.namespaces.items()):\n                 if ns_name.split('.')[0] != 'cv':\n                     continue\n+                # TODO CALIB_FIX_FOCAL_LENGTH is defined both in cv:: and cv::fisheye\n+                prefix = 'FISHEYE_' if 'fisheye' in ns_name else ''\n                 for name, const in sorted(ns.consts.items()):\n+                    name = prefix + name",
+        "comment_created_at": "2024-09-16T06:12:24+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "What if use `namespace_prefix_override` solution like for the functions? Namespace is already appended to the function names, if it's not overridden by config. It's less hacky and more obvious.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1782566322",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26147,
+        "pr_file": "modules/js/generator/embindgen.py",
+        "discussion_id": "1760580610",
+        "commented_code": "@@ -936,7 +937,10 @@ def gen(self, dst_file, src_files, core_bindings):\n             for ns_name, ns in sorted(self.namespaces.items()):\n                 if ns_name.split('.')[0] != 'cv':\n                     continue\n+                # TODO CALIB_FIX_FOCAL_LENGTH is defined both in cv:: and cv::fisheye\n+                prefix = 'FISHEYE_' if 'fisheye' in ns_name else ''\n                 for name, const in sorted(ns.consts.items()):\n+                    name = prefix + name",
+        "comment_created_at": "2024-10-01T11:01:39+00:00",
+        "comment_author": "vrabaud",
+        "comment_body": "I guess that would work but I don't know how to use it. Should all the enums be added to https://github.com/opencv/opencv/blob/450e741f8d53ff12b4e194c7762adaefb952555a/modules/js/generator/embindgen.py#L989 ? ",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,177 @@
+---
+title: Feature flag convention
+description: 'Establish a consistent pattern for feature flags and dependency management
+  in configuration files:
+
+
+  1. Use `WITH_*` or `OPENCV_ENABLE_*` variables to represent user intentions (features
+  to enable if available)'
+repository: opencv/opencv
+label: Configurations
+language: Txt
+comments_count: 3
+repository_stars: 82865
+---
+
+Establish a consistent pattern for feature flags and dependency management in configuration files:
+
+1. Use `WITH_*` or `OPENCV_ENABLE_*` variables to represent user intentions (features to enable if available)
+2. Perform proper detection with `find_package()` and preferably `try_compile()` to validate dependencies
+3. Set `HAVE_*` variables based on actual availability check results
+4. Always guard feature usage in code with `HAVE_*` checks
+5. Prefer target-based dependencies over simple flag checks
+6. Make compile definitions PUBLIC when they affect interface headers
+
+Example:
+```cmake
+# User intention
+ocv_option(OPENCV_ENABLE_EGL_INTEROP "Build with EGL interoperability support" ON)
+
+# Actual detection (in main CMakeLists.txt)
+if(OPENCV_ENABLE_EGL_INTEROP)
+  find_package(EGL)
+  if(EGL_FOUND)
+    set(HAVE_EGL_INTEROP ON)
+  endif()
+endif()
+
+# Usage in module CMakeLists.txt
+if(HAVE_EGL_INTEROP)
+  # Prefer target-based dependencies
+  target_link_libraries(${the_module} PUBLIC ocv.3rdparty.egl)
+  # Make definitions PUBLIC if used in headers
+  target_compile_definitions(${the_module} PUBLIC HAVE_EGL_INTEROP)
+endif()
+```
+
+This convention ensures all dependencies are properly detected during configuration stage, not build stage, preventing build failures due to missing dependencies. It clearly separates user intent from actual availability and promotes modern CMake practices.
+
+
+[
+  {
+    "discussion_id": "1335266321",
+    "pr_number": 22704,
+    "pr_file": "modules/core/CMakeLists.txt",
+    "created_at": "2023-09-24T23:57:22+00:00",
+    "commented_code": "if(OPENCV_LIBVA_LINK)\n  ocv_append_source_file_compile_definitions(\"${CMAKE_CURRENT_LIST_DIR}/src/va_intel.cpp\" \"OPENCV_LIBVA_LINK=1\")\nendif()\nif(OPENCV_ENABLE_EGL_INTEROP)\n  ocv_append_source_file_compile_definitions(\"${CMAKE_CURRENT_LIST_DIR}/src/opengl.cpp\" \"HAVE_EGL_INTEROP\")",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1335266321",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 22704,
+        "pr_file": "modules/core/CMakeLists.txt",
+        "discussion_id": "1335266321",
+        "commented_code": "@@ -107,6 +107,9 @@ endif()\n if(OPENCV_LIBVA_LINK)\n   ocv_append_source_file_compile_definitions(\"${CMAKE_CURRENT_LIST_DIR}/src/va_intel.cpp\" \"OPENCV_LIBVA_LINK=1\")\n endif()\n+if(OPENCV_ENABLE_EGL_INTEROP)\n+  ocv_append_source_file_compile_definitions(\"${CMAKE_CURRENT_LIST_DIR}/src/opengl.cpp\" \"HAVE_EGL_INTEROP\")",
+        "comment_created_at": "2023-09-24T23:57:22+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "Perhaps `HAVE_EGL` and `HAVE_OPENGL` should be checked too.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1335292018",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 22704,
+        "pr_file": "modules/core/CMakeLists.txt",
+        "discussion_id": "1335266321",
+        "commented_code": "@@ -107,6 +107,9 @@ endif()\n if(OPENCV_LIBVA_LINK)\n   ocv_append_source_file_compile_definitions(\"${CMAKE_CURRENT_LIST_DIR}/src/va_intel.cpp\" \"OPENCV_LIBVA_LINK=1\")\n endif()\n+if(OPENCV_ENABLE_EGL_INTEROP)\n+  ocv_append_source_file_compile_definitions(\"${CMAKE_CURRENT_LIST_DIR}/src/opengl.cpp\" \"HAVE_EGL_INTEROP\")",
+        "comment_created_at": "2023-09-25T01:07:42+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "It does in the main [CMakeLists.txt](https://github.com/opencv/opencv/pull/22704/files/14d9a17c1a5a09efad8bea2c8cb4c8b55552afe1#diff-1e7de1ae2d059d21e1dd75d5812d5a34b0222cef273b7c3a2af62eb747f9d20aR326)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1338040779",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 22704,
+        "pr_file": "modules/core/CMakeLists.txt",
+        "discussion_id": "1335266321",
+        "commented_code": "@@ -107,6 +107,9 @@ endif()\n if(OPENCV_LIBVA_LINK)\n   ocv_append_source_file_compile_definitions(\"${CMAKE_CURRENT_LIST_DIR}/src/va_intel.cpp\" \"OPENCV_LIBVA_LINK=1\")\n endif()\n+if(OPENCV_ENABLE_EGL_INTEROP)\n+  ocv_append_source_file_compile_definitions(\"${CMAKE_CURRENT_LIST_DIR}/src/opengl.cpp\" \"HAVE_EGL_INTEROP\")",
+        "comment_created_at": "2023-09-27T04:55:53+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "Not really.\r\n\r\nUser could specify `WITH_OPENGL=ON` but there could be no OpenCL dev packages on build system (or for build target platform in case of cross-compiling).\r\n\r\n`WITH_` / `OPENCV_ENABLE_` is a user intention (lets enable this if available).\r\nNext, `find_package()` should be executed.\r\nPreferable `try_compile()` should be run to validate dependency configuration.\r\nAfter checks above `HAVE_` variable is set to `ON` / `1`.\r\nFeature usage should be guarded by `HAVE_` checks.\r\n\r\nAll dependencies should be properly detected on configuration (cmake) stage.\r\nBuild stage (make) should not fail due to dependency misusing.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1338119972",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 22704,
+        "pr_file": "modules/core/CMakeLists.txt",
+        "discussion_id": "1335266321",
+        "commented_code": "@@ -107,6 +107,9 @@ endif()\n if(OPENCV_LIBVA_LINK)\n   ocv_append_source_file_compile_definitions(\"${CMAKE_CURRENT_LIST_DIR}/src/va_intel.cpp\" \"OPENCV_LIBVA_LINK=1\")\n endif()\n+if(OPENCV_ENABLE_EGL_INTEROP)\n+  ocv_append_source_file_compile_definitions(\"${CMAKE_CURRENT_LIST_DIR}/src/opengl.cpp\" \"HAVE_EGL_INTEROP\")",
+        "comment_created_at": "2023-09-27T06:47:21+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "I see now. Will probably create a PR today.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2107101601",
+    "pr_number": 27355,
+    "pr_file": "modules/gapi/CMakeLists.txt",
+    "created_at": "2025-05-26T11:12:51+00:00",
+    "commented_code": "ocv_target_link_libraries(${the_module} PRIVATE wsock32 ws2_32)\nendif()\n\nocv_option(OPENCV_GAPU_MSMF \"Build G-API with MS Media Foundation support\" HAVE_MSMF)\nif(HAVE_MSMF AND OPENCV_GAPI_MSMF)",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "2107101601",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27355,
+        "pr_file": "modules/gapi/CMakeLists.txt",
+        "discussion_id": "2107101601",
+        "commented_code": "@@ -380,6 +380,15 @@ if(WIN32)\n   ocv_target_link_libraries(${the_module} PRIVATE wsock32 ws2_32)\n endif()\n \n+ocv_option(OPENCV_GAPU_MSMF \"Build G-API with MS Media Foundation support\" HAVE_MSMF)\n+if(HAVE_MSMF AND OPENCV_GAPI_MSMF)",
+        "comment_created_at": "2025-05-26T11:12:51+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "`TARGET ocv.3rdparty.msmf` should be used instead of `HAVE_MSMF`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2033872925",
+    "pr_number": 27194,
+    "pr_file": "3rdparty/ipphal/CMakeLists.txt",
+    "created_at": "2025-04-08T19:10:53+00:00",
+    "commented_code": "\"${CMAKE_CURRENT_SOURCE_DIR}/src/mean_ipp.cpp\"\n    \"${CMAKE_CURRENT_SOURCE_DIR}/src/minmax_ipp.cpp\"\n    \"${CMAKE_CURRENT_SOURCE_DIR}/src/norm_ipp.cpp\"\n    \"${CMAKE_CURRENT_SOURCE_DIR}/src/transforms_ipp.cpp\"\n)\n\nif(HAVE_IPP_ICV)\n  target_compile_definitions(ipphal PRIVATE HAVE_IPP_ICV)\nendif()\n\nif(HAVE_IPP_IW)\n  target_compile_definitions(ipphal PRIVATE HAVE_IPP_IW)",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "2033872925",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27194,
+        "pr_file": "3rdparty/ipphal/CMakeLists.txt",
+        "discussion_id": "2033872925",
+        "commented_code": "@@ -11,13 +11,19 @@ add_library(ipphal STATIC\n     \"${CMAKE_CURRENT_SOURCE_DIR}/src/mean_ipp.cpp\"\n     \"${CMAKE_CURRENT_SOURCE_DIR}/src/minmax_ipp.cpp\"\n     \"${CMAKE_CURRENT_SOURCE_DIR}/src/norm_ipp.cpp\"\n+    \"${CMAKE_CURRENT_SOURCE_DIR}/src/transforms_ipp.cpp\"\n )\n \n if(HAVE_IPP_ICV)\n   target_compile_definitions(ipphal PRIVATE HAVE_IPP_ICV)\n endif()\n \n+if(HAVE_IPP_IW)\n+  target_compile_definitions(ipphal PRIVATE HAVE_IPP_IW)",
+        "comment_created_at": "2025-04-08T19:10:53+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "PRIVATE?\r\n\r\nThis macro is used in \"interface\" headers.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2034495599",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27194,
+        "pr_file": "3rdparty/ipphal/CMakeLists.txt",
+        "discussion_id": "2033872925",
+        "commented_code": "@@ -11,13 +11,19 @@ add_library(ipphal STATIC\n     \"${CMAKE_CURRENT_SOURCE_DIR}/src/mean_ipp.cpp\"\n     \"${CMAKE_CURRENT_SOURCE_DIR}/src/minmax_ipp.cpp\"\n     \"${CMAKE_CURRENT_SOURCE_DIR}/src/norm_ipp.cpp\"\n+    \"${CMAKE_CURRENT_SOURCE_DIR}/src/transforms_ipp.cpp\"\n )\n \n if(HAVE_IPP_ICV)\n   target_compile_definitions(ipphal PRIVATE HAVE_IPP_ICV)\n endif()\n \n+if(HAVE_IPP_IW)\n+  target_compile_definitions(ipphal PRIVATE HAVE_IPP_IW)",
+        "comment_created_at": "2025-04-09T05:51:48+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "Good point. Fixed.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2036555700",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27194,
+        "pr_file": "3rdparty/ipphal/CMakeLists.txt",
+        "discussion_id": "2033872925",
+        "commented_code": "@@ -11,13 +11,19 @@ add_library(ipphal STATIC\n     \"${CMAKE_CURRENT_SOURCE_DIR}/src/mean_ipp.cpp\"\n     \"${CMAKE_CURRENT_SOURCE_DIR}/src/minmax_ipp.cpp\"\n     \"${CMAKE_CURRENT_SOURCE_DIR}/src/norm_ipp.cpp\"\n+    \"${CMAKE_CURRENT_SOURCE_DIR}/src/transforms_ipp.cpp\"\n )\n \n if(HAVE_IPP_ICV)\n   target_compile_definitions(ipphal PRIVATE HAVE_IPP_ICV)\n endif()\n \n+if(HAVE_IPP_IW)\n+  target_compile_definitions(ipphal PRIVATE HAVE_IPP_IW)",
+        "comment_created_at": "2025-04-10T05:52:28+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "Looks like I cannot make it public for now. We get redefinition issue. The macros are defined by both HAL and IPP core. I made it private for now to exclude the redefinition issue and added note to CMake.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

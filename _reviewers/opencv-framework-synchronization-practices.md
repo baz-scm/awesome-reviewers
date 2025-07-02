@@ -1,0 +1,408 @@
+---
+title: Framework synchronization practices
+description: 'When implementing concurrent code, always use the framework''s provided
+  synchronization primitives rather than direct language features. This ensures compatibility
+  across all build configurations and platforms:'
+repository: opencv/opencv
+label: Concurrency
+language: C++
+comments_count: 4
+repository_stars: 82865
+---
+
+When implementing concurrent code, always use the framework's provided synchronization primitives rather than direct language features. This ensures compatibility across all build configurations and platforms:
+
+1. Use OpenCV synchronization mechanisms like `cv::getInitializationMutex()` and `cv::AutoLock` instead of standard C++ constructs like `std::mutex` and `std::lock_guard`:
+
+```cpp
+// Instead of this:
+static std::mutex mtx;
+std::lock_guard<std::mutex> lock(mtx);
+
+// Use this:
+cv::AutoLock lock(cv::getInitializationMutex());
+```
+
+2. Respect system threading settings with `cv::getNumThreads()` rather than hardcoding thread counts:
+
+```cpp
+// Instead of this:
+m_parallel_runner = JxlThreadParallelRunnerMake(nullptr, 8); // Hardcoded value
+
+// Use this:
+m_parallel_runner = JxlThreadParallelRunnerMake(nullptr, cv::getNumThreads());
+```
+
+3. Be aware that thread counts vary by platform (e.g., Android defaults to 2, Linux uses all cores) and that nested parallel operations may be serialized.
+
+4. When using static resources in multithreaded contexts, ensure proper synchronization or consider alternatives like on-demand initialization that avoid static state altogether.
+
+These practices ensure your code remains compatible with special configurations like `OPENCV_DISABLE_THREAD_SUPPORT` while maintaining optimal performance across various platforms.
+
+
+[
+  {
+    "discussion_id": "1370067753",
+    "pr_number": 24444,
+    "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+    "created_at": "2023-10-24T12:17:05+00:00",
+    "commented_code": "if(_src.depth() == CV_8U)\n    {\n        static UMat sdiv_data;\n        static UMat hdiv_data180;\n        static UMat hdiv_data256;\n        static int sdiv_table[256];\n        static int hdiv_table180[256];\n        static int hdiv_table256[256];\n        static volatile bool initialized180 = false, initialized256 = false;\n        static thread_local UMat sdiv_data;\n        static thread_local UMat hdiv_data180;\n        static thread_local UMat hdiv_data256;\n        static thread_local int sdiv_table[256];",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1370067753",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1370067753",
+        "commented_code": "@@ -274,13 +274,13 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n+        static thread_local UMat sdiv_data;\n+        static thread_local UMat hdiv_data180;\n+        static thread_local UMat hdiv_data256;\n+        static thread_local int sdiv_table[256];",
+        "comment_created_at": "2023-10-24T12:17:05+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "Lets try to apply `thread_local` for `UMat` variables only. No need to touch other tables (there is no problem with them).\r\n\r\nUse dedicated `initializedUMat` for that.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1386035956",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1370067753",
+        "commented_code": "@@ -274,13 +274,13 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n+        static thread_local UMat sdiv_data;\n+        static thread_local UMat hdiv_data180;\n+        static thread_local UMat hdiv_data256;\n+        static thread_local int sdiv_table[256];",
+        "comment_created_at": "2023-11-08T06:03:58+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "> initializedUMat\r\n\r\nI am not sure what you mean by the last part",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1387011521",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1370067753",
+        "commented_code": "@@ -274,13 +274,13 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n+        static thread_local UMat sdiv_data;\n+        static thread_local UMat hdiv_data180;\n+        static thread_local UMat hdiv_data256;\n+        static thread_local int sdiv_table[256];",
+        "comment_created_at": "2023-11-08T18:00:22+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "Split initialization on 2 parts:\r\n- regular CPU buffers (like `int sdiv_table[256];`) - they don't need `thread-local` at all.\r\n- OpenCL related stuff which causes problems and needs thread-local variables (also put it under condition that this data is really needed - CPU-only processing doesn't need that at all).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1387203457",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1370067753",
+        "commented_code": "@@ -274,13 +274,13 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n+        static thread_local UMat sdiv_data;\n+        static thread_local UMat hdiv_data180;\n+        static thread_local UMat hdiv_data256;\n+        static thread_local int sdiv_table[256];",
+        "comment_created_at": "2023-11-08T21:10:40+00:00",
+        "comment_author": "vpisarev",
+        "comment_body": "probably, even better solution would be to merge all 3 tables together (of course, 3 pointers can be initialized to point to different parts of the joint table) and then we can convert it to UMat on-fly:\r\n\r\n```\r\nint rgb2hsv_tab[256*3];\r\nvolatile bool rgb2hsv_initialized = false;\r\nif (!rgb2hsv_initialized) { ... }\r\nif (use_opencl) {\r\nUMat rgb2hsv_utab = Mat(1, 256*3, CV_32S, rgb2hsv_tab).getUMat();\r\n... // run opencl kernel with rgb2hsv_utab as one of the parameters\r\n}\r\n```\r\n\r\nyes, it means extra copy, but compared to the processed data it should be a tiny overhead, and much easier to handle than static thread-local UMat's.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1389250064",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1370067753",
+        "commented_code": "@@ -274,13 +274,13 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n+        static thread_local UMat sdiv_data;\n+        static thread_local UMat hdiv_data180;\n+        static thread_local UMat hdiv_data256;\n+        static thread_local int sdiv_table[256];",
+        "comment_created_at": "2023-11-10T10:57:32+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "I'm not experienced enough to say the roundtrip-lateny will be more than we'd like, but it think so. But I like the safety and simplicity of your approach, so I guess I'll profile it.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1389251556",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1370067753",
+        "commented_code": "@@ -274,13 +274,13 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n+        static thread_local UMat sdiv_data;\n+        static thread_local UMat hdiv_data180;\n+        static thread_local UMat hdiv_data256;\n+        static thread_local int sdiv_table[256];",
+        "comment_created_at": "2023-11-10T10:58:59+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "@opencv-alalek @vpisarev ...how to know who of you to follow in which case? ^^",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1389257797",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1370067753",
+        "commented_code": "@@ -274,13 +274,13 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n+        static thread_local UMat sdiv_data;\n+        static thread_local UMat hdiv_data180;\n+        static thread_local UMat hdiv_data256;\n+        static thread_local int sdiv_table[256];",
+        "comment_created_at": "2023-11-10T11:05:25+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "> probably, even better solution would be to merge all 3 tables together (of course, 3 pointers can be initialized to point to different parts of the joint table) and then we can convert it to UMat on-fly:\r\n> \r\n> ```\r\n> int rgb2hsv_tab[256*3];\r\n> volatile bool rgb2hsv_initialized = false;\r\n> if (!rgb2hsv_initialized) { ... }\r\n> if (use_opencl) {\r\n> UMat rgb2hsv_utab = Mat(1, 256*3, CV_32S, rgb2hsv_tab).getUMat();\r\n> ... // run opencl kernel with rgb2hsv_utab as one of the parameters\r\n> }\r\n> ```\r\n> \r\n> yes, it means extra copy, but compared to the processed data it should be a tiny overhead, and much easier to handle than static thread-local UMat's.\r\n\r\nalso... we are in oclCvtColorBGR2HSV which is \"guarded\" by CV_OCL_RUN. so i guess i can drop  ```if (use_opencl)```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1389291318",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1370067753",
+        "commented_code": "@@ -274,13 +274,13 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n+        static thread_local UMat sdiv_data;\n+        static thread_local UMat hdiv_data180;\n+        static thread_local UMat hdiv_data256;\n+        static thread_local int sdiv_table[256];",
+        "comment_created_at": "2023-11-10T11:41:32+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "I neither like unecessary round-trips nor messing with the memory model, so i came  up with this:\r\n\r\n\r\n```c++\r\n    if(_src.depth() == CV_8U)\r\n    {\r\n\t\tstatic std::mutex mtx;\r\n\t\t{\r\n\t\t\tstd::unique_lock<std::mutex> lock(mtx);\r\n\t\t\tstatic UMat sdiv_data;\r\n\t\t\tstatic UMat hdiv_data180;\r\n\t\t\tstatic UMat hdiv_data256;\r\n\t\t\tstatic int combined_table[256];\r\n\t\t\tstatic volatile bool initialized180 = false, initialized256 = false;\r\n\t\t\tstatic volatile bool initialized = hrange == 180 ? initialized180 : initialized256;\r\n\r\n\t\t\tif (!initialized)\r\n\t\t\t{\r\n\t\t\t\tint * const hdiv_table = hrange == 180 ? combined_table : &combined_table[128], hsv_shift = 12;\r\n\t\t\t\tUMat & hdiv_data = hrange == 180 ? hdiv_data180 : hdiv_data256;\r\n\r\n\t\t\t\tcombined_table[0] = 0;\r\n\r\n\t\t\t\tint v = 255 << hsv_shift;\r\n\t\t\t\tif (!initialized180 && !initialized256)\r\n\t\t\t\t{\r\n\t\t\t\t\tfor(int i = 1; i < 256; i++ )\r\n\t\t\t\t\t\tcombined_table[i] = saturate_cast<int>(v/(1.*i));\r\n\t\t\t\t\tMat(1, 256, CV_32SC1, combined_table).copyTo(sdiv_data);\r\n\t\t\t\t}\r\n\r\n\t\t\t\tv = hrange << hsv_shift;\r\n\t\t\t\tfor (int i = 1; i < 256; i++ )\r\n\t\t\t\t\thdiv_table[i] = saturate_cast<int>(v/(6.*i));\r\n\r\n\t\t\t\tMat(1, 256, CV_32SC1, hdiv_table).copyTo(hdiv_data);\r\n\t\t\t\tinitialized = true;\r\n\t\t\t}\r\n\r\n\t\t\th.setArg(ocl::KernelArg::PtrReadOnly(sdiv_data));\r\n\t\t\th.setArg(hrange == 256 ? ocl::KernelArg::PtrReadOnly(hdiv_data256) :\r\n\t\t\t\t\t\t\t ocl::KernelArg::PtrReadOnly(hdiv_data180));\r\n\t\t}\r\n\t}\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1389502048",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1370067753",
+        "commented_code": "@@ -274,13 +274,13 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n+        static thread_local UMat sdiv_data;\n+        static thread_local UMat hdiv_data180;\n+        static thread_local UMat hdiv_data256;\n+        static thread_local int sdiv_table[256];",
+        "comment_created_at": "2023-11-10T14:53:26+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "Proposed code locks mutex on each call. That should be properly avoided.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1389863226",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1370067753",
+        "commented_code": "@@ -274,13 +274,13 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n+        static thread_local UMat sdiv_data;\n+        static thread_local UMat hdiv_data180;\n+        static thread_local UMat hdiv_data256;\n+        static thread_local int sdiv_table[256];",
+        "comment_created_at": "2023-11-10T20:04:29+00:00",
+        "comment_author": "vpisarev",
+        "comment_body": "@kallaballa, let's try the proposed by me approach without use of static UMat's at all.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1390087775",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1370067753",
+        "commented_code": "@@ -274,13 +274,13 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n+        static thread_local UMat sdiv_data;\n+        static thread_local UMat hdiv_data180;\n+        static thread_local UMat hdiv_data256;\n+        static thread_local int sdiv_table[256];",
+        "comment_created_at": "2023-11-11T02:06:59+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "@opencv-alalek double checked pattern and lock_guard 0f290bc\r\n@vpisarev I'll give it a try and provide numbers",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1390631190",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1370067753",
+        "commented_code": "@@ -274,13 +274,13 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n+        static thread_local UMat sdiv_data;\n+        static thread_local UMat hdiv_data180;\n+        static thread_local UMat hdiv_data256;\n+        static thread_local int sdiv_table[256];",
+        "comment_created_at": "2023-11-13T05:12:33+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "Test failed e.g. on MacOS: OCL_TEST_P(CvtColor8u32f, RGB2HSV_FULL) { performTest(3, 3, CVTCODE(RGB2HSV_FULL), IPP_EPS); }\r\n\r\nI don't have a MacOS setup, but it stands to reason that it is a concurrency issue. So i checked on the memory model guarantees of ```volatile``` and there are none. So I guessed that is the problem. Let's see the test.\r\n\r\n@vpisarev implementation without static still pending. want both version working.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1400815714",
+    "pr_number": 24444,
+    "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+    "created_at": "2023-11-21T15:55:50+00:00",
+    "commented_code": "if(_src.depth() == CV_8U)\n    {\n        static UMat sdiv_data;\n        static UMat hdiv_data180;\n        static UMat hdiv_data256;\n        static int sdiv_table[256];\n        static int hdiv_table180[256];\n        static int hdiv_table256[256];\n        static volatile bool initialized180 = false, initialized256 = false;\n        volatile bool & initialized = hrange == 180 ? initialized180 : initialized256;\n        static std::mutex mtx;",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1400815714",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1400815714",
+        "commented_code": "@@ -274,38 +275,45 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n-        volatile bool & initialized = hrange == 180 ? initialized180 : initialized256;\n+        static std::mutex mtx;",
+        "comment_created_at": "2023-11-21T15:55:50+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "This breaks bare metal build configurations without any threading support (see `OPENCV_DISABLE_THREAD_SUPPORT`)\r\n\r\nUse OpenCV wrappers instead.\r\n\r\nReuse `cv::getInitializationMutex()` instead of creation of new one.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1402470564",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1400815714",
+        "commented_code": "@@ -274,38 +275,45 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n-        volatile bool & initialized = hrange == 180 ? initialized180 : initialized256;\n+        static std::mutex mtx;",
+        "comment_created_at": "2023-11-22T17:44:11+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "Oh i understand. thx for the info. is there a list of features i should usually test for? i started to test for WITH_OPENCL=OFF and i will keep in mind that there are targets without thread support... are there more configurations i should keep in mind?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1404710045",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1400815714",
+        "commented_code": "@@ -274,38 +275,45 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n-        volatile bool & initialized = hrange == 180 ? initialized180 : initialized256;\n+        static std::mutex mtx;",
+        "comment_created_at": "2023-11-25T03:20:45+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "Done 031abea. Tested locally by running opencv_test_improc with following build configuration. Btw. i found ```cv::utils::lock_guard``` but it doesn't seem necessary since there is C++11 support.\r\n\r\n```shell\r\ncmake -DINSTALL_BIN_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON -DWITH_OPENCL=ON -DBUILD_opencv_java=OFF -DBUILD_opencv_js=OFF -DBUILD_opencv_python2=OFF -DBUILD_opencv_python3=OFF -DBUILD_EXAMPLES=OFF -DBUILD_PACKAGE=OFF -DBUILD_TESTS=ON -DBUILD_PERF_TESTS=ON -DBUILD_DOCS=OFF -DBUILD_opencv_videoio=ON -DBUILD_opencv_highgui=ON -DBUILD_opencv_ts=ON -DBUILD_opencv_imgcodecs=ON -DBUILD_opencv_plot=OFF -DBUILD_opencv_tracking=OFF -DBUILD_opencv_video=OFF -DBUILD_opencv_world=ON -DCMAKE_C_FLAGS=-DOPENCV_DISABLE_THREAD_SUPPORT -DCMAKE_CXX_FLAGS=-DOPENCV_DISABLE_THREAD_SUPPORT ../opencv\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1411079146",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1400815714",
+        "commented_code": "@@ -274,38 +275,45 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n-        volatile bool & initialized = hrange == 180 ? initialized180 : initialized256;\n+        static std::mutex mtx;",
+        "comment_created_at": "2023-11-30T18:01:26+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "`std::lock_guard` => `cv::AutoLock`\r\n\r\nDid you measure performance changes due to added of `.copyTo()` calls?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1413029712",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1400815714",
+        "commented_code": "@@ -274,38 +275,45 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n-        volatile bool & initialized = hrange == 180 ? initialized180 : initialized256;\n+        static std::mutex mtx;",
+        "comment_created_at": "2023-12-03T08:58:44+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "done: [8cbf9c7](https://github.com/opencv/opencv/pull/24444/commits/8cbf9c70e398cdf8357564ef0e5ab8df7f5d0eef)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1413031013",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1400815714",
+        "commented_code": "@@ -274,38 +275,45 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n-        volatile bool & initialized = hrange == 180 ? initialized180 : initialized256;\n+        static std::mutex mtx;",
+        "comment_created_at": "2023-12-03T09:07:06+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "> `std::lock_guard` => `cv::AutoLock`\r\n> \r\n> Did you measure performance changes due to added of `.copyTo()` calls?\r\n\r\nI compared the current HEAD of 4.x with the branch of the PR (which i updated to the least 4.x HEAD) .\r\nI used follwing build configuration for both branches:\r\n```bash\r\ncmake -DINSTALL_BIN_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON -DWITH_OPENCL=ON -DBUILD_opencv_java=OFF -DBUILD_opencv_js=OFF -DBUILD_opencv_python2=OFF -DBUILD_opencv_python3=OFF -DBUILD_EXAMPLES=OFF -DBUILD_PACKAGE=OFF -DBUILD_TESTS=ON -DBUILD_PERF_TESTS=ON -DBUILD_DOCS=OFF -DBUILD_opencv_videoio=ON -DBUILD_opencv_highgui=ON -DBUILD_opencv_ts=ON -DBUILD_opencv_imgcodecs=ON -DBUILD_opencv_plot=OFF -DBUILD_opencv_tracking=OFF -DBUILD_opencv_video=OFF -DBUILD_opencv_world=ON -DENABLE_PROFILING=ON ../opencv\r\n```\r\n\r\nAnd the following test program: https://github.com/kallaballa/OpenCV-Issues/blob/main/src/oclCvtColorBGR2HSV-race/perf-test.cpp\r\n\r\nWithout patch it takes: ~14.8s\r\nWith patch it takes: ~15.2s\r\n\r\nSo there is a slow-down. I'll optimize a bit and measure again.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1413036376",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1400815714",
+        "commented_code": "@@ -274,38 +275,45 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n-        volatile bool & initialized = hrange == 180 ? initialized180 : initialized256;\n+        static std::mutex mtx;",
+        "comment_created_at": "2023-12-03T09:45:08+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "When profiling i had suspicious results and so i increased the iterations by 10x.\r\nThis gave me \r\n*  154.483s for patched without copy.\r\n* 156.108s for patch with copy.\r\n* 153.803s without patch.\r\n\r\nI think the differences are still quite influenced by variance. anyway it is not much. should i continue?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1413038481",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1400815714",
+        "commented_code": "@@ -274,38 +275,45 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n-        volatile bool & initialized = hrange == 180 ? initialized180 : initialized256;\n+        static std::mutex mtx;",
+        "comment_created_at": "2023-12-03T09:58:45+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "I meassured also the variant no-static/no-thread_local/no-locking: 155.512s",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1426663572",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 24444,
+        "pr_file": "modules/imgproc/src/color_hsv.dispatch.cpp",
+        "discussion_id": "1400815714",
+        "commented_code": "@@ -274,38 +275,45 @@ bool oclCvtColorBGR2HSV( InputArray _src, OutputArray _dst, int bidx, bool full\n \n     if(_src.depth() == CV_8U)\n     {\n-        static UMat sdiv_data;\n-        static UMat hdiv_data180;\n-        static UMat hdiv_data256;\n-        static int sdiv_table[256];\n-        static int hdiv_table180[256];\n-        static int hdiv_table256[256];\n-        static volatile bool initialized180 = false, initialized256 = false;\n-        volatile bool & initialized = hrange == 180 ? initialized180 : initialized256;\n+        static std::mutex mtx;",
+        "comment_created_at": "2023-12-14T12:35:23+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "Please always reuse OpenCV performance tests or add them if something is missing.\r\n\r\nAvoid using of hand-written tests cases\r\n\r\n> suspicious results\r\n\r\nProvided measurement code has bug due to async execution of `cvtColor(UMat)` (code should schedule OpenCL kernels, but do not wait the final result).\r\n\r\nP.S. Mat to UMat coping is synchronous call in current API - forces wait of OpenCL execution queue.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2024125007",
+    "pr_number": 27182,
+    "pr_file": "3rdparty/fastcv/src/fastcv_hal_imgproc.cpp",
+    "created_at": "2025-04-02T06:03:40+00:00",
+    "commented_code": "CV_HAL_RETURN_NOT_IMPLEMENTED(\"ROI not supported\");\n    }\n\n    if(src_depth == CV_32F && normalize != 1)\n        CV_HAL_RETURN_NOT_IMPLEMENTED(\"normalized kernel supported for float types\");\n\n    if(src_depth == CV_8U && (ksize_width != 3 && ksize_width != 5))\n        CV_HAL_RETURN_NOT_IMPLEMENTED(\"kernel size not supported\");\n\n    INITIALIZATION_CHECK;\n\n    fcvBorderType bdr;\n    uint8_t bdrVal = 0;\n    switch(border_type)\n    {\n        case cv::BORDER_REPLICATE:\n            bdr = FASTCV_BORDER_REPLICATE;\n            break;\n        case cv::BORDER_REFLECT:\n            bdr = FASTCV_BORDER_REFLECT;\n            break;\n        case cv::BORDER_REFLECT101:    // cv::BORDER_REFLECT_101, BORDER_DEFAULT\n            bdr = FASTCV_BORDER_REFLECT_V2;\n            break;\n        default:\n            CV_HAL_RETURN_NOT_IMPLEMENTED(\"border type not supported\");\n    }\n    cv::Mat dst_temp;\n    bool inPlace = src_data == dst_data ? true : false ;\n\n    fcvStatus status = FASTCV_SUCCESS;\n    if(ksize_width == 3)\n    int nThreads = cv::getNumThreads();\n\n    cv::Mat src = cv::Mat(height, width, src_depth, (void*)src_data, src_step);\n\n    if(inPlace)\n        dst_temp = cv::Mat(height, width, src_depth);\n    else\n        dst_temp = cv::Mat(height, width, src_depth, (void*)dst_data, dst_step);\n\n    int nStripes, stripeHeight = nThreads * 10;",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "2024125007",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27182,
+        "pr_file": "3rdparty/fastcv/src/fastcv_hal_imgproc.cpp",
+        "discussion_id": "2024125007",
+        "commented_code": "@@ -363,37 +417,46 @@ int fastcv_hal_boxFilter(\n         CV_HAL_RETURN_NOT_IMPLEMENTED(\"ROI not supported\");\n     }\n \n+    if(src_depth == CV_32F && normalize != 1)\n+        CV_HAL_RETURN_NOT_IMPLEMENTED(\"normalized kernel supported for float types\");\n+\n+    if(src_depth == CV_8U && (ksize_width != 3 && ksize_width != 5))\n+        CV_HAL_RETURN_NOT_IMPLEMENTED(\"kernel size not supported\");\n+\n     INITIALIZATION_CHECK;\n \n-    fcvBorderType bdr;\n-    uint8_t bdrVal = 0;\n-    switch(border_type)\n-    {\n-        case cv::BORDER_REPLICATE:\n-            bdr = FASTCV_BORDER_REPLICATE;\n-            break;\n-        case cv::BORDER_REFLECT:\n-            bdr = FASTCV_BORDER_REFLECT;\n-            break;\n-        case cv::BORDER_REFLECT101:    // cv::BORDER_REFLECT_101, BORDER_DEFAULT\n-            bdr = FASTCV_BORDER_REFLECT_V2;\n-            break;\n-        default:\n-            CV_HAL_RETURN_NOT_IMPLEMENTED(\"border type not supported\");\n-    }\n+    cv::Mat dst_temp;\n+    bool inPlace = src_data == dst_data ? true : false ;\n \n-    fcvStatus status = FASTCV_SUCCESS;\n-    if(ksize_width == 3)\n+    int nThreads = cv::getNumThreads();\n+\n+    cv::Mat src = cv::Mat(height, width, src_depth, (void*)src_data, src_step);\n+\n+    if(inPlace)\n+        dst_temp = cv::Mat(height, width, src_depth);\n+    else\n+        dst_temp = cv::Mat(height, width, src_depth, (void*)dst_data, dst_step);\n+\n+    int nStripes, stripeHeight = nThreads * 10;",
+        "comment_created_at": "2025-04-02T06:03:40+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "`stripeHeight = nThreads * 10;` sounds strange. More threads -> larger piece for each thread.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2024155437",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27182,
+        "pr_file": "3rdparty/fastcv/src/fastcv_hal_imgproc.cpp",
+        "discussion_id": "2024125007",
+        "commented_code": "@@ -363,37 +417,46 @@ int fastcv_hal_boxFilter(\n         CV_HAL_RETURN_NOT_IMPLEMENTED(\"ROI not supported\");\n     }\n \n+    if(src_depth == CV_32F && normalize != 1)\n+        CV_HAL_RETURN_NOT_IMPLEMENTED(\"normalized kernel supported for float types\");\n+\n+    if(src_depth == CV_8U && (ksize_width != 3 && ksize_width != 5))\n+        CV_HAL_RETURN_NOT_IMPLEMENTED(\"kernel size not supported\");\n+\n     INITIALIZATION_CHECK;\n \n-    fcvBorderType bdr;\n-    uint8_t bdrVal = 0;\n-    switch(border_type)\n-    {\n-        case cv::BORDER_REPLICATE:\n-            bdr = FASTCV_BORDER_REPLICATE;\n-            break;\n-        case cv::BORDER_REFLECT:\n-            bdr = FASTCV_BORDER_REFLECT;\n-            break;\n-        case cv::BORDER_REFLECT101:    // cv::BORDER_REFLECT_101, BORDER_DEFAULT\n-            bdr = FASTCV_BORDER_REFLECT_V2;\n-            break;\n-        default:\n-            CV_HAL_RETURN_NOT_IMPLEMENTED(\"border type not supported\");\n-    }\n+    cv::Mat dst_temp;\n+    bool inPlace = src_data == dst_data ? true : false ;\n \n-    fcvStatus status = FASTCV_SUCCESS;\n-    if(ksize_width == 3)\n+    int nThreads = cv::getNumThreads();\n+\n+    cv::Mat src = cv::Mat(height, width, src_depth, (void*)src_data, src_step);\n+\n+    if(inPlace)\n+        dst_temp = cv::Mat(height, width, src_depth);\n+    else\n+        dst_temp = cv::Mat(height, width, src_depth, (void*)dst_data, dst_step);\n+\n+    int nStripes, stripeHeight = nThreads * 10;",
+        "comment_created_at": "2025-04-02T06:33:02+00:00",
+        "comment_author": "adsha-quic",
+        "comment_body": "Hi Alex\r\n\r\nWe tested this and found it having good speed, since usually threads are 8 as per our experiments. Please guide what optimizations we can do here.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2024172942",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27182,
+        "pr_file": "3rdparty/fastcv/src/fastcv_hal_imgproc.cpp",
+        "discussion_id": "2024125007",
+        "commented_code": "@@ -363,37 +417,46 @@ int fastcv_hal_boxFilter(\n         CV_HAL_RETURN_NOT_IMPLEMENTED(\"ROI not supported\");\n     }\n \n+    if(src_depth == CV_32F && normalize != 1)\n+        CV_HAL_RETURN_NOT_IMPLEMENTED(\"normalized kernel supported for float types\");\n+\n+    if(src_depth == CV_8U && (ksize_width != 3 && ksize_width != 5))\n+        CV_HAL_RETURN_NOT_IMPLEMENTED(\"kernel size not supported\");\n+\n     INITIALIZATION_CHECK;\n \n-    fcvBorderType bdr;\n-    uint8_t bdrVal = 0;\n-    switch(border_type)\n-    {\n-        case cv::BORDER_REPLICATE:\n-            bdr = FASTCV_BORDER_REPLICATE;\n-            break;\n-        case cv::BORDER_REFLECT:\n-            bdr = FASTCV_BORDER_REFLECT;\n-            break;\n-        case cv::BORDER_REFLECT101:    // cv::BORDER_REFLECT_101, BORDER_DEFAULT\n-            bdr = FASTCV_BORDER_REFLECT_V2;\n-            break;\n-        default:\n-            CV_HAL_RETURN_NOT_IMPLEMENTED(\"border type not supported\");\n-    }\n+    cv::Mat dst_temp;\n+    bool inPlace = src_data == dst_data ? true : false ;\n \n-    fcvStatus status = FASTCV_SUCCESS;\n-    if(ksize_width == 3)\n+    int nThreads = cv::getNumThreads();\n+\n+    cv::Mat src = cv::Mat(height, width, src_depth, (void*)src_data, src_step);\n+\n+    if(inPlace)\n+        dst_temp = cv::Mat(height, width, src_depth);\n+    else\n+        dst_temp = cv::Mat(height, width, src_depth, (void*)dst_data, dst_step);\n+\n+    int nStripes, stripeHeight = nThreads * 10;",
+        "comment_created_at": "2025-04-02T06:48:10+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "threads are 8. It's not true:\r\n- Android build uses 2 threads by default. It's done to prevent overheating, but may be changed in future.\r\n- Linux builds use all available cores.\r\n- parallel_for_ serializes nested parallel_for_ calls. So you can easily get 1 here.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2024174425",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27182,
+        "pr_file": "3rdparty/fastcv/src/fastcv_hal_imgproc.cpp",
+        "discussion_id": "2024125007",
+        "commented_code": "@@ -363,37 +417,46 @@ int fastcv_hal_boxFilter(\n         CV_HAL_RETURN_NOT_IMPLEMENTED(\"ROI not supported\");\n     }\n \n+    if(src_depth == CV_32F && normalize != 1)\n+        CV_HAL_RETURN_NOT_IMPLEMENTED(\"normalized kernel supported for float types\");\n+\n+    if(src_depth == CV_8U && (ksize_width != 3 && ksize_width != 5))\n+        CV_HAL_RETURN_NOT_IMPLEMENTED(\"kernel size not supported\");\n+\n     INITIALIZATION_CHECK;\n \n-    fcvBorderType bdr;\n-    uint8_t bdrVal = 0;\n-    switch(border_type)\n-    {\n-        case cv::BORDER_REPLICATE:\n-            bdr = FASTCV_BORDER_REPLICATE;\n-            break;\n-        case cv::BORDER_REFLECT:\n-            bdr = FASTCV_BORDER_REFLECT;\n-            break;\n-        case cv::BORDER_REFLECT101:    // cv::BORDER_REFLECT_101, BORDER_DEFAULT\n-            bdr = FASTCV_BORDER_REFLECT_V2;\n-            break;\n-        default:\n-            CV_HAL_RETURN_NOT_IMPLEMENTED(\"border type not supported\");\n-    }\n+    cv::Mat dst_temp;\n+    bool inPlace = src_data == dst_data ? true : false ;\n \n-    fcvStatus status = FASTCV_SUCCESS;\n-    if(ksize_width == 3)\n+    int nThreads = cv::getNumThreads();\n+\n+    cv::Mat src = cv::Mat(height, width, src_depth, (void*)src_data, src_step);\n+\n+    if(inPlace)\n+        dst_temp = cv::Mat(height, width, src_depth);\n+    else\n+        dst_temp = cv::Mat(height, width, src_depth, (void*)dst_data, dst_step);\n+\n+    int nStripes, stripeHeight = nThreads * 10;",
+        "comment_created_at": "2025-04-02T06:49:11+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "We usually set granularity to some reasonable size for single thread. OpenCV uses dynamic scheduling, so all other steps are done automatically.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1820133472",
+    "pr_number": 26379,
+    "pr_file": "modules/imgcodecs/src/grfmt_jpegxl.cpp",
+    "created_at": "2024-10-29T05:56:38+00:00",
+    "commented_code": "/*M///////////////////////////////////////////////////////////////////////////////////////\n//\n//  IMPORTANT: READ BEFORE DOWNLOADING, COPYING, INSTALLING OR USING.\n//\n//  By downloading, copying, installing or using the software you agree to this license.\n//  If you do not agree to this license, do not download, install,\n//  copy or use the software.\n//\n//\n//                        Intel License Agreement\n//                For Open Source Computer Vision Library\n//\n// Copyright (C) 2000, Intel Corporation, all rights reserved.\n// Third party copyrights are property of their respective owners.\n//\n// Redistribution and use in source and binary forms, with or without modification,\n// are permitted provided that the following conditions are met:\n//\n//   * Redistribution's of source code must retain the above copyright notice,\n//     this list of conditions and the following disclaimer.\n//\n//   * Redistribution's in binary form must reproduce the above copyright notice,\n//     this list of conditions and the following disclaimer in the documentation\n//     and/or other materials provided with the distribution.\n//\n//   * The name of Intel Corporation may not be used to endorse or promote products\n//     derived from this software without specific prior written permission.\n//\n// This software is provided by the copyright holders and contributors \"as is\" and\n// any express or implied warranties, including, but not limited to, the implied\n// warranties of merchantability and fitness for a particular purpose are disclaimed.\n// In no event shall the Intel Corporation or contributors be liable for any direct,\n// indirect, incidental, special, exemplary, or consequential damages\n// (including, but not limited to, procurement of substitute goods or services;\n// loss of use, data, or profits; or business interruption) however caused\n// and on any theory of liability, whether in contract, strict liability,\n// or tort (including negligence or otherwise) arising in any way out of\n// the use of this software, even if advised of the possibility of such damage.\n//\n//M*/\n\n#include \"precomp.hpp\"\n#include \"grfmt_jpegxl.hpp\"\n\n#ifdef HAVE_JPEGXL\n\n#include <opencv2/core/utils/logger.hpp>\n\nnamespace cv\n{\n\n/////////////////////// JpegXLDecoder ///////////////////\n\nJpegXLDecoder::JpegXLDecoder() : m_f(nullptr, fclose)\n{\n    m_signature = \"\\xFF\\x0A\";\n    m_decoder = nullptr;\n    m_buf_supported = true;\n    m_type = -1;\n}\n\nJpegXLDecoder::~JpegXLDecoder()\n{\n    close();\n}\n\nvoid JpegXLDecoder::close()\n{\n    if (m_decoder)\n        m_decoder.release();\n    if (m_f)\n        m_f.release();\n    m_read_buffer = {};\n    m_width = m_height = 0;\n    m_type = -1;\n}\n\nImageDecoder JpegXLDecoder::newDecoder() const\n{\n    return makePtr<JpegXLDecoder>();\n}\n\nbool JpegXLDecoder::read(Mat* pimg)\n{\n    // Open file\n    if (!m_f) {\n        m_f.reset(fopen(m_filename.c_str(), \"rb\"));\n        if (!m_f)\n            return false;\n    }\n\n    // Initialize decoder\n    if (!m_decoder) {\n        m_decoder = JxlDecoderMake(nullptr);\n        if (!m_decoder)\n            return false;\n        // Subscribe to the basic info event\n        JxlDecoderStatus status = JxlDecoderSubscribeEvents(m_decoder.get(), JXL_DEC_BASIC_INFO | JXL_DEC_FULL_IMAGE);\n        if (status != JXL_DEC_SUCCESS)\n            return false;\n    }\n\n    // Set up parallel m_parallel_runner\n    if (!m_parallel_runner) {\n        m_parallel_runner = JxlThreadParallelRunnerMake(nullptr, JxlThreadParallelRunnerDefaultNumWorkerThreads());",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1820133472",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26379,
+        "pr_file": "modules/imgcodecs/src/grfmt_jpegxl.cpp",
+        "discussion_id": "1820133472",
+        "commented_code": "@@ -0,0 +1,376 @@\n+/*M///////////////////////////////////////////////////////////////////////////////////////\n+//\n+//  IMPORTANT: READ BEFORE DOWNLOADING, COPYING, INSTALLING OR USING.\n+//\n+//  By downloading, copying, installing or using the software you agree to this license.\n+//  If you do not agree to this license, do not download, install,\n+//  copy or use the software.\n+//\n+//\n+//                        Intel License Agreement\n+//                For Open Source Computer Vision Library\n+//\n+// Copyright (C) 2000, Intel Corporation, all rights reserved.\n+// Third party copyrights are property of their respective owners.\n+//\n+// Redistribution and use in source and binary forms, with or without modification,\n+// are permitted provided that the following conditions are met:\n+//\n+//   * Redistribution's of source code must retain the above copyright notice,\n+//     this list of conditions and the following disclaimer.\n+//\n+//   * Redistribution's in binary form must reproduce the above copyright notice,\n+//     this list of conditions and the following disclaimer in the documentation\n+//     and/or other materials provided with the distribution.\n+//\n+//   * The name of Intel Corporation may not be used to endorse or promote products\n+//     derived from this software without specific prior written permission.\n+//\n+// This software is provided by the copyright holders and contributors \"as is\" and\n+// any express or implied warranties, including, but not limited to, the implied\n+// warranties of merchantability and fitness for a particular purpose are disclaimed.\n+// In no event shall the Intel Corporation or contributors be liable for any direct,\n+// indirect, incidental, special, exemplary, or consequential damages\n+// (including, but not limited to, procurement of substitute goods or services;\n+// loss of use, data, or profits; or business interruption) however caused\n+// and on any theory of liability, whether in contract, strict liability,\n+// or tort (including negligence or otherwise) arising in any way out of\n+// the use of this software, even if advised of the possibility of such damage.\n+//\n+//M*/\n+\n+#include \"precomp.hpp\"\n+#include \"grfmt_jpegxl.hpp\"\n+\n+#ifdef HAVE_JPEGXL\n+\n+#include <opencv2/core/utils/logger.hpp>\n+\n+namespace cv\n+{\n+\n+/////////////////////// JpegXLDecoder ///////////////////\n+\n+JpegXLDecoder::JpegXLDecoder() : m_f(nullptr, fclose)\n+{\n+    m_signature = \"\\xFF\\x0A\";\n+    m_decoder = nullptr;\n+    m_buf_supported = true;\n+    m_type = -1;\n+}\n+\n+JpegXLDecoder::~JpegXLDecoder()\n+{\n+    close();\n+}\n+\n+void JpegXLDecoder::close()\n+{\n+    if (m_decoder)\n+        m_decoder.release();\n+    if (m_f)\n+        m_f.release();\n+    m_read_buffer = {};\n+    m_width = m_height = 0;\n+    m_type = -1;\n+}\n+\n+ImageDecoder JpegXLDecoder::newDecoder() const\n+{\n+    return makePtr<JpegXLDecoder>();\n+}\n+\n+bool JpegXLDecoder::read(Mat* pimg)\n+{\n+    // Open file\n+    if (!m_f) {\n+        m_f.reset(fopen(m_filename.c_str(), \"rb\"));\n+        if (!m_f)\n+            return false;\n+    }\n+\n+    // Initialize decoder\n+    if (!m_decoder) {\n+        m_decoder = JxlDecoderMake(nullptr);\n+        if (!m_decoder)\n+            return false;\n+        // Subscribe to the basic info event\n+        JxlDecoderStatus status = JxlDecoderSubscribeEvents(m_decoder.get(), JXL_DEC_BASIC_INFO | JXL_DEC_FULL_IMAGE);\n+        if (status != JXL_DEC_SUCCESS)\n+            return false;\n+    }\n+\n+    // Set up parallel m_parallel_runner\n+    if (!m_parallel_runner) {\n+        m_parallel_runner = JxlThreadParallelRunnerMake(nullptr, JxlThreadParallelRunnerDefaultNumWorkerThreads());",
+        "comment_created_at": "2024-10-29T05:56:38+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "I propose to use `num_worker_threads = cv::getNumThreads()` to make it manageable outside. See https://docs.opencv.org/4.x/db/de0/group__core__utils.html#ga2db334ec41d98da3129ef4a2342fc4d4 ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1820588823",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26379,
+        "pr_file": "modules/imgcodecs/src/grfmt_jpegxl.cpp",
+        "discussion_id": "1820133472",
+        "commented_code": "@@ -0,0 +1,376 @@\n+/*M///////////////////////////////////////////////////////////////////////////////////////\n+//\n+//  IMPORTANT: READ BEFORE DOWNLOADING, COPYING, INSTALLING OR USING.\n+//\n+//  By downloading, copying, installing or using the software you agree to this license.\n+//  If you do not agree to this license, do not download, install,\n+//  copy or use the software.\n+//\n+//\n+//                        Intel License Agreement\n+//                For Open Source Computer Vision Library\n+//\n+// Copyright (C) 2000, Intel Corporation, all rights reserved.\n+// Third party copyrights are property of their respective owners.\n+//\n+// Redistribution and use in source and binary forms, with or without modification,\n+// are permitted provided that the following conditions are met:\n+//\n+//   * Redistribution's of source code must retain the above copyright notice,\n+//     this list of conditions and the following disclaimer.\n+//\n+//   * Redistribution's in binary form must reproduce the above copyright notice,\n+//     this list of conditions and the following disclaimer in the documentation\n+//     and/or other materials provided with the distribution.\n+//\n+//   * The name of Intel Corporation may not be used to endorse or promote products\n+//     derived from this software without specific prior written permission.\n+//\n+// This software is provided by the copyright holders and contributors \"as is\" and\n+// any express or implied warranties, including, but not limited to, the implied\n+// warranties of merchantability and fitness for a particular purpose are disclaimed.\n+// In no event shall the Intel Corporation or contributors be liable for any direct,\n+// indirect, incidental, special, exemplary, or consequential damages\n+// (including, but not limited to, procurement of substitute goods or services;\n+// loss of use, data, or profits; or business interruption) however caused\n+// and on any theory of liability, whether in contract, strict liability,\n+// or tort (including negligence or otherwise) arising in any way out of\n+// the use of this software, even if advised of the possibility of such damage.\n+//\n+//M*/\n+\n+#include \"precomp.hpp\"\n+#include \"grfmt_jpegxl.hpp\"\n+\n+#ifdef HAVE_JPEGXL\n+\n+#include <opencv2/core/utils/logger.hpp>\n+\n+namespace cv\n+{\n+\n+/////////////////////// JpegXLDecoder ///////////////////\n+\n+JpegXLDecoder::JpegXLDecoder() : m_f(nullptr, fclose)\n+{\n+    m_signature = \"\\xFF\\x0A\";\n+    m_decoder = nullptr;\n+    m_buf_supported = true;\n+    m_type = -1;\n+}\n+\n+JpegXLDecoder::~JpegXLDecoder()\n+{\n+    close();\n+}\n+\n+void JpegXLDecoder::close()\n+{\n+    if (m_decoder)\n+        m_decoder.release();\n+    if (m_f)\n+        m_f.release();\n+    m_read_buffer = {};\n+    m_width = m_height = 0;\n+    m_type = -1;\n+}\n+\n+ImageDecoder JpegXLDecoder::newDecoder() const\n+{\n+    return makePtr<JpegXLDecoder>();\n+}\n+\n+bool JpegXLDecoder::read(Mat* pimg)\n+{\n+    // Open file\n+    if (!m_f) {\n+        m_f.reset(fopen(m_filename.c_str(), \"rb\"));\n+        if (!m_f)\n+            return false;\n+    }\n+\n+    // Initialize decoder\n+    if (!m_decoder) {\n+        m_decoder = JxlDecoderMake(nullptr);\n+        if (!m_decoder)\n+            return false;\n+        // Subscribe to the basic info event\n+        JxlDecoderStatus status = JxlDecoderSubscribeEvents(m_decoder.get(), JXL_DEC_BASIC_INFO | JXL_DEC_FULL_IMAGE);\n+        if (status != JXL_DEC_SUCCESS)\n+            return false;\n+    }\n+\n+    // Set up parallel m_parallel_runner\n+    if (!m_parallel_runner) {\n+        m_parallel_runner = JxlThreadParallelRunnerMake(nullptr, JxlThreadParallelRunnerDefaultNumWorkerThreads());",
+        "comment_created_at": "2024-10-29T11:05:49+00:00",
+        "comment_author": "cdcseacave",
+        "comment_body": "done",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

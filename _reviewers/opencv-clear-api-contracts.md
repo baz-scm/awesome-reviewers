@@ -1,0 +1,322 @@
+---
+title: Clear API contracts
+description: Design APIs with clear contracts that behave exactly as their names and
+  signatures suggest. Functions should do precisely what they claim to do without
+  surprising side effects or hidden behaviors.
+repository: opencv/opencv
+label: API
+language: C++
+comments_count: 6
+repository_stars: 82865
+---
+
+Design APIs with clear contracts that behave exactly as their names and signatures suggest. Functions should do precisely what they claim to do without surprising side effects or hidden behaviors.
+
+Key principles:
+- Function behavior must strictly align with its name and signature
+- Prefer simplified interfaces that abstract implementation details
+- Be explicit about parameter requirements and behaviors
+- Raise errors for invalid operations rather than using fallback paths
+- Use sensible defaults that follow established conventions
+
+**Example of poor design:**
+```cpp
+// Confusing API with unclear behavior
+bool initializeContextFromVA(VADisplay display, bool tryInterop) {
+    // Uses a different display if provided one doesn't work
+    // Silently falls back to non-interop mode if tryInterop fails
+    // Returns success even when not using the requested display
+}
+```
+
+**Improved design:**
+```cpp
+// Clear contract, predictable behavior
+bool initializeContextFromVA(VADisplay display) {
+    // Only initializes with the exact display provided
+    // Throws exception with clear message if initialization fails
+    // Returns true only when successfully initialized with given display
+}
+```
+
+Remember to document any special parameter handling. If your function treats certain values (like Point(0,0)) specially, make this explicit in both the function signature (with default parameters) and documentation. When extending existing APIs, maintain consistency with established patterns in the codebase.
+
+
+[
+  {
+    "discussion_id": "2176710492",
+    "pr_number": 27499,
+    "pr_file": "modules/imgcodecs/src/loadsave.cpp",
+    "created_at": "2025-07-01T07:51:35+00:00",
+    "commented_code": "*\n*/\nstatic bool\nimread_( const String& filename, int flags, OutputArray mat )\nimread_( const String& filename, int flags, OutputArray mat,\n         std::vector<int>* metadata_types, OutputArrayOfArrays metadata)\n{\n    /// Search for the relevant decoder to handle the imagery\n    ImageDecoder decoder;\n\n    if (metadata_types)\n        metadata_types->clear();\n\n#ifdef HAVE_GDAL",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "2176710492",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27499,
+        "pr_file": "modules/imgcodecs/src/loadsave.cpp",
+        "discussion_id": "2176710492",
+        "commented_code": "@@ -419,11 +475,15 @@ static void ApplyExifOrientation(ExifEntry_t orientationTag, OutputArray img)\n  *\n */\n static bool\n-imread_( const String& filename, int flags, OutputArray mat )\n+imread_( const String& filename, int flags, OutputArray mat,\n+         std::vector<int>* metadata_types, OutputArrayOfArrays metadata)\n {\n     /// Search for the relevant decoder to handle the imagery\n     ImageDecoder decoder;\n \n+    if (metadata_types)\n+        metadata_types->clear();\n+\n #ifdef HAVE_GDAL",
+        "comment_created_at": "2025-07-01T07:51:35+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "Need a warning, that GDAL does not support metadata for now.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2091429332",
+    "pr_number": 27051,
+    "pr_file": "samples/cpp/color_correction_model.cpp",
+    "created_at": "2025-05-15T15:14:56+00:00",
+    "commented_code": "//! [tutorial]\n#include <opencv2/core.hpp>\n#include <opencv2/highgui.hpp>\n#include <opencv2/imgcodecs.hpp>\n#include <opencv2/imgproc.hpp>\n#include <opencv2/photo.hpp>\n#include <opencv2/objdetect.hpp>\n#include <opencv2/dnn.hpp>\n#include <iostream>\n#include \"../dnn/common.hpp\"\n\nusing namespace std;\nusing namespace cv;\nusing namespace cv::dnn;\nusing namespace cv::ccm;\nusing namespace mcc;\n\nconst string about =\n    \"This sample detects Macbeth color checker using DNN or thresholding and applies color correction.\"\n    \"To run default:\\n\"\n    \"\\t ./example_cpp_color_correction_model --input=path/to/your/input/image --query=path/to/your/query/image\\n\"\n    \"With DNN model:\\n\"\n    \"\\t ./example_cpp_color_correction_model mcc --input=path/to/your/input/image --query=path/to/your/query/image\\n\\n\"\n    \"Using pre-computed CCM:\\n\"\n    \"\\t ./example_cpp_color_correction_model mcc --ccm_file=path/to/ccm_output.yaml --query=path/to/your/query/image\\n\\n\"\n    \"Model path can also be specified using --model argument. And config path can be specified using --config. Download it using python download_models.py mcc from dnn samples directory\\n\\n\";\n\nconst string param_keys =\n    \"{ help h          |                   | Print help message. }\"\n    \"{ @alias          |                   | An alias name of model to extract preprocessing parameters from models.yml file. }\"\n    \"{ zoo             | ../dnn/models.yml | An optional path to file with preprocessing parameters }\"\n    \"{ input i         |  mcc_ccm_test.jpg | Path to input image for computing CCM.}\"\n    \"{ query q         |     baboon.jpg    | Path to query image to apply color correction. If not provided, input image will be used. }\"\n    \"{ type            |         0         | chartType: 0-Standard, 1-DigitalSG, 2-Vinyl }\"\n    \"{ num_charts      |         1         | Maximum number of charts in the image }\"\n    \"{ ccm_file        |                   | Path to YAML file containing pre-computed CCM parameters}\";\n\nconst string backend_keys = format(\n    \"{ backend          | default | Choose one of computation backends: \"\n                            \"default: automatically (by default), \"\n                            \"openvino: Intel's Deep Learning Inference Engine (https://software.intel.com/openvino-toolkit), \"\n                            \"opencv: OpenCV implementation, \"\n                            \"vkcom: VKCOM, \"\n                            \"cuda: CUDA, \"\n                            \"webnn: WebNN }\");\n\nconst string target_keys = format(\n    \"{ target           | cpu | Choose one of target computation devices: \"\n                            \"cpu: CPU target (by default), \"\n                            \"opencl: OpenCL, \"\n                            \"opencl_fp16: OpenCL fp16 (half-float precision), \"\n                            \"vpu: VPU, \"\n                            \"vulkan: Vulkan, \"\n                            \"cuda: CUDA, \"\n                            \"cuda_fp16: CUDA fp16 (half-float preprocess) }\");\n\nstring keys = param_keys + backend_keys + target_keys;\n\nstatic bool processFrame(const Mat& frame, Ptr<CCheckerDetector> detector, Mat& src, int nc){\n    if (!detector->process(frame, nc))\n    {\n        return false;\n    }\n    vector<Ptr<CChecker>> checkers = detector->getListColorChecker();\n    src = checkers[0]->getChartsRGB(false);\n\n    return true;\n}\n\nint main(int argc, char* argv[]) {\n    CommandLineParser parser(argc, argv, keys);\n    parser.about(about);\n\n    if (parser.has(\"help\")) {\n        cout << about << endl;\n        parser.printMessage();\n        return 0;\n    }\n\n    string modelName = parser.get<String>(\"@alias\");\n    string zooFile = parser.get<String>(\"zoo\");\n    const char* path = getenv(\"OPENCV_SAMPLES_DATA_PATH\");\n\n    if ((path != NULL) || parser.has(\"@alias\")) {\n        zooFile = findFile(zooFile);\n    }\n    else{\n        cout<<\"[WARN] set the environment variables or pass the arguments --model, --config and models.yml file using --zoo for using dnn based detector. Continuing with default detector.\\n\\n\";\n    }\n    keys += genPreprocArguments(modelName, zooFile);\n    parser = CommandLineParser(argc, argv, keys);\n\n    int t = parser.get<int>(\"type\");\n    if (t < 0 || t > 2)\n    {\n        cout << \"Error: --type must be 0, 1 or 2\" << endl;\n        parser.printMessage();          // prints full usage\n        return -1;\n    }\n\n    ColorChart chartType = ColorChart(t);\n\n    const string sha1 = parser.get<String>(\"sha1\");\n    const string modelPath = findModel(parser.get<string>(\"model\"), sha1);\n    const string config_sha1 = parser.get<String>(\"config_sha1\");\n    const string configPath = findModel(parser.get<string>(\"config\"), config_sha1);\n    const string backend = parser.get<String>(\"backend\");\n    const string target = parser.get<String>(\"target\");\n\n    int nc = parser.get<int>(\"num_charts\");\n\n    // Get input and target image paths\n    const string inputFile = parser.get<String>(\"input\");\n    const string queryFile = parser.get<String>(\"query\");\n    const string ccmFile = parser.get<String>(\"ccm_file\");\n\n    if (!ccmFile.empty()) {\n        // When ccm_file is provided, only query is required\n        if (queryFile.empty()) {\n            cout << \"Error: Query image path must be provided when using pre-computed CCM.\" << endl;\n            parser.printMessage();\n            return -1;\n        }\n    } else {\n        // Original validation for when computing new CCM\n        if (inputFile.empty()) {\n            cout << \"Error: Input image path must be provided.\" << endl;\n            parser.printMessage();\n            return -1;\n        }\n    }\n\n    ColorCorrectionModel model;\n    Mat queryImage;\n\n    if (!ccmFile.empty()) {\n        // Load CCM from YAML file\n        FileStorage fs(ccmFile, FileStorage::READ);\n        if (!fs.isOpened()) {\n            cout << \"Error: Unable to open CCM file: \" << ccmFile << endl;\n            return -1;\n        }\n        model.read(fs[\"ColorCorrectionModel\"]);\n        fs.release();\n        cout << \"Loaded CCM from file: \" << ccmFile << endl;\n\n        // Read query image when using pre-computed CCM\n        queryImage = imread(findFile(queryFile));\n        if (queryImage.empty()) {\n            cout << \"Error: Unable to read query image.\" << endl;\n            return -1;\n        }\n    } else {\n        // Read input image for computing new CCM\n        Mat originalImage = imread(findFile(inputFile));\n        if (originalImage.empty()) {\n            cout << \"Error: Unable to read input image.\" << endl;\n            return -1;\n        }\n\n        // Process first image to compute CCM\n        Mat image = originalImage.clone();\n        Mat src;\n\n        Ptr<CCheckerDetector> detector;\n        if (!modelPath.empty() && !configPath.empty()) {\n            Net net = readNetFromTensorflow(modelPath, configPath);\n            net.setPreferableBackend(getBackendID(backend));\n            net.setPreferableTarget(getTargetID(target));\n            detector = CCheckerDetector::create(net);\n            cout << \"Using DNN-based checker detector.\" << endl;\n        } else {\n            detector = CCheckerDetector::create();\n            cout << \"Using thresholding-based checker detector.\" << endl;\n        }\n        detector->setColorChartType(chartType);\n\n        if (!processFrame(image, detector, src, nc)) {\n            cout << \"No chart detected in the input image!\" << endl;\n            return -1;\n        }\n        // Convert to double and normalize\n        src.convertTo(src, CV_64F, 1.0/255.0);\n\n        // Color correction model\n        model = ColorCorrectionModel(src, COLORCHECKER_MACBETH);\n        model.setCcmType(CCM_LINEAR);\n        model.setDistance(DISTANCE_CIE2000);\n        model.setLinearization(LINEARIZATION_GAMMA);\n        model.setLinearizationGamma(2.2);\n\n        Mat ccm = model.compute();\n        cout << \"Computed CCM Matrix:\\n\" << ccm << endl;\n        cout << \"Loss: \" << model.getLoss() << endl;\n\n        // Save model parameters to YAML file\n        FileStorage fs(\"ccm_output.yaml\", FileStorage::WRITE);\n        model.write(fs);\n        fs.release();\n        cout << \"Model parameters saved to ccm_output.yaml\" << endl;\n\n        // Set query image for correction\n        if (queryFile.empty()) {\n            cout << \"[WARN] No query image provided, applying color correction on input image\" << endl;\n            queryImage = originalImage.clone();\n        } else {\n            queryImage = imread(findFile(queryFile));\n            if (queryImage.empty()) {\n                cout << \"Error: Unable to read query image.\" << endl;\n                return -1;\n            }\n        }\n    }\n\n    // Apply correction to query image\n    Mat calibratedImage, normalizedImage;\n    cvtColor(queryImage, normalizedImage, COLOR_BGR2RGB);\n    normalizedImage.convertTo(normalizedImage, CV_64F, 1.0/255.0);  // Convert to double and normalize\n    model.correctImage(normalizedImage, calibratedImage);",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "2091429332",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 27051,
+        "pr_file": "samples/cpp/color_correction_model.cpp",
+        "discussion_id": "2091429332",
+        "commented_code": "@@ -0,0 +1,232 @@\n+//! [tutorial]\n+#include <opencv2/core.hpp>\n+#include <opencv2/highgui.hpp>\n+#include <opencv2/imgcodecs.hpp>\n+#include <opencv2/imgproc.hpp>\n+#include <opencv2/photo.hpp>\n+#include <opencv2/objdetect.hpp>\n+#include <opencv2/dnn.hpp>\n+#include <iostream>\n+#include \"../dnn/common.hpp\"\n+\n+using namespace std;\n+using namespace cv;\n+using namespace cv::dnn;\n+using namespace cv::ccm;\n+using namespace mcc;\n+\n+const string about =\n+    \"This sample detects Macbeth color checker using DNN or thresholding and applies color correction.\"\n+    \"To run default:\\n\"\n+    \"\\t ./example_cpp_color_correction_model --input=path/to/your/input/image --query=path/to/your/query/image\\n\"\n+    \"With DNN model:\\n\"\n+    \"\\t ./example_cpp_color_correction_model mcc --input=path/to/your/input/image --query=path/to/your/query/image\\n\\n\"\n+    \"Using pre-computed CCM:\\n\"\n+    \"\\t ./example_cpp_color_correction_model mcc --ccm_file=path/to/ccm_output.yaml --query=path/to/your/query/image\\n\\n\"\n+    \"Model path can also be specified using --model argument. And config path can be specified using --config. Download it using python download_models.py mcc from dnn samples directory\\n\\n\";\n+\n+const string param_keys =\n+    \"{ help h          |                   | Print help message. }\"\n+    \"{ @alias          |                   | An alias name of model to extract preprocessing parameters from models.yml file. }\"\n+    \"{ zoo             | ../dnn/models.yml | An optional path to file with preprocessing parameters }\"\n+    \"{ input i         |  mcc_ccm_test.jpg | Path to input image for computing CCM.}\"\n+    \"{ query q         |     baboon.jpg    | Path to query image to apply color correction. If not provided, input image will be used. }\"\n+    \"{ type            |         0         | chartType: 0-Standard, 1-DigitalSG, 2-Vinyl }\"\n+    \"{ num_charts      |         1         | Maximum number of charts in the image }\"\n+    \"{ ccm_file        |                   | Path to YAML file containing pre-computed CCM parameters}\";\n+\n+const string backend_keys = format(\n+    \"{ backend          | default | Choose one of computation backends: \"\n+                            \"default: automatically (by default), \"\n+                            \"openvino: Intel's Deep Learning Inference Engine (https://software.intel.com/openvino-toolkit), \"\n+                            \"opencv: OpenCV implementation, \"\n+                            \"vkcom: VKCOM, \"\n+                            \"cuda: CUDA, \"\n+                            \"webnn: WebNN }\");\n+\n+const string target_keys = format(\n+    \"{ target           | cpu | Choose one of target computation devices: \"\n+                            \"cpu: CPU target (by default), \"\n+                            \"opencl: OpenCL, \"\n+                            \"opencl_fp16: OpenCL fp16 (half-float precision), \"\n+                            \"vpu: VPU, \"\n+                            \"vulkan: Vulkan, \"\n+                            \"cuda: CUDA, \"\n+                            \"cuda_fp16: CUDA fp16 (half-float preprocess) }\");\n+\n+string keys = param_keys + backend_keys + target_keys;\n+\n+static bool processFrame(const Mat& frame, Ptr<CCheckerDetector> detector, Mat& src, int nc){\n+    if (!detector->process(frame, nc))\n+    {\n+        return false;\n+    }\n+    vector<Ptr<CChecker>> checkers = detector->getListColorChecker();\n+    src = checkers[0]->getChartsRGB(false);\n+\n+    return true;\n+}\n+\n+int main(int argc, char* argv[]) {\n+    CommandLineParser parser(argc, argv, keys);\n+    parser.about(about);\n+\n+    if (parser.has(\"help\")) {\n+        cout << about << endl;\n+        parser.printMessage();\n+        return 0;\n+    }\n+\n+    string modelName = parser.get<String>(\"@alias\");\n+    string zooFile = parser.get<String>(\"zoo\");\n+    const char* path = getenv(\"OPENCV_SAMPLES_DATA_PATH\");\n+\n+    if ((path != NULL) || parser.has(\"@alias\")) {\n+        zooFile = findFile(zooFile);\n+    }\n+    else{\n+        cout<<\"[WARN] set the environment variables or pass the arguments --model, --config and models.yml file using --zoo for using dnn based detector. Continuing with default detector.\\n\\n\";\n+    }\n+    keys += genPreprocArguments(modelName, zooFile);\n+    parser = CommandLineParser(argc, argv, keys);\n+\n+    int t = parser.get<int>(\"type\");\n+    if (t < 0 || t > 2)\n+    {\n+        cout << \"Error: --type must be 0, 1 or 2\" << endl;\n+        parser.printMessage();          // prints full usage\n+        return -1;\n+    }\n+\n+    ColorChart chartType = ColorChart(t);\n+\n+    const string sha1 = parser.get<String>(\"sha1\");\n+    const string modelPath = findModel(parser.get<string>(\"model\"), sha1);\n+    const string config_sha1 = parser.get<String>(\"config_sha1\");\n+    const string configPath = findModel(parser.get<string>(\"config\"), config_sha1);\n+    const string backend = parser.get<String>(\"backend\");\n+    const string target = parser.get<String>(\"target\");\n+\n+    int nc = parser.get<int>(\"num_charts\");\n+\n+    // Get input and target image paths\n+    const string inputFile = parser.get<String>(\"input\");\n+    const string queryFile = parser.get<String>(\"query\");\n+    const string ccmFile = parser.get<String>(\"ccm_file\");\n+\n+    if (!ccmFile.empty()) {\n+        // When ccm_file is provided, only query is required\n+        if (queryFile.empty()) {\n+            cout << \"Error: Query image path must be provided when using pre-computed CCM.\" << endl;\n+            parser.printMessage();\n+            return -1;\n+        }\n+    } else {\n+        // Original validation for when computing new CCM\n+        if (inputFile.empty()) {\n+            cout << \"Error: Input image path must be provided.\" << endl;\n+            parser.printMessage();\n+            return -1;\n+        }\n+    }\n+\n+    ColorCorrectionModel model;\n+    Mat queryImage;\n+\n+    if (!ccmFile.empty()) {\n+        // Load CCM from YAML file\n+        FileStorage fs(ccmFile, FileStorage::READ);\n+        if (!fs.isOpened()) {\n+            cout << \"Error: Unable to open CCM file: \" << ccmFile << endl;\n+            return -1;\n+        }\n+        model.read(fs[\"ColorCorrectionModel\"]);\n+        fs.release();\n+        cout << \"Loaded CCM from file: \" << ccmFile << endl;\n+\n+        // Read query image when using pre-computed CCM\n+        queryImage = imread(findFile(queryFile));\n+        if (queryImage.empty()) {\n+            cout << \"Error: Unable to read query image.\" << endl;\n+            return -1;\n+        }\n+    } else {\n+        // Read input image for computing new CCM\n+        Mat originalImage = imread(findFile(inputFile));\n+        if (originalImage.empty()) {\n+            cout << \"Error: Unable to read input image.\" << endl;\n+            return -1;\n+        }\n+\n+        // Process first image to compute CCM\n+        Mat image = originalImage.clone();\n+        Mat src;\n+\n+        Ptr<CCheckerDetector> detector;\n+        if (!modelPath.empty() && !configPath.empty()) {\n+            Net net = readNetFromTensorflow(modelPath, configPath);\n+            net.setPreferableBackend(getBackendID(backend));\n+            net.setPreferableTarget(getTargetID(target));\n+            detector = CCheckerDetector::create(net);\n+            cout << \"Using DNN-based checker detector.\" << endl;\n+        } else {\n+            detector = CCheckerDetector::create();\n+            cout << \"Using thresholding-based checker detector.\" << endl;\n+        }\n+        detector->setColorChartType(chartType);\n+\n+        if (!processFrame(image, detector, src, nc)) {\n+            cout << \"No chart detected in the input image!\" << endl;\n+            return -1;\n+        }\n+        // Convert to double and normalize\n+        src.convertTo(src, CV_64F, 1.0/255.0);\n+\n+        // Color correction model\n+        model = ColorCorrectionModel(src, COLORCHECKER_MACBETH);\n+        model.setCcmType(CCM_LINEAR);\n+        model.setDistance(DISTANCE_CIE2000);\n+        model.setLinearization(LINEARIZATION_GAMMA);\n+        model.setLinearizationGamma(2.2);\n+\n+        Mat ccm = model.compute();\n+        cout << \"Computed CCM Matrix:\\n\" << ccm << endl;\n+        cout << \"Loss: \" << model.getLoss() << endl;\n+\n+        // Save model parameters to YAML file\n+        FileStorage fs(\"ccm_output.yaml\", FileStorage::WRITE);\n+        model.write(fs);\n+        fs.release();\n+        cout << \"Model parameters saved to ccm_output.yaml\" << endl;\n+\n+        // Set query image for correction\n+        if (queryFile.empty()) {\n+            cout << \"[WARN] No query image provided, applying color correction on input image\" << endl;\n+            queryImage = originalImage.clone();\n+        } else {\n+            queryImage = imread(findFile(queryFile));\n+            if (queryImage.empty()) {\n+                cout << \"Error: Unable to read query image.\" << endl;\n+                return -1;\n+            }\n+        }\n+    }\n+\n+    // Apply correction to query image\n+    Mat calibratedImage, normalizedImage;\n+    cvtColor(queryImage, normalizedImage, COLOR_BGR2RGB);\n+    normalizedImage.convertTo(normalizedImage, CV_64F, 1.0/255.0);  // Convert to double and normalize\n+    model.correctImage(normalizedImage, calibratedImage);",
+        "comment_created_at": "2025-05-15T15:14:56+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "I propose to Move BRG/RGB logic into model with a flag (default to bgr). All OpenCV functions are designed for BGR. The flag allows to make optimizations without API change.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1022288868",
+    "pr_number": 22780,
+    "pr_file": "modules/core/src/va_intel.cpp",
+    "created_at": "2022-11-15T03:49:31+00:00",
+    "commented_code": "#else  // !HAVE_VA\n\n#   ifdef HAVE_VA_INTEL\n    if (tryInterop)\n\n    Context& va_ctx = OpenCLExecutionContext::getCurrent().getContext();\n    VAAPIInterop* interop = va_ctx.getUserContext<VAAPIInterop>().get();\n    if (tryInterop && interop == NULL)",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1022288868",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 22780,
+        "pr_file": "modules/core/src/va_intel.cpp",
+        "discussion_id": "1022288868",
+        "commented_code": "@@ -85,7 +85,10 @@ Context& initializeContextFromVA(VADisplay display, bool tryInterop)\n #else  // !HAVE_VA\n \n #   ifdef HAVE_VA_INTEL\n-    if (tryInterop)\n+\n+    Context& va_ctx = OpenCLExecutionContext::getCurrent().getContext();\n+    VAAPIInterop* interop = va_ctx.getUserContext<VAAPIInterop>().get();\n+    if (tryInterop && interop == NULL)",
+        "comment_created_at": "2022-11-15T03:49:31+00:00",
+        "comment_author": "alalek",
+        "comment_body": "Function is called `initializeContextFromVA()`.\r\nBut implementation of this function is confusing (see below).\r\n\r\nExpected result is OpenCL context with specified `VADisplay display`.\r\nReturning result with **another** `display` is wrong.\r\nFallback paths (and `tryInterop` parameter) should not be there. Error should be raised instead (actually one fallback do that through `NO_VA_SUPPORT_ERROR`). `tryInterop` parameter should be dropped too.\r\n\r\nReference: `initializeContextFromD3D11Device()`\r\n\r\nRelates #5272 (and https://github.com/opencv/opencv/pull/5272#discussion_r38926396 is correct and we a have design problem here)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1024888786",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 22780,
+        "pr_file": "modules/core/src/va_intel.cpp",
+        "discussion_id": "1022288868",
+        "commented_code": "@@ -85,7 +85,10 @@ Context& initializeContextFromVA(VADisplay display, bool tryInterop)\n #else  // !HAVE_VA\n \n #   ifdef HAVE_VA_INTEL\n-    if (tryInterop)\n+\n+    Context& va_ctx = OpenCLExecutionContext::getCurrent().getContext();\n+    VAAPIInterop* interop = va_ctx.getUserContext<VAAPIInterop>().get();\n+    if (tryInterop && interop == NULL)",
+        "comment_created_at": "2022-11-17T08:32:54+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "I think I understand. I am on it",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1027130746",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 22780,
+        "pr_file": "modules/core/src/va_intel.cpp",
+        "discussion_id": "1022288868",
+        "commented_code": "@@ -85,7 +85,10 @@ Context& initializeContextFromVA(VADisplay display, bool tryInterop)\n #else  // !HAVE_VA\n \n #   ifdef HAVE_VA_INTEL\n-    if (tryInterop)\n+\n+    Context& va_ctx = OpenCLExecutionContext::getCurrent().getContext();\n+    VAAPIInterop* interop = va_ctx.getUserContext<VAAPIInterop>().get();\n+    if (tryInterop && interop == NULL)",
+        "comment_created_at": "2022-11-19T19:12:26+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "But how to handle VA (non-Intel)? Is it correct to return a context without interop?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1027131155",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 22780,
+        "pr_file": "modules/core/src/va_intel.cpp",
+        "discussion_id": "1022288868",
+        "commented_code": "@@ -85,7 +85,10 @@ Context& initializeContextFromVA(VADisplay display, bool tryInterop)\n #else  // !HAVE_VA\n \n #   ifdef HAVE_VA_INTEL\n-    if (tryInterop)\n+\n+    Context& va_ctx = OpenCLExecutionContext::getCurrent().getContext();\n+    VAAPIInterop* interop = va_ctx.getUserContext<VAAPIInterop>().get();\n+    if (tryInterop && interop == NULL)",
+        "comment_created_at": "2022-11-19T19:16:53+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "Also. what happens if it is called multiple times and the context is already with VADisplay? I am asking specifically because ```initializeContextFromVA()``` is called from withing VideoWriter and VideoCapture.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1027131595",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 22780,
+        "pr_file": "modules/core/src/va_intel.cpp",
+        "discussion_id": "1022288868",
+        "commented_code": "@@ -85,7 +85,10 @@ Context& initializeContextFromVA(VADisplay display, bool tryInterop)\n #else  // !HAVE_VA\n \n #   ifdef HAVE_VA_INTEL\n-    if (tryInterop)\n+\n+    Context& va_ctx = OpenCLExecutionContext::getCurrent().getContext();\n+    VAAPIInterop* interop = va_ctx.getUserContext<VAAPIInterop>().get();\n+    if (tryInterop && interop == NULL)",
+        "comment_created_at": "2022-11-19T19:21:13+00:00",
+        "comment_author": "kallaballa",
+        "comment_body": "I myself have a proposal for what context handling should maybe look like based on my  [4.x fork](https://github.com/kallaballa/opencv/tree/GCV): https://github.com/kallaballa/GCV/blob/main/src/video/video-demo.cpp\r\n\r\nIt basically creates a context for each interop-ability (OpenGL/VAAPI) copies them and when they are needed it binds them. So only one ```initializeContextFromVA()```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1889809784",
+    "pr_number": 25584,
+    "pr_file": "modules/videoio/src/backend_plugin.cpp",
+    "created_at": "2024-12-18T08:23:40+00:00",
+    "commented_code": "return Ptr<IVideoCapture>();\n}\n\nPtr<IVideoCapture> PluginBackend::createCapture(std::streambuf& source, const VideoCaptureParameters& params) const",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1889809784",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 25584,
+        "pr_file": "modules/videoio/src/backend_plugin.cpp",
+        "discussion_id": "1889809784",
+        "commented_code": "@@ -704,6 +731,25 @@ Ptr<IVideoCapture> PluginBackend::createCapture(const std::string &filename, con\n     return Ptr<IVideoCapture>();\n }\n \n+Ptr<IVideoCapture> PluginBackend::createCapture(std::streambuf& source, const VideoCaptureParameters& params) const",
+        "comment_created_at": "2024-12-18T08:23:40+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "No need to use `std::streambuf` anywhere in API.\r\nWe need to use internally just simplified class which provides seek/read **interface**.\r\n\r\nPublic API should have simple converter from this.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1895328978",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 25584,
+        "pr_file": "modules/videoio/src/backend_plugin.cpp",
+        "discussion_id": "1889809784",
+        "commented_code": "@@ -704,6 +731,25 @@ Ptr<IVideoCapture> PluginBackend::createCapture(const std::string &filename, con\n     return Ptr<IVideoCapture>();\n }\n \n+Ptr<IVideoCapture> PluginBackend::createCapture(std::streambuf& source, const VideoCaptureParameters& params) const",
+        "comment_created_at": "2024-12-23T06:56:59+00:00",
+        "comment_author": "dkurt",
+        "comment_body": "Thanks for the review. Added a simplified interface, but it\u2019s private for internal conversion.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1895741926",
+    "pr_number": 25584,
+    "pr_file": "modules/videoio/src/cap.cpp",
+    "created_at": "2024-12-23T13:13:30+00:00",
+    "commented_code": "return false;\n}\n\nbool VideoCapture::open(std::streambuf& stream, int apiPreference, const std::vector<int>& params)\n{\n    CV_INSTRUMENT_REGION();\n\n    if (isOpened())\n    {\n        release();\n    }\n\n    const VideoCaptureParameters parameters(params);\n    const std::vector<VideoBackendInfo> backends = cv::videoio_registry::getAvailableBackends_CaptureByBuffer();\n    for (size_t i = 0; i < backends.size(); i++)\n    {\n        const VideoBackendInfo& info = backends[i];\n        if (apiPreference == CAP_ANY || apiPreference == info.id)\n        {\n            if (!info.backendFactory)\n            {\n                CV_LOG_DEBUG(NULL, \"VIDEOIO(\" << info.name << \"): factory is not available (plugins require filesystem support)\");\n                continue;\n            }\n            CV_CAPTURE_LOG_DEBUG(NULL,\n                                 cv::format(\"VIDEOIO(%s): trying capture buffer ...\",\n                                            info.name));\n            CV_Assert(!info.backendFactory.empty());\n            const Ptr<IBackend> backend = info.backendFactory->getBackend();\n            if (!backend.empty())\n            {\n                try\n                {\n                    icap = backend->createCapture(StreambufReadStream::create(stream), parameters);",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1895741926",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 25584,
+        "pr_file": "modules/videoio/src/cap.cpp",
+        "discussion_id": "1895741926",
+        "commented_code": "@@ -228,6 +235,128 @@ bool VideoCapture::open(const String& filename, int apiPreference, const std::ve\n     return false;\n }\n \n+bool VideoCapture::open(std::streambuf& stream, int apiPreference, const std::vector<int>& params)\n+{\n+    CV_INSTRUMENT_REGION();\n+\n+    if (isOpened())\n+    {\n+        release();\n+    }\n+\n+    const VideoCaptureParameters parameters(params);\n+    const std::vector<VideoBackendInfo> backends = cv::videoio_registry::getAvailableBackends_CaptureByBuffer();\n+    for (size_t i = 0; i < backends.size(); i++)\n+    {\n+        const VideoBackendInfo& info = backends[i];\n+        if (apiPreference == CAP_ANY || apiPreference == info.id)\n+        {\n+            if (!info.backendFactory)\n+            {\n+                CV_LOG_DEBUG(NULL, \"VIDEOIO(\" << info.name << \"): factory is not available (plugins require filesystem support)\");\n+                continue;\n+            }\n+            CV_CAPTURE_LOG_DEBUG(NULL,\n+                                 cv::format(\"VIDEOIO(%s): trying capture buffer ...\",\n+                                            info.name));\n+            CV_Assert(!info.backendFactory.empty());\n+            const Ptr<IBackend> backend = info.backendFactory->getBackend();\n+            if (!backend.empty())\n+            {\n+                try\n+                {\n+                    icap = backend->createCapture(StreambufReadStream::create(stream), parameters);",
+        "comment_created_at": "2024-12-23T13:13:30+00:00",
+        "comment_author": "opencv-alalek",
+        "comment_body": "Who performs `seek(0, 0)` between trials?\r\n\r\nPerhaps we should not allow `CAP_ANY` in this API.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1896163255",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 25584,
+        "pr_file": "modules/videoio/src/cap.cpp",
+        "discussion_id": "1895741926",
+        "commented_code": "@@ -228,6 +235,128 @@ bool VideoCapture::open(const String& filename, int apiPreference, const std::ve\n     return false;\n }\n \n+bool VideoCapture::open(std::streambuf& stream, int apiPreference, const std::vector<int>& params)\n+{\n+    CV_INSTRUMENT_REGION();\n+\n+    if (isOpened())\n+    {\n+        release();\n+    }\n+\n+    const VideoCaptureParameters parameters(params);\n+    const std::vector<VideoBackendInfo> backends = cv::videoio_registry::getAvailableBackends_CaptureByBuffer();\n+    for (size_t i = 0; i < backends.size(); i++)\n+    {\n+        const VideoBackendInfo& info = backends[i];\n+        if (apiPreference == CAP_ANY || apiPreference == info.id)\n+        {\n+            if (!info.backendFactory)\n+            {\n+                CV_LOG_DEBUG(NULL, \"VIDEOIO(\" << info.name << \"): factory is not available (plugins require filesystem support)\");\n+                continue;\n+            }\n+            CV_CAPTURE_LOG_DEBUG(NULL,\n+                                 cv::format(\"VIDEOIO(%s): trying capture buffer ...\",\n+                                            info.name));\n+            CV_Assert(!info.backendFactory.empty());\n+            const Ptr<IBackend> backend = info.backendFactory->getBackend();\n+            if (!backend.empty())\n+            {\n+                try\n+                {\n+                    icap = backend->createCapture(StreambufReadStream::create(stream), parameters);",
+        "comment_created_at": "2024-12-23T22:18:46+00:00",
+        "comment_author": "dkurt",
+        "comment_body": "Good point, there is no explicit seek. Added a check that `apiPref != CAP_ANY`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1856167263",
+    "pr_number": 26511,
+    "pr_file": "modules/photo/src/seamless_cloning.cpp",
+    "created_at": "2024-11-25T08:56:04+00:00",
+    "commented_code": "{\n    CV_INSTRUMENT_REGION();\n    CV_Assert(!_src.empty());\n    CV_Assert(!_dst.empty());\n\n    const Mat src  = _src.getMat();\n    const Mat dest = _dst.getMat();\n\n    if (p == Point())\n    {\n        p.x = dest.size().width / 2;\n        p.y = dest.size().height / 2;\n    }",
+    "repo_full_name": "opencv/opencv",
+    "discussion_comments": [
+      {
+        "comment_id": "1856167263",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26511,
+        "pr_file": "modules/photo/src/seamless_cloning.cpp",
+        "discussion_id": "1856167263",
+        "commented_code": "@@ -68,17 +68,30 @@ void cv::seamlessClone(InputArray _src, InputArray _dst, InputArray _mask, Point\n {\n     CV_INSTRUMENT_REGION();\n     CV_Assert(!_src.empty());\n+    CV_Assert(!_dst.empty());\n \n     const Mat src  = _src.getMat();\n     const Mat dest = _dst.getMat();\n+\n+    if (p == Point())\n+    {\n+        p.x = dest.size().width / 2;\n+        p.y = dest.size().height / 2;\n+    }",
+        "comment_created_at": "2024-11-25T08:56:04+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "The `p` parameter does not have default value like `Point p = Point()`. It means that the point is user provided value. I do not think that we sound handle `Point()`, a.k.a. (0,0) as special case.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1856216698",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26511,
+        "pr_file": "modules/photo/src/seamless_cloning.cpp",
+        "discussion_id": "1856167263",
+        "commented_code": "@@ -68,17 +68,30 @@ void cv::seamlessClone(InputArray _src, InputArray _dst, InputArray _mask, Point\n {\n     CV_INSTRUMENT_REGION();\n     CV_Assert(!_src.empty());\n+    CV_Assert(!_dst.empty());\n \n     const Mat src  = _src.getMat();\n     const Mat dest = _dst.getMat();\n+\n+    if (p == Point())\n+    {\n+        p.x = dest.size().width / 2;\n+        p.y = dest.size().height / 2;\n+    }",
+        "comment_created_at": "2024-11-25T09:25:31+00:00",
+        "comment_author": "sturkmen72",
+        "comment_body": "what about using Point(-1,-1) to centralize as special case ? \r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1856333478",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26511,
+        "pr_file": "modules/photo/src/seamless_cloning.cpp",
+        "discussion_id": "1856167263",
+        "commented_code": "@@ -68,17 +68,30 @@ void cv::seamlessClone(InputArray _src, InputArray _dst, InputArray _mask, Point\n {\n     CV_INSTRUMENT_REGION();\n     CV_Assert(!_src.empty());\n+    CV_Assert(!_dst.empty());\n \n     const Mat src  = _src.getMat();\n     const Mat dest = _dst.getMat();\n+\n+    if (p == Point())\n+    {\n+        p.x = dest.size().width / 2;\n+        p.y = dest.size().height / 2;\n+    }",
+        "comment_created_at": "2024-11-25T10:30:20+00:00",
+        "comment_author": "asmorkalov",
+        "comment_body": "Why do we need special cases in code? User should provide location, shouldn't he/she?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1856531315",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26511,
+        "pr_file": "modules/photo/src/seamless_cloning.cpp",
+        "discussion_id": "1856167263",
+        "commented_code": "@@ -68,17 +68,30 @@ void cv::seamlessClone(InputArray _src, InputArray _dst, InputArray _mask, Point\n {\n     CV_INSTRUMENT_REGION();\n     CV_Assert(!_src.empty());\n+    CV_Assert(!_dst.empty());\n \n     const Mat src  = _src.getMat();\n     const Mat dest = _dst.getMat();\n+\n+    if (p == Point())\n+    {\n+        p.x = dest.size().width / 2;\n+        p.y = dest.size().height / 2;\n+    }",
+        "comment_created_at": "2024-11-25T12:26:53+00:00",
+        "comment_author": "sturkmen72",
+        "comment_body": "\"In issue #15928, the user reports:\r\n\r\n>>I had:\r\n\r\n```\r\nsrc.shape   = 500,500\r\nsrc_mask    = 500,500\r\ndest.shape  = 500,500\r\n\r\nh, w = src_mask.shape[:2]\r\n```\r\n>>At this point, I didn't see the need for the required argument `p`, as I expected the function to automatically match the mask. However, since `p` is a required argument, I provided `(w//2, h//2)` for `p` (the center of the mask). But instead of aligning the source image (`src`) into the destination (`dest`), the resulting cloning was shifted up to the center of the screen!\r\nIt seems like there may have been an issue with how the center point was calculated or used. The user expected the function to align the source (src) based on the mask (src_mask) automatically, but instead, the function seemed to shift the cloning to an unexpected location.\r\n\r\nPerhaps the logic for finding the center point could be improved or made more intuitive to help avoid confusion in such cases. A clearer method of determining the center, or perhaps some additional documentation on how to properly use the p argument, might help facilitate this process.\"",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1856553811",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26511,
+        "pr_file": "modules/photo/src/seamless_cloning.cpp",
+        "discussion_id": "1856167263",
+        "commented_code": "@@ -68,17 +68,30 @@ void cv::seamlessClone(InputArray _src, InputArray _dst, InputArray _mask, Point\n {\n     CV_INSTRUMENT_REGION();\n     CV_Assert(!_src.empty());\n+    CV_Assert(!_dst.empty());\n \n     const Mat src  = _src.getMat();\n     const Mat dest = _dst.getMat();\n+\n+    if (p == Point())\n+    {\n+        p.x = dest.size().width / 2;\n+        p.y = dest.size().height / 2;\n+    }",
+        "comment_created_at": "2024-11-25T12:43:22+00:00",
+        "comment_author": "sturkmen72",
+        "comment_body": "also in the issue the user commented \r\n>>I got the expected behaviour by using a rect of thickness 2\r\n\r\n```\r\nh, w = src_mask.shape[:2]\r\n# rect of thickness > 1\r\ncv2.rectangle(src_mask,(0,0), (w, h) ,255, 2)\r\n# the clone will now aligns from the centre\r\nout=cv2.seamlessClone(src, dest, src_mask,(w//2, h//2),flags= cv2.NORMAL_CLONE)\r\n```\r\na rect of 1 thickness did not work.\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1856554333",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26511,
+        "pr_file": "modules/photo/src/seamless_cloning.cpp",
+        "discussion_id": "1856167263",
+        "commented_code": "@@ -68,17 +68,30 @@ void cv::seamlessClone(InputArray _src, InputArray _dst, InputArray _mask, Point\n {\n     CV_INSTRUMENT_REGION();\n     CV_Assert(!_src.empty());\n+    CV_Assert(!_dst.empty());\n \n     const Mat src  = _src.getMat();\n     const Mat dest = _dst.getMat();\n+\n+    if (p == Point())\n+    {\n+        p.x = dest.size().width / 2;\n+        p.y = dest.size().height / 2;\n+    }",
+        "comment_created_at": "2024-11-25T12:43:44+00:00",
+        "comment_author": "sturkmen72",
+        "comment_body": "i will revert this idea if you want.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1856639391",
+        "repo_full_name": "opencv/opencv",
+        "pr_number": 26511,
+        "pr_file": "modules/photo/src/seamless_cloning.cpp",
+        "discussion_id": "1856167263",
+        "commented_code": "@@ -68,17 +68,30 @@ void cv::seamlessClone(InputArray _src, InputArray _dst, InputArray _mask, Point\n {\n     CV_INSTRUMENT_REGION();\n     CV_Assert(!_src.empty());\n+    CV_Assert(!_dst.empty());\n \n     const Mat src  = _src.getMat();\n     const Mat dest = _dst.getMat();\n+\n+    if (p == Point())\n+    {\n+        p.x = dest.size().width / 2;\n+        p.y = dest.size().height / 2;\n+    }",
+        "comment_created_at": "2024-11-25T13:42:54+00:00",
+        "comment_author": "sturkmen72",
+        "comment_body": "there is related issues on some repos like https://github.com/OpenTalker/SadTalker/issues/542\r\nlet me investigate if\r\n\r\n```\r\n    {\r\n        p.x = dest.size().width / 2;\r\n        p.y = dest.size().height / 2;\r\n    }\r\n```\r\nworks perfectly fine for different dimensions",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

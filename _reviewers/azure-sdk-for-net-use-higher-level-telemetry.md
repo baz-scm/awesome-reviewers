@@ -1,0 +1,103 @@
+---
+title: Use higher-level telemetry
+description: When implementing observability for Azure services, prefer higher-level
+  telemetry packages and configuration methods over low-level implementations. For
+  Azure Monitor integration, use the Azure.Monitor.OpenTelemetry.AspNetCore package
+  instead of the lower-level Azure.Monitor.OpenTelemetry.Exporter, as it provides
+  simpler integration and is the recommended...
+repository: Azure/azure-sdk-for-net
+label: Observability
+language: Markdown
+comments_count: 2
+repository_stars: 5809
+---
+
+When implementing observability for Azure services, prefer higher-level telemetry packages and configuration methods over low-level implementations. For Azure Monitor integration, use the Azure.Monitor.OpenTelemetry.AspNetCore package instead of the lower-level Azure.Monitor.OpenTelemetry.Exporter, as it provides simpler integration and is the recommended approach for most scenarios.
+
+For enabling OpenTelemetry support, you can use either environment variables or programmatic configuration:
+
+```csharp
+// Option 1: Set environment variable (before application starts)
+// AZURE_EXPERIMENTAL_ENABLE_ACTIVITY_SOURCE=true
+
+// Option 2: Use AppContext.SetSwitch (preferred for programmatic control)
+AppContext.SetSwitch("Azure.Experimental.EnableActivitySource", true);
+
+// Use the recommended higher-level package
+// Install: dotnet add package Azure.Monitor.OpenTelemetry.AspNetCore
+// Instead of the lower-level: Azure.Monitor.OpenTelemetry.Exporter
+```
+
+Using higher-level telemetry packages simplifies implementation, provides better defaults, and follows Azure SDK best practices for observability. This approach reduces the complexity of monitoring code and improves maintainability while ensuring comprehensive system visibility.
+
+
+[
+  {
+    "discussion_id": "2162531642",
+    "pr_number": 50119,
+    "pr_file": "sdk/ai/Azure.AI.Agents.Persistent/README.md",
+    "created_at": "2025-06-23T21:05:31+00:00",
+    "commented_code": "run.LastError?.Message);\n```\n`\n\n#### Tracing\n\nYou can add an Application Insights Azure resource to your Azure AI Foundry project. See the Tracing tab in your AI Foundry project. If one was enabled, you use the Application Insights connection string, configure your Agents, and observe the full execution path through Azure Monitor. Typically, you might want to start tracing before you create an Agent.\n\nTracing also requires enabling OpenTelemetry support. One way to do this is to set the `AZURE_EXPERIMENTAL_ENABLE_ACTIVITY_SOURCE` environment variable value to `true`.",
+    "repo_full_name": "Azure/azure-sdk-for-net",
+    "discussion_comments": [
+      {
+        "comment_id": "2162531642",
+        "repo_full_name": "Azure/azure-sdk-for-net",
+        "pr_number": 50119,
+        "pr_file": "sdk/ai/Azure.AI.Agents.Persistent/README.md",
+        "discussion_id": "2162531642",
+        "commented_code": "@@ -866,6 +869,51 @@ Assert.AreEqual(\n     run.LastError?.Message);\n ```\n `\n+\n+#### Tracing\n+\n+You can add an Application Insights Azure resource to your Azure AI Foundry project. See the Tracing tab in your AI Foundry project. If one was enabled, you use the Application Insights connection string, configure your Agents, and observe the full execution path through Azure Monitor. Typically, you might want to start tracing before you create an Agent.\n+\n+Tracing also requires enabling OpenTelemetry support. One way to do this is to set the `AZURE_EXPERIMENTAL_ENABLE_ACTIVITY_SOURCE` environment variable value to `true`.",
+        "comment_created_at": "2025-06-23T21:05:31+00:00",
+        "comment_author": "lmolkova",
+        "comment_body": "do we also support `AppContext.SetSwitch(\"Azure.Experimental.EnableActivitySource\", true);` ?\r\n\r\nsee https://github.com/Azure/azure-sdk-for-net/blob/main/sdk/ai/Azure.AI.Inference/samples/Sample8_ChatCompletionsWithOpenTelemetry.md for an example of it being documented and https://github.com/Azure/azure-sdk-for-net/blob/main/sdk/core/Azure.Core/samples/Diagnostics.md to reference for more details",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2162589182",
+        "repo_full_name": "Azure/azure-sdk-for-net",
+        "pr_number": 50119,
+        "pr_file": "sdk/ai/Azure.AI.Agents.Persistent/README.md",
+        "discussion_id": "2162531642",
+        "commented_code": "@@ -866,6 +869,51 @@ Assert.AreEqual(\n     run.LastError?.Message);\n ```\n `\n+\n+#### Tracing\n+\n+You can add an Application Insights Azure resource to your Azure AI Foundry project. See the Tracing tab in your AI Foundry project. If one was enabled, you use the Application Insights connection string, configure your Agents, and observe the full execution path through Azure Monitor. Typically, you might want to start tracing before you create an Agent.\n+\n+Tracing also requires enabling OpenTelemetry support. One way to do this is to set the `AZURE_EXPERIMENTAL_ENABLE_ACTIVITY_SOURCE` environment variable value to `true`.",
+        "comment_created_at": "2025-06-23T21:52:19+00:00",
+        "comment_author": "M-Hietala",
+        "comment_body": "added",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2162538146",
+    "pr_number": 50119,
+    "pr_file": "sdk/ai/Azure.AI.Agents.Persistent/README.md",
+    "created_at": "2025-06-23T21:09:54+00:00",
+    "commented_code": "run.LastError?.Message);\n```\n`\n\n#### Tracing\n\nYou can add an Application Insights Azure resource to your Azure AI Foundry project. See the Tracing tab in your AI Foundry project. If one was enabled, you use the Application Insights connection string, configure your Agents, and observe the full execution path through Azure Monitor. Typically, you might want to start tracing before you create an Agent.\n\nTracing also requires enabling OpenTelemetry support. One way to do this is to set the `AZURE_EXPERIMENTAL_ENABLE_ACTIVITY_SOURCE` environment variable value to `true`.\n\nTo enabled content recording, set the `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` environment variable to `true`. Content in this context refers to chat message content, function call tool related function names, function parameter names and values.\n\n##### Tracing to Azure Montior\n\nFor tracing to Azure Monitor from your application, install the Azure.Monitor.OpenTelemetry.Exporter with [NuGet](https://www.nuget.org/ ):\n\n```dotnetcli\ndotnet add package Azure.Monitor.OpenTelemetry.Exporter",
+    "repo_full_name": "Azure/azure-sdk-for-net",
+    "discussion_comments": [
+      {
+        "comment_id": "2162538146",
+        "repo_full_name": "Azure/azure-sdk-for-net",
+        "pr_number": 50119,
+        "pr_file": "sdk/ai/Azure.AI.Agents.Persistent/README.md",
+        "discussion_id": "2162538146",
+        "commented_code": "@@ -866,6 +869,51 @@ Assert.AreEqual(\n     run.LastError?.Message);\n ```\n `\n+\n+#### Tracing\n+\n+You can add an Application Insights Azure resource to your Azure AI Foundry project. See the Tracing tab in your AI Foundry project. If one was enabled, you use the Application Insights connection string, configure your Agents, and observe the full execution path through Azure Monitor. Typically, you might want to start tracing before you create an Agent.\n+\n+Tracing also requires enabling OpenTelemetry support. One way to do this is to set the `AZURE_EXPERIMENTAL_ENABLE_ACTIVITY_SOURCE` environment variable value to `true`.\n+\n+To enabled content recording, set the `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` environment variable to `true`. Content in this context refers to chat message content, function call tool related function names, function parameter names and values.\n+\n+##### Tracing to Azure Montior\n+\n+For tracing to Azure Monitor from your application, install the Azure.Monitor.OpenTelemetry.Exporter with [NuGet](https://www.nuget.org/ ):\n+\n+```dotnetcli\n+dotnet add package Azure.Monitor.OpenTelemetry.Exporter",
+        "comment_created_at": "2025-06-23T21:09:54+00:00",
+        "comment_author": "lmolkova",
+        "comment_body": "it's actually way easier and better to use az.mon.ote.aspnetcore package - https://github.com/Azure/azure-sdk-for-net/blob/0c2a40252d1c7ed86188153bd4aa8ddeed868371/sdk/monitor/Azure.Monitor.OpenTelemetry.AspNetCore/README.md, consider switching to it or at least note that it should be the first choice.\r\n\r\nDirect usage of the exporter is very low-level and not expected in AzMon use cases\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2162589001",
+        "repo_full_name": "Azure/azure-sdk-for-net",
+        "pr_number": 50119,
+        "pr_file": "sdk/ai/Azure.AI.Agents.Persistent/README.md",
+        "discussion_id": "2162538146",
+        "commented_code": "@@ -866,6 +869,51 @@ Assert.AreEqual(\n     run.LastError?.Message);\n ```\n `\n+\n+#### Tracing\n+\n+You can add an Application Insights Azure resource to your Azure AI Foundry project. See the Tracing tab in your AI Foundry project. If one was enabled, you use the Application Insights connection string, configure your Agents, and observe the full execution path through Azure Monitor. Typically, you might want to start tracing before you create an Agent.\n+\n+Tracing also requires enabling OpenTelemetry support. One way to do this is to set the `AZURE_EXPERIMENTAL_ENABLE_ACTIVITY_SOURCE` environment variable value to `true`.\n+\n+To enabled content recording, set the `AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED` environment variable to `true`. Content in this context refers to chat message content, function call tool related function names, function parameter names and values.\n+\n+##### Tracing to Azure Montior\n+\n+For tracing to Azure Monitor from your application, install the Azure.Monitor.OpenTelemetry.Exporter with [NuGet](https://www.nuget.org/ ):\n+\n+```dotnetcli\n+dotnet add package Azure.Monitor.OpenTelemetry.Exporter",
+        "comment_created_at": "2025-06-23T21:52:09+00:00",
+        "comment_author": "M-Hietala",
+        "comment_body": "added",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

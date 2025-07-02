@@ -1,0 +1,99 @@
+---
+title: Match CI commands locally
+description: Always use the same build and test commands locally that are used in
+  your CI pipeline to ensure consistency between environments. This practice significantly
+  increases the likelihood that code passing locally will also pass in CI, reducing
+  integration delays and failed builds.
+repository: Azure/azure-sdk-for-net
+label: CI/CD
+language: Markdown
+comments_count: 2
+repository_stars: 5809
+---
+
+Always use the same build and test commands locally that are used in your CI pipeline to ensure consistency between environments. This practice significantly increases the likelihood that code passing locally will also pass in CI, reducing integration delays and failed builds.
+
+For example, instead of using custom build commands or shortcuts, use the exact commands from your pipeline:
+
+```bash
+# Instead of:
+dotnet build ./myproject.csproj
+
+# Use the CI-equivalent command:
+dotnet pack eng/service.proj /p:ServiceDirectory=<service-directory>
+dotnet test eng/services.proj /p:ServiceDirectory=<service-directory>
+```
+
+This approach helps identify issues earlier in the development process and prevents situations where code passes locally but fails in CI due to environmental differences or non-standard configurations. When everyone on the team follows this practice, it also ensures consistency across developer environments and reduces troubleshooting time for CI failures.
+
+
+[
+  {
+    "discussion_id": "2143212696",
+    "pr_number": 50575,
+    "pr_file": ".github/copilot-instructions.md",
+    "created_at": "2025-06-12T16:47:20+00:00",
+    "commented_code": "# Repository information\nNote that files in this repository are generally organized in the following way:\n- `azure-sdk-for-net/sdk/{service-directory}/{package-name}` holds everything for a specific Azure SDK package.\n- `azure-sdk-for-net/sdk/{service-directory}/{package-name}/src` holds the source code for the package.\n- `azure-sdk-for-net/sdk/{service-directory}/{package-name}/tests` holds the tests for the package.\n- `azure-sdk-for-net/sdk/{service-directory}/{package-name}/samples` holds the samples for the package.\n\nThere are a few exceptions where package-name is replaced with a shorter directory name. For example in the cognitiveservices directory. The package `Microsoft.Azure.CognitiveServices.Language.SpellCheck` can be found in `azure-sdk-for-net/sdk/cognitiveservices/Language.SpellCheck`. When in doubt, you can look at the name of the .csproj file within the src folder to determine the package name.\n\n# Requirements\n- If you are writing C# code within the `azure-sdk-for-net/sdk` directory:\n    1. Follow the coding guidelines in the \"Coding guidelines\" section below.\n    2. You should never manually make changes to `*/Generated/*` files, e.g. `azure-sdk-for-net/sdk/containerregistry/Azure.Containers.ContainerRegistry/src/Generated/`\n        - Only re-generate these files if instructed to do so. If you are instructed to regenerate an SDK, use `dotnet build /t:GenerateCode`\n        - If you feel like you need to make changes to these files beyond re-generating them in order to complete your task, do not do this, instead see if you can work around the problem in the code that is not in the `Generated` folder. If you can't, report this to the user.\n    3. Code should build successfully using the following steps:",
+    "repo_full_name": "Azure/azure-sdk-for-net",
+    "discussion_comments": [
+      {
+        "comment_id": "2143212696",
+        "repo_full_name": "Azure/azure-sdk-for-net",
+        "pr_number": 50575,
+        "pr_file": ".github/copilot-instructions.md",
+        "discussion_id": "2143212696",
+        "commented_code": "@@ -0,0 +1,25 @@\n+# Repository information\n+Note that files in this repository are generally organized in the following way:\n+- `azure-sdk-for-net/sdk/{service-directory}/{package-name}` holds everything for a specific Azure SDK package.\n+- `azure-sdk-for-net/sdk/{service-directory}/{package-name}/src` holds the source code for the package.\n+- `azure-sdk-for-net/sdk/{service-directory}/{package-name}/tests` holds the tests for the package.\n+- `azure-sdk-for-net/sdk/{service-directory}/{package-name}/samples` holds the samples for the package.\n+\n+There are a few exceptions where package-name is replaced with a shorter directory name. For example in the cognitiveservices directory. The package `Microsoft.Azure.CognitiveServices.Language.SpellCheck` can be found in `azure-sdk-for-net/sdk/cognitiveservices/Language.SpellCheck`. When in doubt, you can look at the name of the .csproj file within the src folder to determine the package name.\n+\n+# Requirements\n+- If you are writing C# code within the `azure-sdk-for-net/sdk` directory:\n+    1. Follow the coding guidelines in the \"Coding guidelines\" section below.\n+    2. You should never manually make changes to `*/Generated/*` files, e.g. `azure-sdk-for-net/sdk/containerregistry/Azure.Containers.ContainerRegistry/src/Generated/`\n+        - Only re-generate these files if instructed to do so. If you are instructed to regenerate an SDK, use `dotnet build /t:GenerateCode`\n+        - If you feel like you need to make changes to these files beyond re-generating them in order to complete your task, do not do this, instead see if you can work around the problem in the code that is not in the `Generated` folder. If you can't, report this to the user.\n+    3. Code should build successfully using the following steps:",
+        "comment_created_at": "2025-06-12T16:47:20+00:00",
+        "comment_author": "m-redding",
+        "comment_body": "Debating whether to have copilot run unit tests in addition to building.\r\nAn alternative could be adding some kind of tool that can do all the validation for a given service directory in one call, to make it easier for copilot ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2143801505",
+        "repo_full_name": "Azure/azure-sdk-for-net",
+        "pr_number": 50575,
+        "pr_file": ".github/copilot-instructions.md",
+        "discussion_id": "2143212696",
+        "commented_code": "@@ -0,0 +1,25 @@\n+# Repository information\n+Note that files in this repository are generally organized in the following way:\n+- `azure-sdk-for-net/sdk/{service-directory}/{package-name}` holds everything for a specific Azure SDK package.\n+- `azure-sdk-for-net/sdk/{service-directory}/{package-name}/src` holds the source code for the package.\n+- `azure-sdk-for-net/sdk/{service-directory}/{package-name}/tests` holds the tests for the package.\n+- `azure-sdk-for-net/sdk/{service-directory}/{package-name}/samples` holds the samples for the package.\n+\n+There are a few exceptions where package-name is replaced with a shorter directory name. For example in the cognitiveservices directory. The package `Microsoft.Azure.CognitiveServices.Language.SpellCheck` can be found in `azure-sdk-for-net/sdk/cognitiveservices/Language.SpellCheck`. When in doubt, you can look at the name of the .csproj file within the src folder to determine the package name.\n+\n+# Requirements\n+- If you are writing C# code within the `azure-sdk-for-net/sdk` directory:\n+    1. Follow the coding guidelines in the \"Coding guidelines\" section below.\n+    2. You should never manually make changes to `*/Generated/*` files, e.g. `azure-sdk-for-net/sdk/containerregistry/Azure.Containers.ContainerRegistry/src/Generated/`\n+        - Only re-generate these files if instructed to do so. If you are instructed to regenerate an SDK, use `dotnet build /t:GenerateCode`\n+        - If you feel like you need to make changes to these files beyond re-generating them in order to complete your task, do not do this, instead see if you can work around the problem in the code that is not in the `Generated` folder. If you can't, report this to the user.\n+    3. Code should build successfully using the following steps:",
+        "comment_created_at": "2025-06-12T23:12:46+00:00",
+        "comment_author": "weshaggard",
+        "comment_body": "I would try to stick to what the CI does `dotnet pack eng/service.proj /p:ServiceDirectory=<service>` and `dotnet test eng/services.proj /p:ServiceDirectory=<service>`. That way it more closely matches the CI and has a higher chance of passing.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2146083028",
+        "repo_full_name": "Azure/azure-sdk-for-net",
+        "pr_number": 50575,
+        "pr_file": ".github/copilot-instructions.md",
+        "discussion_id": "2143212696",
+        "commented_code": "@@ -0,0 +1,25 @@\n+# Repository information\n+Note that files in this repository are generally organized in the following way:\n+- `azure-sdk-for-net/sdk/{service-directory}/{package-name}` holds everything for a specific Azure SDK package.\n+- `azure-sdk-for-net/sdk/{service-directory}/{package-name}/src` holds the source code for the package.\n+- `azure-sdk-for-net/sdk/{service-directory}/{package-name}/tests` holds the tests for the package.\n+- `azure-sdk-for-net/sdk/{service-directory}/{package-name}/samples` holds the samples for the package.\n+\n+There are a few exceptions where package-name is replaced with a shorter directory name. For example in the cognitiveservices directory. The package `Microsoft.Azure.CognitiveServices.Language.SpellCheck` can be found in `azure-sdk-for-net/sdk/cognitiveservices/Language.SpellCheck`. When in doubt, you can look at the name of the .csproj file within the src folder to determine the package name.\n+\n+# Requirements\n+- If you are writing C# code within the `azure-sdk-for-net/sdk` directory:\n+    1. Follow the coding guidelines in the \"Coding guidelines\" section below.\n+    2. You should never manually make changes to `*/Generated/*` files, e.g. `azure-sdk-for-net/sdk/containerregistry/Azure.Containers.ContainerRegistry/src/Generated/`\n+        - Only re-generate these files if instructed to do so. If you are instructed to regenerate an SDK, use `dotnet build /t:GenerateCode`\n+        - If you feel like you need to make changes to these files beyond re-generating them in order to complete your task, do not do this, instead see if you can work around the problem in the code that is not in the `Generated` folder. If you can't, report this to the user.\n+    3. Code should build successfully using the following steps:",
+        "comment_created_at": "2025-06-13T20:57:52+00:00",
+        "comment_author": "m-redding",
+        "comment_body": "K yeah that makes sense to me too. I'll update this ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2007277965",
+    "pr_number": 49024,
+    "pr_file": "sdk/cognitiveservices/Knowledge.QnAMaker/CHANGELOG.md",
+    "created_at": "2025-03-21T10:20:03+00:00",
+    "commented_code": null,
+    "repo_full_name": "Azure/azure-sdk-for-net",
+    "discussion_comments": [
+      {
+        "comment_id": "2007277965",
+        "repo_full_name": "Azure/azure-sdk-for-net",
+        "pr_number": 49024,
+        "pr_file": "sdk/cognitiveservices/Knowledge.QnAMaker/CHANGELOG.md",
+        "discussion_id": "2007277965",
+        "commented_code": null,
+        "comment_created_at": "2025-03-21T10:20:03+00:00",
+        "comment_author": "ArcturusZhang",
+        "comment_body": "Everything in this directory was removed because the library inside this directory is actually a track 1 SDK library.\r\nWe could know this by its package name (`Microsoft.*`) and its generated file contents.\r\nWe have pruned all track 1 SDK libraries, and this one dodges that round maybe because its directory name does not look like a track 1 library (`Microsoft.*`).\r\nNow it is causing the CI to fail therefore I noticed it and removed it here.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

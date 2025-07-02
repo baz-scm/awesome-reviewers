@@ -1,0 +1,119 @@
+---
+title: Simplify code organization
+description: 'Maintain clean code organization by eliminating unnecessary abstractions
+  and preventing codebase fragmentation. This applies both at the component level
+  and module level:'
+repository: langchain-ai/langchainjs
+label: Code Style
+language: Javascript
+comments_count: 2
+repository_stars: 15004
+---
+
+Maintain clean code organization by eliminating unnecessary abstractions and preventing codebase fragmentation. This applies both at the component level and module level:
+
+1. Avoid creating wrapper components that don't add functionality
+   ```jsx
+   // Don't do this:
+   function InstallationInfo({ children }) {
+     return <Npm2Yarn>{children}</Npm2Yarn>;
+   }
+   
+   // Do this instead:
+   <Npm2Yarn>{content}</Npm2Yarn>
+   ```
+
+2. Consolidate related functionality into logical groups rather than creating new isolated entry points:
+   ```js
+   // Don't do this:
+   "utils/is_openai_tool": "utils/is_openai_tool",
+   
+   // Do this instead:
+   // Add to existing related module like "language_models/base"
+   ```
+
+This approach reduces code complexity, improves maintainability, and makes the codebase easier to navigate and understand.
+
+
+[
+  {
+    "discussion_id": "1881043372",
+    "pr_number": 7347,
+    "pr_file": "docs/core_docs/src/theme/EmbeddingTabs.js",
+    "created_at": "2024-12-11T21:44:10+00:00",
+    "commented_code": "/* eslint-disable react/jsx-props-no-spreading, react/destructuring-assignment */\nimport React from \"react\";\nimport Tabs from \"@theme/Tabs\";\nimport TabItem from \"@theme/TabItem\";\nimport CodeBlock from \"@theme-original/CodeBlock\";\nimport Npm2Yarn from \"@theme/Npm2Yarn\";\n\nfunction InstallationInfo({ children }) {\n  return <Npm2Yarn>{children}</Npm2Yarn>;\n}",
+    "repo_full_name": "langchain-ai/langchainjs",
+    "discussion_comments": [
+      {
+        "comment_id": "1881043372",
+        "repo_full_name": "langchain-ai/langchainjs",
+        "pr_number": 7347,
+        "pr_file": "docs/core_docs/src/theme/EmbeddingTabs.js",
+        "discussion_id": "1881043372",
+        "commented_code": "@@ -0,0 +1,131 @@\n+/* eslint-disable react/jsx-props-no-spreading, react/destructuring-assignment */\n+import React from \"react\";\n+import Tabs from \"@theme/Tabs\";\n+import TabItem from \"@theme/TabItem\";\n+import CodeBlock from \"@theme-original/CodeBlock\";\n+import Npm2Yarn from \"@theme/Npm2Yarn\";\n+\n+function InstallationInfo({ children }) {\n+  return <Npm2Yarn>{children}</Npm2Yarn>;\n+}",
+        "comment_created_at": "2024-12-11T21:44:10+00:00",
+        "comment_author": "bracesproul",
+        "comment_body": "Whats the point of wrapping this and not just calling `Npm2Yarn` inside the component?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1882257407",
+        "repo_full_name": "langchain-ai/langchainjs",
+        "pr_number": 7347,
+        "pr_file": "docs/core_docs/src/theme/EmbeddingTabs.js",
+        "discussion_id": "1881043372",
+        "commented_code": "@@ -0,0 +1,131 @@\n+/* eslint-disable react/jsx-props-no-spreading, react/destructuring-assignment */\n+import React from \"react\";\n+import Tabs from \"@theme/Tabs\";\n+import TabItem from \"@theme/TabItem\";\n+import CodeBlock from \"@theme-original/CodeBlock\";\n+import Npm2Yarn from \"@theme/Npm2Yarn\";\n+\n+function InstallationInfo({ children }) {\n+  return <Npm2Yarn>{children}</Npm2Yarn>;\n+}",
+        "comment_created_at": "2024-12-12T14:33:14+00:00",
+        "comment_author": "ccurme",
+        "comment_body": "Thanks, updated this. I had copied `InstallationInfo` from chat model tabs and then deleted some stuff.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1637267576",
+    "pr_number": 5737,
+    "pr_file": "langchain-core/langchain.config.js",
+    "created_at": "2024-06-12T23:54:00+00:00",
+    "commented_code": "\"utils/testing\": \"utils/testing/index\",\n    \"utils/tiktoken\": \"utils/tiktoken\",\n    \"utils/types\": \"utils/types/index\",\n    \"utils/is_openai_tool\": \"utils/is_openai_tool\",",
+    "repo_full_name": "langchain-ai/langchainjs",
+    "discussion_comments": [
+      {
+        "comment_id": "1637267576",
+        "repo_full_name": "langchain-ai/langchainjs",
+        "pr_number": 5737,
+        "pr_file": "langchain-core/langchain.config.js",
+        "discussion_id": "1637267576",
+        "commented_code": "@@ -66,6 +66,7 @@ export const config = {\n     \"utils/testing\": \"utils/testing/index\",\n     \"utils/tiktoken\": \"utils/tiktoken\",\n     \"utils/types\": \"utils/types/index\",\n+    \"utils/is_openai_tool\": \"utils/is_openai_tool\",",
+        "comment_created_at": "2024-06-12T23:54:00+00:00",
+        "comment_author": "jacoblee93",
+        "comment_body": "Can we put this in an existing entrypoint? `types` maybe?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1637268177",
+        "repo_full_name": "langchain-ai/langchainjs",
+        "pr_number": 5737,
+        "pr_file": "langchain-core/langchain.config.js",
+        "discussion_id": "1637267576",
+        "commented_code": "@@ -66,6 +66,7 @@ export const config = {\n     \"utils/testing\": \"utils/testing/index\",\n     \"utils/tiktoken\": \"utils/tiktoken\",\n     \"utils/types\": \"utils/types/index\",\n+    \"utils/is_openai_tool\": \"utils/is_openai_tool\",",
+        "comment_created_at": "2024-06-12T23:54:11+00:00",
+        "comment_author": "jacoblee93",
+        "comment_body": "Want to avoid fragmentation",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1637345929",
+        "repo_full_name": "langchain-ai/langchainjs",
+        "pr_number": 5737,
+        "pr_file": "langchain-core/langchain.config.js",
+        "discussion_id": "1637267576",
+        "commented_code": "@@ -66,6 +66,7 @@ export const config = {\n     \"utils/testing\": \"utils/testing/index\",\n     \"utils/tiktoken\": \"utils/tiktoken\",\n     \"utils/types\": \"utils/types/index\",\n+    \"utils/is_openai_tool\": \"utils/is_openai_tool\",",
+        "comment_created_at": "2024-06-13T01:21:49+00:00",
+        "comment_author": "bracesproul",
+        "comment_body": "Moved to `@langchain/core/language_models/base` so it's exported from the same place as `ToolDefinition`",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

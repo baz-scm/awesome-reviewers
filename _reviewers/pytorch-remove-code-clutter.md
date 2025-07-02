@@ -1,0 +1,341 @@
+---
+title: Remove code clutter
+description: 'Eliminate unnecessary code elements that add cognitive load without
+  providing value. This includes:
+
+
+  1. **Unused parameters** - Remove or mark parameters that are no longer used:'
+repository: pytorch/pytorch
+label: Code Style
+language: Other
+comments_count: 8
+repository_stars: 91169
+---
+
+Eliminate unnecessary code elements that add cognitive load without providing value. This includes:
+
+1. **Unused parameters** - Remove or mark parameters that are no longer used:
+   ```cpp
+   // Bad
+   void blockReduceGammaBetaBackwardsHelper(..., bool check_x, bool check_y) {
+     // check_y is never used
+   }
+   
+   // Good
+   void blockReduceGammaBetaBackwardsHelper(..., bool check_x) {
+     // Removed unused parameter
+   }
+   
+   // Alternative using C++17 features
+   void blockReduceGammaBetaBackwardsHelper(..., bool check_x, [[maybe_unused]] bool check_y) {
+     // Explicitly marking parameter as unused
+   }
+   ```
+
+2. **Redundant prefixes** - Skip `this->` when class members don't shadow local variables:
+   ```cpp
+   // Bad
+   this->dims_before = new_dims_before;
+   this->dims_after = new_dims_after;
+   
+   // Good
+   dims_before = new_dims_before;
+   dims_after = new_dims_after;
+   ```
+
+3. **Typos in comments** - Fix comment typos to maintain code clarity:
+   ```cpp
+   // Bad
+   /*transpoced*/ false
+   
+   // Good
+   /*transposed*/ false
+   ```
+
+4. **Modern alternatives to C-arrays** - Prefer standard containers:
+   ```cpp
+   // Bad
+   auto lhs_qa8dx_buffer = std::make_unique<int8_t[]>(
+       m * (k + sizeof(float) + sizeof(int32_t))); // Allocate for LHS
+   int8_t* lhs_qa8dx = lhs_qa8dx_buffer.get();
+   
+   // Good
+   std::vector<int8_t> lhs_qa8dx_buffer(m * (k + sizeof(float) + sizeof(int32_t)));
+   int8_t* lhs_qa8dx = lhs_qa8dx_buffer.data();
+   ```
+
+5. **Undefined local macros** - Clean up macros that are only needed temporarily:
+   ```cpp
+   // Bad
+   #define C10_ALLOCATOR_CONFIG_PARSE_ENV(env, deprecated) ...
+   // macro used
+   // but never undefined
+   
+   // Good
+   #define C10_ALLOCATOR_CONFIG_PARSE_ENV(env, deprecated) ...
+   // macro used
+   #undef C10_ALLOCATOR_CONFIG_PARSE_ENV
+   ```
+
+6. **Unnecessary forwards** - Remove unnecessary std::forward calls:
+   ```cpp
+   // Bad
+   check_type(schema_arg, std::forward<IValueList>(args)[i_arg - 1]);
+   
+   // Good
+   check_type(schema_arg, args[i_arg - 1]);
+   ```
+
+Removing clutter improves readability, reduces maintenance burden, and helps avoid subtle bugs.
+
+
+[
+  {
+    "discussion_id": "1996369008",
+    "pr_number": 148605,
+    "pr_file": "aten/src/ATen/native/cuda/layer_norm_kernel.cu",
+    "created_at": "2025-03-14T22:23:15+00:00",
+    "commented_code": "}\n}\n\n\ntemplate <typename T, typename T_ACC>\nvoid launch_vectorized_layer_norm_kernel(\n  int N,\n  int64_t M,\n  T_ACC eps,\n  const T* X_data,\n  const T* gamma_data,\n  const T* beta_data,\n  T* Y_data,\n  T_ACC* mean_data,\n  T_ACC* rstd_data\n// When the data size is a multiple of the tile size we can use fewer\n// instructions and registers. Example, this is the case when M=256 N=256.\ntemplate <typename T, typename T_ACC,\nunsigned int block_dim_x,\nunsigned int block_dim_y,\nunsigned int rows_per_block_y,\nbool aligned_grid>\n__device__\n__forceinline__\nvoid\nblockReduceGammaBetaBackwardsAligned(\n    int64_t M,\n    int64_t N,\n    const T* __restrict__ dY,\n    const T* __restrict__ X,\n    const T_ACC* __restrict__ mean,\n    const T_ACC* __restrict__ rstd,\n    T* __restrict__ dg,\n    T* __restrict__ db,\n    T_ACC &dg_sum,\n    T_ACC &db_sum\n) {\n    //constexpr int alignment = 16; //currently unused to make sure float and half results are bw accurate\n    auto stream = at::cuda::getCurrentCUDAStream().stream();\n    const int warp_size = at::cuda::warp_size();\n    const dim3 threads(warp_size, num_threads() / warp_size, 1);\n    dim3 blocks(M);\n\n#ifdef USE_ROCM\n    uint64_t workgroupSize = static_cast<uint64_t>(blocks.x) * static_cast<uint64_t>(threads.x);\n    // this caused invalid configuration problem\n    if (workgroupSize > std::numeric_limits<uint32_t>::max()) {\n      // Fix invalid configuration https://github.com/pytorch/pytorch/issues/136291\n      blocks.x = std::numeric_limits<uint32_t>::max() / threads.x;\n  constexpr int rows_per_thread_y = rows_per_block_y / block_dim_y;\n  int64_t thread_x = blockIdx.x * block_dim_x + threadIdx.x;\n  for (int64_t M_start = blockIdx.y * rows_per_block_y;\n        M_start < M;\n        M_start += rows_per_block_y * gridDim.y) {\n    int lane_id = (threadIdx.y * blockDim.x + threadIdx.x) & (kWarpSize - 1);\n    int64_t mean_index = M_start + threadIdx.y * rows_per_thread_y;\n    T_ACC warp_mean = 0, warp_rstd = 0;\n    if (lane_id < rows_per_thread_y) {\n      warp_mean = mean[mean_index + lane_id];\n      warp_rstd = rstd[mean_index + lane_id];\n    }\n    WARP_SYNC();\n    T_ACC dY_regs[rows_per_thread_y] = {0};\n    T_ACC X_regs[rows_per_thread_y] = {0};\n    #pragma unroll\n    for (int i = 0; i < rows_per_thread_y; ++i) {\n      int64_t current_y = M_start + threadIdx.y * rows_per_thread_y + i;\n      if (aligned_grid || (current_y < M && thread_x < N)) {\n        dY_regs[i] = dY[current_y * N + thread_x];\n        X_regs[i] = X[current_y * N + thread_x];\n      }\n    }\n#endif\n\n    TORCH_INTERNAL_ASSERT_DEBUG_ONLY(threads.y % 2 == 0 || threads.y == 1);\n    int nshared = threads.y > 1 ? threads.y * 3/2 *sizeof(T_ACC) : 0;\n    vectorized_layer_norm_kernel<<<blocks, threads, nshared, stream>>>(N, eps, X_data,\n    gamma_data, beta_data, mean_data, rstd_data, Y_data);\n    C10_CUDA_KERNEL_LAUNCH_CHECK();\n    #pragma unroll\n    for (int i = 0; i < rows_per_thread_y; ++i) {\n      T_ACC mean_reg = WARP_SHFL(warp_mean, i, kWarpSize);\n      T_ACC rstd_reg = WARP_SHFL(warp_rstd, i, kWarpSize);\n      dg_sum += dY_regs[i] * (X_regs[i] - mean_reg) * rstd_reg;\n      db_sum += dY_regs[i];\n    }\n  }\n}\n\n#ifdef USE_ROCM\n    // the blocks.x contains the max grid x dimention without invalid configuration error\n    // Fix invalid configuration https://github.com/pytorch/pytorch/issues/136291\n    // Ensure all elements are processed. Prepare for next round\n    int64_t remaining = M - blocks.x;\n    const T* X_data2 = X_data;\n    T_ACC* mean_data2 = mean_data;\n    T_ACC* rstd_data2 = rstd_data;\n    T* Y_data2 = Y_data;\ntemplate <typename T, typename T_ACC,\nunsigned int block_dim_x,\nunsigned int block_dim_y,\nunsigned int rows_per_block_y,\nbool check_x,\nbool check_y>\n__device__\n__forceinline__\nvoid\nblockReduceGammaBetaBackwardsHelper(\n    int64_t M_start,\n    int64_t M,\n    int64_t N,\n    const T* __restrict__ dY,\n    const T* __restrict__ X,\n    const T_ACC* __restrict__ mean,\n    const T_ACC* __restrict__ rstd,\n    T* __restrict__ dg,\n    T* __restrict__ db,\n    T_ACC &dg_sum,\n    T_ACC &db_sum\n) {\n  constexpr int rows_per_thread_y = rows_per_block_y / block_dim_y;\n  int64_t thread_x = blockIdx.x * block_dim_x + threadIdx.x;\n\n    while (remaining > 0) {\n      X_data2 += N * blocks.x;\n      mean_data2 += blocks.x;\n      rstd_data2 += blocks.x;\n      Y_data2 += N * blocks.x;\n    int lane_id = (threadIdx.y * blockDim.x + threadIdx.x) & (kWarpSize - 1);\n    int64_t mean_index = M_start + threadIdx.y * rows_per_thread_y;\n    T_ACC warp_mean = 0, warp_rstd = 0;\n    if (lane_id < rows_per_thread_y && mean_index + lane_id < M) {\n      warp_mean = mean[mean_index + lane_id];\n      warp_rstd = rstd[mean_index + lane_id];\n    }\n    WARP_SYNC();\n\n      blocks.x = (remaining > blocks.x) ? blocks.x : remaining;\n\n      vectorized_layer_norm_kernel<<<blocks, threads, nshared, stream>>>(N, eps, X_data2,\n        gamma_data, beta_data, mean_data2, rstd_data2, Y_data2);\n      C10_CUDA_KERNEL_LAUNCH_CHECK();\n\n      remaining -= blocks.x;\n    T_ACC dY_regs[rows_per_thread_y] = {0};\n    T_ACC X_regs[rows_per_thread_y] = {0};\n    #pragma unroll\n    for (int i = 0; i < rows_per_thread_y; ++i) {\n      int64_t current_y = M_start + threadIdx.y * rows_per_thread_y + i;\n      bool active = true;\n      if (check_x && thread_x >= N) {\n        active = false;\n      }\n      if (check_y && current_y >= M) {\n        active = false;\n      }\n      if (active) {\n        dY_regs[i] = dY[current_y * N + thread_x];\n        X_regs[i] = X[current_y * N + thread_x];\n      }\n    }\n#endif\n\n    #pragma unroll\n    for (int i = 0; i < rows_per_thread_y; ++i) {\n      T_ACC mean_reg = WARP_SHFL(warp_mean, i, kWarpSize);\n      T_ACC rstd_reg = WARP_SHFL(warp_rstd, i, kWarpSize);\n      dg_sum += dY_regs[i] * (X_regs[i] - mean_reg) * rstd_reg;\n      db_sum += dY_regs[i];\n    }\n}\n\ntemplate <typename T, typename T_ACC>\nvoid LayerNormKernelImplInternal(\n    const Tensor& X,\n    const Tensor& gamma,\n    const Tensor& beta,\ntemplate <typename T, typename T_ACC,\nunsigned int block_dim_x,\nunsigned int block_dim_y,\nunsigned int rows_per_block_y,\nbool check_x,\nbool check_y>",
+    "repo_full_name": "pytorch/pytorch",
+    "discussion_comments": [
+      {
+        "comment_id": "1996369008",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 148605,
+        "pr_file": "aten/src/ATen/native/cuda/layer_norm_kernel.cu",
+        "discussion_id": "1996369008",
+        "commented_code": "@@ -509,862 +509,859 @@ __global__ void layer_norm_grad_input_kernel_vectorized(\n   }\n }\n \n-\n-template <typename T, typename T_ACC>\n-void launch_vectorized_layer_norm_kernel(\n-  int N,\n-  int64_t M,\n-  T_ACC eps,\n-  const T* X_data,\n-  const T* gamma_data,\n-  const T* beta_data,\n-  T* Y_data,\n-  T_ACC* mean_data,\n-  T_ACC* rstd_data\n+// When the data size is a multiple of the tile size we can use fewer\n+// instructions and registers. Example, this is the case when M=256 N=256.\n+template <typename T, typename T_ACC,\n+unsigned int block_dim_x,\n+unsigned int block_dim_y,\n+unsigned int rows_per_block_y,\n+bool aligned_grid>\n+__device__\n+__forceinline__\n+void\n+blockReduceGammaBetaBackwardsAligned(\n+    int64_t M,\n+    int64_t N,\n+    const T* __restrict__ dY,\n+    const T* __restrict__ X,\n+    const T_ACC* __restrict__ mean,\n+    const T_ACC* __restrict__ rstd,\n+    T* __restrict__ dg,\n+    T* __restrict__ db,\n+    T_ACC &dg_sum,\n+    T_ACC &db_sum\n ) {\n-    //constexpr int alignment = 16; //currently unused to make sure float and half results are bw accurate\n-    auto stream = at::cuda::getCurrentCUDAStream().stream();\n-    const int warp_size = at::cuda::warp_size();\n-    const dim3 threads(warp_size, num_threads() / warp_size, 1);\n-    dim3 blocks(M);\n-\n-#ifdef USE_ROCM\n-    uint64_t workgroupSize = static_cast<uint64_t>(blocks.x) * static_cast<uint64_t>(threads.x);\n-    // this caused invalid configuration problem\n-    if (workgroupSize > std::numeric_limits<uint32_t>::max()) {\n-      // Fix invalid configuration https://github.com/pytorch/pytorch/issues/136291\n-      blocks.x = std::numeric_limits<uint32_t>::max() / threads.x;\n+  constexpr int rows_per_thread_y = rows_per_block_y / block_dim_y;\n+  int64_t thread_x = blockIdx.x * block_dim_x + threadIdx.x;\n+  for (int64_t M_start = blockIdx.y * rows_per_block_y;\n+        M_start < M;\n+        M_start += rows_per_block_y * gridDim.y) {\n+    int lane_id = (threadIdx.y * blockDim.x + threadIdx.x) & (kWarpSize - 1);\n+    int64_t mean_index = M_start + threadIdx.y * rows_per_thread_y;\n+    T_ACC warp_mean = 0, warp_rstd = 0;\n+    if (lane_id < rows_per_thread_y) {\n+      warp_mean = mean[mean_index + lane_id];\n+      warp_rstd = rstd[mean_index + lane_id];\n+    }\n+    WARP_SYNC();\n+    T_ACC dY_regs[rows_per_thread_y] = {0};\n+    T_ACC X_regs[rows_per_thread_y] = {0};\n+    #pragma unroll\n+    for (int i = 0; i < rows_per_thread_y; ++i) {\n+      int64_t current_y = M_start + threadIdx.y * rows_per_thread_y + i;\n+      if (aligned_grid || (current_y < M && thread_x < N)) {\n+        dY_regs[i] = dY[current_y * N + thread_x];\n+        X_regs[i] = X[current_y * N + thread_x];\n+      }\n     }\n-#endif\n \n-    TORCH_INTERNAL_ASSERT_DEBUG_ONLY(threads.y % 2 == 0 || threads.y == 1);\n-    int nshared = threads.y > 1 ? threads.y * 3/2 *sizeof(T_ACC) : 0;\n-    vectorized_layer_norm_kernel<<<blocks, threads, nshared, stream>>>(N, eps, X_data,\n-    gamma_data, beta_data, mean_data, rstd_data, Y_data);\n-    C10_CUDA_KERNEL_LAUNCH_CHECK();\n+    #pragma unroll\n+    for (int i = 0; i < rows_per_thread_y; ++i) {\n+      T_ACC mean_reg = WARP_SHFL(warp_mean, i, kWarpSize);\n+      T_ACC rstd_reg = WARP_SHFL(warp_rstd, i, kWarpSize);\n+      dg_sum += dY_regs[i] * (X_regs[i] - mean_reg) * rstd_reg;\n+      db_sum += dY_regs[i];\n+    }\n+  }\n+}\n \n-#ifdef USE_ROCM\n-    // the blocks.x contains the max grid x dimention without invalid configuration error\n-    // Fix invalid configuration https://github.com/pytorch/pytorch/issues/136291\n-    // Ensure all elements are processed. Prepare for next round\n-    int64_t remaining = M - blocks.x;\n-    const T* X_data2 = X_data;\n-    T_ACC* mean_data2 = mean_data;\n-    T_ACC* rstd_data2 = rstd_data;\n-    T* Y_data2 = Y_data;\n+template <typename T, typename T_ACC,\n+unsigned int block_dim_x,\n+unsigned int block_dim_y,\n+unsigned int rows_per_block_y,\n+bool check_x,\n+bool check_y>\n+__device__\n+__forceinline__\n+void\n+blockReduceGammaBetaBackwardsHelper(\n+    int64_t M_start,\n+    int64_t M,\n+    int64_t N,\n+    const T* __restrict__ dY,\n+    const T* __restrict__ X,\n+    const T_ACC* __restrict__ mean,\n+    const T_ACC* __restrict__ rstd,\n+    T* __restrict__ dg,\n+    T* __restrict__ db,\n+    T_ACC &dg_sum,\n+    T_ACC &db_sum\n+) {\n+  constexpr int rows_per_thread_y = rows_per_block_y / block_dim_y;\n+  int64_t thread_x = blockIdx.x * block_dim_x + threadIdx.x;\n \n-    while (remaining > 0) {\n-      X_data2 += N * blocks.x;\n-      mean_data2 += blocks.x;\n-      rstd_data2 += blocks.x;\n-      Y_data2 += N * blocks.x;\n+    int lane_id = (threadIdx.y * blockDim.x + threadIdx.x) & (kWarpSize - 1);\n+    int64_t mean_index = M_start + threadIdx.y * rows_per_thread_y;\n+    T_ACC warp_mean = 0, warp_rstd = 0;\n+    if (lane_id < rows_per_thread_y && mean_index + lane_id < M) {\n+      warp_mean = mean[mean_index + lane_id];\n+      warp_rstd = rstd[mean_index + lane_id];\n+    }\n+    WARP_SYNC();\n \n-      blocks.x = (remaining > blocks.x) ? blocks.x : remaining;\n \n-      vectorized_layer_norm_kernel<<<blocks, threads, nshared, stream>>>(N, eps, X_data2,\n-        gamma_data, beta_data, mean_data2, rstd_data2, Y_data2);\n-      C10_CUDA_KERNEL_LAUNCH_CHECK();\n \n-      remaining -= blocks.x;\n+    T_ACC dY_regs[rows_per_thread_y] = {0};\n+    T_ACC X_regs[rows_per_thread_y] = {0};\n+    #pragma unroll\n+    for (int i = 0; i < rows_per_thread_y; ++i) {\n+      int64_t current_y = M_start + threadIdx.y * rows_per_thread_y + i;\n+      bool active = true;\n+      if (check_x && thread_x >= N) {\n+        active = false;\n+      }\n+      if (check_y && current_y >= M) {\n+        active = false;\n+      }\n+      if (active) {\n+        dY_regs[i] = dY[current_y * N + thread_x];\n+        X_regs[i] = X[current_y * N + thread_x];\n+      }\n     }\n-#endif\n \n+    #pragma unroll\n+    for (int i = 0; i < rows_per_thread_y; ++i) {\n+      T_ACC mean_reg = WARP_SHFL(warp_mean, i, kWarpSize);\n+      T_ACC rstd_reg = WARP_SHFL(warp_rstd, i, kWarpSize);\n+      dg_sum += dY_regs[i] * (X_regs[i] - mean_reg) * rstd_reg;\n+      db_sum += dY_regs[i];\n+    }\n }\n \n-template <typename T, typename T_ACC>\n-void LayerNormKernelImplInternal(\n-    const Tensor& X,\n-    const Tensor& gamma,\n-    const Tensor& beta,\n+template <typename T, typename T_ACC,\n+unsigned int block_dim_x,\n+unsigned int block_dim_y,\n+unsigned int rows_per_block_y,\n+bool check_x,\n+bool check_y>",
+        "comment_created_at": "2025-03-14T22:23:15+00:00",
+        "comment_author": "ngimel",
+        "comment_body": "check_y id never used in this function",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2000093583",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 148605,
+        "pr_file": "aten/src/ATen/native/cuda/layer_norm_kernel.cu",
+        "discussion_id": "1996369008",
+        "commented_code": "@@ -509,862 +509,859 @@ __global__ void layer_norm_grad_input_kernel_vectorized(\n   }\n }\n \n-\n-template <typename T, typename T_ACC>\n-void launch_vectorized_layer_norm_kernel(\n-  int N,\n-  int64_t M,\n-  T_ACC eps,\n-  const T* X_data,\n-  const T* gamma_data,\n-  const T* beta_data,\n-  T* Y_data,\n-  T_ACC* mean_data,\n-  T_ACC* rstd_data\n+// When the data size is a multiple of the tile size we can use fewer\n+// instructions and registers. Example, this is the case when M=256 N=256.\n+template <typename T, typename T_ACC,\n+unsigned int block_dim_x,\n+unsigned int block_dim_y,\n+unsigned int rows_per_block_y,\n+bool aligned_grid>\n+__device__\n+__forceinline__\n+void\n+blockReduceGammaBetaBackwardsAligned(\n+    int64_t M,\n+    int64_t N,\n+    const T* __restrict__ dY,\n+    const T* __restrict__ X,\n+    const T_ACC* __restrict__ mean,\n+    const T_ACC* __restrict__ rstd,\n+    T* __restrict__ dg,\n+    T* __restrict__ db,\n+    T_ACC &dg_sum,\n+    T_ACC &db_sum\n ) {\n-    //constexpr int alignment = 16; //currently unused to make sure float and half results are bw accurate\n-    auto stream = at::cuda::getCurrentCUDAStream().stream();\n-    const int warp_size = at::cuda::warp_size();\n-    const dim3 threads(warp_size, num_threads() / warp_size, 1);\n-    dim3 blocks(M);\n-\n-#ifdef USE_ROCM\n-    uint64_t workgroupSize = static_cast<uint64_t>(blocks.x) * static_cast<uint64_t>(threads.x);\n-    // this caused invalid configuration problem\n-    if (workgroupSize > std::numeric_limits<uint32_t>::max()) {\n-      // Fix invalid configuration https://github.com/pytorch/pytorch/issues/136291\n-      blocks.x = std::numeric_limits<uint32_t>::max() / threads.x;\n+  constexpr int rows_per_thread_y = rows_per_block_y / block_dim_y;\n+  int64_t thread_x = blockIdx.x * block_dim_x + threadIdx.x;\n+  for (int64_t M_start = blockIdx.y * rows_per_block_y;\n+        M_start < M;\n+        M_start += rows_per_block_y * gridDim.y) {\n+    int lane_id = (threadIdx.y * blockDim.x + threadIdx.x) & (kWarpSize - 1);\n+    int64_t mean_index = M_start + threadIdx.y * rows_per_thread_y;\n+    T_ACC warp_mean = 0, warp_rstd = 0;\n+    if (lane_id < rows_per_thread_y) {\n+      warp_mean = mean[mean_index + lane_id];\n+      warp_rstd = rstd[mean_index + lane_id];\n+    }\n+    WARP_SYNC();\n+    T_ACC dY_regs[rows_per_thread_y] = {0};\n+    T_ACC X_regs[rows_per_thread_y] = {0};\n+    #pragma unroll\n+    for (int i = 0; i < rows_per_thread_y; ++i) {\n+      int64_t current_y = M_start + threadIdx.y * rows_per_thread_y + i;\n+      if (aligned_grid || (current_y < M && thread_x < N)) {\n+        dY_regs[i] = dY[current_y * N + thread_x];\n+        X_regs[i] = X[current_y * N + thread_x];\n+      }\n     }\n-#endif\n \n-    TORCH_INTERNAL_ASSERT_DEBUG_ONLY(threads.y % 2 == 0 || threads.y == 1);\n-    int nshared = threads.y > 1 ? threads.y * 3/2 *sizeof(T_ACC) : 0;\n-    vectorized_layer_norm_kernel<<<blocks, threads, nshared, stream>>>(N, eps, X_data,\n-    gamma_data, beta_data, mean_data, rstd_data, Y_data);\n-    C10_CUDA_KERNEL_LAUNCH_CHECK();\n+    #pragma unroll\n+    for (int i = 0; i < rows_per_thread_y; ++i) {\n+      T_ACC mean_reg = WARP_SHFL(warp_mean, i, kWarpSize);\n+      T_ACC rstd_reg = WARP_SHFL(warp_rstd, i, kWarpSize);\n+      dg_sum += dY_regs[i] * (X_regs[i] - mean_reg) * rstd_reg;\n+      db_sum += dY_regs[i];\n+    }\n+  }\n+}\n \n-#ifdef USE_ROCM\n-    // the blocks.x contains the max grid x dimention without invalid configuration error\n-    // Fix invalid configuration https://github.com/pytorch/pytorch/issues/136291\n-    // Ensure all elements are processed. Prepare for next round\n-    int64_t remaining = M - blocks.x;\n-    const T* X_data2 = X_data;\n-    T_ACC* mean_data2 = mean_data;\n-    T_ACC* rstd_data2 = rstd_data;\n-    T* Y_data2 = Y_data;\n+template <typename T, typename T_ACC,\n+unsigned int block_dim_x,\n+unsigned int block_dim_y,\n+unsigned int rows_per_block_y,\n+bool check_x,\n+bool check_y>\n+__device__\n+__forceinline__\n+void\n+blockReduceGammaBetaBackwardsHelper(\n+    int64_t M_start,\n+    int64_t M,\n+    int64_t N,\n+    const T* __restrict__ dY,\n+    const T* __restrict__ X,\n+    const T_ACC* __restrict__ mean,\n+    const T_ACC* __restrict__ rstd,\n+    T* __restrict__ dg,\n+    T* __restrict__ db,\n+    T_ACC &dg_sum,\n+    T_ACC &db_sum\n+) {\n+  constexpr int rows_per_thread_y = rows_per_block_y / block_dim_y;\n+  int64_t thread_x = blockIdx.x * block_dim_x + threadIdx.x;\n \n-    while (remaining > 0) {\n-      X_data2 += N * blocks.x;\n-      mean_data2 += blocks.x;\n-      rstd_data2 += blocks.x;\n-      Y_data2 += N * blocks.x;\n+    int lane_id = (threadIdx.y * blockDim.x + threadIdx.x) & (kWarpSize - 1);\n+    int64_t mean_index = M_start + threadIdx.y * rows_per_thread_y;\n+    T_ACC warp_mean = 0, warp_rstd = 0;\n+    if (lane_id < rows_per_thread_y && mean_index + lane_id < M) {\n+      warp_mean = mean[mean_index + lane_id];\n+      warp_rstd = rstd[mean_index + lane_id];\n+    }\n+    WARP_SYNC();\n \n-      blocks.x = (remaining > blocks.x) ? blocks.x : remaining;\n \n-      vectorized_layer_norm_kernel<<<blocks, threads, nshared, stream>>>(N, eps, X_data2,\n-        gamma_data, beta_data, mean_data2, rstd_data2, Y_data2);\n-      C10_CUDA_KERNEL_LAUNCH_CHECK();\n \n-      remaining -= blocks.x;\n+    T_ACC dY_regs[rows_per_thread_y] = {0};\n+    T_ACC X_regs[rows_per_thread_y] = {0};\n+    #pragma unroll\n+    for (int i = 0; i < rows_per_thread_y; ++i) {\n+      int64_t current_y = M_start + threadIdx.y * rows_per_thread_y + i;\n+      bool active = true;\n+      if (check_x && thread_x >= N) {\n+        active = false;\n+      }\n+      if (check_y && current_y >= M) {\n+        active = false;\n+      }\n+      if (active) {\n+        dY_regs[i] = dY[current_y * N + thread_x];\n+        X_regs[i] = X[current_y * N + thread_x];\n+      }\n     }\n-#endif\n \n+    #pragma unroll\n+    for (int i = 0; i < rows_per_thread_y; ++i) {\n+      T_ACC mean_reg = WARP_SHFL(warp_mean, i, kWarpSize);\n+      T_ACC rstd_reg = WARP_SHFL(warp_rstd, i, kWarpSize);\n+      dg_sum += dY_regs[i] * (X_regs[i] - mean_reg) * rstd_reg;\n+      db_sum += dY_regs[i];\n+    }\n }\n \n-template <typename T, typename T_ACC>\n-void LayerNormKernelImplInternal(\n-    const Tensor& X,\n-    const Tensor& gamma,\n-    const Tensor& beta,\n+template <typename T, typename T_ACC,\n+unsigned int block_dim_x,\n+unsigned int block_dim_y,\n+unsigned int rows_per_block_y,\n+bool check_x,\n+bool check_y>",
+        "comment_created_at": "2025-03-18T03:03:30+00:00",
+        "comment_author": "ahmadsharif1",
+        "comment_body": "Great point. Done.\r\n\r\n(This was also done for historical reasons while I was writing the kernel. )",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2138662133",
+    "pr_number": 155590,
+    "pr_file": "c10/core/SymbolicShapeMeta.cpp",
+    "created_at": "2025-06-10T19:52:08+00:00",
+    "commented_code": "return _compute_contiguous(sizes, strides, numel());\n}\n\nSymBool SymbolicShapeMeta::compute_def_contiguous() const {\n  if (!strides_valid_) {\n    return false;\n  }\n  c10::SymIntArrayRef sizes(sizes_);\n  c10::SymIntArrayRef strides(strides_);\n  // definitely_contiguous from Contiguity.h\n  return _compute_def_contiguous(sizes, strides, numel());\n}\n\n// The rest of them\n#define DEFINE_EAGER_SYMBOOL_COMPUTE(name, nodeimpl, fallback) \\\n  SymBool SymbolicShapeMeta::name() const {                    \\\n    if (!strides_valid_) {                                     \\\n      return false;                                            \\\n    }                                                          \\\n    c10::SymIntArrayRef sizes(sizes_);                         \\\n    c10::SymIntArrayRef strides(strides_);                     \\\n    return fallback(sizes, strides);                           \\\n#define DEFINE_EAGER_SYMBOOL_COMPUTE(name, fallback) \\",
+    "repo_full_name": "pytorch/pytorch",
+    "discussion_comments": [
+      {
+        "comment_id": "2138662133",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 155590,
+        "pr_file": "c10/core/SymbolicShapeMeta.cpp",
+        "discussion_id": "2138662133",
+        "commented_code": "@@ -82,15 +86,25 @@ SymBool SymbolicShapeMeta::compute_contiguous() const {\n   return _compute_contiguous(sizes, strides, numel());\n }\n \n+SymBool SymbolicShapeMeta::compute_def_contiguous() const {\n+  if (!strides_valid_) {\n+    return false;\n+  }\n+  c10::SymIntArrayRef sizes(sizes_);\n+  c10::SymIntArrayRef strides(strides_);\n+  // definitely_contiguous from Contiguity.h\n+  return _compute_def_contiguous(sizes, strides, numel());\n+}\n+\n // The rest of them\n-#define DEFINE_EAGER_SYMBOOL_COMPUTE(name, nodeimpl, fallback) \\\n-  SymBool SymbolicShapeMeta::name() const {                    \\\n-    if (!strides_valid_) {                                     \\\n-      return false;                                            \\\n-    }                                                          \\\n-    c10::SymIntArrayRef sizes(sizes_);                         \\\n-    c10::SymIntArrayRef strides(strides_);                     \\\n-    return fallback(sizes, strides);                           \\\n+#define DEFINE_EAGER_SYMBOOL_COMPUTE(name, fallback) \\",
+        "comment_created_at": "2025-06-10T19:52:08+00:00",
+        "comment_author": "laithsakka",
+        "comment_body": "nodeimpl arg is redundant?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2160604579",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 155590,
+        "pr_file": "c10/core/SymbolicShapeMeta.cpp",
+        "discussion_id": "2138662133",
+        "commented_code": "@@ -82,15 +86,25 @@ SymBool SymbolicShapeMeta::compute_contiguous() const {\n   return _compute_contiguous(sizes, strides, numel());\n }\n \n+SymBool SymbolicShapeMeta::compute_def_contiguous() const {\n+  if (!strides_valid_) {\n+    return false;\n+  }\n+  c10::SymIntArrayRef sizes(sizes_);\n+  c10::SymIntArrayRef strides(strides_);\n+  // definitely_contiguous from Contiguity.h\n+  return _compute_def_contiguous(sizes, strides, numel());\n+}\n+\n // The rest of them\n-#define DEFINE_EAGER_SYMBOOL_COMPUTE(name, nodeimpl, fallback) \\\n-  SymBool SymbolicShapeMeta::name() const {                    \\\n-    if (!strides_valid_) {                                     \\\n-      return false;                                            \\\n-    }                                                          \\\n-    c10::SymIntArrayRef sizes(sizes_);                         \\\n-    c10::SymIntArrayRef strides(strides_);                     \\\n-    return fallback(sizes, strides);                           \\\n+#define DEFINE_EAGER_SYMBOOL_COMPUTE(name, fallback) \\",
+        "comment_created_at": "2025-06-23T02:18:20+00:00",
+        "comment_author": "ezyang",
+        "comment_body": "Yeah, probably from when we needed to figure out how to dispatch",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2024110522",
+    "pr_number": 150506,
+    "pr_file": "aten/src/ATen/native/TensorAdvancedIndexing.cpp",
+    "created_at": "2025-04-02T05:48:14+00:00",
+    "commented_code": "false, \"index is out of bounds for dimension with size 0\");\n  }\n\n  this->dims_before = dims_before;\n  this->dims_after = dims_after;\n  this->src = restride_src(src, dims_before, dims_indexed, replacement_shape);\n  this->dims_before = new_dims_before;\n  this->dims_after = new_dims_after;",
+    "repo_full_name": "pytorch/pytorch",
+    "discussion_comments": [
+      {
+        "comment_id": "2024110522",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 150506,
+        "pr_file": "aten/src/ATen/native/TensorAdvancedIndexing.cpp",
+        "discussion_id": "2024110522",
+        "commented_code": "@@ -677,13 +677,13 @@ AdvancedIndex::AdvancedIndex(const Tensor& src, TensorList indices_list) {\n         false, \"index is out of bounds for dimension with size 0\");\n   }\n \n-  this->dims_before = dims_before;\n-  this->dims_after = dims_after;\n-  this->src = restride_src(src, dims_before, dims_indexed, replacement_shape);\n+  this->dims_before = new_dims_before;\n+  this->dims_after = new_dims_after;",
+        "comment_created_at": "2025-04-02T05:48:14+00:00",
+        "comment_author": "malfet",
+        "comment_body": "You can remove `this->` as class members no longer shadowed by local variables",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2024855751",
+    "pr_number": 150503,
+    "pr_file": "aten/src/ATen/native/cpu/int4mm_kernel.cpp",
+    "created_at": "2025-04-02T13:40:45+00:00",
+    "commented_code": "}\n  };\n\n  // NOLINTNEXTLINE(modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)\n  auto lhs_qa8dx_buffer = std::make_unique<int8_t[]>(\n      m * (k + sizeof(float) + sizeof(int32_t))); // Allocate for LHS\n  int8_t* lhs_qa8dx = lhs_qa8dx_buffer.get();",
+    "repo_full_name": "pytorch/pytorch",
+    "discussion_comments": [
+      {
+        "comment_id": "2024855751",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 150503,
+        "pr_file": "aten/src/ATen/native/cpu/int4mm_kernel.cpp",
+        "discussion_id": "2024855751",
+        "commented_code": "@@ -1068,6 +1070,7 @@ static void ref_dyn_quant_matmul_4bit_groupwise_kernel(\n     }\n   };\n \n+  // NOLINTNEXTLINE(modernize-avoid-c-arrays,cppcoreguidelines-avoid-c-arrays)\n   auto lhs_qa8dx_buffer = std::make_unique<int8_t[]>(\n       m * (k + sizeof(float) + sizeof(int32_t))); // Allocate for LHS\n   int8_t* lhs_qa8dx = lhs_qa8dx_buffer.get();",
+        "comment_created_at": "2025-04-02T13:40:45+00:00",
+        "comment_author": "Skylion007",
+        "comment_body": "```suggestion\r\n  std::vector<int8_t> lhs_qa8dx_buffer(m * (k + sizeof(float) + sizeof(int32_t)));\r\n  int8_t* lhs_qa8dx = lhs_qa8dx_buffer.data();\r\n```\r\nWouldn't this be cleaner?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2177707270",
+    "pr_number": 156161,
+    "pr_file": "aten/src/ATen/native/cpu/ScatterGatherKernel.cpp",
+    "created_at": "2025-07-01T14:09:38+00:00",
+    "commented_code": "}\n#endif\n\n// implementation taken from FBGEMM/src/Utils.cc\nnamespace {\n// histogram size per thread\nconstexpr int RDX_HIST_SIZE = 256;\n\nvoid update_prefsum_and_offset_in_range(\n    int64_t& offset,\n    const int bins_beg,\n    const int bins_end,\n    const int nthreads,\n    const int64_t* const histogram,\n    int64_t* const histogram_ps) {\n  for (int bins = bins_beg; bins < bins_end; ++bins) {\n    for (int t = 0; t < nthreads; ++t) {\n      histogram_ps[t * RDX_HIST_SIZE + bins] = offset;\n      offset += histogram[t * RDX_HIST_SIZE + bins];\n    }\n  }\n}\n\nstatic inline void combine_prefix_sum(\n    const int nthreads,\n    const int64_t elements_count,\n    const int64_t* const histogram,\n    int64_t* const histogram_ps) {\n  int64_t offset = 0;\n  update_prefsum_and_offset_in_range(\n      offset, 0, RDX_HIST_SIZE, nthreads, histogram, histogram_ps);\n  // TODO(DamianSzwichtenberg): Is assert sufficient? In most cases, it will\n  // work only in debug build.\n  assert(offset == elements_count);\n  // Suppress unused variable warning\n  (void)elements_count;\n}\n\nstatic inline void combine_prefix_sum_for_msb(\n    const int nthreads,\n    const int64_t elements_count,\n    const int64_t* const histogram,\n    int64_t* const histogram_ps) {\n  int64_t offset = 0;\n  update_prefsum_and_offset_in_range(\n      offset, 128, RDX_HIST_SIZE, nthreads, histogram, histogram_ps);\n  update_prefsum_and_offset_in_range(\n      offset, 0, 128, nthreads, histogram, histogram_ps);\n  // TODO(DamianSzwichtenberg): Is assert sufficient? In most cases, it will\n  // work only in debug build.\n  assert(offset == elements_count);\n  // Suppress unused variable warning\n  (void)elements_count;",
+    "repo_full_name": "pytorch/pytorch",
+    "discussion_comments": [
+      {
+        "comment_id": "2177707270",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 156161,
+        "pr_file": "aten/src/ATen/native/cpu/ScatterGatherKernel.cpp",
+        "discussion_id": "2177707270",
+        "commented_code": "@@ -665,6 +675,208 @@ std::pair<K*, V*> radix_sort_parallel(\n }\n #endif\n \n+// implementation taken from FBGEMM/src/Utils.cc\n+namespace {\n+// histogram size per thread\n+constexpr int RDX_HIST_SIZE = 256;\n+\n+void update_prefsum_and_offset_in_range(\n+    int64_t& offset,\n+    const int bins_beg,\n+    const int bins_end,\n+    const int nthreads,\n+    const int64_t* const histogram,\n+    int64_t* const histogram_ps) {\n+  for (int bins = bins_beg; bins < bins_end; ++bins) {\n+    for (int t = 0; t < nthreads; ++t) {\n+      histogram_ps[t * RDX_HIST_SIZE + bins] = offset;\n+      offset += histogram[t * RDX_HIST_SIZE + bins];\n+    }\n+  }\n+}\n+\n+static inline void combine_prefix_sum(\n+    const int nthreads,\n+    const int64_t elements_count,\n+    const int64_t* const histogram,\n+    int64_t* const histogram_ps) {\n+  int64_t offset = 0;\n+  update_prefsum_and_offset_in_range(\n+      offset, 0, RDX_HIST_SIZE, nthreads, histogram, histogram_ps);\n+  // TODO(DamianSzwichtenberg): Is assert sufficient? In most cases, it will\n+  // work only in debug build.\n+  assert(offset == elements_count);\n+  // Suppress unused variable warning\n+  (void)elements_count;\n+}\n+\n+static inline void combine_prefix_sum_for_msb(\n+    const int nthreads,\n+    const int64_t elements_count,\n+    const int64_t* const histogram,\n+    int64_t* const histogram_ps) {\n+  int64_t offset = 0;\n+  update_prefsum_and_offset_in_range(\n+      offset, 128, RDX_HIST_SIZE, nthreads, histogram, histogram_ps);\n+  update_prefsum_and_offset_in_range(\n+      offset, 0, 128, nthreads, histogram, histogram_ps);\n+  // TODO(DamianSzwichtenberg): Is assert sufficient? In most cases, it will\n+  // work only in debug build.\n+  assert(offset == elements_count);\n+  // Suppress unused variable warning\n+  (void)elements_count;",
+        "comment_created_at": "2025-07-01T14:09:38+00:00",
+        "comment_author": "Skylion007",
+        "comment_body": "We are on C++17, why not just use [maybe unused] now?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2177885551",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 156161,
+        "pr_file": "aten/src/ATen/native/cpu/ScatterGatherKernel.cpp",
+        "discussion_id": "2177707270",
+        "commented_code": "@@ -665,6 +675,208 @@ std::pair<K*, V*> radix_sort_parallel(\n }\n #endif\n \n+// implementation taken from FBGEMM/src/Utils.cc\n+namespace {\n+// histogram size per thread\n+constexpr int RDX_HIST_SIZE = 256;\n+\n+void update_prefsum_and_offset_in_range(\n+    int64_t& offset,\n+    const int bins_beg,\n+    const int bins_end,\n+    const int nthreads,\n+    const int64_t* const histogram,\n+    int64_t* const histogram_ps) {\n+  for (int bins = bins_beg; bins < bins_end; ++bins) {\n+    for (int t = 0; t < nthreads; ++t) {\n+      histogram_ps[t * RDX_HIST_SIZE + bins] = offset;\n+      offset += histogram[t * RDX_HIST_SIZE + bins];\n+    }\n+  }\n+}\n+\n+static inline void combine_prefix_sum(\n+    const int nthreads,\n+    const int64_t elements_count,\n+    const int64_t* const histogram,\n+    int64_t* const histogram_ps) {\n+  int64_t offset = 0;\n+  update_prefsum_and_offset_in_range(\n+      offset, 0, RDX_HIST_SIZE, nthreads, histogram, histogram_ps);\n+  // TODO(DamianSzwichtenberg): Is assert sufficient? In most cases, it will\n+  // work only in debug build.\n+  assert(offset == elements_count);\n+  // Suppress unused variable warning\n+  (void)elements_count;\n+}\n+\n+static inline void combine_prefix_sum_for_msb(\n+    const int nthreads,\n+    const int64_t elements_count,\n+    const int64_t* const histogram,\n+    int64_t* const histogram_ps) {\n+  int64_t offset = 0;\n+  update_prefsum_and_offset_in_range(\n+      offset, 128, RDX_HIST_SIZE, nthreads, histogram, histogram_ps);\n+  update_prefsum_and_offset_in_range(\n+      offset, 0, 128, nthreads, histogram, histogram_ps);\n+  // TODO(DamianSzwichtenberg): Is assert sufficient? In most cases, it will\n+  // work only in debug build.\n+  assert(offset == elements_count);\n+  // Suppress unused variable warning\n+  (void)elements_count;",
+        "comment_created_at": "2025-07-01T15:19:16+00:00",
+        "comment_author": "maajidkhann",
+        "comment_body": "Thanks for pointing out. Added the suggestion in the code.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2167715137",
+    "pr_number": 149601,
+    "pr_file": "c10/core/AllocatorConfig.cpp",
+    "created_at": "2025-06-25T22:01:33+00:00",
+    "commented_code": "#include <c10/core/AllocatorConfig.h>\n#include <c10/core/DeviceType.h>\n#include <c10/util/CallOnce.h>\n#include <c10/util/env.h>\n\n#include <array>\n#include <cstdlib>\n\nnamespace c10::CachingAllocator {\n\nnamespace {\nconstexpr size_t kRoundUpPowerOfTwoIntervals = 16;\nconstexpr size_t kMB = 1024 * 1024ul;\nconstexpr size_t kRoundUpPowerOfTwoStart = 1 * kMB; // 1MB\nconstexpr size_t kRoundUpPowerOfTwoEnd = 64 * 1024ul * kMB; // 64GB\nconstexpr size_t kPinnedMaxRegisterThreads = 128;\n} // anonymous namespace\n\nAllocatorConfig& AllocatorConfig::instance() {\n  static AllocatorConfig instance;\n  static c10::once_flag init_once;\n#define C10_ALLOCATOR_CONFIG_PARSE_ENV(env, deprecated)                       \\",
+    "repo_full_name": "pytorch/pytorch",
+    "discussion_comments": [
+      {
+        "comment_id": "2167715137",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 149601,
+        "pr_file": "c10/core/AllocatorConfig.cpp",
+        "discussion_id": "2167715137",
+        "commented_code": "@@ -0,0 +1,438 @@\n+#include <c10/core/AllocatorConfig.h>\n+#include <c10/core/DeviceType.h>\n+#include <c10/util/CallOnce.h>\n+#include <c10/util/env.h>\n+\n+#include <array>\n+#include <cstdlib>\n+\n+namespace c10::CachingAllocator {\n+\n+namespace {\n+constexpr size_t kRoundUpPowerOfTwoIntervals = 16;\n+constexpr size_t kMB = 1024 * 1024ul;\n+constexpr size_t kRoundUpPowerOfTwoStart = 1 * kMB; // 1MB\n+constexpr size_t kRoundUpPowerOfTwoEnd = 64 * 1024ul * kMB; // 64GB\n+constexpr size_t kPinnedMaxRegisterThreads = 128;\n+} // anonymous namespace\n+\n+AllocatorConfig& AllocatorConfig::instance() {\n+  static AllocatorConfig instance;\n+  static c10::once_flag init_once;\n+#define C10_ALLOCATOR_CONFIG_PARSE_ENV(env, deprecated)                       \\",
+        "comment_created_at": "2025-06-25T22:01:33+00:00",
+        "comment_author": "albanD",
+        "comment_body": "You should either define this outside the function if it used elsewhere/you want it available in the whole file or undef it here.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2168045769",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 149601,
+        "pr_file": "c10/core/AllocatorConfig.cpp",
+        "discussion_id": "2167715137",
+        "commented_code": "@@ -0,0 +1,438 @@\n+#include <c10/core/AllocatorConfig.h>\n+#include <c10/core/DeviceType.h>\n+#include <c10/util/CallOnce.h>\n+#include <c10/util/env.h>\n+\n+#include <array>\n+#include <cstdlib>\n+\n+namespace c10::CachingAllocator {\n+\n+namespace {\n+constexpr size_t kRoundUpPowerOfTwoIntervals = 16;\n+constexpr size_t kMB = 1024 * 1024ul;\n+constexpr size_t kRoundUpPowerOfTwoStart = 1 * kMB; // 1MB\n+constexpr size_t kRoundUpPowerOfTwoEnd = 64 * 1024ul * kMB; // 64GB\n+constexpr size_t kPinnedMaxRegisterThreads = 128;\n+} // anonymous namespace\n+\n+AllocatorConfig& AllocatorConfig::instance() {\n+  static AllocatorConfig instance;\n+  static c10::once_flag init_once;\n+#define C10_ALLOCATOR_CONFIG_PARSE_ENV(env, deprecated)                       \\",
+        "comment_created_at": "2025-06-26T03:53:44+00:00",
+        "comment_author": "guangyey",
+        "comment_body": "`#undef` added.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2104407669",
+    "pr_number": 154202,
+    "pr_file": "aten/src/ATen/native/mkldnn/xpu/Conv.cpp",
+    "created_at": "2025-05-23T11:37:58+00:00",
+    "commented_code": "return std::tuple<Tensor, Tensor, Tensor>{grad_input, grad_weight, grad_bias};\n}\n\nTensor convolution_pointwise(\n    const Tensor& input_t,\n    const Tensor& weight_t,\n    const c10::optional<Tensor>& bias_opt,\n    IntArrayRef padding,\n    IntArrayRef stride,\n    IntArrayRef dilation,\n    int64_t groups,\n    c10::string_view attr,\n    torch::List<c10::optional<at::Scalar>> scalars,\n    c10::optional<c10::string_view> algorithm) {\n  Attr att;\n  att = construct_unary_attr(att, attr, scalars, algorithm);\n  const Tensor bias = bias_opt.has_value() ? bias_opt.value() : at::Tensor();\n  std::vector<int64_t> output_padding = {0};\n\n  return _convolution(\n      input_t,\n      weight_t,\n      bias,\n      stride,\n      padding,\n      dilation,\n      /*transposed*/ false,\n      output_padding,\n      groups,\n      att);\n}\n\nTensor convolution_pointwise_binary(\n    const Tensor& input_t,\n    const Tensor& other_t,\n    const Tensor& weight_t,\n    const c10::optional<Tensor>& bias_opt,\n    IntArrayRef padding,\n    IntArrayRef stride,\n    IntArrayRef dilation,\n    int64_t groups,\n    c10::string_view binary_attr,\n    c10::optional<at::Scalar> alpha,\n    c10::optional<c10::string_view> unary_attr,\n    torch::List<c10::optional<at::Scalar>> unary_scalars,\n    c10::optional<c10::string_view> unary_algorithm) {\n  Tensor output;\n  Tensor bias = bias_opt.has_value() ? bias_opt.value() : at::Tensor();\n  // Step1: Construct binary attr\n  Attr attr;\n  attr = construct_binary_attr(attr, binary_attr, other_t);\n  // Step2: Append unary attr\n  if (unary_attr.has_value())\n    attr = construct_unary_attr(\n        attr, unary_attr.value(), unary_scalars, unary_algorithm);\n\n  Tensor res = _convolution_out(\n      output,\n      input_t,\n      weight_t,\n      bias,\n      stride,\n      padding,\n      dilation,\n      /*transpoced*/ false,\n      {{0, 0}},\n      groups,\n      attr);\n\n  // Step3: Run conv\n  return res;\n}\n\n\nTensor& convolution_pointwise_binary_(\n    Tensor& other_t,\n    const Tensor& input_t,\n    const Tensor& weight_t,\n    const c10::optional<Tensor>& bias_opt,\n    IntArrayRef padding,\n    IntArrayRef stride,\n    IntArrayRef dilation,\n    int64_t groups,\n    c10::string_view binary_attr,\n    c10::optional<at::Scalar> alpha,\n    c10::optional<c10::string_view> unary_attr,\n    torch::List<c10::optional<at::Scalar>> unary_scalars,\n    c10::optional<c10::string_view> unary_algorithm) {\n  Tensor bias = bias_opt.has_value() ? bias_opt.value() : at::Tensor();\n  // Step1: Construct binary attr\n  Attr attr;\n  attr = construct_binary_attr(attr, binary_attr, other_t);\n  \n  std::cout<<\"binary_attr\"<<binary_attr<<std::endl;\n  // Step2: Append unary attr\n  if (unary_attr.has_value())\n    attr = construct_unary_attr(\n      attr, unary_attr.value(), unary_scalars, unary_algorithm);\n  \n  _convolution_out(\n      other_t,\n      input_t,\n      weight_t,\n      bias,\n      stride,\n      padding,\n      dilation,\n      /*transpoced*/ false,",
+    "repo_full_name": "pytorch/pytorch",
+    "discussion_comments": [
+      {
+        "comment_id": "2104407669",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 154202,
+        "pr_file": "aten/src/ATen/native/mkldnn/xpu/Conv.cpp",
+        "discussion_id": "2104407669",
+        "commented_code": "@@ -751,11 +681,136 @@ std::tuple<Tensor, Tensor, Tensor> convolution_backward_overrideable(\n   return std::tuple<Tensor, Tensor, Tensor>{grad_input, grad_weight, grad_bias};\n }\n \n+Tensor convolution_pointwise(\n+    const Tensor& input_t,\n+    const Tensor& weight_t,\n+    const c10::optional<Tensor>& bias_opt,\n+    IntArrayRef padding,\n+    IntArrayRef stride,\n+    IntArrayRef dilation,\n+    int64_t groups,\n+    c10::string_view attr,\n+    torch::List<c10::optional<at::Scalar>> scalars,\n+    c10::optional<c10::string_view> algorithm) {\n+  Attr att;\n+  att = construct_unary_attr(att, attr, scalars, algorithm);\n+  const Tensor bias = bias_opt.has_value() ? bias_opt.value() : at::Tensor();\n+  std::vector<int64_t> output_padding = {0};\n+\n+  return _convolution(\n+      input_t,\n+      weight_t,\n+      bias,\n+      stride,\n+      padding,\n+      dilation,\n+      /*transposed*/ false,\n+      output_padding,\n+      groups,\n+      att);\n+}\n+\n+Tensor convolution_pointwise_binary(\n+    const Tensor& input_t,\n+    const Tensor& other_t,\n+    const Tensor& weight_t,\n+    const c10::optional<Tensor>& bias_opt,\n+    IntArrayRef padding,\n+    IntArrayRef stride,\n+    IntArrayRef dilation,\n+    int64_t groups,\n+    c10::string_view binary_attr,\n+    c10::optional<at::Scalar> alpha,\n+    c10::optional<c10::string_view> unary_attr,\n+    torch::List<c10::optional<at::Scalar>> unary_scalars,\n+    c10::optional<c10::string_view> unary_algorithm) {\n+  Tensor output;\n+  Tensor bias = bias_opt.has_value() ? bias_opt.value() : at::Tensor();\n+  // Step1: Construct binary attr\n+  Attr attr;\n+  attr = construct_binary_attr(attr, binary_attr, other_t);\n+  // Step2: Append unary attr\n+  if (unary_attr.has_value())\n+    attr = construct_unary_attr(\n+        attr, unary_attr.value(), unary_scalars, unary_algorithm);\n+\n+  Tensor res = _convolution_out(\n+      output,\n+      input_t,\n+      weight_t,\n+      bias,\n+      stride,\n+      padding,\n+      dilation,\n+      /*transpoced*/ false,\n+      {{0, 0}},\n+      groups,\n+      attr);\n+\n+  // Step3: Run conv\n+  return res;\n+}\n+\n+\n+Tensor& convolution_pointwise_binary_(\n+    Tensor& other_t,\n+    const Tensor& input_t,\n+    const Tensor& weight_t,\n+    const c10::optional<Tensor>& bias_opt,\n+    IntArrayRef padding,\n+    IntArrayRef stride,\n+    IntArrayRef dilation,\n+    int64_t groups,\n+    c10::string_view binary_attr,\n+    c10::optional<at::Scalar> alpha,\n+    c10::optional<c10::string_view> unary_attr,\n+    torch::List<c10::optional<at::Scalar>> unary_scalars,\n+    c10::optional<c10::string_view> unary_algorithm) {\n+  Tensor bias = bias_opt.has_value() ? bias_opt.value() : at::Tensor();\n+  // Step1: Construct binary attr\n+  Attr attr;\n+  attr = construct_binary_attr(attr, binary_attr, other_t);\n+  \n+  std::cout<<\"binary_attr\"<<binary_attr<<std::endl;\n+  // Step2: Append unary attr\n+  if (unary_attr.has_value())\n+    attr = construct_unary_attr(\n+      attr, unary_attr.value(), unary_scalars, unary_algorithm);\n+  \n+  _convolution_out(\n+      other_t,\n+      input_t,\n+      weight_t,\n+      bias,\n+      stride,\n+      padding,\n+      dilation,\n+      /*transpoced*/ false,",
+        "comment_created_at": "2025-05-23T11:37:58+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Typo in the inline comment: 'transpoced' should be corrected to 'transposed'.\n```suggestion\n      /*transposed*/ false,\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104428290",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 154202,
+        "pr_file": "aten/src/ATen/native/mkldnn/xpu/Conv.cpp",
+        "discussion_id": "2104407669",
+        "commented_code": "@@ -751,11 +681,136 @@ std::tuple<Tensor, Tensor, Tensor> convolution_backward_overrideable(\n   return std::tuple<Tensor, Tensor, Tensor>{grad_input, grad_weight, grad_bias};\n }\n \n+Tensor convolution_pointwise(\n+    const Tensor& input_t,\n+    const Tensor& weight_t,\n+    const c10::optional<Tensor>& bias_opt,\n+    IntArrayRef padding,\n+    IntArrayRef stride,\n+    IntArrayRef dilation,\n+    int64_t groups,\n+    c10::string_view attr,\n+    torch::List<c10::optional<at::Scalar>> scalars,\n+    c10::optional<c10::string_view> algorithm) {\n+  Attr att;\n+  att = construct_unary_attr(att, attr, scalars, algorithm);\n+  const Tensor bias = bias_opt.has_value() ? bias_opt.value() : at::Tensor();\n+  std::vector<int64_t> output_padding = {0};\n+\n+  return _convolution(\n+      input_t,\n+      weight_t,\n+      bias,\n+      stride,\n+      padding,\n+      dilation,\n+      /*transposed*/ false,\n+      output_padding,\n+      groups,\n+      att);\n+}\n+\n+Tensor convolution_pointwise_binary(\n+    const Tensor& input_t,\n+    const Tensor& other_t,\n+    const Tensor& weight_t,\n+    const c10::optional<Tensor>& bias_opt,\n+    IntArrayRef padding,\n+    IntArrayRef stride,\n+    IntArrayRef dilation,\n+    int64_t groups,\n+    c10::string_view binary_attr,\n+    c10::optional<at::Scalar> alpha,\n+    c10::optional<c10::string_view> unary_attr,\n+    torch::List<c10::optional<at::Scalar>> unary_scalars,\n+    c10::optional<c10::string_view> unary_algorithm) {\n+  Tensor output;\n+  Tensor bias = bias_opt.has_value() ? bias_opt.value() : at::Tensor();\n+  // Step1: Construct binary attr\n+  Attr attr;\n+  attr = construct_binary_attr(attr, binary_attr, other_t);\n+  // Step2: Append unary attr\n+  if (unary_attr.has_value())\n+    attr = construct_unary_attr(\n+        attr, unary_attr.value(), unary_scalars, unary_algorithm);\n+\n+  Tensor res = _convolution_out(\n+      output,\n+      input_t,\n+      weight_t,\n+      bias,\n+      stride,\n+      padding,\n+      dilation,\n+      /*transpoced*/ false,\n+      {{0, 0}},\n+      groups,\n+      attr);\n+\n+  // Step3: Run conv\n+  return res;\n+}\n+\n+\n+Tensor& convolution_pointwise_binary_(\n+    Tensor& other_t,\n+    const Tensor& input_t,\n+    const Tensor& weight_t,\n+    const c10::optional<Tensor>& bias_opt,\n+    IntArrayRef padding,\n+    IntArrayRef stride,\n+    IntArrayRef dilation,\n+    int64_t groups,\n+    c10::string_view binary_attr,\n+    c10::optional<at::Scalar> alpha,\n+    c10::optional<c10::string_view> unary_attr,\n+    torch::List<c10::optional<at::Scalar>> unary_scalars,\n+    c10::optional<c10::string_view> unary_algorithm) {\n+  Tensor bias = bias_opt.has_value() ? bias_opt.value() : at::Tensor();\n+  // Step1: Construct binary attr\n+  Attr attr;\n+  attr = construct_binary_attr(attr, binary_attr, other_t);\n+  \n+  std::cout<<\"binary_attr\"<<binary_attr<<std::endl;\n+  // Step2: Append unary attr\n+  if (unary_attr.has_value())\n+    attr = construct_unary_attr(\n+      attr, unary_attr.value(), unary_scalars, unary_algorithm);\n+  \n+  _convolution_out(\n+      other_t,\n+      input_t,\n+      weight_t,\n+      bias,\n+      stride,\n+      padding,\n+      dilation,\n+      /*transpoced*/ false,",
+        "comment_created_at": "2025-05-23T11:50:42+00:00",
+        "comment_author": "ZhiweiYan-96",
+        "comment_body": "modified",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1957124391",
+    "pr_number": 147253,
+    "pr_file": "torch/csrc/jit/runtime/static/impl.cpp",
+    "created_at": "2025-02-15T14:08:24+00:00",
+    "commented_code": "const auto& schema_arg = schema_args[i_arg];\n\n    if (i_arg - 1 < args.size()) {\n      check_type(schema_arg, std::forward<IValueList>(args)[i_arg - 1]);\n      check_type(schema_arg, args[i_arg - 1]);",
+    "repo_full_name": "pytorch/pytorch",
+    "discussion_comments": [
+      {
+        "comment_id": "1957124391",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 147253,
+        "pr_file": "torch/csrc/jit/runtime/static/impl.cpp",
+        "discussion_id": "1957124391",
+        "commented_code": "@@ -1042,7 +1042,7 @@ void BlockRunner::set_inputs(IValueList&& args, const KeywordArgs& kwargs) {\n     const auto& schema_arg = schema_args[i_arg];\n \n     if (i_arg - 1 < args.size()) {\n-      check_type(schema_arg, std::forward<IValueList>(args)[i_arg - 1]);\n+      check_type(schema_arg, args[i_arg - 1]);",
+        "comment_created_at": "2025-02-15T14:08:24+00:00",
+        "comment_author": "Skylion007",
+        "comment_body": "What error does this resolve?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1957154993",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 147253,
+        "pr_file": "torch/csrc/jit/runtime/static/impl.cpp",
+        "discussion_id": "1957124391",
+        "commented_code": "@@ -1042,7 +1042,7 @@ void BlockRunner::set_inputs(IValueList&& args, const KeywordArgs& kwargs) {\n     const auto& schema_arg = schema_args[i_arg];\n \n     if (i_arg - 1 < args.size()) {\n-      check_type(schema_arg, std::forward<IValueList>(args)[i_arg - 1]);\n+      check_type(schema_arg, args[i_arg - 1]);",
+        "comment_created_at": "2025-02-15T16:48:46+00:00",
+        "comment_author": "cyyever",
+        "comment_body": "Tidy warns use-after-move. Although that isn't real, removing std::forward can make the code cleaner.   ",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

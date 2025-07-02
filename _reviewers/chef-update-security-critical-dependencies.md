@@ -1,0 +1,64 @@
+---
+title: Update security-critical dependencies
+description: Regularly audit and update third-party libraries and dependencies to
+  address known security vulnerabilities. Pay special attention to components that
+  handle sensitive operations such as file system access, encryption, or network communication.
+  Implement a systematic process to monitor CVEs and security bulletins relevant to
+  your dependencies, and document...
+repository: chef/chef
+label: Security
+language: Markdown
+comments_count: 1
+repository_stars: 7860
+---
+
+Regularly audit and update third-party libraries and dependencies to address known security vulnerabilities. Pay special attention to components that handle sensitive operations such as file system access, encryption, or network communication. Implement a systematic process to monitor CVEs and security bulletins relevant to your dependencies, and document all security-related updates in release notes with specific vulnerability references.
+
+Example:
+```ruby
+# In your dependency management file (e.g., Gemfile, package.json, requirements.txt)
+
+# GOOD: Specify minimum secure versions with comments explaining security implications
+gem 'libarchive', '>= 3.5.2'  # Addresses symbolic link handling vulnerabilities
+gem 'openssl', '>= 1.1.1l'    # Resolves CVE-2021-3711 and CVE-2021-3712
+
+# BETTER: Include automated security scanning in your CI pipeline
+# Example GitHub Actions workflow snippet:
+- name: Security scan dependencies
+  uses: some-security-scanner-action@v1
+  with:
+    scan-type: 'dependency'
+    fail-on: 'high'
+```
+
+When updating dependencies for security reasons, always include clear documentation in your release notes that specifies:
+1. Which dependency was updated
+2. The version change (from/to)
+3. What security vulnerability was addressed
+4. Any potential impact on existing functionality
+
+
+[
+  {
+    "discussion_id": "697660971",
+    "pr_number": 11976,
+    "pr_file": "RELEASE_NOTES.md",
+    "created_at": "2021-08-27T19:04:43+00:00",
+    "commented_code": "This file holds \"in progress\" release notes for the current release under development and is intended for consumption by the Chef Documentation team. Please see <https://docs.chef.io/release_notes/> for the official Chef release notes.\n\n## What's New in 17.4\n## What's New in 17.4.38\n\n### Bug fixes\n\n- Resolved a regression introduced in Chef Infra Client 17.4 that would cause HWRP-style resources inheriting from LWRPBase to fail.\n\n### Enhancements\n\n- Log output has been improved to better deliniate when the Infra Phase and Compliance Phase start and end.\n- Ohai data collection of Amazon EC2 metadata has been improved to collect additional data for some configurations.\n- Removed ERROR logs when retrying failed communication with the Chef Infra Server.\n- Improved the `archive_file` resource by upgrading the `libarchive` library it uses, which includes the following improvements:\n  - Support for PWB and v7 binary CPIO formats.\n  - Support for the deflate algorithm in symbolic link decompression with zip files.\n  - Various bug fixes when working with CAB, ZIP, 7zip, and RAR files.\n\n### Security\n\n#### OpenSSL 1.1.1l\n\nOpenSSL has been updated from 1.1.1k to 1.1.1l on macOS systems to resolve the following CVEs:\n\n- [CVE-2021-3711](https://nvd.nist.gov/vuln/detail/CVE-2021-3711)\n- [CVE-2021-3712](https://nvd.nist.gov/vuln/detail/CVE-2021-3712)\n\n#### libarchive 3.5.2\n\nUpdated the libarchive library which powers the archive_file resource from 3.5.1 to 3.5.2 to resolve security vulnerabilities in libarchive's handling of symbolic links.",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "697660971",
+        "repo_full_name": "chef/chef",
+        "pr_number": 11976,
+        "pr_file": "RELEASE_NOTES.md",
+        "discussion_id": "697660971",
+        "commented_code": "@@ -1,6 +1,35 @@\n This file holds \"in progress\" release notes for the current release under development and is intended for consumption by the Chef Documentation team. Please see <https://docs.chef.io/release_notes/> for the official Chef release notes.\n \n-## What's New in 17.4\n+## What's New in 17.4.38\n+\n+### Bug fixes\n+\n+- Resolved a regression introduced in Chef Infra Client 17.4 that would cause HWRP-style resources inheriting from LWRPBase to fail.\n+\n+### Enhancements\n+\n+- Log output has been improved to better deliniate when the Infra Phase and Compliance Phase start and end.\n+- Ohai data collection of Amazon EC2 metadata has been improved to collect additional data for some configurations.\n+- Removed ERROR logs when retrying failed communication with the Chef Infra Server.\n+- Improved the `archive_file` resource by upgrading the `libarchive` library it uses, which includes the following improvements:\n+  - Support for PWB and v7 binary CPIO formats.\n+  - Support for the deflate algorithm in symbolic link decompression with zip files.\n+  - Various bug fixes when working with CAB, ZIP, 7zip, and RAR files.\n+\n+### Security\n+\n+#### OpenSSL 1.1.1l\n+\n+OpenSSL has been updated from 1.1.1k to 1.1.1l on macOS systems to resolve the following CVEs:\n+\n+- [CVE-2021-3711](https://nvd.nist.gov/vuln/detail/CVE-2021-3711)\n+- [CVE-2021-3712](https://nvd.nist.gov/vuln/detail/CVE-2021-3712)\n+\n+#### libarchive 3.5.2\n+\n+Updated the libarchive library which powers the archive_file resource from 3.5.1 to 3.5.2 to resolve security vulnerabilities in libarchive's handling of symbolic links.",
+        "comment_created_at": "2021-08-27T19:04:43+00:00",
+        "comment_author": "kagarmoe",
+        "comment_body": "```suggestion\r\nUpdated the libarchive library that powers the `archive_file` resource from 3.5.1 to 3.5.2 to resolve security vulnerabilities in libarchive's handling of symbolic links.\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

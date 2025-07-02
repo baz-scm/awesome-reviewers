@@ -1,0 +1,109 @@
+---
+title: Remove commented code
+description: Avoid leaving commented-out code in the codebase. Version control systems
+  already track the history of changes, making commented-out code unnecessary. Removing
+  unused commented code improves readability, reduces confusion, and keeps the codebase
+  clean.
+repository: chef/chef
+label: Code Style
+language: Yaml
+comments_count: 3
+repository_stars: 7860
+---
+
+Avoid leaving commented-out code in the codebase. Version control systems already track the history of changes, making commented-out code unnecessary. Removing unused commented code improves readability, reduces confusion, and keeps the codebase clean.
+
+Example of code to avoid:
+```yaml
+builder-to-testers-map:
+  ubuntu-20.04-x86_64:
+    - ubuntu-16.04-x86_64
+    - ubuntu-18.04-x86_64
+    - ubuntu-20.04-x86_64
+  # windows-2012r2-i386:
+  #   - windows-2012r2-i386
+```
+
+Instead, simply remove the commented lines completely. If the code needs to be referenced later, it can be found in the commit history.
+
+
+[
+  {
+    "discussion_id": "1170982646",
+    "pr_number": 13694,
+    "pr_file": ".expeditor/adhoc-canary.omnibus.yml",
+    "created_at": "2023-04-19T08:14:27+00:00",
+    "commented_code": "- ubuntu-16.04-x86_64\n    - ubuntu-18.04-x86_64\n    - ubuntu-20.04-x86_64\n  windows-2012r2-i386:\n    - windows-2012r2-i386\n  # windows-2012r2-i386:",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "1170982646",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13694,
+        "pr_file": ".expeditor/adhoc-canary.omnibus.yml",
+        "discussion_id": "1170982646",
+        "commented_code": "@@ -66,8 +66,8 @@ builder-to-testers-map:\n     - ubuntu-16.04-x86_64\n     - ubuntu-18.04-x86_64\n     - ubuntu-20.04-x86_64\n-  windows-2012r2-i386:\n-    - windows-2012r2-i386\n+  # windows-2012r2-i386:",
+        "comment_created_at": "2023-04-19T08:14:27+00:00",
+        "comment_author": "neha-p6",
+        "comment_body": "can we remove the commented code? We will still know what was removed from this commit if anything is needed in future",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1170982889",
+    "pr_number": 13694,
+    "pr_file": ".expeditor/release.omnibus.yml",
+    "created_at": "2023-04-19T08:14:40+00:00",
+    "commented_code": "- sles-15-x86_64\n  sles-15-aarch64:\n    - sles-15-aarch64\n  solaris2-5.11-i386:\n    - solaris2-5.11-i386\n  # solaris2-5.11-i386:\n  #   - solaris2-5.11-i386",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "1170982889",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13694,
+        "pr_file": ".expeditor/release.omnibus.yml",
+        "discussion_id": "1170982889",
+        "commented_code": "@@ -55,8 +55,8 @@ builder-to-testers-map:\n     - sles-15-x86_64\n   sles-15-aarch64:\n     - sles-15-aarch64\n-  solaris2-5.11-i386:\n-    - solaris2-5.11-i386\n+  # solaris2-5.11-i386:\n+  #   - solaris2-5.11-i386",
+        "comment_created_at": "2023-04-19T08:14:40+00:00",
+        "comment_author": "neha-p6",
+        "comment_body": "can we remove the commented code? We will still know what was removed from this commit if anything is needed in future",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1170983093",
+    "pr_number": 13694,
+    "pr_file": ".expeditor/release.omnibus.yml",
+    "created_at": "2023-04-19T08:14:51+00:00",
+    "commented_code": "- ubuntu-16.04-x86_64\n    - ubuntu-18.04-x86_64\n    - ubuntu-20.04-x86_64\n  windows-2012r2-i386:\n    - windows-2012r2-i386\n  # windows-2012r2-i386:\n  #   - windows-2012r2-i386\n  windows-2012r2-x86_64:",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "1170983093",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13694,
+        "pr_file": ".expeditor/release.omnibus.yml",
+        "discussion_id": "1170983093",
+        "commented_code": "@@ -66,8 +66,8 @@ builder-to-testers-map:\n     - ubuntu-16.04-x86_64\n     - ubuntu-18.04-x86_64\n     - ubuntu-20.04-x86_64\n-  windows-2012r2-i386:\n-    - windows-2012r2-i386\n+  # windows-2012r2-i386:\n+  #   - windows-2012r2-i386\n   windows-2012r2-x86_64:",
+        "comment_created_at": "2023-04-19T08:14:51+00:00",
+        "comment_author": "neha-p6",
+        "comment_body": "can we remove the commented code? We will still know what was removed from this commit if anything is needed in future",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1171771397",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13694,
+        "pr_file": ".expeditor/release.omnibus.yml",
+        "discussion_id": "1170983093",
+        "commented_code": "@@ -66,8 +66,8 @@ builder-to-testers-map:\n     - ubuntu-16.04-x86_64\n     - ubuntu-18.04-x86_64\n     - ubuntu-20.04-x86_64\n-  windows-2012r2-i386:\n-    - windows-2012r2-i386\n+  # windows-2012r2-i386:\n+  #   - windows-2012r2-i386\n   windows-2012r2-x86_64:",
+        "comment_created_at": "2023-04-19T19:29:47+00:00",
+        "comment_author": "johnmccrae",
+        "comment_body": "Great point. Thanks. Doing that now. ",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

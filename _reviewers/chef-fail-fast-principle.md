@@ -1,0 +1,152 @@
+---
+title: Fail fast principle
+description: Design CI/CD pipelines to fail quickly and visibly rather than masking
+  errors through excessive retries or complex conditions. When a build step fails,
+  it should fail immediately with clear error reporting to reduce debugging time and
+  enable faster remediation.
+repository: chef/chef
+label: CI/CD
+language: Other
+comments_count: 3
+repository_stars: 7860
+---
+
+Design CI/CD pipelines to fail quickly and visibly rather than masking errors through excessive retries or complex conditions. When a build step fails, it should fail immediately with clear error reporting to reduce debugging time and enable faster remediation.
+
+Instead of implementing multiple retry attempts that delay the inevitable failure, prefer a minimal retry strategy or a single attempt with good error logging. This approach reduces build time and exposes problems sooner, allowing developers to address issues more efficiently.
+
+For example, replace code like this:
+```
+$install_attempt = 0
+do {
+    Start-Sleep -Seconds 5
+    $install_attempt++
+    Write-BuildLine "Install attempt $install_attempt"
+    bundle exec rake install:local --trace=stdout
+} while ((-not $?) -and ($install_attempt -lt 5))
+```
+
+With a simpler approach:
+```
+bundle exec rake install --trace=stdout
+```
+
+Similarly, when configuring pipeline conditions, use concise regex patterns that are easy to understand and maintain rather than complex, hard-to-read conditions that might hide logic errors.
+
+
+[
+  {
+    "discussion_id": "1092469391",
+    "pr_number": 13529,
+    "pr_file": "habitat/plan.ps1",
+    "created_at": "2023-01-31T20:53:12+00:00",
+    "commented_code": "}\n        Write-BuildLine \" ** Running the chef project's 'rake install' to install the path-based gems so they look like any other installed gem.\"\n        $install_attempt = 0\n        do {\n            Start-Sleep -Seconds 5\n            $install_attempt++\n            Write-BuildLine \"Install attempt $install_attempt\"\n            bundle exec rake install:local --trace=stdout\n        } while ((-not $?) -and ($install_attempt -lt 5))\n        bundle exec rake install --trace=stdout # this needs to be 'bundle exec'd because a Rakefile makes reference to Bundler",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "1092469391",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13529,
+        "pr_file": "habitat/plan.ps1",
+        "discussion_id": "1092469391",
+        "commented_code": "@@ -104,12 +104,13 @@ function Invoke-Build {\n         }\n         Write-BuildLine \" ** Running the chef project's 'rake install' to install the path-based gems so they look like any other installed gem.\"\n         $install_attempt = 0\n-        do {\n-            Start-Sleep -Seconds 5\n-            $install_attempt++\n-            Write-BuildLine \"Install attempt $install_attempt\"\n-            bundle exec rake install:local --trace=stdout\n-        } while ((-not $?) -and ($install_attempt -lt 5))\n+        bundle exec rake install --trace=stdout # this needs to be 'bundle exec'd because a Rakefile makes reference to Bundler",
+        "comment_created_at": "2023-01-31T20:53:12+00:00",
+        "comment_author": "jaymzh",
+        "comment_body": "I don't think this file is related to the backport?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1093114088",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13529,
+        "pr_file": "habitat/plan.ps1",
+        "discussion_id": "1092469391",
+        "commented_code": "@@ -104,12 +104,13 @@ function Invoke-Build {\n         }\n         Write-BuildLine \" ** Running the chef project's 'rake install' to install the path-based gems so they look like any other installed gem.\"\n         $install_attempt = 0\n-        do {\n-            Start-Sleep -Seconds 5\n-            $install_attempt++\n-            Write-BuildLine \"Install attempt $install_attempt\"\n-            bundle exec rake install:local --trace=stdout\n-        } while ((-not $?) -and ($install_attempt -lt 5))\n+        bundle exec rake install --trace=stdout # this needs to be 'bundle exec'd because a Rakefile makes reference to Bundler",
+        "comment_created_at": "2023-02-01T11:46:45+00:00",
+        "comment_author": "neha-p6",
+        "comment_body": "Yeah, it was for windows plan runner to spit out errors in verify pipeline.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1093155925",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13529,
+        "pr_file": "habitat/plan.ps1",
+        "discussion_id": "1092469391",
+        "commented_code": "@@ -104,12 +104,13 @@ function Invoke-Build {\n         }\n         Write-BuildLine \" ** Running the chef project's 'rake install' to install the path-based gems so they look like any other installed gem.\"\n         $install_attempt = 0\n-        do {\n-            Start-Sleep -Seconds 5\n-            $install_attempt++\n-            Write-BuildLine \"Install attempt $install_attempt\"\n-            bundle exec rake install:local --trace=stdout\n-        } while ((-not $?) -and ($install_attempt -lt 5))\n+        bundle exec rake install --trace=stdout # this needs to be 'bundle exec'd because a Rakefile makes reference to Bundler",
+        "comment_created_at": "2023-02-01T12:30:06+00:00",
+        "comment_author": "neha-p6",
+        "comment_body": "Latest update: Windows plan issue is fixed. But I have updated this code block to retry installing gems once, instead of 5 time in a loop. That just increases build time and prevents us from seeing the error sooner. If it did not install after 2 attempts, it is not going to. No point in trying 5 times.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1095097557",
+    "pr_number": 13546,
+    "pr_file": ".buildkite/hooks/pre-command",
+    "created_at": "2023-02-02T21:21:59+00:00",
+    "commented_code": "set -eu\n\n# Only execute in the verify pipeline\n[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || exit 0\n[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/release$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/adhoc$ ]]  || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/adhoc-canary$ ]] || exit 0",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "1095097557",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13546,
+        "pr_file": ".buildkite/hooks/pre-command",
+        "discussion_id": "1095097557",
+        "commented_code": "@@ -3,23 +3,23 @@\n set -eu\n \n # Only execute in the verify pipeline\n-[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || exit 0\n+[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/release$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/adhoc$ ]]  || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/adhoc-canary$ ]] || exit 0",
+        "comment_created_at": "2023-02-02T21:21:59+00:00",
+        "comment_author": "jesseprieur",
+        "comment_body": "Should we do this as a proper regex? `(verify|validate/(release|adhoc|canary))$`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1095099057",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13546,
+        "pr_file": ".buildkite/hooks/pre-command",
+        "discussion_id": "1095097557",
+        "commented_code": "@@ -3,23 +3,23 @@\n set -eu\n \n # Only execute in the verify pipeline\n-[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || exit 0\n+[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/release$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/adhoc$ ]]  || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/adhoc-canary$ ]] || exit 0",
+        "comment_created_at": "2023-02-02T21:23:53+00:00",
+        "comment_author": "evanahlberg",
+        "comment_body": "on main i did this.. forgot to change it: \r\n\r\n`[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/.* ]] || exit 0`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1087220519",
+    "pr_number": 13530,
+    "pr_file": ".buildkite/hooks/pre-command",
+    "created_at": "2023-01-25T21:54:03+00:00",
+    "commented_code": "set -eu\n\n# Only execute in the verify pipeline\n[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || exit 0\n[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/release$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/adhoc$ ]]  || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/adhoc-canary$ ]] || exit 0",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "1087220519",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13530,
+        "pr_file": ".buildkite/hooks/pre-command",
+        "discussion_id": "1087220519",
+        "commented_code": "@@ -3,7 +3,7 @@\n set -eu\n \n # Only execute in the verify pipeline\n-[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || exit 0\n+[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/release$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/adhoc$ ]]  || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/adhoc-canary$ ]] || exit 0",
+        "comment_created_at": "2023-01-25T21:54:03+00:00",
+        "comment_author": "tpowell-progress",
+        "comment_body": "shouldn't you be able to just match on leading `'validate/'`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1087236070",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13530,
+        "pr_file": ".buildkite/hooks/pre-command",
+        "discussion_id": "1087220519",
+        "commented_code": "@@ -3,7 +3,7 @@\n set -eu\n \n # Only execute in the verify pipeline\n-[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || exit 0\n+[[ \"$BUILDKITE_PIPELINE_NAME\" =~ verify$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/release$ ]] || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/adhoc$ ]]  || [[ \"$BUILDKITE_PIPELINE_NAME\" =~ validate/adhoc-canary$ ]] || exit 0",
+        "comment_created_at": "2023-01-25T22:09:36+00:00",
+        "comment_author": "evanahlberg",
+        "comment_body": "yeah no problem, updated!",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

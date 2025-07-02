@@ -1,0 +1,131 @@
+---
+title: Format for readability
+description: 'Code should be formatted to optimize readability. Apply these key practices:
+
+
+  1. **Maintain reasonable line length** (typically 100 columns) by breaking long
+  lines of code. For function declarations with multiple parameters or long statements,
+  wrap them across lines with proper indentation:'
+repository: tensorflow/swift
+label: Code Style
+language: Other
+comments_count: 3
+repository_stars: 6136
+---
+
+Code should be formatted to optimize readability. Apply these key practices:
+
+1. **Maintain reasonable line length** (typically 100 columns) by breaking long lines of code. For function declarations with multiple parameters or long statements, wrap them across lines with proper indentation:
+
+```swift
+// Instead of:
+func getMedianExecutionTime(iterationCount: UInt = 10, _ verbose:Bool = false, _ function: () -> ()) -> Double {
+
+// Use:
+func getMedianExecutionTime(
+  iterationCount: UInt = 10, _ verbose:Bool = false, _ function: () -> ()
+) -> Double {
+```
+
+2. **Leverage language syntax conventions** for cleaner code. In Swift, when a closure is the last argument, you can omit the parentheses:
+
+```swift
+// Instead of:
+array.sorted(by: { s1, s2 in return s1 > s2 })
+
+// You can write:
+array.sorted { s1, s2 in return s1 > s2 }
+```
+
+3. **Use appropriate formatting for multiline strings**. In Swift, the indentation of multiline strings is aligned with the closing triple quotes, not the indentation in the source code:
+
+```swift
+let quotation = """
+    This text will have leading whitespace aligned
+    with the closing triple quotes.
+    """
+```
+
+These formatting practices improve code readability, reduce cognitive load, and make the codebase more maintainable.
+
+
+[
+  {
+    "discussion_id": "353856139",
+    "pr_number": 168,
+    "pr_file": "docs/site/tutorials/device_placement.ipynb",
+    "created_at": "2019-12-04T16:42:39+00:00",
+    "commented_code": "{\n \"cells\": [\n  {\n   \"cell_type\": \"markdown\",\n   \"metadata\": {\n    \"colab_type\": \"text\",\n    \"id\": \"QyCcF45zBQ3E\"\n   },\n   \"source\": [\n    \"##### Copyright 2019 The TensorFlow Authors. [Licensed under the Apache License, Version 2.0](#scrollTo=y_UVSRtBBsJk).\"\n   ]\n  },\n  {\n   \"cell_type\": \"code\",\n   \"execution_count\": null,\n   \"metadata\": {\n    \"colab\": {},\n    \"colab_type\": \"code\",\n    \"id\": \"CPII1rGR2rF9\",\n    \"scrolled\": true\n   },\n   \"outputs\": [],\n   \"source\": [\n    \"#@title Licensed under the Apache License, Version 2.0 (the \\\"License\\\"); { display-mode: \\\"form\\\" }\\n\",\n    \"// Licensed under the Apache License, Version 2.0 (the \\\"License\\\");\\n\",\n    \"// you may not use this file except in compliance with the License.\\n\",\n    \"// You may obtain a copy of the License at\\n\",\n    \"//\\n\",\n    \"// https://www.apache.org/licenses/LICENSE-2.0\\n\",\n    \"//\\n\",\n    \"// Unless required by applicable law or agreed to in writing, software\\n\",\n    \"// distributed under the License is distributed on an \\\"AS IS\\\" BASIS,\\n\",\n    \"// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\\n\",\n    \"// See the License for the specific language governing permissions and\\n\",\n    \"// limitations under the License.\"\n   ]\n  },\n  {\n   \"cell_type\": \"markdown\",\n   \"metadata\": {\n    \"colab_type\": \"text\",\n    \"id\": \"zBH72IXMJ3JJ\"\n   },\n   \"source\": [\n    \"<table class=\\\"tfo-notebook-buttons\\\" align=\\\"left\\\">\\n\",\n    \"  <td>\\n\",\n    \"    <a target=\\\"_blank\\\" href=\\\"https://www.tensorflow.org/swift/tutorials/model_training_walkthrough\\\"><img src=\\\"https://www.tensorflow.org/images/tf_logo_32px.png\\\" />View on TensorFlow.org</a>\\n\",\n    \"  </td>\\n\",\n    \"  <td>\\n\",\n    \"    <a target=\\\"_blank\\\" href=\\\"https://colab.research.google.com/github/tensorflow/swift/blob/master/docs/site/tutorials/model_training_walkthrough.ipynb\\\"><img src=\\\"https://www.tensorflow.org/images/colab_logo_32px.png\\\" />Run in Google Colab</a>\\n\",\n    \"  </td>\\n\",\n    \"  <td>\\n\",\n    \"    <a target=\\\"_blank\\\" href=\\\"https://github.com/tensorflow/swift/blob/master/docs/site/tutorials/model_training_walkthrough.ipynb\\\"><img src=\\\"https://www.tensorflow.org/images/GitHub-Mark-32px.png\\\" />View source on GitHub</a>\\n\",\n    \"  </td>\\n\",\n    \"</table>\"\n   ]\n  },\n  {\n   \"cell_type\": \"markdown\",\n   \"metadata\": {\n    \"colab_type\": \"text\",\n    \"id\": \"JtEZ1pCPn--z\"\n   },\n   \"source\": [\n    \"# Device placement APIs tutorial\"\n   ]\n  },\n  {\n   \"cell_type\": \"markdown\",\n   \"metadata\": {},\n   \"source\": [\n    \"This tutorial demonstrates how to use the device placement APIs in Swift for TensorFlow. Device placement APIs allow you to run operations on a specific device, for example, on a CPU or a GPU.\"\n   ]\n  },\n  {\n   \"cell_type\": \"markdown\",\n   \"metadata\": {\n    \"colab_type\": \"text\",\n    \"id\": \"1J3AuPBT9gyR\"\n   },\n   \"source\": [\n    \"### Configure imports\\n\",\n    \"\\n\",\n    \"Import TensorFlow and Dispatch\"\n   ]\n  },\n  {\n   \"cell_type\": \"code\",\n   \"execution_count\": 9,\n   \"metadata\": {\n    \"colab\": {},\n    \"colab_type\": \"code\",\n    \"id\": \"wr5A5WvthvZ0\",\n    \"scrolled\": true\n   },\n   \"outputs\": [],\n   \"source\": [\n    \"import TensorFlow\\n\",\n    \"import Dispatch\"\n   ]\n  },\n  {\n   \"cell_type\": \"markdown\",\n   \"metadata\": {},\n   \"source\": [\n    \"### Set up some timing utility functions\"\n   ]\n  },\n  {\n   \"cell_type\": \"markdown\",\n   \"metadata\": {},\n   \"source\": [\n    \"We'll use this function to run our code multiple times and return the median execution time.\"\n   ]\n  },\n  {\n   \"cell_type\": \"code\",\n   \"execution_count\": 10,\n   \"metadata\": {},\n   \"outputs\": [],\n   \"source\": [\n    \"func getMedianExecutionTime(iterationCount: UInt = 10, _ verbose:Bool = false, _ function: () -> ()) -> Double {\\n\",",
+    "repo_full_name": "tensorflow/swift",
+    "discussion_comments": [
+      {
+        "comment_id": "353856139",
+        "repo_full_name": "tensorflow/swift",
+        "pr_number": 168,
+        "pr_file": "docs/site/tutorials/device_placement.ipynb",
+        "discussion_id": "353856139",
+        "commented_code": "@@ -0,0 +1,372 @@\n+{\n+ \"cells\": [\n+  {\n+   \"cell_type\": \"markdown\",\n+   \"metadata\": {\n+    \"colab_type\": \"text\",\n+    \"id\": \"QyCcF45zBQ3E\"\n+   },\n+   \"source\": [\n+    \"##### Copyright 2019 The TensorFlow Authors. [Licensed under the Apache License, Version 2.0](#scrollTo=y_UVSRtBBsJk).\"\n+   ]\n+  },\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": null,\n+   \"metadata\": {\n+    \"colab\": {},\n+    \"colab_type\": \"code\",\n+    \"id\": \"CPII1rGR2rF9\",\n+    \"scrolled\": true\n+   },\n+   \"outputs\": [],\n+   \"source\": [\n+    \"#@title Licensed under the Apache License, Version 2.0 (the \\\"License\\\"); { display-mode: \\\"form\\\" }\\n\",\n+    \"// Licensed under the Apache License, Version 2.0 (the \\\"License\\\");\\n\",\n+    \"// you may not use this file except in compliance with the License.\\n\",\n+    \"// You may obtain a copy of the License at\\n\",\n+    \"//\\n\",\n+    \"// https://www.apache.org/licenses/LICENSE-2.0\\n\",\n+    \"//\\n\",\n+    \"// Unless required by applicable law or agreed to in writing, software\\n\",\n+    \"// distributed under the License is distributed on an \\\"AS IS\\\" BASIS,\\n\",\n+    \"// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\\n\",\n+    \"// See the License for the specific language governing permissions and\\n\",\n+    \"// limitations under the License.\"\n+   ]\n+  },\n+  {\n+   \"cell_type\": \"markdown\",\n+   \"metadata\": {\n+    \"colab_type\": \"text\",\n+    \"id\": \"zBH72IXMJ3JJ\"\n+   },\n+   \"source\": [\n+    \"<table class=\\\"tfo-notebook-buttons\\\" align=\\\"left\\\">\\n\",\n+    \"  <td>\\n\",\n+    \"    <a target=\\\"_blank\\\" href=\\\"https://www.tensorflow.org/swift/tutorials/model_training_walkthrough\\\"><img src=\\\"https://www.tensorflow.org/images/tf_logo_32px.png\\\" />View on TensorFlow.org</a>\\n\",\n+    \"  </td>\\n\",\n+    \"  <td>\\n\",\n+    \"    <a target=\\\"_blank\\\" href=\\\"https://colab.research.google.com/github/tensorflow/swift/blob/master/docs/site/tutorials/model_training_walkthrough.ipynb\\\"><img src=\\\"https://www.tensorflow.org/images/colab_logo_32px.png\\\" />Run in Google Colab</a>\\n\",\n+    \"  </td>\\n\",\n+    \"  <td>\\n\",\n+    \"    <a target=\\\"_blank\\\" href=\\\"https://github.com/tensorflow/swift/blob/master/docs/site/tutorials/model_training_walkthrough.ipynb\\\"><img src=\\\"https://www.tensorflow.org/images/GitHub-Mark-32px.png\\\" />View source on GitHub</a>\\n\",\n+    \"  </td>\\n\",\n+    \"</table>\"\n+   ]\n+  },\n+  {\n+   \"cell_type\": \"markdown\",\n+   \"metadata\": {\n+    \"colab_type\": \"text\",\n+    \"id\": \"JtEZ1pCPn--z\"\n+   },\n+   \"source\": [\n+    \"# Device placement APIs tutorial\"\n+   ]\n+  },\n+  {\n+   \"cell_type\": \"markdown\",\n+   \"metadata\": {},\n+   \"source\": [\n+    \"This tutorial demonstrates how to use the device placement APIs in Swift for TensorFlow. Device placement APIs allow you to run operations on a specific device, for example, on a CPU or a GPU.\"\n+   ]\n+  },\n+  {\n+   \"cell_type\": \"markdown\",\n+   \"metadata\": {\n+    \"colab_type\": \"text\",\n+    \"id\": \"1J3AuPBT9gyR\"\n+   },\n+   \"source\": [\n+    \"### Configure imports\\n\",\n+    \"\\n\",\n+    \"Import TensorFlow and Dispatch\"\n+   ]\n+  },\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": 9,\n+   \"metadata\": {\n+    \"colab\": {},\n+    \"colab_type\": \"code\",\n+    \"id\": \"wr5A5WvthvZ0\",\n+    \"scrolled\": true\n+   },\n+   \"outputs\": [],\n+   \"source\": [\n+    \"import TensorFlow\\n\",\n+    \"import Dispatch\"\n+   ]\n+  },\n+  {\n+   \"cell_type\": \"markdown\",\n+   \"metadata\": {},\n+   \"source\": [\n+    \"### Set up some timing utility functions\"\n+   ]\n+  },\n+  {\n+   \"cell_type\": \"markdown\",\n+   \"metadata\": {},\n+   \"source\": [\n+    \"We'll use this function to run our code multiple times and return the median execution time.\"\n+   ]\n+  },\n+  {\n+   \"cell_type\": \"code\",\n+   \"execution_count\": 10,\n+   \"metadata\": {},\n+   \"outputs\": [],\n+   \"source\": [\n+    \"func getMedianExecutionTime(iterationCount: UInt = 10, _ verbose:Bool = false, _ function: () -> ()) -> Double {\\n\",",
+        "comment_created_at": "2019-12-04T16:42:39+00:00",
+        "comment_author": "marcrasi",
+        "comment_body": "line-wrap like this to keep it under 100 columns:\r\n```\r\nfunc getMedianExecutionTime(\r\n  iterationCount: UInt = 10, _ verbose:Bool = false, _ function: () -> ()\r\n) -> Double {\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "279618335",
+    "pr_number": 182,
+    "pr_file": "docs/site/tutorials/a_swift_tour.ipynb",
+    "created_at": "2019-04-30T05:39:31+00:00",
+    "commented_code": "}\n      ]\n    },\n    {\n      \"metadata\": {\n        \"id\": \"9zKWsFm7vjFw\",\n        \"colab_type\": \"text\"\n      },\n      \"cell_type\": \"markdown\",\n      \"source\": [\n        \"Notice above that we didn't wrap the closure in parentheses when passing it into the `sorted` function. This is because if the last (or only) argument of a function is a closure, the parentheses for it are optional. For a more clear example:\"",
+    "repo_full_name": "tensorflow/swift",
+    "discussion_comments": [
+      {
+        "comment_id": "279618335",
+        "repo_full_name": "tensorflow/swift",
+        "pr_number": 182,
+        "pr_file": "docs/site/tutorials/a_swift_tour.ipynb",
+        "discussion_id": "279618335",
+        "commented_code": "@@ -1394,6 +1394,50 @@\n         }\n       ]\n     },\n+    {\n+      \"metadata\": {\n+        \"id\": \"9zKWsFm7vjFw\",\n+        \"colab_type\": \"text\"\n+      },\n+      \"cell_type\": \"markdown\",\n+      \"source\": [\n+        \"Notice above that we didn't wrap the closure in parentheses when passing it into the `sorted` function. This is because if the last (or only) argument of a function is a closure, the parentheses for it are optional. For a more clear example:\"",
+        "comment_created_at": "2019-04-30T05:39:31+00:00",
+        "comment_author": "bartchr808",
+        "comment_body": "This change is the addition of showing how you don't need to put the closure inside the parameter of the function.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "267909525",
+    "pr_number": 157,
+    "pr_file": "docs/site/tutorials/a_swift_tour.ipynb",
+    "created_at": "2019-03-21T18:52:44+00:00",
+    "commented_code": "},\n    {\n      \"metadata\": {\n        \"id\": \"To8-oxWUdE2H\",\n        \"id\": \"3avZRAzlguOQ\",\n        \"colab_type\": \"code\",\n        \"colab\": {}\n      },\n      \"cell_type\": \"code\",\n      \"source\": [\n        \"// Experiment:\\n\",\n        \"// Use `\\\\()` to include a floating-point calculation in a string and to include someone's name in a\\n\",\n        \"// greeting.\"\n      ],\n      \"execution_count\": 0,\n      \"outputs\": []\n    },\n    {\n      \"metadata\": {\n        \"id\": \"4T6rPJ6tWaKu\",\n        \"colab_type\": \"text\"\n      },\n      \"cell_type\": \"markdown\",\n      \"source\": [\n        \"#### Experiment\\n\",\n        \"\\n\",\n        \"Use `()` to include a floating-point calculation in a string and to include someone\u2019s name in a greeting.\\n\",\n        \"Use three double quotation marks (`\\\"\\\"\\\"`) for strings that take up multiple lines. Indentation at the start of each quoted line is removed, as long as it matches the indentation of the closing quotation marks. For example:\"\n      ]\n    },\n    {\n      \"metadata\": {\n        \"id\": \"_5RJZBV1Webt\",\n        \"colab_type\": \"code\",\n        \"outputId\": \"8723eb4b-431b-4dcb-bc8c-002c7edc8555\",\n        \"colab\": {\n          \"base_uri\": \"https://localhost:8080/\",\n          \"height\": 54\n        }\n      },\n      \"cell_type\": \"code\",\n      \"source\": [\n        \"let quotation = \\\"\\\"\\\"\\n\",\n        \"    Even though there's whitespace to the left,\\n\",\n        \"    the actual lines aren't indented.\\n\",\n        \"    Except for this line.\\n\",",
+    "repo_full_name": "tensorflow/swift",
+    "discussion_comments": [
+      {
+        "comment_id": "267909525",
+        "repo_full_name": "tensorflow/swift",
+        "pr_number": 157,
+        "pr_file": "docs/site/tutorials/a_swift_tour.ipynb",
+        "discussion_id": "267909525",
+        "commented_code": "@@ -272,23 +292,82 @@\n     },\n     {\n       \"metadata\": {\n-        \"id\": \"To8-oxWUdE2H\",\n+        \"id\": \"3avZRAzlguOQ\",\n+        \"colab_type\": \"code\",\n+        \"colab\": {}\n+      },\n+      \"cell_type\": \"code\",\n+      \"source\": [\n+        \"// Experiment:\\n\",\n+        \"// Use `\\\\()` to include a floating-point calculation in a string and to include someone's name in a\\n\",\n+        \"// greeting.\"\n+      ],\n+      \"execution_count\": 0,\n+      \"outputs\": []\n+    },\n+    {\n+      \"metadata\": {\n+        \"id\": \"4T6rPJ6tWaKu\",\n         \"colab_type\": \"text\"\n       },\n       \"cell_type\": \"markdown\",\n       \"source\": [\n-        \"#### Experiment\\n\",\n-        \"\\n\",\n-        \"Use `()` to include a floating-point calculation in a string and to include someone\u2019s name in a greeting.\\n\",\n+        \"Use three double quotation marks (`\\\"\\\"\\\"`) for strings that take up multiple lines. Indentation at the start of each quoted line is removed, as long as it matches the indentation of the closing quotation marks. For example:\"\n+      ]\n+    },\n+    {\n+      \"metadata\": {\n+        \"id\": \"_5RJZBV1Webt\",\n+        \"colab_type\": \"code\",\n+        \"outputId\": \"8723eb4b-431b-4dcb-bc8c-002c7edc8555\",\n+        \"colab\": {\n+          \"base_uri\": \"https://localhost:8080/\",\n+          \"height\": 54\n+        }\n+      },\n+      \"cell_type\": \"code\",\n+      \"source\": [\n+        \"let quotation = \\\"\\\"\\\"\\n\",\n+        \"    Even though there's whitespace to the left,\\n\",\n+        \"    the actual lines aren't indented.\\n\",\n+        \"    Except for this line.\\n\",",
+        "comment_created_at": "2019-03-21T18:52:44+00:00",
+        "comment_author": "saeta",
+        "comment_body": "I'm not sure I understand this line. Looking at the output of the cell, it doesn't look indented.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "267926486",
+        "repo_full_name": "tensorflow/swift",
+        "pr_number": 157,
+        "pr_file": "docs/site/tutorials/a_swift_tour.ipynb",
+        "discussion_id": "267909525",
+        "commented_code": "@@ -272,23 +292,82 @@\n     },\n     {\n       \"metadata\": {\n-        \"id\": \"To8-oxWUdE2H\",\n+        \"id\": \"3avZRAzlguOQ\",\n+        \"colab_type\": \"code\",\n+        \"colab\": {}\n+      },\n+      \"cell_type\": \"code\",\n+      \"source\": [\n+        \"// Experiment:\\n\",\n+        \"// Use `\\\\()` to include a floating-point calculation in a string and to include someone's name in a\\n\",\n+        \"// greeting.\"\n+      ],\n+      \"execution_count\": 0,\n+      \"outputs\": []\n+    },\n+    {\n+      \"metadata\": {\n+        \"id\": \"4T6rPJ6tWaKu\",\n         \"colab_type\": \"text\"\n       },\n       \"cell_type\": \"markdown\",\n       \"source\": [\n-        \"#### Experiment\\n\",\n-        \"\\n\",\n-        \"Use `()` to include a floating-point calculation in a string and to include someone\u2019s name in a greeting.\\n\",\n+        \"Use three double quotation marks (`\\\"\\\"\\\"`) for strings that take up multiple lines. Indentation at the start of each quoted line is removed, as long as it matches the indentation of the closing quotation marks. For example:\"\n+      ]\n+    },\n+    {\n+      \"metadata\": {\n+        \"id\": \"_5RJZBV1Webt\",\n+        \"colab_type\": \"code\",\n+        \"outputId\": \"8723eb4b-431b-4dcb-bc8c-002c7edc8555\",\n+        \"colab\": {\n+          \"base_uri\": \"https://localhost:8080/\",\n+          \"height\": 54\n+        }\n+      },\n+      \"cell_type\": \"code\",\n+      \"source\": [\n+        \"let quotation = \\\"\\\"\\\"\\n\",\n+        \"    Even though there's whitespace to the left,\\n\",\n+        \"    the actual lines aren't indented.\\n\",\n+        \"    Except for this line.\\n\",",
+        "comment_created_at": "2019-03-21T19:40:06+00:00",
+        "comment_author": "dan-zheng",
+        "comment_body": "Multiline strings in Swift are aligned based on the indentation of the closing triple quotes.\r\n\r\nhttps://docs.swift.org/swift-book/LanguageGuide/StringsAndCharacters.html",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

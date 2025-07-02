@@ -1,0 +1,78 @@
+---
+title: Document non-obvious logic
+description: Add clear comments explaining the purpose and reasoning behind complex
+  or non-obvious code logic. Comments should explain 'why' certain implementation
+  choices were made or how specific variables and conditions function, rather than
+  just restating what the code does. This is especially important for security-related
+  checks, timing mechanisms, interruption...
+repository: dotnet/runtime
+label: Documentation
+language: C
+comments_count: 2
+repository_stars: 16578
+---
+
+Add clear comments explaining the purpose and reasoning behind complex or non-obvious code logic. Comments should explain 'why' certain implementation choices were made or how specific variables and conditions function, rather than just restating what the code does. This is especially important for security-related checks, timing mechanisms, interruption handling, and specialized attribute usage.
+
+For example:
+```c
+/* Tracks the starting time of the wait loop to calculate the remaining timeout
+ * when re-entering the loop after an interruption. */
+DWORD start_ticks = GetTickCount();
+
+// OR
+
+/* Skip inlining methods requiring security objects to prevent
+ * security context bypass vulnerabilities */
+if (target_method->flags & METHOD_ATTRIBUTE_REQSECOBJ) {
+    return FALSE;
+}
+```
+
+
+[
+  {
+    "discussion_id": "2115632001",
+    "pr_number": 116134,
+    "pr_file": "src/mono/mono/mini/interp/transform.c",
+    "created_at": "2025-05-30T10:35:03+00:00",
+    "commented_code": "} else if (td->method->wrapper_type == MONO_WRAPPER_RUNTIME_INVOKE) {\n\t\t\t// This scenario causes https://github.com/dotnet/runtime/issues/83792\n\t\t\treturn FALSE;\n\t\t} else if (target_method->flags & METHOD_ATTRIBUTE_REQSECOBJ) {",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2115632001",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116134,
+        "pr_file": "src/mono/mono/mini/interp/transform.c",
+        "discussion_id": "2115632001",
+        "commented_code": "@@ -3854,6 +3854,8 @@ interp_transform_call (TransformData *td, MonoMethod *method, MonoMethod *target\n \t\t} else if (td->method->wrapper_type == MONO_WRAPPER_RUNTIME_INVOKE) {\n \t\t\t// This scenario causes https://github.com/dotnet/runtime/issues/83792\n \t\t\treturn FALSE;\n+\t\t} else if (target_method->flags & METHOD_ATTRIBUTE_REQSECOBJ) {",
+        "comment_created_at": "2025-05-30T10:35:03+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "[nitpick] Consider adding a brief comment explaining why the METHOD_ATTRIBUTE_REQSECOBJ flag check is necessary in this context to prevent unintended inlining.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2107732713",
+    "pr_number": 116001,
+    "pr_file": "src/mono/mono/utils/mono-os-wait-win32.c",
+    "created_at": "2025-05-26T18:34:08+00:00",
+    "commented_code": "DWORD result = WAIT_FAILED;\n\tMonoThreadInfo * const info = alertable ? mono_thread_info_current_unchecked () : NULL;",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2107732713",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116001,
+        "pr_file": "src/mono/mono/utils/mono-os-wait-win32.c",
+        "discussion_id": "2107732713",
+        "commented_code": "@@ -93,17 +95,46 @@ win32_wait_for_single_object_ex (HANDLE handle, DWORD timeout, BOOL alertable, B\n \tDWORD result = WAIT_FAILED;\n \tMonoThreadInfo * const info = alertable ? mono_thread_info_current_unchecked () : NULL;\n ",
+        "comment_created_at": "2025-05-26T18:34:08+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "[nitpick] Add a brief comment explaining the purpose of tracking `start_ticks` and how it adjusts the remaining timeout when re-entering the wait loop.\n```suggestion\n\n\t/* Tracks the starting time of the wait loop to calculate the remaining timeout\n\t * when re-entering the loop after an interruption. */\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

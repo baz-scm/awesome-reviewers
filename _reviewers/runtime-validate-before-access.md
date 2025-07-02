@@ -1,0 +1,110 @@
+---
+title: Validate before access
+description: Always validate parameters and initialize variables before access to
+  prevent null dereference and undefined behavior. When handling arrays or pointers,
+  require and validate length parameters. For conditionally initialized variables,
+  ensure all code paths explicitly set values.
+repository: dotnet/runtime
+label: Null Handling
+language: C
+comments_count: 3
+repository_stars: 16578
+---
+
+Always validate parameters and initialize variables before access to prevent null dereference and undefined behavior. When handling arrays or pointers, require and validate length parameters. For conditionally initialized variables, ensure all code paths explicitly set values.
+
+Example:
+```c
+// Unsafe: No length validation before indexing
+static bool IsPathNotFullyQualified(WCHAR* path)
+{
+    // Potential null dereference or buffer overflow
+    if (path[0] == VOLUME_SEPARATOR_CHAR) return false;
+}
+
+// Safe: Length parameter and validation
+static bool IsPathNotFullyQualified(WCHAR* path, size_t length)
+{
+    // Validate before accessing
+    if (path == NULL || length < 1) return true;
+    if (path[0] == VOLUME_SEPARATOR_CHAR) return false;
+}
+
+// For conditional initialization, always set values in all branches:
+if (!bitmap_only)
+    interface_offsets_full[i] = gklass->interface_offsets_packed[i];
+else
+    interface_offsets_full[i] = 0; // Prevent uninitialized value use
+```
+
+When modifying control flow to prevent null pointer dereferences, add explanatory comments to clarify the safety measures for future maintainers.
+
+
+[
+  {
+    "discussion_id": "2114392290",
+    "pr_number": 116096,
+    "pr_file": "src/native/minipal/file.c",
+    "created_at": "2025-05-29T17:09:09+00:00",
+    "commented_code": "// Licensed to the .NET Foundation under one or more agreements.\n// The .NET Foundation licenses this file to you under the MIT license.\n\n#include <stdint.h>\n#include <minipal/file.h>\n\n#ifdef TARGET_WINDOWS\n#include <Windows.h>\n\n#define ExtendedPrefix L\"\\\\\\\\?\\\\\"\n#define DevicePathPrefix L\"\\\\\\\\.\\\\\"\n#define UNCExtendedPathPrefix L\"\\\\\\\\?\\\\UNC\\\\\"\n#define UNCPathPrefix L\"\\\\\\\\\"\n#define DIRECTORY_SEPARATOR_CHAR L'\\\\'\n#define ALT_DIRECTORY_SEPARATOR_CHAR L'/'\n#define VOLUME_SEPARATOR_CHAR L':'\n\nstatic bool IsDirectorySeparator(WCHAR ch)\n{\n    return (ch == DIRECTORY_SEPARATOR_CHAR) || (ch == ALT_DIRECTORY_SEPARATOR_CHAR);\n}\n\nstatic bool IsPathNotFullyQualified(WCHAR* path)",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2114392290",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116096,
+        "pr_file": "src/native/minipal/file.c",
+        "discussion_id": "2114392290",
+        "commented_code": "@@ -0,0 +1,198 @@\n+// Licensed to the .NET Foundation under one or more agreements.\n+// The .NET Foundation licenses this file to you under the MIT license.\n+\n+#include <stdint.h>\n+#include <minipal/file.h>\n+\n+#ifdef TARGET_WINDOWS\n+#include <Windows.h>\n+\n+#define ExtendedPrefix L\"\\\\\\\\?\\\\\"\n+#define DevicePathPrefix L\"\\\\\\\\.\\\\\"\n+#define UNCExtendedPathPrefix L\"\\\\\\\\?\\\\UNC\\\\\"\n+#define UNCPathPrefix L\"\\\\\\\\\"\n+#define DIRECTORY_SEPARATOR_CHAR L'\\\\'\n+#define ALT_DIRECTORY_SEPARATOR_CHAR L'/'\n+#define VOLUME_SEPARATOR_CHAR L':'\n+\n+static bool IsDirectorySeparator(WCHAR ch)\n+{\n+    return (ch == DIRECTORY_SEPARATOR_CHAR) || (ch == ALT_DIRECTORY_SEPARATOR_CHAR);\n+}\n+\n+static bool IsPathNotFullyQualified(WCHAR* path)",
+        "comment_created_at": "2025-05-29T17:09:09+00:00",
+        "comment_author": "AaronRobinsonMSFT",
+        "comment_body": "```suggestion\r\nstatic bool IsPathNotFullyQualified(WCHAR* path, size_t length)\r\n```\r\n\r\nPass in the path length and assert it is sufficient since we are indexing into the array.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2174309399",
+    "pr_number": 117140,
+    "pr_file": "src/mono/mono/metadata/class-setup-vtable.c",
+    "created_at": "2025-06-30T06:20:57+00:00",
+    "commented_code": "interfaces_full [i] = inflated;\n\t\t\tif (!bitmap_only)\n\t\t\t\tinterface_offsets_full [i] = gklass->interface_offsets_packed [i];\n\t\t\telse\n\t\t\t\tinterface_offsets_full [i] = 0;",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2174309399",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117140,
+        "pr_file": "src/mono/mono/metadata/class-setup-vtable.c",
+        "discussion_id": "2174309399",
+        "commented_code": "@@ -183,6 +183,8 @@ mono_class_setup_interface_offsets_internal (MonoClass *klass, int cur_slot, int\n \t\t\tinterfaces_full [i] = inflated;\n \t\t\tif (!bitmap_only)\n \t\t\t\tinterface_offsets_full [i] = gklass->interface_offsets_packed [i];\n+\t\t\telse\n+\t\t\t\tinterface_offsets_full [i] = 0;",
+        "comment_created_at": "2025-06-30T06:20:57+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Explicitly initializing interface_offsets_full to 0 in the bitmap_only branch prevents the use of an uninitialized value and avoids false positives from valgrind. Ensure that this branch covers all the necessary cases for proper memory initialization.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2111954481",
+    "pr_number": 116069,
+    "pr_file": "src/mono/mono/mini/interp/transform-opt.c",
+    "created_at": "2025-05-28T13:40:33+00:00",
+    "commented_code": "g_print (\"superins: \");\n\t\t\t\t\t\t\t\tinterp_dump_ins (ins, td->data_items);\n\t\t\t\t\t\t\t}",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2111954481",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116069,
+        "pr_file": "src/mono/mono/mini/interp/transform-opt.c",
+        "discussion_id": "2111954481",
+        "commented_code": "@@ -3804,9 +3806,7 @@ interp_super_instructions (TransformData *td)\n \t\t\t\t\t\t\t\tg_print (\"superins: \");\n \t\t\t\t\t\t\t\tinterp_dump_ins (ins, td->data_items);\n \t\t\t\t\t\t\t}",
+        "comment_created_at": "2025-05-28T13:40:33+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Replacing 'ins = ins->prev' with 'goto retry_ins' avoids a potential null pointer dereference, but consider adding a comment to clarify the control flow and ensure readability for future maintainers.\n```suggestion\n\t\t\t\t\t\t\t}\n\t\t\t\t\t\t\t// Retry processing the current instruction after modifying its opcode and operands.\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

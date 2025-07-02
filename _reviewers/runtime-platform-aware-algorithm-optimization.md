@@ -1,0 +1,180 @@
+---
+title: Platform-aware algorithm optimization
+description: When implementing performance-critical algorithms, design your code to
+  detect and utilize platform-specific hardware features while maintaining compatibility
+  across different architectures. Create abstraction layers that allow the same algorithm
+  to run on various platforms but take advantage of specialized instruction sets (like
+  AVX extensions) when...
+repository: dotnet/runtime
+label: Algorithms
+language: Txt
+comments_count: 2
+repository_stars: 16578
+---
+
+When implementing performance-critical algorithms, design your code to detect and utilize platform-specific hardware features while maintaining compatibility across different architectures. Create abstraction layers that allow the same algorithm to run on various platforms but take advantage of specialized instruction sets (like AVX extensions) when available.
+
+For example, instead of directly using platform-specific code:
+
+```csharp
+// Not recommended - tightly coupled to specific hardware
+public void ProcessData(float[] data)
+{
+    if (Avx2.IsSupported)
+    {
+        // Use AVX2 instructions
+    }
+    else
+    {
+        // Fallback implementation
+    }
+}
+```
+
+Create a strategy pattern that selects the appropriate implementation:
+
+```csharp
+// Recommended approach
+public interface IDataProcessor
+{
+    void ProcessData(float[] data);
+}
+
+public class DataProcessorFactory
+{
+    public static IDataProcessor Create()
+    {
+        if (Avx2.IsSupported)
+        {
+            return new Avx2DataProcessor();
+        }
+        else if (Sse.IsSupported)
+        {
+            return new SseDataProcessor();
+        }
+        return new DefaultDataProcessor();
+    }
+}
+```
+
+This approach facilitates platform-specific optimizations while maintaining clean separation of concerns, makes testing easier, and allows for future extensions as new instruction sets become available.
+
+
+[
+  {
+    "discussion_id": "2017489479",
+    "pr_number": 113956,
+    "pr_file": "src/coreclr/tools/Common/JitInterface/ThunkGenerator/InstructionSetDesc.txt",
+    "created_at": "2025-03-27T19:30:36+00:00",
+    "commented_code": "instructionset64bit,X86   ,AVX10v2\ninstructionset64bit,X86   ,AVX10v2_V512\ninstructionset64bit,X86   ,GFNI\ninstructionset64bit,X86   ,AVXVNNIINT8\ninstructionset64bit,X86   ,AVXVNNIINT16",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2017489479",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 113956,
+        "pr_file": "src/coreclr/tools/Common/JitInterface/ThunkGenerator/InstructionSetDesc.txt",
+        "discussion_id": "2017489479",
+        "commented_code": "@@ -102,6 +106,8 @@ instructionset64bit,X86   ,AVX10v1_V512\n instructionset64bit,X86   ,AVX10v2\n instructionset64bit,X86   ,AVX10v2_V512\n instructionset64bit,X86   ,GFNI\n+instructionset64bit,X86   ,AVXVNNIINT8\n+instructionset64bit,X86   ,AVXVNNIINT16",
+        "comment_created_at": "2025-03-27T19:30:36+00:00",
+        "comment_author": "saucecontrol",
+        "comment_body": "These don't need the X64 ISA defined. The X64 nested classes that will exist in the managed API are only there to hide `Avx2.X64` which would otherwise be inherited. JIT only needs to handle `AvxVnni*.X64.IsSupported` as intrinsic, which will happen automatically (to always return false) since there will be no ISA mapping.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2017532566",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 113956,
+        "pr_file": "src/coreclr/tools/Common/JitInterface/ThunkGenerator/InstructionSetDesc.txt",
+        "discussion_id": "2017489479",
+        "commented_code": "@@ -102,6 +106,8 @@ instructionset64bit,X86   ,AVX10v1_V512\n instructionset64bit,X86   ,AVX10v2\n instructionset64bit,X86   ,AVX10v2_V512\n instructionset64bit,X86   ,GFNI\n+instructionset64bit,X86   ,AVXVNNIINT8\n+instructionset64bit,X86   ,AVXVNNIINT16",
+        "comment_created_at": "2025-03-27T20:06:37+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "> to always return false\r\n\r\n`AvxVnni*.X64.IsSupported` should return false on a 32-bit machine and on a 64-bit machine it should return the same result as `AvxVnni*.IsSupported`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2017534021",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 113956,
+        "pr_file": "src/coreclr/tools/Common/JitInterface/ThunkGenerator/InstructionSetDesc.txt",
+        "discussion_id": "2017489479",
+        "commented_code": "@@ -102,6 +106,8 @@ instructionset64bit,X86   ,AVX10v1_V512\n instructionset64bit,X86   ,AVX10v2\n instructionset64bit,X86   ,AVX10v2_V512\n instructionset64bit,X86   ,GFNI\n+instructionset64bit,X86   ,AVXVNNIINT8\n+instructionset64bit,X86   ,AVXVNNIINT16",
+        "comment_created_at": "2025-03-27T20:07:56+00:00",
+        "comment_author": "khushal1996",
+        "comment_body": "Understood. I will be removing the ```AvxVnniInt*.x64``` Isas.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2017539524",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 113956,
+        "pr_file": "src/coreclr/tools/Common/JitInterface/ThunkGenerator/InstructionSetDesc.txt",
+        "discussion_id": "2017489479",
+        "commented_code": "@@ -102,6 +106,8 @@ instructionset64bit,X86   ,AVX10v1_V512\n instructionset64bit,X86   ,AVX10v2\n instructionset64bit,X86   ,AVX10v2_V512\n instructionset64bit,X86   ,GFNI\n+instructionset64bit,X86   ,AVXVNNIINT8\n+instructionset64bit,X86   ,AVXVNNIINT16",
+        "comment_created_at": "2025-03-27T20:12:32+00:00",
+        "comment_author": "khushal1996",
+        "comment_body": "> > to always return false\r\n> \r\n> `AvxVnni*.X64.IsSupported` should return false on a 32-bit machine and on a 64-bit machine it should return the same result as `AvxVnni*.IsSupported`\r\n\r\n\r\nhmm.. so to sum up, current structure should be kept as is.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2017558326",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 113956,
+        "pr_file": "src/coreclr/tools/Common/JitInterface/ThunkGenerator/InstructionSetDesc.txt",
+        "discussion_id": "2017489479",
+        "commented_code": "@@ -102,6 +106,8 @@ instructionset64bit,X86   ,AVX10v1_V512\n instructionset64bit,X86   ,AVX10v2\n instructionset64bit,X86   ,AVX10v2_V512\n instructionset64bit,X86   ,GFNI\n+instructionset64bit,X86   ,AVXVNNIINT8\n+instructionset64bit,X86   ,AVXVNNIINT16",
+        "comment_created_at": "2025-03-27T20:28:52+00:00",
+        "comment_author": "saucecontrol",
+        "comment_body": "Yeah, sorry, my mistake.  I was thinking about previous cases where an X64 ISA has been added when there was no corresponding managed class at all.  As Tanner said, it will have different behavior on x86 vs x64, so we need an ISA to map to for `IsSupported`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2144132675",
+    "pr_number": 113956,
+    "pr_file": "src/coreclr/tools/Common/JitInterface/ThunkGenerator/InstructionSetDesc.txt",
+    "created_at": "2025-06-13T03:21:19+00:00",
+    "commented_code": "implication        ,X86   ,WAITPKG              ,X86Base\nimplication        ,X86   ,X86Serialize         ,X86Base\n\nimplication        ,X86   ,AVXVNNIINT           ,AVX2\nimplication        ,X86   ,AVXVNNIINT_V512      ,AVX10v2",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2144132675",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 113956,
+        "pr_file": "src/coreclr/tools/Common/JitInterface/ThunkGenerator/InstructionSetDesc.txt",
+        "discussion_id": "2144132675",
+        "commented_code": "@@ -179,6 +187,9 @@ implication        ,X86   ,SHA                  ,X86Base\n implication        ,X86   ,WAITPKG              ,X86Base\n implication        ,X86   ,X86Serialize         ,X86Base\n \n+implication        ,X86   ,AVXVNNIINT           ,AVX2\n+implication        ,X86   ,AVXVNNIINT_V512      ,AVX10v2",
+        "comment_created_at": "2025-06-13T03:21:19+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "Is this implication going to exclude the CPUID for `AVX10_VNNI_INT`?\r\n\r\nIt wasn't clear if that would only be set for `AVX10.2` or if it was allowed to be separate",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2144351183",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 113956,
+        "pr_file": "src/coreclr/tools/Common/JitInterface/ThunkGenerator/InstructionSetDesc.txt",
+        "discussion_id": "2144132675",
+        "commented_code": "@@ -179,6 +187,9 @@ implication        ,X86   ,SHA                  ,X86Base\n implication        ,X86   ,WAITPKG              ,X86Base\n implication        ,X86   ,X86Serialize         ,X86Base\n \n+implication        ,X86   ,AVXVNNIINT           ,AVX2\n+implication        ,X86   ,AVXVNNIINT_V512      ,AVX10v2",
+        "comment_created_at": "2025-06-13T07:09:16+00:00",
+        "comment_author": "khushal1996",
+        "comment_body": "As of now we dont need CPUID `AVX10_VNNI_INT`. It would be set for AVX10.2 as well but AVX10.2 alone also indicated presence of `AVX_VNNI_INT8/16` `EVEX` instructions. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2144351813",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 113956,
+        "pr_file": "src/coreclr/tools/Common/JitInterface/ThunkGenerator/InstructionSetDesc.txt",
+        "discussion_id": "2144132675",
+        "commented_code": "@@ -179,6 +187,9 @@ implication        ,X86   ,SHA                  ,X86Base\n implication        ,X86   ,WAITPKG              ,X86Base\n implication        ,X86   ,X86Serialize         ,X86Base\n \n+implication        ,X86   ,AVXVNNIINT           ,AVX2\n+implication        ,X86   ,AVXVNNIINT_V512      ,AVX10v2",
+        "comment_created_at": "2025-06-13T07:09:44+00:00",
+        "comment_author": "khushal1996",
+        "comment_body": "But the current design leaves provision for adding `AVX10_VNNI_INT` without any complications in future.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

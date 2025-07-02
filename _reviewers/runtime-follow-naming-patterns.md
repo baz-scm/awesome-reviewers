@@ -1,0 +1,356 @@
+---
+title: Follow naming patterns
+description: 'Maintain consistent naming patterns throughout your code to improve
+  readability and maintainability. Follow these guidelines:
+
+
+  1. Use PascalCase for public methods and members'
+repository: dotnet/runtime
+label: Naming Conventions
+language: C#
+comments_count: 9
+repository_stars: 16578
+---
+
+Maintain consistent naming patterns throughout your code to improve readability and maintainability. Follow these guidelines:
+
+1. Use PascalCase for public methods and members
+   ```csharp
+   // Incorrect
+   public static int iCreateProcessInfo() { ... }
+   
+   // Correct
+   public static int CreateProcessInfo() { ... }
+   ```
+
+2. Method names should accurately reflect their purpose
+   ```csharp
+   // Misleading (doesn't return anything)
+   public static void GetExtendedHelp(ParseResult _) { ... }
+   
+   // Better
+   public static void DisplayHelp(ParseResult _) { ... }
+   ```
+
+3. Match related parameter names for clarity
+   ```csharp
+   // Inconsistent
+   GetConnectionInfo(connection, out protocol, out cipherSuite, ref negotiatedAlpn, out alpnLength);
+   
+   // Consistent
+   GetConnectionInfo(connection, out protocol, out cipherSuite, ref negotiatedAlpn, out negotiatedAlpnLength);
+   ```
+
+4. Design enums with meaningful defaults
+   ```csharp
+   // Poor design (default value is meaningful)
+   public enum ExtendedLayoutKind
+   {
+       None = -1,
+       CStruct = 0  // This becomes the default!
+   }
+   
+   // Better design
+   public enum ExtendedLayoutKind
+   {
+       None = 0,    // Default is semantically "none"
+       CStruct = 1
+   }
+   ```
+
+5. Use consistent abbreviations based on platform conventions
+   ```csharp
+   // Unnecessarily verbose when platform uses "Nw" consistently
+   internal sealed class SafeNetworkFrameworkHandle : SafeHandleZeroOrMinusOneIsInvalid
+   
+   // Better
+   internal sealed class SafeNwHandle : SafeHandleZeroOrMinusOneIsInvalid
+   ```
+
+When selecting names, consider how they'll be read in context and their alignment with existing patterns in your codebase and the platform.
+
+
+[
+  {
+    "discussion_id": "2112930186",
+    "pr_number": 116082,
+    "pr_file": "src/coreclr/tools/Common/TypeSystem/Common/MetadataType.cs",
+    "created_at": "2025-05-28T23:41:16+00:00",
+    "commented_code": "}\n\n        public abstract int GetInlineArrayLength();\n\n        public abstract ExtendedLayoutInfo GetExtendedLayoutInfo();\n    }\n\n    public struct ClassLayoutMetadata\n    {\n        public int PackingSize;\n        public int Size;\n    }\n\n    public struct ExtendedLayoutInfo\n    {\n        public ExtendedLayoutKind Kind;\n    }\n\n    public enum ExtendedLayoutKind\n    {\n        None = -1,\n        CStruct = 0",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2112930186",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116082,
+        "pr_file": "src/coreclr/tools/Common/TypeSystem/Common/MetadataType.cs",
+        "discussion_id": "2112930186",
+        "commented_code": "@@ -104,11 +110,24 @@ public bool IsInlineArray\n         }\n \n         public abstract int GetInlineArrayLength();\n+\n+        public abstract ExtendedLayoutInfo GetExtendedLayoutInfo();\n     }\n \n     public struct ClassLayoutMetadata\n     {\n         public int PackingSize;\n         public int Size;\n     }\n+\n+    public struct ExtendedLayoutInfo\n+    {\n+        public ExtendedLayoutKind Kind;\n+    }\n+\n+    public enum ExtendedLayoutKind\n+    {\n+        None = -1,\n+        CStruct = 0",
+        "comment_created_at": "2025-05-28T23:41:16+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "The ExtendedLayoutKind enum defines None = -1 and CStruct = 0, which means default(ExtendedLayoutKind) == CStruct. This will cause any uninitialized ExtendedLayoutInfo.Kind to indicate CStruct unexpectedly; consider switching to None = 0 and CStruct = 1 to align the default enum value with 'no extended layout'.\n```suggestion\n        None = 0,\n        CStruct = 1\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2113114956",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116082,
+        "pr_file": "src/coreclr/tools/Common/TypeSystem/Common/MetadataType.cs",
+        "discussion_id": "2112930186",
+        "commented_code": "@@ -104,11 +110,24 @@ public bool IsInlineArray\n         }\n \n         public abstract int GetInlineArrayLength();\n+\n+        public abstract ExtendedLayoutInfo GetExtendedLayoutInfo();\n     }\n \n     public struct ClassLayoutMetadata\n     {\n         public int PackingSize;\n         public int Size;\n     }\n+\n+    public struct ExtendedLayoutInfo\n+    {\n+        public ExtendedLayoutKind Kind;\n+    }\n+\n+    public enum ExtendedLayoutKind\n+    {\n+        None = -1,\n+        CStruct = 0",
+        "comment_created_at": "2025-05-29T03:44:15+00:00",
+        "comment_author": "jkoritzinsky",
+        "comment_body": "The members here are meant to match the approved member values for the `ExtendedLayoutKind` enum.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2146340036",
+    "pr_number": 116659,
+    "pr_file": "src/installer/managed/Microsoft.NET.HostModel/MachO/BinaryFormat/Blobs/CodeDirectoryBlob.cs",
+    "created_at": "2025-06-14T01:16:07+00:00",
+    "commented_code": "// Fill in the CodeDirectory hashes\n\n        // Special slot hashes\n        // -7 is the der entitlements blob hash\n        if (derEntitlementsBlob != null)\n        {\n            using var derStream = new MemoryStreamWriter((int)derEntitlementsBlob.Size);\n            derEntitlementsBlob.Write(derStream, 0);\n            specialSlotHashes[(int)CodeDirectorySpecialSlot.DerEntitlements - 1] = hasher.ComputeHash(derStream.GetBuffer());",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2146340036",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116659,
+        "pr_file": "src/installer/managed/Microsoft.NET.HostModel/MachO/BinaryFormat/Blobs/CodeDirectoryBlob.cs",
+        "discussion_id": "2146340036",
+        "commented_code": "@@ -121,12 +142,29 @@ public static CodeDirectoryBlob Create(\n         // Fill in the CodeDirectory hashes\n \n         // Special slot hashes\n+        // -7 is the der entitlements blob hash\n+        if (derEntitlementsBlob != null)\n+        {\n+            using var derStream = new MemoryStreamWriter((int)derEntitlementsBlob.Size);\n+            derEntitlementsBlob.Write(derStream, 0);\n+            specialSlotHashes[(int)CodeDirectorySpecialSlot.DerEntitlements - 1] = hasher.ComputeHash(derStream.GetBuffer());",
+        "comment_created_at": "2025-06-14T01:16:07+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Consider creating a helper method to convert a CodeDirectorySpecialSlot value into a zero-based index rather than subtracting one directly, as this may be error\u2011prone if enum values change in the future.\n```suggestion\n            specialSlotHashes[GetSpecialSlotIndex(CodeDirectorySpecialSlot.DerEntitlements)] = hasher.ComputeHash(derStream.GetBuffer());\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2164709694",
+    "pr_number": 116659,
+    "pr_file": "src/installer/managed/Microsoft.NET.HostModel/MachO/BinaryFormat/Blobs/CodeDirectoryBlob.cs",
+    "created_at": "2025-06-24T19:06:06+00:00",
+    "commented_code": "+ SpecialSlotCount * HashSize\n        + CodeSlotCount * HashSize;\n\n    public string Identifier => _identifier;\n    public CodeDirectoryFlags Flags => (CodeDirectoryFlags)((uint)_cdHeader._flags).ConvertFromBigEndian();",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2164709694",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116659,
+        "pr_file": "src/installer/managed/Microsoft.NET.HostModel/MachO/BinaryFormat/Blobs/CodeDirectoryBlob.cs",
+        "discussion_id": "2164709694",
+        "commented_code": "@@ -97,16 +99,34 @@ private CodeDirectoryBlob(\n         + SpecialSlotCount * HashSize\n         + CodeSlotCount * HashSize;\n \n+    public string Identifier => _identifier;\n+    public CodeDirectoryFlags Flags => (CodeDirectoryFlags)((uint)_cdHeader._flags).ConvertFromBigEndian();",
+        "comment_created_at": "2025-06-24T19:06:06+00:00",
+        "comment_author": "elinor-fung",
+        "comment_body": "Can we make the public fields on CodeDirectoryHeader pascal-cased?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2164898526",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116659,
+        "pr_file": "src/installer/managed/Microsoft.NET.HostModel/MachO/BinaryFormat/Blobs/CodeDirectoryBlob.cs",
+        "discussion_id": "2164709694",
+        "commented_code": "@@ -97,16 +99,34 @@ private CodeDirectoryBlob(\n         + SpecialSlotCount * HashSize\n         + CodeSlotCount * HashSize;\n \n+    public string Identifier => _identifier;\n+    public CodeDirectoryFlags Flags => (CodeDirectoryFlags)((uint)_cdHeader._flags).ConvertFromBigEndian();",
+        "comment_created_at": "2025-06-24T21:03:14+00:00",
+        "comment_author": "jtschuster",
+        "comment_body": "Yes, it probably makes sense to keep everything behind a property and do the conversion in the getter.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1690377396",
+    "pr_number": 105403,
+    "pr_file": "src/libraries/System.Diagnostics.Process/src/System/Diagnostics/ProcessManager.SunOS.cs",
+    "created_at": "2024-07-24T20:20:01+00:00",
+    "commented_code": "// Licensed to the .NET Foundation under one or more agreements.\n// The .NET Foundation licenses this file to you under the MIT license.\n\nusing System.Collections.Generic;\nusing System.Globalization;\nusing System.IO;\nusing System.Runtime.InteropServices;\n\n// TODO: remove or scope to just the methods that need them\n#pragma warning disable CA1822\n#pragma warning disable IDE0060\n\nnamespace System.Diagnostics\n{\n    internal static partial class ProcessManager\n    {\n        /// <summary>Gets the IDs of all processes on the current machine.</summary>\n        public static int[] GetProcessIds()\n        {\n            IEnumerable<int> pids = EnumerateProcessIds();\n            return new List<int>(pids).ToArray();\n        }\n\n        /// <summary>Gets process infos for each process on the specified machine.</summary>\n        /// <param name=\"processNameFilter\">Optional process name to use as an inclusion filter.</param>\n        /// <param name=\"machineName\">The target machine.</param>\n        /// <returns>An array of process infos, one per found process.</returns>\n        public static ProcessInfo[] GetProcessInfos(string? processNameFilter, string machineName)\n        {\n            ThrowIfRemoteMachine(machineName);\n\n            // Iterate through all process IDs to load information about each process\n            IEnumerable<int> pids = EnumerateProcessIds();\n            ArrayBuilder<ProcessInfo> processes = default;\n            foreach (int pid in pids)\n            {\n                ProcessInfo? pi = CreateProcessInfo(pid, processNameFilter);\n                if (pi != null)\n                {\n                    processes.Add(pi);\n                }\n            }\n\n            return processes.ToArray();\n        }\n\n        /// <summary>Gets an array of module infos for the specified process.</summary>\n        /// <param name=\"processId\">The ID of the process whose modules should be enumerated.</param>\n        /// <returns>The array of modules.</returns>\n        internal static ProcessModuleCollection GetModules(int processId)\n        {\n\n            // Negative PIDs aren't valid\n            ArgumentOutOfRangeException.ThrowIfNegative(processId);\n\n            // GetModules(x)[0].FileName is often used to find the path to the executable, so at least\n            // get that.\n            // TODO: is there better way to get loaded modules?\n\n            Interop.procfs.ProcessStatusInfo iProcInfo;\n            if (Interop.procfs.TryReadProcessStatusInfo(processId, out iProcInfo))\n            {\n                string fullName = Process.GetUntruncatedProcessName(ref iProcInfo);\n                if (!string.IsNullOrEmpty(fullName))\n                {\n                    return new ProcessModuleCollection(1)\n                    {\n                        new ProcessModule(fullName, Path.GetFileName(fullName))\n                    };\n                }\n            }\n            return new ProcessModuleCollection(0);\n        }\n\n        /// <summary>\n        /// Creates a ProcessInfo from the specified process ID.\n        /// </summary>\n        internal static ProcessInfo? CreateProcessInfo(int pid, string? processNameFilter = null)\n        {\n            // Negative PIDs aren't valid\n            ArgumentOutOfRangeException.ThrowIfNegative(pid);\n\n            Interop.procfs.ProcessStatusInfo iProcInfo;\n            if (! Interop.procfs.TryReadProcessStatusInfo(pid, out iProcInfo))\n            {\n                return null;\n            }\n\n            string processName = Process.GetUntruncatedProcessName(ref iProcInfo);\n            if (!string.IsNullOrEmpty(processNameFilter) &&\n                !string.Equals(processName, processNameFilter, StringComparison.OrdinalIgnoreCase))\n            {\n                return null;\n            }\n\n            return iCreateProcessInfo(ref iProcInfo);\n        }\n\n        // ----------------------------------\n        // ---- Unix PAL layer ends here ----\n        // ----------------------------------\n\n        /// <summary>Enumerates the IDs of all processes on the current machine.</summary>\n        internal static IEnumerable<int> EnumerateProcessIds()\n        {\n            // Parse /proc for any directory that's named with a number.  Each such\n            // directory represents a process.\n            foreach (string procDir in Directory.EnumerateDirectories(Interop.procfs.RootPath))\n            {\n                string dirName = Path.GetFileName(procDir);\n                int pid;\n                if (int.TryParse(dirName, NumberStyles.Integer, CultureInfo.InvariantCulture, out pid))\n                {\n                    Debug.Assert(pid >= 0);\n                    yield return pid;\n                }\n            }\n        }\n\n        /// <summary>Enumerates the IDs of all threads in the specified process.</summary>\n        internal static IEnumerable<int> EnumerateThreadIds(int pid)\n        {\n            // Parse /proc/$pid/lwp for any directory that's named with a number.  Each such\n            // directory represents a process.\n            string dir = Interop.procfs.GetLwpDirForProcess(pid);\n            foreach (string lwpDir in Directory.EnumerateDirectories(dir))\n            {\n                string dirName = Path.GetFileName(lwpDir);\n                int tid;\n                if (int.TryParse(dirName, NumberStyles.Integer, CultureInfo.InvariantCulture, out tid))\n                {\n                    Debug.Assert(tid >= 0);\n                    yield return tid;\n                }\n            }\n        }\n\n        /// <summary>\n        /// Creates a ProcessInfo from the data read from a /proc/pid/psinfo file and the associated lwp directory.\n        /// </summary>\n        internal static ProcessInfo iCreateProcessInfo(ref Interop.procfs.ProcessStatusInfo iProcInfo)",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "1690377396",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 105403,
+        "pr_file": "src/libraries/System.Diagnostics.Process/src/System/Diagnostics/ProcessManager.SunOS.cs",
+        "discussion_id": "1690377396",
+        "commented_code": "@@ -0,0 +1,253 @@\n+// Licensed to the .NET Foundation under one or more agreements.\n+// The .NET Foundation licenses this file to you under the MIT license.\n+\n+using System.Collections.Generic;\n+using System.Globalization;\n+using System.IO;\n+using System.Runtime.InteropServices;\n+\n+// TODO: remove or scope to just the methods that need them\n+#pragma warning disable CA1822\n+#pragma warning disable IDE0060\n+\n+namespace System.Diagnostics\n+{\n+    internal static partial class ProcessManager\n+    {\n+        /// <summary>Gets the IDs of all processes on the current machine.</summary>\n+        public static int[] GetProcessIds()\n+        {\n+            IEnumerable<int> pids = EnumerateProcessIds();\n+            return new List<int>(pids).ToArray();\n+        }\n+\n+        /// <summary>Gets process infos for each process on the specified machine.</summary>\n+        /// <param name=\"processNameFilter\">Optional process name to use as an inclusion filter.</param>\n+        /// <param name=\"machineName\">The target machine.</param>\n+        /// <returns>An array of process infos, one per found process.</returns>\n+        public static ProcessInfo[] GetProcessInfos(string? processNameFilter, string machineName)\n+        {\n+            ThrowIfRemoteMachine(machineName);\n+\n+            // Iterate through all process IDs to load information about each process\n+            IEnumerable<int> pids = EnumerateProcessIds();\n+            ArrayBuilder<ProcessInfo> processes = default;\n+            foreach (int pid in pids)\n+            {\n+                ProcessInfo? pi = CreateProcessInfo(pid, processNameFilter);\n+                if (pi != null)\n+                {\n+                    processes.Add(pi);\n+                }\n+            }\n+\n+            return processes.ToArray();\n+        }\n+\n+        /// <summary>Gets an array of module infos for the specified process.</summary>\n+        /// <param name=\"processId\">The ID of the process whose modules should be enumerated.</param>\n+        /// <returns>The array of modules.</returns>\n+        internal static ProcessModuleCollection GetModules(int processId)\n+        {\n+\n+            // Negative PIDs aren't valid\n+            ArgumentOutOfRangeException.ThrowIfNegative(processId);\n+\n+            // GetModules(x)[0].FileName is often used to find the path to the executable, so at least\n+            // get that.\n+            // TODO: is there better way to get loaded modules?\n+\n+            Interop.procfs.ProcessStatusInfo iProcInfo;\n+            if (Interop.procfs.TryReadProcessStatusInfo(processId, out iProcInfo))\n+            {\n+                string fullName = Process.GetUntruncatedProcessName(ref iProcInfo);\n+                if (!string.IsNullOrEmpty(fullName))\n+                {\n+                    return new ProcessModuleCollection(1)\n+                    {\n+                        new ProcessModule(fullName, Path.GetFileName(fullName))\n+                    };\n+                }\n+            }\n+            return new ProcessModuleCollection(0);\n+        }\n+\n+        /// <summary>\n+        /// Creates a ProcessInfo from the specified process ID.\n+        /// </summary>\n+        internal static ProcessInfo? CreateProcessInfo(int pid, string? processNameFilter = null)\n+        {\n+            // Negative PIDs aren't valid\n+            ArgumentOutOfRangeException.ThrowIfNegative(pid);\n+\n+            Interop.procfs.ProcessStatusInfo iProcInfo;\n+            if (! Interop.procfs.TryReadProcessStatusInfo(pid, out iProcInfo))\n+            {\n+                return null;\n+            }\n+\n+            string processName = Process.GetUntruncatedProcessName(ref iProcInfo);\n+            if (!string.IsNullOrEmpty(processNameFilter) &&\n+                !string.Equals(processName, processNameFilter, StringComparison.OrdinalIgnoreCase))\n+            {\n+                return null;\n+            }\n+\n+            return iCreateProcessInfo(ref iProcInfo);\n+        }\n+\n+        // ----------------------------------\n+        // ---- Unix PAL layer ends here ----\n+        // ----------------------------------\n+\n+        /// <summary>Enumerates the IDs of all processes on the current machine.</summary>\n+        internal static IEnumerable<int> EnumerateProcessIds()\n+        {\n+            // Parse /proc for any directory that's named with a number.  Each such\n+            // directory represents a process.\n+            foreach (string procDir in Directory.EnumerateDirectories(Interop.procfs.RootPath))\n+            {\n+                string dirName = Path.GetFileName(procDir);\n+                int pid;\n+                if (int.TryParse(dirName, NumberStyles.Integer, CultureInfo.InvariantCulture, out pid))\n+                {\n+                    Debug.Assert(pid >= 0);\n+                    yield return pid;\n+                }\n+            }\n+        }\n+\n+        /// <summary>Enumerates the IDs of all threads in the specified process.</summary>\n+        internal static IEnumerable<int> EnumerateThreadIds(int pid)\n+        {\n+            // Parse /proc/$pid/lwp for any directory that's named with a number.  Each such\n+            // directory represents a process.\n+            string dir = Interop.procfs.GetLwpDirForProcess(pid);\n+            foreach (string lwpDir in Directory.EnumerateDirectories(dir))\n+            {\n+                string dirName = Path.GetFileName(lwpDir);\n+                int tid;\n+                if (int.TryParse(dirName, NumberStyles.Integer, CultureInfo.InvariantCulture, out tid))\n+                {\n+                    Debug.Assert(tid >= 0);\n+                    yield return tid;\n+                }\n+            }\n+        }\n+\n+        /// <summary>\n+        /// Creates a ProcessInfo from the data read from a /proc/pid/psinfo file and the associated lwp directory.\n+        /// </summary>\n+        internal static ProcessInfo iCreateProcessInfo(ref Interop.procfs.ProcessStatusInfo iProcInfo)",
+        "comment_created_at": "2024-07-24T20:20:01+00:00",
+        "comment_author": "am11",
+        "comment_body": "C# uses PascalCasing -> `CreateProcessInfo`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2166661801",
+    "pr_number": 117016,
+    "pr_file": "src/libraries/Common/src/Interop/OSX/Interop.NetworkTls.cs",
+    "created_at": "2025-06-25T13:00:40+00:00",
+    "commented_code": "// Licensed to the .NET Foundation under one or more agreements.\n// The .NET Foundation licenses this file to you under the MIT license.\n\nusing System;\nusing System.Collections.Generic;\nusing System.Diagnostics;\nusing System.Net.Security;\nusing System.Runtime.InteropServices;\nusing System.Security.Authentication;\nusing Microsoft.Win32.SafeHandles;\n\ninternal static partial class Interop\n{\n    // TLS 1.3 specific Network Framework implementation for macOS\n    internal static partial class NetworkFramework\n    {\n        internal static partial class Tls\n        {\n            // Core TLS functions for Network Framework integration\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwInit\")]\n            [return: MarshalAs(UnmanagedType.I4)]\n            internal static unsafe partial bool Init(delegate* unmanaged<IntPtr, StatusUpdates, IntPtr, IntPtr, void> statusCallback,\n                                                   delegate* unmanaged<IntPtr, byte*, void**, int> readCallback,\n                                                   delegate* unmanaged<IntPtr, byte*, void**, int> writeCallback);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwCreateContext\")]\n            internal static partial SafeNetworkFrameworkHandle CreateContext([MarshalAs(UnmanagedType.I4)] bool isServer);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwSetTlsOptions\", StringMarshalling = StringMarshalling.Utf8)]\n            private static partial int SetTlsOptions(SafeNetworkFrameworkHandle connection, IntPtr gcHandle,\n                                                            string targetName, Span<byte> alpnBuffer, int alpnLength,\n                                                            SslProtocols minTlsProtocol, SslProtocols maxTlsProtocol);\n\n            internal static int SetTlsOptions(SafeNetworkFrameworkHandle nwHandle, IntPtr gcHandle, string targetName, List<SslApplicationProtocol>? applicationProtocols, SslProtocols minTlsVersion, SslProtocols maxTlsVersion)\n            {\n                int alpnLength = GetAlpnProtocolListSerializedLength(applicationProtocols);\n                Span<byte> alpn = alpnLength <= 256 ? stackalloc byte[256].Slice(0, alpnLength) : new byte[alpnLength];\n                SerializeAlpnProtocolList(applicationProtocols, alpn);\n\n                return SetTlsOptions(nwHandle, gcHandle, targetName, alpn, alpnLength, minTlsVersion, maxTlsVersion);\n            }\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwStartTlsHandshake\")]\n            internal static partial int StartTlsHandshake(SafeNetworkFrameworkHandle connection, IntPtr gcHandle);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwProcessInputData\")]\n            internal static unsafe partial int ProcessInputData(SafeNetworkFrameworkHandle connection,\n                                                               SafeNetworkFrameworkHandle framer,\n                                                               byte* buffer, int bufferLength);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwSendToConnection\")]\n            internal static unsafe partial int SendToConnection(SafeNetworkFrameworkHandle connection, IntPtr gcHandle,\n                                                               void* buffer, int bufferLength);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwReadFromConnection\")]\n            internal static partial int ReadFromConnection(SafeNetworkFrameworkHandle connection, IntPtr gcHandle);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwCancelConnection\")]\n            internal static partial int CancelConnection(SafeNetworkFrameworkHandle connection);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwGetConnectionInfo\")]\n            internal static unsafe partial int GetConnectionInfo(SafeNetworkFrameworkHandle connection,\n                                                               out SslProtocols pProtocol, out TlsCipherSuite pCipherSuiteOut,\n                                                               ref void* negotiatedAlpn, out uint alpnLength);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwCopyCertChain\")]\n            internal static partial int CopyCertChain(SafeNetworkFrameworkHandle connection,\n                                                             out SafeCFArrayHandle certificates,\n                                                             out int count);\n\n            internal static int GetAlpnProtocolListSerializedLength(List<SslApplicationProtocol>? applicationProtocols)\n            {\n                if (applicationProtocols is null)\n                {\n                    return 0;\n                }\n\n                int protocolSize = 0;\n\n                foreach (SslApplicationProtocol protocol in applicationProtocols)\n                {\n                    if (protocol.Protocol.Length == 0 || protocol.Protocol.Length > byte.MaxValue)\n                    {\n                        throw new ArgumentException(SR.net_ssl_app_protocols_invalid, nameof(applicationProtocols));\n                    }\n\n                    protocolSize += protocol.Protocol.Length + 2;\n                }\n\n                return protocolSize;\n            }\n\n            private static void SerializeAlpnProtocolList(List<SslApplicationProtocol>? applicationProtocols, Span<byte> buffer)\n            {\n                if (applicationProtocols is null)\n                {\n                    return;\n                }\n\n                Debug.Assert(GetAlpnProtocolListSerializedLength(applicationProtocols) == buffer.Length);\n\n                int offset = 0;\n                foreach (SslApplicationProtocol protocol in applicationProtocols)\n                {\n                    buffer[offset++] = (byte)protocol.Protocol.Length;\n                    protocol.Protocol.Span.CopyTo(buffer.Slice(offset));\n                    offset += protocol.Protocol.Length;\n                    buffer[offset++] = 0;\n                }\n            }\n        }\n        // Status enumeration for Network Framework TLS operations\n        internal enum StatusUpdates\n        {\n            UnknownError = 0,\n            FramerStart = 1,\n            FramerStop = 2,\n            HandshakeFinished = 3,\n            HandshakeFailed = 4,\n            ConnectionReadFinished = 100,\n            ConnectionWriteFinished = 101,\n            ConnectionWriteFailed = 102,\n            ConnectionCancelled = 103,\n        }\n\n        internal enum OSStatus\n        {\n            NoError = 0,\n            ReadError = -19,\n            WriteError = -20,\n            EOFError = -39,\n            SecUserCanceled = -128,\n            WouldBlock = -9803\n        }\n    }\n\n    // Safe handle classes for Network Framework TLS resources\n    internal sealed class SafeNetworkFrameworkHandle : SafeHandleZeroOrMinusOneIsInvalid",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2166661801",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117016,
+        "pr_file": "src/libraries/Common/src/Interop/OSX/Interop.NetworkTls.cs",
+        "discussion_id": "2166661801",
+        "commented_code": "@@ -0,0 +1,153 @@\n+// Licensed to the .NET Foundation under one or more agreements.\n+// The .NET Foundation licenses this file to you under the MIT license.\n+\n+using System;\n+using System.Collections.Generic;\n+using System.Diagnostics;\n+using System.Net.Security;\n+using System.Runtime.InteropServices;\n+using System.Security.Authentication;\n+using Microsoft.Win32.SafeHandles;\n+\n+internal static partial class Interop\n+{\n+    // TLS 1.3 specific Network Framework implementation for macOS\n+    internal static partial class NetworkFramework\n+    {\n+        internal static partial class Tls\n+        {\n+            // Core TLS functions for Network Framework integration\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwInit\")]\n+            [return: MarshalAs(UnmanagedType.I4)]\n+            internal static unsafe partial bool Init(delegate* unmanaged<IntPtr, StatusUpdates, IntPtr, IntPtr, void> statusCallback,\n+                                                   delegate* unmanaged<IntPtr, byte*, void**, int> readCallback,\n+                                                   delegate* unmanaged<IntPtr, byte*, void**, int> writeCallback);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwCreateContext\")]\n+            internal static partial SafeNetworkFrameworkHandle CreateContext([MarshalAs(UnmanagedType.I4)] bool isServer);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwSetTlsOptions\", StringMarshalling = StringMarshalling.Utf8)]\n+            private static partial int SetTlsOptions(SafeNetworkFrameworkHandle connection, IntPtr gcHandle,\n+                                                            string targetName, Span<byte> alpnBuffer, int alpnLength,\n+                                                            SslProtocols minTlsProtocol, SslProtocols maxTlsProtocol);\n+\n+            internal static int SetTlsOptions(SafeNetworkFrameworkHandle nwHandle, IntPtr gcHandle, string targetName, List<SslApplicationProtocol>? applicationProtocols, SslProtocols minTlsVersion, SslProtocols maxTlsVersion)\n+            {\n+                int alpnLength = GetAlpnProtocolListSerializedLength(applicationProtocols);\n+                Span<byte> alpn = alpnLength <= 256 ? stackalloc byte[256].Slice(0, alpnLength) : new byte[alpnLength];\n+                SerializeAlpnProtocolList(applicationProtocols, alpn);\n+\n+                return SetTlsOptions(nwHandle, gcHandle, targetName, alpn, alpnLength, minTlsVersion, maxTlsVersion);\n+            }\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwStartTlsHandshake\")]\n+            internal static partial int StartTlsHandshake(SafeNetworkFrameworkHandle connection, IntPtr gcHandle);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwProcessInputData\")]\n+            internal static unsafe partial int ProcessInputData(SafeNetworkFrameworkHandle connection,\n+                                                               SafeNetworkFrameworkHandle framer,\n+                                                               byte* buffer, int bufferLength);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwSendToConnection\")]\n+            internal static unsafe partial int SendToConnection(SafeNetworkFrameworkHandle connection, IntPtr gcHandle,\n+                                                               void* buffer, int bufferLength);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwReadFromConnection\")]\n+            internal static partial int ReadFromConnection(SafeNetworkFrameworkHandle connection, IntPtr gcHandle);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwCancelConnection\")]\n+            internal static partial int CancelConnection(SafeNetworkFrameworkHandle connection);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwGetConnectionInfo\")]\n+            internal static unsafe partial int GetConnectionInfo(SafeNetworkFrameworkHandle connection,\n+                                                               out SslProtocols pProtocol, out TlsCipherSuite pCipherSuiteOut,\n+                                                               ref void* negotiatedAlpn, out uint alpnLength);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwCopyCertChain\")]\n+            internal static partial int CopyCertChain(SafeNetworkFrameworkHandle connection,\n+                                                             out SafeCFArrayHandle certificates,\n+                                                             out int count);\n+\n+            internal static int GetAlpnProtocolListSerializedLength(List<SslApplicationProtocol>? applicationProtocols)\n+            {\n+                if (applicationProtocols is null)\n+                {\n+                    return 0;\n+                }\n+\n+                int protocolSize = 0;\n+\n+                foreach (SslApplicationProtocol protocol in applicationProtocols)\n+                {\n+                    if (protocol.Protocol.Length == 0 || protocol.Protocol.Length > byte.MaxValue)\n+                    {\n+                        throw new ArgumentException(SR.net_ssl_app_protocols_invalid, nameof(applicationProtocols));\n+                    }\n+\n+                    protocolSize += protocol.Protocol.Length + 2;\n+                }\n+\n+                return protocolSize;\n+            }\n+\n+            private static void SerializeAlpnProtocolList(List<SslApplicationProtocol>? applicationProtocols, Span<byte> buffer)\n+            {\n+                if (applicationProtocols is null)\n+                {\n+                    return;\n+                }\n+\n+                Debug.Assert(GetAlpnProtocolListSerializedLength(applicationProtocols) == buffer.Length);\n+\n+                int offset = 0;\n+                foreach (SslApplicationProtocol protocol in applicationProtocols)\n+                {\n+                    buffer[offset++] = (byte)protocol.Protocol.Length;\n+                    protocol.Protocol.Span.CopyTo(buffer.Slice(offset));\n+                    offset += protocol.Protocol.Length;\n+                    buffer[offset++] = 0;\n+                }\n+            }\n+        }\n+        // Status enumeration for Network Framework TLS operations\n+        internal enum StatusUpdates\n+        {\n+            UnknownError = 0,\n+            FramerStart = 1,\n+            FramerStop = 2,\n+            HandshakeFinished = 3,\n+            HandshakeFailed = 4,\n+            ConnectionReadFinished = 100,\n+            ConnectionWriteFinished = 101,\n+            ConnectionWriteFailed = 102,\n+            ConnectionCancelled = 103,\n+        }\n+\n+        internal enum OSStatus\n+        {\n+            NoError = 0,\n+            ReadError = -19,\n+            WriteError = -20,\n+            EOFError = -39,\n+            SecUserCanceled = -128,\n+            WouldBlock = -9803\n+        }\n+    }\n+\n+    // Safe handle classes for Network Framework TLS resources\n+    internal sealed class SafeNetworkFrameworkHandle : SafeHandleZeroOrMinusOneIsInvalid",
+        "comment_created_at": "2025-06-25T13:00:40+00:00",
+        "comment_author": "rzikm",
+        "comment_body": "`Nw` abbreviation seems to be used a lot in the platfrom API, I would consider naming the safe handle `SafeNwHandle`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2169077770",
+    "pr_number": 117016,
+    "pr_file": "src/libraries/Common/src/Interop/OSX/Interop.Network.Tls.cs",
+    "created_at": "2025-06-26T13:28:04+00:00",
+    "commented_code": "// Licensed to the .NET Foundation under one or more agreements.\n// The .NET Foundation licenses this file to you under the MIT license.\n\nusing System;\nusing System.Collections.Generic;\nusing System.Diagnostics;\nusing System.Net.Security;\nusing System.Runtime.InteropServices;\nusing System.Security.Authentication;\nusing Microsoft.Win32.SafeHandles;\n\ninternal static partial class Interop\n{\n    // TLS 1.3 specific Network Framework implementation for macOS\n    internal static partial class NetworkFramework\n    {\n        internal static partial class Tls\n        {\n            // Core TLS functions for Network Framework integration\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwInit\")]\n            [return: MarshalAs(UnmanagedType.I4)]\n            internal static unsafe partial bool Init(delegate* unmanaged<IntPtr, StatusUpdates, IntPtr, IntPtr, void> statusCallback,\n                                                   delegate* unmanaged<IntPtr, byte*, void**, int> readCallback,\n                                                   delegate* unmanaged<IntPtr, byte*, void**, int> writeCallback);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwCreateContext\")]\n            internal static partial SafeNwHandle CreateContext([MarshalAs(UnmanagedType.I4)] bool isServer);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwSetTlsOptions\", StringMarshalling = StringMarshalling.Utf8)]\n            private static partial int SetTlsOptions(SafeNwHandle connection, IntPtr gcHandle,\n                                                            string targetName, Span<byte> alpnBuffer, int alpnLength,\n                                                            SslProtocols minTlsProtocol, SslProtocols maxTlsProtocol);\n\n            internal static int SetTlsOptions(SafeNwHandle nwHandle, IntPtr gcHandle, string targetName, List<SslApplicationProtocol>? applicationProtocols, SslProtocols minTlsVersion, SslProtocols maxTlsVersion)\n            {\n                int alpnLength = GetAlpnProtocolListSerializedLength(applicationProtocols);\n                Span<byte> alpn = alpnLength <= 256 ? stackalloc byte[256].Slice(0, alpnLength) : new byte[alpnLength];\n                SerializeAlpnProtocolList(applicationProtocols, alpn);\n\n                return SetTlsOptions(nwHandle, gcHandle, targetName, alpn, alpnLength, minTlsVersion, maxTlsVersion);\n            }\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwStartTlsHandshake\")]\n            internal static partial int StartTlsHandshake(SafeNwHandle connection, IntPtr gcHandle);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwProcessInputData\")]\n            internal static unsafe partial int ProcessInputData(SafeNwHandle connection,\n                                                               SafeNwHandle framer,\n                                                               byte* buffer, int bufferLength);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwSendToConnection\")]\n            internal static unsafe partial int SendToConnection(SafeNwHandle connection, IntPtr gcHandle,\n                                                               void* buffer, int bufferLength);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwReadFromConnection\")]\n            internal static partial int ReadFromConnection(SafeNwHandle connection, IntPtr gcHandle);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwCancelConnection\")]\n            internal static partial int CancelConnection(SafeNwHandle connection);\n\n            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwGetConnectionInfo\")]\n            internal static unsafe partial int GetConnectionInfo(SafeNwHandle connection,\n                                                               out SslProtocols pProtocol, out TlsCipherSuite pCipherSuiteOut,\n                                                               ref void* negotiatedAlpn, out uint alpnLength);",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2169077770",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117016,
+        "pr_file": "src/libraries/Common/src/Interop/OSX/Interop.Network.Tls.cs",
+        "discussion_id": "2169077770",
+        "commented_code": "@@ -0,0 +1,153 @@\n+// Licensed to the .NET Foundation under one or more agreements.\n+// The .NET Foundation licenses this file to you under the MIT license.\n+\n+using System;\n+using System.Collections.Generic;\n+using System.Diagnostics;\n+using System.Net.Security;\n+using System.Runtime.InteropServices;\n+using System.Security.Authentication;\n+using Microsoft.Win32.SafeHandles;\n+\n+internal static partial class Interop\n+{\n+    // TLS 1.3 specific Network Framework implementation for macOS\n+    internal static partial class NetworkFramework\n+    {\n+        internal static partial class Tls\n+        {\n+            // Core TLS functions for Network Framework integration\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwInit\")]\n+            [return: MarshalAs(UnmanagedType.I4)]\n+            internal static unsafe partial bool Init(delegate* unmanaged<IntPtr, StatusUpdates, IntPtr, IntPtr, void> statusCallback,\n+                                                   delegate* unmanaged<IntPtr, byte*, void**, int> readCallback,\n+                                                   delegate* unmanaged<IntPtr, byte*, void**, int> writeCallback);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwCreateContext\")]\n+            internal static partial SafeNwHandle CreateContext([MarshalAs(UnmanagedType.I4)] bool isServer);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwSetTlsOptions\", StringMarshalling = StringMarshalling.Utf8)]\n+            private static partial int SetTlsOptions(SafeNwHandle connection, IntPtr gcHandle,\n+                                                            string targetName, Span<byte> alpnBuffer, int alpnLength,\n+                                                            SslProtocols minTlsProtocol, SslProtocols maxTlsProtocol);\n+\n+            internal static int SetTlsOptions(SafeNwHandle nwHandle, IntPtr gcHandle, string targetName, List<SslApplicationProtocol>? applicationProtocols, SslProtocols minTlsVersion, SslProtocols maxTlsVersion)\n+            {\n+                int alpnLength = GetAlpnProtocolListSerializedLength(applicationProtocols);\n+                Span<byte> alpn = alpnLength <= 256 ? stackalloc byte[256].Slice(0, alpnLength) : new byte[alpnLength];\n+                SerializeAlpnProtocolList(applicationProtocols, alpn);\n+\n+                return SetTlsOptions(nwHandle, gcHandle, targetName, alpn, alpnLength, minTlsVersion, maxTlsVersion);\n+            }\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwStartTlsHandshake\")]\n+            internal static partial int StartTlsHandshake(SafeNwHandle connection, IntPtr gcHandle);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwProcessInputData\")]\n+            internal static unsafe partial int ProcessInputData(SafeNwHandle connection,\n+                                                               SafeNwHandle framer,\n+                                                               byte* buffer, int bufferLength);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwSendToConnection\")]\n+            internal static unsafe partial int SendToConnection(SafeNwHandle connection, IntPtr gcHandle,\n+                                                               void* buffer, int bufferLength);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwReadFromConnection\")]\n+            internal static partial int ReadFromConnection(SafeNwHandle connection, IntPtr gcHandle);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwCancelConnection\")]\n+            internal static partial int CancelConnection(SafeNwHandle connection);\n+\n+            [LibraryImport(Interop.Libraries.AppleNetworkNative, EntryPoint = \"AppleNetNative_NwGetConnectionInfo\")]\n+            internal static unsafe partial int GetConnectionInfo(SafeNwHandle connection,\n+                                                               out SslProtocols pProtocol, out TlsCipherSuite pCipherSuiteOut,\n+                                                               ref void* negotiatedAlpn, out uint alpnLength);",
+        "comment_created_at": "2025-06-26T13:28:04+00:00",
+        "comment_author": "stephentoub",
+        "comment_body": "Is alpnLength the length of negotiatedAlpn? Typically it's helpfulf for a buffer ptr and associated length to be named in a corresponding way, e.g. foo and fooLength, so negotiatedAlpn and negotatiedAlpnLength.\r\n\r\nAlso, why is this void* but other APIs are using byte*. Is this one not bytes?\r\n\r\nAnd why is this length uint when other lengths are int?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2169418022",
+    "pr_number": 117034,
+    "pr_file": "src/tools/illink/src/ILLink.RoslynAnalyzer/TrimAnalysis/FlowAnnotations.cs",
+    "created_at": "2025-06-26T16:08:52+00:00",
+    "commented_code": "return field.GetDynamicallyAccessedMemberTypes();\n        }\n\n        internal static DynamicallyAccessedMemberTypes GetFieldAnnotation(IPropertySymbol property)",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2169418022",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117034,
+        "pr_file": "src/tools/illink/src/ILLink.RoslynAnalyzer/TrimAnalysis/FlowAnnotations.cs",
+        "discussion_id": "2169418022",
+        "commented_code": "@@ -120,6 +120,14 @@ internal static DynamicallyAccessedMemberTypes GetFieldAnnotation(IFieldSymbol f\n             return field.GetDynamicallyAccessedMemberTypes();\n         }\n \n+        internal static DynamicallyAccessedMemberTypes GetFieldAnnotation(IPropertySymbol property)",
+        "comment_created_at": "2025-06-26T16:08:52+00:00",
+        "comment_author": "jtschuster",
+        "comment_body": "nit: would `GetBackingFieldAnnotation` make more sense here? Or at least a comment about why the name is Field and parameter is Property for would be helpful. And should we add an assert that the property is an auto-property?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2169505350",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117034,
+        "pr_file": "src/tools/illink/src/ILLink.RoslynAnalyzer/TrimAnalysis/FlowAnnotations.cs",
+        "discussion_id": "2169418022",
+        "commented_code": "@@ -120,6 +120,14 @@ internal static DynamicallyAccessedMemberTypes GetFieldAnnotation(IFieldSymbol f\n             return field.GetDynamicallyAccessedMemberTypes();\n         }\n \n+        internal static DynamicallyAccessedMemberTypes GetFieldAnnotation(IPropertySymbol property)",
+        "comment_created_at": "2025-06-26T17:02:55+00:00",
+        "comment_author": "sbomer",
+        "comment_body": "Took your naming suggestion. I thought about adding an assert, but the check needs more context than just the property symbol (it would match the conditions where the new logic is invoked from LocalDataFlowVisitor. We could introduce a wrapper type to preserve this invariant but I think that's more complex than necessary for this.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2114710117",
+    "pr_number": 116065,
+    "pr_file": "src/coreclr/tools/aot/ILCompiler/ILCompilerRootCommand.cs",
+    "created_at": "2025-05-29T20:36:00+00:00",
+    "commented_code": "});\n        }\n\n        public static IEnumerable<Func<HelpContext, bool>> GetExtendedHelp(HelpContext _)\n        public static void GetExtendedHelp(ParseResult _)",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2114710117",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116065,
+        "pr_file": "src/coreclr/tools/aot/ILCompiler/ILCompilerRootCommand.cs",
+        "discussion_id": "2114710117",
+        "commented_code": "@@ -329,64 +329,57 @@ public ILCompilerRootCommand(string[] args) : base(\".NET Native IL Compiler\")\n             });\n         }\n \n-        public static IEnumerable<Func<HelpContext, bool>> GetExtendedHelp(HelpContext _)\n+        public static void GetExtendedHelp(ParseResult _)",
+        "comment_created_at": "2025-05-29T20:36:00+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "This method is not returning anything after this change, so `Get...` name does not fit what it does anymore. \r\n\r\nI would rename it to `PrintHelp`, `DisplayHelp` or something similar.\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2114714971",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116065,
+        "pr_file": "src/coreclr/tools/aot/ILCompiler/ILCompilerRootCommand.cs",
+        "discussion_id": "2114710117",
+        "commented_code": "@@ -329,64 +329,57 @@ public ILCompilerRootCommand(string[] args) : base(\".NET Native IL Compiler\")\n             });\n         }\n \n-        public static IEnumerable<Func<HelpContext, bool>> GetExtendedHelp(HelpContext _)\n+        public static void GetExtendedHelp(ParseResult _)",
+        "comment_created_at": "2025-05-29T20:39:39+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "(I have not commented on all places with this name. All of them should be fixed.)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2103970378",
+    "pr_number": 115927,
+    "pr_file": "src/tasks/WasmAppBuilder/WasmAppBuilder.cs",
+    "created_at": "2025-05-23T07:19:54+00:00",
+    "commented_code": "if (browserProfiler != null)\n        {\n            bootConfig.environmentVariables ??= new();\n            bootConfig.environmentVariables[\"DOTNET_WasmPerfInstrumentation\"] = browserProfiler.Substring(\"browser:\".Length);\n            bootConfig.environmentVariables[\"DOTNET_WasmPerformanceInstrumentation\"] = browserProfiler.Substring(\"browser:\".Length);",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2103970378",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/tasks/WasmAppBuilder/WasmAppBuilder.cs",
+        "discussion_id": "2103970378",
+        "commented_code": "@@ -418,7 +418,7 @@ protected override bool ExecuteInternal()\n         if (browserProfiler != null)\n         {\n             bootConfig.environmentVariables ??= new();\n-            bootConfig.environmentVariables[\"DOTNET_WasmPerfInstrumentation\"] = browserProfiler.Substring(\"browser:\".Length);\n+            bootConfig.environmentVariables[\"DOTNET_WasmPerformanceInstrumentation\"] = browserProfiler.Substring(\"browser:\".Length);",
+        "comment_created_at": "2025-05-23T07:19:54+00:00",
+        "comment_author": "pavelsavara",
+        "comment_body": "@copilot find other locations with DOTNET_WasmPerfInstrumentation and rename them too",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2103980390",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/tasks/WasmAppBuilder/WasmAppBuilder.cs",
+        "discussion_id": "2103970378",
+        "commented_code": "@@ -418,7 +418,7 @@ protected override bool ExecuteInternal()\n         if (browserProfiler != null)\n         {\n             bootConfig.environmentVariables ??= new();\n-            bootConfig.environmentVariables[\"DOTNET_WasmPerfInstrumentation\"] = browserProfiler.Substring(\"browser:\".Length);\n+            bootConfig.environmentVariables[\"DOTNET_WasmPerformanceInstrumentation\"] = browserProfiler.Substring(\"browser:\".Length);",
+        "comment_created_at": "2025-05-23T07:25:35+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "I found and renamed the remaining instances of `WasmPerfInstrumentation` to `WasmPerformanceInstrumentation` in src/mono/sample/wasm/browser-eventpipe/Wasm.Browser.EventPipe.Sample.csproj in commit 110386f. This was the only remaining file using this property name.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104002974",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/tasks/WasmAppBuilder/WasmAppBuilder.cs",
+        "discussion_id": "2103970378",
+        "commented_code": "@@ -418,7 +418,7 @@ protected override bool ExecuteInternal()\n         if (browserProfiler != null)\n         {\n             bootConfig.environmentVariables ??= new();\n-            bootConfig.environmentVariables[\"DOTNET_WasmPerfInstrumentation\"] = browserProfiler.Substring(\"browser:\".Length);\n+            bootConfig.environmentVariables[\"DOTNET_WasmPerformanceInstrumentation\"] = browserProfiler.Substring(\"browser:\".Length);",
+        "comment_created_at": "2025-05-23T07:36:19+00:00",
+        "comment_author": "pavelsavara",
+        "comment_body": "search again for `DOTNET_WasmPerfInstrumentation` and rename it to `DOTNET_WasmPerformanceInstrumentation`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104008795",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/tasks/WasmAppBuilder/WasmAppBuilder.cs",
+        "discussion_id": "2103970378",
+        "commented_code": "@@ -418,7 +418,7 @@ protected override bool ExecuteInternal()\n         if (browserProfiler != null)\n         {\n             bootConfig.environmentVariables ??= new();\n-            bootConfig.environmentVariables[\"DOTNET_WasmPerfInstrumentation\"] = browserProfiler.Substring(\"browser:\".Length);\n+            bootConfig.environmentVariables[\"DOTNET_WasmPerformanceInstrumentation\"] = browserProfiler.Substring(\"browser:\".Length);",
+        "comment_created_at": "2025-05-23T07:39:51+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "I've renamed `DOTNET_WasmPerfInstrumentation` to `DOTNET_WasmPerformanceInstrumentation` in src/mono/mono/profiler/browser.c in commit ff1d869.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

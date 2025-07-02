@@ -1,0 +1,344 @@
+---
+title: Specific exceptions with context
+description: Always throw the most specific exception type appropriate for the error
+  condition and include contextual information in the error message. This helps developers
+  quickly identify and fix issues.
+repository: dotnet/runtime
+label: Error Handling
+language: C#
+comments_count: 9
+repository_stars: 16578
+---
+
+Always throw the most specific exception type appropriate for the error condition and include contextual information in the error message. This helps developers quickly identify and fix issues.
+
+Key practices:
+1. Use derived exception types instead of base types (e.g., `PlatformNotSupportedException` instead of `NotSupportedException`)
+2. For cancellation scenarios, accept both `OperationCanceledException` and `TaskCanceledException`
+3. Include relevant context in exception messages, avoiding generic "unknown error" messages
+4. Test exception messages to ensure they provide meaningful information
+
+Example:
+```csharp
+// Bad
+throw new Exception("Operation failed");
+// or
+throw new CryptographicException("Unknown error (0xc100000d)");
+
+// Good
+throw new PlatformNotSupportedException(
+    SR.Format(SR.ProcessStartSingleFeatureNotSupported, nameof(feature)));
+// or
+await Assert.ThrowsAnyAsync<OperationCanceledException>(() => 
+    operation.ExecuteAsync(cancellationToken));
+```
+
+
+[
+  {
+    "discussion_id": "2180591767",
+    "pr_number": 117248,
+    "pr_file": "src/libraries/System.Net.Http/tests/FunctionalTests/DiagnosticsTests.cs",
+    "created_at": "2025-07-02T17:18:57+00:00",
+    "commented_code": "uri = new Uri($\"{uri.Scheme}://localhost:{uri.Port}\");\n                        }\n\n                        await Assert.ThrowsAsync<TaskCanceledException>(() => GetAsync(useVersion, testAsync, uri, cts.Token));\n                        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => GetAsync(useVersion, testAsync, uri, cts.Token));\n\n                        Assert.NotNull(activity);\n                        Assert.Equal(ActivityStatusCode.Error, activity.Status);\n                        ActivityAssert.HasTag(activity, \"error.type\", (string errorType) => errorType == typeof(TaskCanceledException).FullName || errorType == typeof(OperationCanceledException).FullName);\n                        ActivityEvent evt = activity.Events.Single(e => e.Name == \"exception\");\n                        Dictionary<string, object?> tags = evt.Tags.ToDictionary(t => t.Key, t => t.Value);\n                        Assert.Contains(\"exception.type\", tags.Keys);\n                        Assert.Contains(\"exception.message\", tags.Keys);\n                        Assert.Contains(\"exception.stacktrace\", tags.Keys);\n                        Assert.True((string)tags[\"exception.type\"] == typeof(TaskCanceledException).FullName || (string)tags[\"exception.type\"] == typeof(TaskCanceledException).FullName);",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2180591767",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117248,
+        "pr_file": "src/libraries/System.Net.Http/tests/FunctionalTests/DiagnosticsTests.cs",
+        "discussion_id": "2180591767",
+        "commented_code": "@@ -871,14 +861,23 @@ await GetFactoryForVersion(useVersion).CreateClientAndServerAsync(\n                             uri = new Uri($\"{uri.Scheme}://localhost:{uri.Port}\");\n                         }\n \n-                        await Assert.ThrowsAsync<TaskCanceledException>(() => GetAsync(useVersion, testAsync, uri, cts.Token));\n+                        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => GetAsync(useVersion, testAsync, uri, cts.Token));\n+\n+                        Assert.NotNull(activity);\n+                        Assert.Equal(ActivityStatusCode.Error, activity.Status);\n+                        ActivityAssert.HasTag(activity, \"error.type\", (string errorType) => errorType == typeof(TaskCanceledException).FullName || errorType == typeof(OperationCanceledException).FullName);\n+                        ActivityEvent evt = activity.Events.Single(e => e.Name == \"exception\");\n+                        Dictionary<string, object?> tags = evt.Tags.ToDictionary(t => t.Key, t => t.Value);\n+                        Assert.Contains(\"exception.type\", tags.Keys);\n+                        Assert.Contains(\"exception.message\", tags.Keys);\n+                        Assert.Contains(\"exception.stacktrace\", tags.Keys);\n+                        Assert.True((string)tags[\"exception.type\"] == typeof(TaskCanceledException).FullName || (string)tags[\"exception.type\"] == typeof(TaskCanceledException).FullName);",
+        "comment_created_at": "2025-07-02T17:18:57+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "The assertion compares `TaskCanceledException` twice; the second comparison should be `OperationCanceledException.FullName` to allow both exception types.\n```suggestion\n                        Assert.True((string)tags[\"exception.type\"] == typeof(TaskCanceledException).FullName || (string)tags[\"exception.type\"] == typeof(OperationCanceledException).FullName);\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2180593863",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117248,
+        "pr_file": "src/libraries/System.Net.Http/tests/FunctionalTests/DiagnosticsTests.cs",
+        "discussion_id": "2180591767",
+        "commented_code": "@@ -871,14 +861,23 @@ await GetFactoryForVersion(useVersion).CreateClientAndServerAsync(\n                             uri = new Uri($\"{uri.Scheme}://localhost:{uri.Port}\");\n                         }\n \n-                        await Assert.ThrowsAsync<TaskCanceledException>(() => GetAsync(useVersion, testAsync, uri, cts.Token));\n+                        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => GetAsync(useVersion, testAsync, uri, cts.Token));\n+\n+                        Assert.NotNull(activity);\n+                        Assert.Equal(ActivityStatusCode.Error, activity.Status);\n+                        ActivityAssert.HasTag(activity, \"error.type\", (string errorType) => errorType == typeof(TaskCanceledException).FullName || errorType == typeof(OperationCanceledException).FullName);\n+                        ActivityEvent evt = activity.Events.Single(e => e.Name == \"exception\");\n+                        Dictionary<string, object?> tags = evt.Tags.ToDictionary(t => t.Key, t => t.Value);\n+                        Assert.Contains(\"exception.type\", tags.Keys);\n+                        Assert.Contains(\"exception.message\", tags.Keys);\n+                        Assert.Contains(\"exception.stacktrace\", tags.Keys);\n+                        Assert.True((string)tags[\"exception.type\"] == typeof(TaskCanceledException).FullName || (string)tags[\"exception.type\"] == typeof(TaskCanceledException).FullName);",
+        "comment_created_at": "2025-07-02T17:20:08+00:00",
+        "comment_author": "antonfirsov",
+        "comment_body": "fixed",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1162801258",
+    "pr_number": 84582,
+    "pr_file": "src/libraries/System.Private.CoreLib/src/System/Byte.cs",
+    "created_at": "2023-04-11T13:14:54+00:00",
+    "commented_code": "return m_value;\n        }\n\n        public static byte Parse(string s)\n        {\n            if (s == null) ThrowHelper.ThrowArgumentNullException(ExceptionArgument.s);\n            return Parse((ReadOnlySpan<char>)s, NumberStyles.Integer, NumberFormatInfo.CurrentInfo);\n        }\n        public static byte Parse(string s) => Parse(s, NumberStyles.Integer, provider: null);\n\n        public static byte Parse(string s, NumberStyles style)\n        {\n            NumberFormatInfo.ValidateParseStyleInteger(style);\n            if (s == null) ThrowHelper.ThrowArgumentNullException(ExceptionArgument.s);\n            return Parse((ReadOnlySpan<char>)s, style, NumberFormatInfo.CurrentInfo);\n        }\n        public static byte Parse(string s, NumberStyles style) => Parse(s, style, provider: null);\n\n        public static byte Parse(string s, IFormatProvider? provider)\n        {\n            if (s == null) ThrowHelper.ThrowArgumentNullException(ExceptionArgument.s);\n            return Parse((ReadOnlySpan<char>)s, NumberStyles.Integer, NumberFormatInfo.GetInstance(provider));\n        }\n        public static byte Parse(string s, IFormatProvider? provider) => Parse(s, NumberStyles.Integer, provider);\n\n        // Parses an unsigned byte from a String in the given style.  If\n        // a NumberFormatInfo isn't specified, the current culture's\n        // NumberFormatInfo is assumed.\n        public static byte Parse(string s, NumberStyles style, IFormatProvider? provider)\n        {\n            NumberFormatInfo.ValidateParseStyleInteger(style);",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "1162801258",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 84582,
+        "pr_file": "src/libraries/System.Private.CoreLib/src/System/Byte.cs",
+        "discussion_id": "1162801258",
+        "commented_code": "@@ -91,98 +92,42 @@ public override int GetHashCode()\n             return m_value;\n         }\n \n-        public static byte Parse(string s)\n-        {\n-            if (s == null) ThrowHelper.ThrowArgumentNullException(ExceptionArgument.s);\n-            return Parse((ReadOnlySpan<char>)s, NumberStyles.Integer, NumberFormatInfo.CurrentInfo);\n-        }\n+        public static byte Parse(string s) => Parse(s, NumberStyles.Integer, provider: null);\n \n-        public static byte Parse(string s, NumberStyles style)\n-        {\n-            NumberFormatInfo.ValidateParseStyleInteger(style);\n-            if (s == null) ThrowHelper.ThrowArgumentNullException(ExceptionArgument.s);\n-            return Parse((ReadOnlySpan<char>)s, style, NumberFormatInfo.CurrentInfo);\n-        }\n+        public static byte Parse(string s, NumberStyles style) => Parse(s, style, provider: null);\n \n-        public static byte Parse(string s, IFormatProvider? provider)\n-        {\n-            if (s == null) ThrowHelper.ThrowArgumentNullException(ExceptionArgument.s);\n-            return Parse((ReadOnlySpan<char>)s, NumberStyles.Integer, NumberFormatInfo.GetInstance(provider));\n-        }\n+        public static byte Parse(string s, IFormatProvider? provider) => Parse(s, NumberStyles.Integer, provider);\n \n-        // Parses an unsigned byte from a String in the given style.  If\n-        // a NumberFormatInfo isn't specified, the current culture's\n-        // NumberFormatInfo is assumed.\n         public static byte Parse(string s, NumberStyles style, IFormatProvider? provider)\n         {\n-            NumberFormatInfo.ValidateParseStyleInteger(style);",
+        "comment_created_at": "2023-04-11T13:14:54+00:00",
+        "comment_author": "stephentoub",
+        "comment_body": "This will now throw an ArgumentNullException for string s instead of an ArgumentException for style if both string is null and style is invalid.  I assume we're ok with that.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1162934313",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 84582,
+        "pr_file": "src/libraries/System.Private.CoreLib/src/System/Byte.cs",
+        "discussion_id": "1162801258",
+        "commented_code": "@@ -91,98 +92,42 @@ public override int GetHashCode()\n             return m_value;\n         }\n \n-        public static byte Parse(string s)\n-        {\n-            if (s == null) ThrowHelper.ThrowArgumentNullException(ExceptionArgument.s);\n-            return Parse((ReadOnlySpan<char>)s, NumberStyles.Integer, NumberFormatInfo.CurrentInfo);\n-        }\n+        public static byte Parse(string s) => Parse(s, NumberStyles.Integer, provider: null);\n \n-        public static byte Parse(string s, NumberStyles style)\n-        {\n-            NumberFormatInfo.ValidateParseStyleInteger(style);\n-            if (s == null) ThrowHelper.ThrowArgumentNullException(ExceptionArgument.s);\n-            return Parse((ReadOnlySpan<char>)s, style, NumberFormatInfo.CurrentInfo);\n-        }\n+        public static byte Parse(string s, NumberStyles style) => Parse(s, style, provider: null);\n \n-        public static byte Parse(string s, IFormatProvider? provider)\n-        {\n-            if (s == null) ThrowHelper.ThrowArgumentNullException(ExceptionArgument.s);\n-            return Parse((ReadOnlySpan<char>)s, NumberStyles.Integer, NumberFormatInfo.GetInstance(provider));\n-        }\n+        public static byte Parse(string s, IFormatProvider? provider) => Parse(s, NumberStyles.Integer, provider);\n \n-        // Parses an unsigned byte from a String in the given style.  If\n-        // a NumberFormatInfo isn't specified, the current culture's\n-        // NumberFormatInfo is assumed.\n         public static byte Parse(string s, NumberStyles style, IFormatProvider? provider)\n         {\n-            NumberFormatInfo.ValidateParseStyleInteger(style);",
+        "comment_created_at": "2023-04-11T14:46:27+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "We weren't entirely consistent about this throughout all of our APIs. Several of them validated `s` first and several others validated `style` first.\r\n\r\nI opted for making it consistent as `s` first since that is validating the arguments \"in order\".",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2175288621",
+    "pr_number": 117150,
+    "pr_file": "src/libraries/Common/tests/System/Security/Cryptography/AlgorithmImplementations/MLDsa/MLDsaTestsBase.cs",
+    "created_at": "2025-06-30T14:58:35+00:00",
+    "commented_code": "AssertExtensions.SequenceEqual(info.PrivateSeed, export(mldsa)));\n        }\n\n        [Theory]\n        [MemberData(nameof(MLDsaTestsData.IetfMLDsaAlgorithms), MemberType = typeof(MLDsaTestsData))]\n        public void SignData_PublicKeyOnlyThrows(MLDsaKeyInfo info)\n        {\n            using MLDsa mldsa = ImportPublicKey(info.Algorithm, info.PublicKey);\n            byte[] destination = new byte[info.Algorithm.SignatureSizeInBytes];\n            CryptographicException ce =\n                Assert.ThrowsAny<CryptographicException>(() => mldsa.SignData(\"hello\"u8, destination));\n\n            Assert.DoesNotContain(\"unknown\", ce.Message, StringComparison.OrdinalIgnoreCase);",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2175288621",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117150,
+        "pr_file": "src/libraries/Common/tests/System/Security/Cryptography/AlgorithmImplementations/MLDsa/MLDsaTestsBase.cs",
+        "discussion_id": "2175288621",
+        "commented_code": "@@ -279,6 +279,18 @@ public void ImportPrivateSeed_Export(MLDsaKeyInfo info)\n                 AssertExtensions.SequenceEqual(info.PrivateSeed, export(mldsa)));\n         }\n \n+        [Theory]\n+        [MemberData(nameof(MLDsaTestsData.IetfMLDsaAlgorithms), MemberType = typeof(MLDsaTestsData))]\n+        public void SignData_PublicKeyOnlyThrows(MLDsaKeyInfo info)\n+        {\n+            using MLDsa mldsa = ImportPublicKey(info.Algorithm, info.PublicKey);\n+            byte[] destination = new byte[info.Algorithm.SignatureSizeInBytes];\n+            CryptographicException ce =\n+                Assert.ThrowsAny<CryptographicException>(() => mldsa.SignData(\"hello\"u8, destination));\n+\n+            Assert.DoesNotContain(\"unknown\", ce.Message, StringComparison.OrdinalIgnoreCase);",
+        "comment_created_at": "2025-06-30T14:58:35+00:00",
+        "comment_author": "vcsjones",
+        "comment_body": "We don't typically assert exception messages because of localization, but we can at least assert it doesn't contain the word \"unknown\" in any language.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2175315713",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117150,
+        "pr_file": "src/libraries/Common/tests/System/Security/Cryptography/AlgorithmImplementations/MLDsa/MLDsaTestsBase.cs",
+        "discussion_id": "2175288621",
+        "commented_code": "@@ -279,6 +279,18 @@ public void ImportPrivateSeed_Export(MLDsaKeyInfo info)\n                 AssertExtensions.SequenceEqual(info.PrivateSeed, export(mldsa)));\n         }\n \n+        [Theory]\n+        [MemberData(nameof(MLDsaTestsData.IetfMLDsaAlgorithms), MemberType = typeof(MLDsaTestsData))]\n+        public void SignData_PublicKeyOnlyThrows(MLDsaKeyInfo info)\n+        {\n+            using MLDsa mldsa = ImportPublicKey(info.Algorithm, info.PublicKey);\n+            byte[] destination = new byte[info.Algorithm.SignatureSizeInBytes];\n+            CryptographicException ce =\n+                Assert.ThrowsAny<CryptographicException>(() => mldsa.SignData(\"hello\"u8, destination));\n+\n+            Assert.DoesNotContain(\"unknown\", ce.Message, StringComparison.OrdinalIgnoreCase);",
+        "comment_created_at": "2025-06-30T15:10:30+00:00",
+        "comment_author": "stephentoub",
+        "comment_body": "What are we trying to prevent with that assert?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2175376416",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117150,
+        "pr_file": "src/libraries/Common/tests/System/Security/Cryptography/AlgorithmImplementations/MLDsa/MLDsaTestsBase.cs",
+        "discussion_id": "2175288621",
+        "commented_code": "@@ -279,6 +279,18 @@ public void ImportPrivateSeed_Export(MLDsaKeyInfo info)\n                 AssertExtensions.SequenceEqual(info.PrivateSeed, export(mldsa)));\n         }\n \n+        [Theory]\n+        [MemberData(nameof(MLDsaTestsData.IetfMLDsaAlgorithms), MemberType = typeof(MLDsaTestsData))]\n+        public void SignData_PublicKeyOnlyThrows(MLDsaKeyInfo info)\n+        {\n+            using MLDsa mldsa = ImportPublicKey(info.Algorithm, info.PublicKey);\n+            byte[] destination = new byte[info.Algorithm.SignatureSizeInBytes];\n+            CryptographicException ce =\n+                Assert.ThrowsAny<CryptographicException>(() => mldsa.SignData(\"hello\"u8, destination));\n+\n+            Assert.DoesNotContain(\"unknown\", ce.Message, StringComparison.OrdinalIgnoreCase);",
+        "comment_created_at": "2025-06-30T15:37:26+00:00",
+        "comment_author": "vcsjones",
+        "comment_body": "The general fix for this is to throw a better exception message than what Windows tells us the message is. Prior to the fix, the `CryptographicException`'s message is \"System.Security.Cryptography.CryptographicException : Unknown error (0xc100000d)\". This is the message that comes out of `FormatMessage` in Win32 world.\r\n\r\nWe have had a number of reports that this exception message is not helpful (trying to use a public key for a private key operation).\r\n\r\nWe were always going to throw a `CryptographicException` because that is how the p/invoke boundary handles errors. The assert is there to make sure we are throwing the exception with the helpful error message that customers want, not the Win32 \"Something bad happened\" one.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2111703536",
+    "pr_number": 116042,
+    "pr_file": "src/libraries/System.Net.Mail/tests/Functional/SmtpClientTest.cs",
+    "created_at": "2025-05-28T12:17:13+00:00",
+    "commented_code": "await Task.Delay(500);\n            serverMre.Set();\n\n            await Assert.ThrowsAsync<TaskCanceledException>(async () => await sendTask).WaitAsync(TestHelper.PassingTestTimeout);\n            try\n            {\n                await sendTask.WaitAsync(TestHelper.PassingTestTimeout);\n                Assert.Fail(\"Expected exception was not thrown\");\n            }\n            catch (SmtpException ex)\n            {\n                Assert.IsAssignableFrom<OperationCanceledException>(ex.InnerException);\n            }\n            catch (OperationCanceledException)\n            {\n                // This is also acceptable\n            }",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2111703536",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116042,
+        "pr_file": "src/libraries/System.Net.Mail/tests/Functional/SmtpClientTest.cs",
+        "discussion_id": "2111703536",
+        "commented_code": "@@ -327,7 +327,19 @@ public async Task SendMailAsync_CanBeCanceled_CancellationToken()\n             await Task.Delay(500);\n             serverMre.Set();\n \n-            await Assert.ThrowsAsync<TaskCanceledException>(async () => await sendTask).WaitAsync(TestHelper.PassingTestTimeout);\n+            try\n+            {\n+                await sendTask.WaitAsync(TestHelper.PassingTestTimeout);\n+                Assert.Fail(\"Expected exception was not thrown\");\n+            }\n+            catch (SmtpException ex)\n+            {\n+                Assert.IsAssignableFrom<OperationCanceledException>(ex.InnerException);\n+            }\n+            catch (OperationCanceledException)\n+            {\n+                // This is also acceptable\n+            }",
+        "comment_created_at": "2025-05-28T12:17:13+00:00",
+        "comment_author": "rzikm",
+        "comment_body": "Don't add a try-catch block, it should be enough to use `ThrowsAnyAsync<OperationCanceledException>`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2111817655",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116042,
+        "pr_file": "src/libraries/System.Net.Mail/tests/Functional/SmtpClientTest.cs",
+        "discussion_id": "2111703536",
+        "commented_code": "@@ -327,7 +327,19 @@ public async Task SendMailAsync_CanBeCanceled_CancellationToken()\n             await Task.Delay(500);\n             serverMre.Set();\n \n-            await Assert.ThrowsAsync<TaskCanceledException>(async () => await sendTask).WaitAsync(TestHelper.PassingTestTimeout);\n+            try\n+            {\n+                await sendTask.WaitAsync(TestHelper.PassingTestTimeout);\n+                Assert.Fail(\"Expected exception was not thrown\");\n+            }\n+            catch (SmtpException ex)\n+            {\n+                Assert.IsAssignableFrom<OperationCanceledException>(ex.InnerException);\n+            }\n+            catch (OperationCanceledException)\n+            {\n+                // This is also acceptable\n+            }",
+        "comment_created_at": "2025-05-28T13:05:21+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Replaced the try-catch block with ThrowsAnyAsync<OperationCanceledException> as suggested in commit 74103549b.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2111705687",
+    "pr_number": 116042,
+    "pr_file": "src/libraries/System.Net.Mail/tests/Functional/SmtpClientTest.cs",
+    "created_at": "2025-05-28T12:18:28+00:00",
+    "commented_code": "AsyncCompletedEventArgs e = await tcs.Task.WaitAsync(TestHelper.PassingTestTimeout);\n            Assert.True(e.Cancelled, \"SendAsync should have been canceled\");\n            _output.WriteLine(e.Error?.ToString() ?? \"No error\");\n            Assert.IsType<OperationCanceledException>(e.Error.InnerException);\n            Assert.IsAssignableFrom<OperationCanceledException>(e.Error.InnerException);",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2111705687",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116042,
+        "pr_file": "src/libraries/System.Net.Mail/tests/Functional/SmtpClientTest.cs",
+        "discussion_id": "2111705687",
+        "commented_code": "@@ -370,7 +382,7 @@ public async Task SendAsync_CanBeCanceled_SendAsyncCancel()\n             AsyncCompletedEventArgs e = await tcs.Task.WaitAsync(TestHelper.PassingTestTimeout);\n             Assert.True(e.Cancelled, \"SendAsync should have been canceled\");\n             _output.WriteLine(e.Error?.ToString() ?? \"No error\");\n-            Assert.IsType<OperationCanceledException>(e.Error.InnerException);\n+            Assert.IsAssignableFrom<OperationCanceledException>(e.Error.InnerException);\n ",
+        "comment_created_at": "2025-05-28T12:18:28+00:00",
+        "comment_author": "rzikm",
+        "comment_body": "If e.Cancelled is true, the Error property should be null.\r\n\r\nThere seems to be a bug in the implementation, so you need to fix this in SmtpClient source as well.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2111818185",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116042,
+        "pr_file": "src/libraries/System.Net.Mail/tests/Functional/SmtpClientTest.cs",
+        "discussion_id": "2111705687",
+        "commented_code": "@@ -370,7 +382,7 @@ public async Task SendAsync_CanBeCanceled_SendAsyncCancel()\n             AsyncCompletedEventArgs e = await tcs.Task.WaitAsync(TestHelper.PassingTestTimeout);\n             Assert.True(e.Cancelled, \"SendAsync should have been canceled\");\n             _output.WriteLine(e.Error?.ToString() ?? \"No error\");\n-            Assert.IsType<OperationCanceledException>(e.Error.InnerException);\n+            Assert.IsAssignableFrom<OperationCanceledException>(e.Error.InnerException);\n ",
+        "comment_created_at": "2025-05-28T13:05:28+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Fixed in commit 74103549b by modifying the ProcessException method in SmtpClient.cs to return null when an operation is canceled, ensuring that when e.Cancelled is true, the Error property will be null. Also updated the test assertion to check for e.Error being null.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2113537798",
+    "pr_number": 116042,
+    "pr_file": "src/libraries/System.Net.Mail/src/System/Net/Mail/SmtpClient.cs",
+    "created_at": "2025-05-29T09:05:46+00:00",
+    "commented_code": "canceled = e is OperationCanceledException;\n\n                    Abort();\n\n                    // If the operation was canceled, we should not report an error\n                    if (canceled)\n                    {\n                        return null;\n                    }",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2113537798",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116042,
+        "pr_file": "src/libraries/System.Net.Mail/src/System/Net/Mail/SmtpClient.cs",
+        "discussion_id": "2113537798",
+        "commented_code": "@@ -549,6 +549,12 @@ Exception ProcessException(Exception e, ref bool canceled, bool forceWrapExcepti\n                     canceled = e is OperationCanceledException;\n \n                     Abort();\n+\n+                    // If the operation was canceled, we should not report an error\n+                    if (canceled)\n+                    {\n+                        return null;\n+                    }",
+        "comment_created_at": "2025-05-29T09:05:46+00:00",
+        "comment_author": "rzikm",
+        "comment_body": "On second thought, this will affect also the SendMailAsync function, and we may end up not throwing OperationCanceledException. The check for canceled == true should occur when constructing `AsyncCompletedEventArgs`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2113605810",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116042,
+        "pr_file": "src/libraries/System.Net.Mail/src/System/Net/Mail/SmtpClient.cs",
+        "discussion_id": "2113537798",
+        "commented_code": "@@ -549,6 +549,12 @@ Exception ProcessException(Exception e, ref bool canceled, bool forceWrapExcepti\n                     canceled = e is OperationCanceledException;\n \n                     Abort();\n+\n+                    // If the operation was canceled, we should not report an error\n+                    if (canceled)\n+                    {\n+                        return null;\n+                    }",
+        "comment_created_at": "2025-05-29T09:49:40+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Fixed in commit 770bb3d8a. Modified AsyncCompletedEventArgs construction to set Error = null when canceled = true, and added OperationCanceledException to the list of exceptions that should not be wrapped in ProcessException method.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2109285326",
+    "pr_number": 116010,
+    "pr_file": "src/coreclr/nativeaot/System.Private.CoreLib/src/System/Runtime/ThunkPool.cs",
+    "created_at": "2025-05-27T14:02:04+00:00",
+    "commented_code": "}\n            else\n            {\n                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping();\n                int isOOM = 0;\n                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping(&isOOM);\n\n                if (nextThunksBlock == IntPtr.Zero)\n                {\n                    // We either ran out of memory and can't do anymore mappings of the thunks templates sections,\n                    // or we are using the managed runtime services fallback, which doesn't provide the\n                    // file mapping feature (ex: older version of mrt100.dll, or no mrt100.dll at all).\n\n                    // The only option is for the caller to attempt and recycle unused thunks to be able to\n                    // find some free entries.\n                    if (isOOM == 0)\n                        exception = new NotSupportedException();",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2109285326",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116010,
+        "pr_file": "src/coreclr/nativeaot/System.Private.CoreLib/src/System/Runtime/ThunkPool.cs",
+        "discussion_id": "2109285326",
+        "commented_code": "@@ -347,16 +342,15 @@ public static unsafe IntPtr GetNewThunksBlock()\n             }\n             else\n             {\n-                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping();\n+                int isOOM = 0;\n+                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping(&isOOM);\n \n                 if (nextThunksBlock == IntPtr.Zero)\n                 {\n-                    // We either ran out of memory and can't do anymore mappings of the thunks templates sections,\n-                    // or we are using the managed runtime services fallback, which doesn't provide the\n-                    // file mapping feature (ex: older version of mrt100.dll, or no mrt100.dll at all).\n-\n-                    // The only option is for the caller to attempt and recycle unused thunks to be able to\n-                    // find some free entries.\n+                    if (isOOM == 0)\n+                        exception = new NotSupportedException();",
+        "comment_created_at": "2025-05-27T14:02:04+00:00",
+        "comment_author": "MichalPetryka",
+        "comment_body": "Add a custom exception message?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2111360070",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116010,
+        "pr_file": "src/coreclr/nativeaot/System.Private.CoreLib/src/System/Runtime/ThunkPool.cs",
+        "discussion_id": "2109285326",
+        "commented_code": "@@ -347,16 +342,15 @@ public static unsafe IntPtr GetNewThunksBlock()\n             }\n             else\n             {\n-                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping();\n+                int isOOM = 0;\n+                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping(&isOOM);\n \n                 if (nextThunksBlock == IntPtr.Zero)\n                 {\n-                    // We either ran out of memory and can't do anymore mappings of the thunks templates sections,\n-                    // or we are using the managed runtime services fallback, which doesn't provide the\n-                    // file mapping feature (ex: older version of mrt100.dll, or no mrt100.dll at all).\n-\n-                    // The only option is for the caller to attempt and recycle unused thunks to be able to\n-                    // find some free entries.\n+                    if (isOOM == 0)\n+                        exception = new NotSupportedException();",
+        "comment_created_at": "2025-05-28T09:15:26+00:00",
+        "comment_author": "MichalStrehovsky",
+        "comment_body": "Do you have a suggestion for a message that would be actually useful (we might not have a full list of reasons why this could fail; we just found out about a new reason a couple months ago...). I mostly just wanted to distinguish OOM from \"everything else\".",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2113304758",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116010,
+        "pr_file": "src/coreclr/nativeaot/System.Private.CoreLib/src/System/Runtime/ThunkPool.cs",
+        "discussion_id": "2109285326",
+        "commented_code": "@@ -347,16 +342,15 @@ public static unsafe IntPtr GetNewThunksBlock()\n             }\n             else\n             {\n-                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping();\n+                int isOOM = 0;\n+                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping(&isOOM);\n \n                 if (nextThunksBlock == IntPtr.Zero)\n                 {\n-                    // We either ran out of memory and can't do anymore mappings of the thunks templates sections,\n-                    // or we are using the managed runtime services fallback, which doesn't provide the\n-                    // file mapping feature (ex: older version of mrt100.dll, or no mrt100.dll at all).\n-\n-                    // The only option is for the caller to attempt and recycle unused thunks to be able to\n-                    // find some free entries.\n+                    if (isOOM == 0)\n+                        exception = new NotSupportedException();",
+        "comment_created_at": "2025-05-29T06:32:00+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "\"Dynamic entrypoint allocation is not supported in the current environment.\"?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2109491987",
+    "pr_number": 116010,
+    "pr_file": "src/coreclr/nativeaot/System.Private.CoreLib/src/System/Runtime/ThunkPool.cs",
+    "created_at": "2025-05-27T15:18:46+00:00",
+    "commented_code": "}\n            else\n            {\n                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping();\n                int isOOM = 0;\n                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping(&isOOM);\n\n                if (nextThunksBlock == IntPtr.Zero)\n                {\n                    // We either ran out of memory and can't do anymore mappings of the thunks templates sections,\n                    // or we are using the managed runtime services fallback, which doesn't provide the\n                    // file mapping feature (ex: older version of mrt100.dll, or no mrt100.dll at all).\n\n                    // The only option is for the caller to attempt and recycle unused thunks to be able to\n                    // find some free entries.\n                    if (isOOM == 0)",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2109491987",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116010,
+        "pr_file": "src/coreclr/nativeaot/System.Private.CoreLib/src/System/Runtime/ThunkPool.cs",
+        "discussion_id": "2109491987",
+        "commented_code": "@@ -347,16 +342,15 @@ public static unsafe IntPtr GetNewThunksBlock()\n             }\n             else\n             {\n-                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping();\n+                int isOOM = 0;\n+                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping(&isOOM);\n \n                 if (nextThunksBlock == IntPtr.Zero)\n                 {\n-                    // We either ran out of memory and can't do anymore mappings of the thunks templates sections,\n-                    // or we are using the managed runtime services fallback, which doesn't provide the\n-                    // file mapping feature (ex: older version of mrt100.dll, or no mrt100.dll at all).\n-\n-                    // The only option is for the caller to attempt and recycle unused thunks to be able to\n-                    // find some free entries.\n+                    if (isOOM == 0)",
+        "comment_created_at": "2025-05-27T15:18:46+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "Can we throw the exception immediately here instead of propagating it manually? The manual error propagation looks like a left-over from the .NET Native MRT/app split.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2112640738",
+    "pr_number": 116010,
+    "pr_file": "src/coreclr/nativeaot/System.Private.CoreLib/src/System/Runtime/ThunkPool.cs",
+    "created_at": "2025-05-28T19:52:20+00:00",
+    "commented_code": "}\n            else\n            {\n                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping();\n\n                if (nextThunksBlock == IntPtr.Zero)\n                {\n                    // We either ran out of memory and can't do anymore mappings of the thunks templates sections,\n                    // or we are using the managed runtime services fallback, which doesn't provide the\n                    // file mapping feature (ex: older version of mrt100.dll, or no mrt100.dll at all).\n\n                    // The only option is for the caller to attempt and recycle unused thunks to be able to\n                    // find some free entries.\n\n                    return IntPtr.Zero;\n                }\n                nextThunksBlock = IntPtr.Zero;\n                int result = RuntimeImports.RhAllocateThunksMapping(&nextThunksBlock);\n                if (result == HResults.E_OUTOFMEMORY)\n                    throw new OutOfMemoryException();\n                else if (result != HResults.S_OK)\n                    throw new NotSupportedException() { HResult = result };",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2112640738",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116010,
+        "pr_file": "src/coreclr/nativeaot/System.Private.CoreLib/src/System/Runtime/ThunkPool.cs",
+        "discussion_id": "2112640738",
+        "commented_code": "@@ -347,19 +310,12 @@ public static unsafe IntPtr GetNewThunksBlock()\n             }\n             else\n             {\n-                nextThunksBlock = RuntimeImports.RhAllocateThunksMapping();\n-\n-                if (nextThunksBlock == IntPtr.Zero)\n-                {\n-                    // We either ran out of memory and can't do anymore mappings of the thunks templates sections,\n-                    // or we are using the managed runtime services fallback, which doesn't provide the\n-                    // file mapping feature (ex: older version of mrt100.dll, or no mrt100.dll at all).\n-\n-                    // The only option is for the caller to attempt and recycle unused thunks to be able to\n-                    // find some free entries.\n-\n-                    return IntPtr.Zero;\n-                }\n+                nextThunksBlock = IntPtr.Zero;\n+                int result = RuntimeImports.RhAllocateThunksMapping(&nextThunksBlock);\n+                if (result == HResults.E_OUTOFMEMORY)\n+                    throw new OutOfMemoryException();\n+                else if (result != HResults.S_OK)\n+                    throw new NotSupportedException() { HResult = result };",
+        "comment_created_at": "2025-05-28T19:52:20+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "This should be `PlatformNotSupportedException`. From .NET Framework design guidelines:\r\n\r\nDO throw PlatformNotSupportedException to indicate the operation cannot complete in the current runtime environment but could on a different runtime or operating system.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

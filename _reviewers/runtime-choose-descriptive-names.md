@@ -1,0 +1,133 @@
+---
+title: Choose descriptive names
+description: Names should clearly convey purpose and meaning. Parameter, variable,
+  and method names should be self-explanatory and accurately reflect their behavior
+  and intent. Rename elements when their original name no longer captures their purpose
+  or could lead to confusion.
+repository: dotnet/runtime
+label: Naming Conventions
+language: C++
+comments_count: 3
+repository_stars: 16578
+---
+
+Names should clearly convey purpose and meaning. Parameter, variable, and method names should be self-explanatory and accurately reflect their behavior and intent. Rename elements when their original name no longer captures their purpose or could lead to confusion.
+
+For example, if a parameter indicates whether side effects can be ignored:
+```cpp
+// Less clear
+bool IsRedundantMov(instruction ins, format fmt, size_t size, operand dst, operand src, bool canSkip)
+
+// More clear
+bool IsRedundantMov(instruction ins, format fmt, size_t size, operand dst, operand src, bool canIgnoreSideEffects)
+```
+
+Similarly, ensure that error messages and user-facing text use precise, accurate terminology that reflects current platform realities (like changing "not a managed .dll or .exe" to "not a managed .dll" when managed .exe files aren't relevant in modern .NET).
+
+When variables are used across different scopes (like in lambdas), be especially attentive to naming clarity to avoid ambiguity about which variables are being referenced.
+
+
+[
+  {
+    "discussion_id": "2178433376",
+    "pr_number": 116940,
+    "pr_file": "src/native/corehost/fxr/command_line.cpp",
+    "created_at": "2025-07-01T20:06:50+00:00",
+    "commented_code": "trace::verbose(_X(\"Application '%s' is not a managed executable.\"), app_candidate.c_str());\n                if (!exec_mode)\n                {\n                    // Check if this is a non-managed file with directory separator that exists\n                    // This should show a specific error instead of routing to CLI\n                    bool has_dir_separator = app_candidate.find(DIR_SEPARATOR) != pal::string_t::npos;\n                    if (has_dir_separator)\n                    {\n                        if (pal::file_exists(app_candidate))\n                        {\n                            trace::error(_X(\"The application '%s' is not a managed .dll or .exe.\"), app_candidate.c_str());",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2178433376",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116940,
+        "pr_file": "src/native/corehost/fxr/command_line.cpp",
+        "discussion_id": "2178433376",
+        "commented_code": "@@ -164,6 +164,17 @@ namespace\n                 trace::verbose(_X(\"Application '%s' is not a managed executable.\"), app_candidate.c_str());\n                 if (!exec_mode)\n                 {\n+                    // Check if this is a non-managed file with directory separator that exists\n+                    // This should show a specific error instead of routing to CLI\n+                    bool has_dir_separator = app_candidate.find(DIR_SEPARATOR) != pal::string_t::npos;\n+                    if (has_dir_separator)\n+                    {\n+                        if (pal::file_exists(app_candidate))\n+                        {\n+                            trace::error(_X(\"The application '%s' is not a managed .dll or .exe.\"), app_candidate.c_str());",
+        "comment_created_at": "2025-07-01T20:06:50+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "```suggestion\r\n                            trace::error(_X(\"The application '%s' is not a managed .dll.\"), app_candidate.c_str());\r\n```\r\nI do not think managed .exes are a thing in modern .NET. None of the tooling will produce them. Should we drop `or .exe` here to avoid suggesting that managed .exes are a thing?\r\n\r\nAlternatively, we can say `is not a .NET binary.\". \"binary\" looks less Windows-specific, but also less descriptive. It won't give you a hint that you need to pass in .dll.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2178464647",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116940,
+        "pr_file": "src/native/corehost/fxr/command_line.cpp",
+        "discussion_id": "2178433376",
+        "commented_code": "@@ -164,6 +164,17 @@ namespace\n                 trace::verbose(_X(\"Application '%s' is not a managed executable.\"), app_candidate.c_str());\n                 if (!exec_mode)\n                 {\n+                    // Check if this is a non-managed file with directory separator that exists\n+                    // This should show a specific error instead of routing to CLI\n+                    bool has_dir_separator = app_candidate.find(DIR_SEPARATOR) != pal::string_t::npos;\n+                    if (has_dir_separator)\n+                    {\n+                        if (pal::file_exists(app_candidate))\n+                        {\n+                            trace::error(_X(\"The application '%s' is not a managed .dll or .exe.\"), app_candidate.c_str());",
+        "comment_created_at": "2025-07-01T20:31:41+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Changed to \"is not a managed .dll.\" as suggested. You're right that managed .exe files aren't really a thing in modern .NET. Updated both the error message and the corresponding test. Changes committed in fdf2d2d.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "650323345",
+    "pr_number": 54075,
+    "pr_file": "src/coreclr/jit/emitxarch.cpp",
+    "created_at": "2021-06-12T00:51:46+00:00",
+    "commented_code": "}\n}\n\n//----------------------------------------------------------------------------------------\n// IsRedundantMov:\n//    Check if the current `mov` instruction is redundant and can be omitted.\n//    A `mov` is redundant in following 3 cases:\n//\n//    1. Move to same register on TARGET_AMD64\n//       (Except 4-byte movement like \"mov eax, eax\" which zeros out upper bits of eax register)\n//\n//         mov rax, rax\n//\n//    2. Move that is identical to last instruction emitted.\n//\n//         mov rax, rbx  # <-- last instruction\n//         mov rax, rbx  # <-- current instruction can be omitted.\n//\n//    3. Opposite Move as that of last instruction emitted.\n//\n//         mov rax, rbx  # <-- last instruction\n//         mov rbx, rax  # <-- current instruction can be omitted.\n//\n// Arguments:\n//    ins  - The current instruction\n//    fmt  - The current format\n//    size - Operand size of current instruction\n//    dst  - The current destination\n//    src  - The current source\n// canSkip - The move can be skipped as it doesn't represent special semantics",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "650323345",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 54075,
+        "pr_file": "src/coreclr/jit/emitxarch.cpp",
+        "discussion_id": "650323345",
+        "commented_code": "@@ -4279,6 +4278,181 @@ bool emitter::IsMovInstruction(instruction ins)\n     }\n }\n \n+//----------------------------------------------------------------------------------------\n+// IsRedundantMov:\n+//    Check if the current `mov` instruction is redundant and can be omitted.\n+//    A `mov` is redundant in following 3 cases:\n+//\n+//    1. Move to same register on TARGET_AMD64\n+//       (Except 4-byte movement like \"mov eax, eax\" which zeros out upper bits of eax register)\n+//\n+//         mov rax, rax\n+//\n+//    2. Move that is identical to last instruction emitted.\n+//\n+//         mov rax, rbx  # <-- last instruction\n+//         mov rax, rbx  # <-- current instruction can be omitted.\n+//\n+//    3. Opposite Move as that of last instruction emitted.\n+//\n+//         mov rax, rbx  # <-- last instruction\n+//         mov rbx, rax  # <-- current instruction can be omitted.\n+//\n+// Arguments:\n+//    ins  - The current instruction\n+//    fmt  - The current format\n+//    size - Operand size of current instruction\n+//    dst  - The current destination\n+//    src  - The current source\n+// canSkip - The move can be skipped as it doesn't represent special semantics",
+        "comment_created_at": "2021-06-12T00:51:46+00:00",
+        "comment_author": "AndyAyersMS",
+        "comment_body": "Consider renaming this to better convey what it means, something like `canIgnoreSideEffects`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "650398755",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 54075,
+        "pr_file": "src/coreclr/jit/emitxarch.cpp",
+        "discussion_id": "650323345",
+        "commented_code": "@@ -4279,6 +4278,181 @@ bool emitter::IsMovInstruction(instruction ins)\n     }\n }\n \n+//----------------------------------------------------------------------------------------\n+// IsRedundantMov:\n+//    Check if the current `mov` instruction is redundant and can be omitted.\n+//    A `mov` is redundant in following 3 cases:\n+//\n+//    1. Move to same register on TARGET_AMD64\n+//       (Except 4-byte movement like \"mov eax, eax\" which zeros out upper bits of eax register)\n+//\n+//         mov rax, rax\n+//\n+//    2. Move that is identical to last instruction emitted.\n+//\n+//         mov rax, rbx  # <-- last instruction\n+//         mov rax, rbx  # <-- current instruction can be omitted.\n+//\n+//    3. Opposite Move as that of last instruction emitted.\n+//\n+//         mov rax, rbx  # <-- last instruction\n+//         mov rbx, rax  # <-- current instruction can be omitted.\n+//\n+// Arguments:\n+//    ins  - The current instruction\n+//    fmt  - The current format\n+//    size - Operand size of current instruction\n+//    dst  - The current destination\n+//    src  - The current source\n+// canSkip - The move can be skipped as it doesn't represent special semantics",
+        "comment_created_at": "2021-06-12T14:29:49+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "I've renamed this in `IsRedundantMov` but not everywhere else (as `/* canSkip */ value` is used for almost every call to `emitIns_Mov`).",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2172954376",
+    "pr_number": 117097,
+    "pr_file": "src/coreclr/jit/instr.cpp",
+    "created_at": "2025-06-27T22:48:21+00:00",
+    "commented_code": "assert(control < ArrLen(intCmpOpNames));\n\n        const char* pseudoName = intCmpOpNames[control];\n        return AddPrefixAndSuffix(vexPrefix, \"pcmp\", pseudoName, suffix);\n        return RemoveVexPrefixIfNeeded(AddSuffix(\"vpcmp\", pseudoName, suffix));\n    };\n\n    // Some instructions have different mnemonics depending on the immediate.\n    switch (ins)\n    {\n        case INS_cmppd:\n    auto GetEvexOnlyName = [&](const char* pseudoName) -> const char* {\n        if (emit->TakesEvexPrefix(id))\n        {\n            return GetFltCmpOpName(id, \"pd\");\n            return pseudoName;\n        }\n        return RemoveVexPrefixIfNeeded(insName);",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2172954376",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117097,
+        "pr_file": "src/coreclr/jit/instr.cpp",
+        "discussion_id": "2172954376",
+        "commented_code": "@@ -153,237 +166,260 @@ const char* CodeGen::genInsDisplayName(emitter::instrDesc* id)\n         assert(control < ArrLen(intCmpOpNames));\n \n         const char* pseudoName = intCmpOpNames[control];\n-        return AddPrefixAndSuffix(vexPrefix, \"pcmp\", pseudoName, suffix);\n+        return RemoveVexPrefixIfNeeded(AddSuffix(\"vpcmp\", pseudoName, suffix));\n     };\n \n-    // Some instructions have different mnemonics depending on the immediate.\n-    switch (ins)\n-    {\n-        case INS_cmppd:\n+    auto GetEvexOnlyName = [&](const char* pseudoName) -> const char* {\n+        if (emit->TakesEvexPrefix(id))\n         {\n-            return GetFltCmpOpName(id, \"pd\");\n+            return pseudoName;\n         }\n+        return RemoveVexPrefixIfNeeded(insName);",
+        "comment_created_at": "2025-06-27T22:48:21+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "The lambda GetEvexOnlyName is referencing 'insName', which is undefined in this scope. It appears you intended to use the 'pseudoName' parameter instead.\n```suggestion\n        return RemoveVexPrefixIfNeeded(pseudoName);\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2173308754",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117097,
+        "pr_file": "src/coreclr/jit/instr.cpp",
+        "discussion_id": "2172954376",
+        "commented_code": "@@ -153,237 +166,260 @@ const char* CodeGen::genInsDisplayName(emitter::instrDesc* id)\n         assert(control < ArrLen(intCmpOpNames));\n \n         const char* pseudoName = intCmpOpNames[control];\n-        return AddPrefixAndSuffix(vexPrefix, \"pcmp\", pseudoName, suffix);\n+        return RemoveVexPrefixIfNeeded(AddSuffix(\"vpcmp\", pseudoName, suffix));\n     };\n \n-    // Some instructions have different mnemonics depending on the immediate.\n-    switch (ins)\n-    {\n-        case INS_cmppd:\n+    auto GetEvexOnlyName = [&](const char* pseudoName) -> const char* {\n+        if (emit->TakesEvexPrefix(id))\n         {\n-            return GetFltCmpOpName(id, \"pd\");\n+            return pseudoName;\n         }\n+        return RemoveVexPrefixIfNeeded(insName);",
+        "comment_created_at": "2025-06-28T14:48:55+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "This is in a lambda which implicitly captures the `insName` variable",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

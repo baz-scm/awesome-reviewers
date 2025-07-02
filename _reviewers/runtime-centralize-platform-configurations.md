@@ -1,0 +1,194 @@
+---
+title: Centralize platform configurations
+description: 'Platform-specific code and API usage should be centralized in designated
+  configuration files rather than scattered throughout the codebase. When adding code
+  that might not be available on all supported platforms:'
+repository: dotnet/runtime
+label: Configurations
+language: C
+comments_count: 2
+repository_stars: 16578
+---
+
+Platform-specific code and API usage should be centralized in designated configuration files rather than scattered throughout the codebase. When adding code that might not be available on all supported platforms:
+
+1. Use feature detection via CMake's `check_symbol_exists` or similar mechanisms
+2. Define feature macros in a central configuration file
+3. Use conditional compilation based on these macros
+4. Consider adding polyfills for platforms missing specific APIs
+
+For example, instead of embedding platform checks throughout your code:
+
+```c
+// Not recommended: platform-specific code scattered in implementation
+void* SystemNative_AlignedAlloc(uintptr_t alignment, uintptr_t size)
+{
+#if defined(__APPLE__)
+  // macOS-specific implementation
+#elif defined(__linux__)
+  // Linux-specific implementation
+#endif
+}
+
+// Recommended: Use centralized feature detection
+#include "pal_config.h" // Contains centrally defined HAVE_* macros
+
+void* SystemNative_AlignedAlloc(uintptr_t alignment, uintptr_t size)
+{
+#if HAVE_ALIGNED_ALLOC
+  return aligned_alloc(alignment, size);
+#elif HAVE_POSIX_MEMALIGN
+  void* result = NULL;
+  return posix_memalign(&result, alignment, size) == 0 ? result : NULL;
+#else
+  // Fallback implementation for platforms without native support
+  return malloc(size);
+#endif
+}
+```
+
+This approach improves maintainability, makes configuration audits easier, and centralizes knowledge about platform differences.
+
+
+[
+  {
+    "discussion_id": "649469717",
+    "pr_number": 54006,
+    "pr_file": "src/libraries/Native/Unix/System.Native/pal_memory.c",
+    "created_at": "2021-06-10T19:30:01+00:00",
+    "commented_code": "#include <stdlib.h>\n#include <string.h>\n\nvoid* SystemNative_MemAlignedAlloc(uintptr_t alignment, uintptr_t size)\n{\n    return aligned_alloc(alignment, size);",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "649469717",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 54006,
+        "pr_file": "src/libraries/Native/Unix/System.Native/pal_memory.c",
+        "discussion_id": "649469717",
+        "commented_code": "@@ -6,11 +6,26 @@\n #include <stdlib.h>\n #include <string.h>\n \n+void* SystemNative_MemAlignedAlloc(uintptr_t alignment, uintptr_t size)\n+{\n+    return aligned_alloc(alignment, size);",
+        "comment_created_at": "2021-06-10T19:30:01+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "> /Applications/Xcode_12.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX11.1.sdk/usr/include/malloc/_malloc.h:50:10: note: 'aligned_alloc' has been marked as being introduced in macOS 10.15 here, but the deployment target is macOS 10.13.0\r\n\r\nand then the mono failure for C99 seem potentially problematic\r\n\r\n`posix_memalign` is the \"next best\" thing but has a restriction\r\n> The address of the allocated memory will be a multiple of alignment, which must be a power of two and a multiple of sizeof(void *).\r\n\r\n`memalign` might also be available, but is considered \"obsolete\" in newer versions and is not guaranteed to work with `free` (and there is no explicit counterpart for it)\r\n\r\nhttps://www.man7.org/linux/man-pages/man3/posix_memalign.3.html",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "649481837",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 54006,
+        "pr_file": "src/libraries/Native/Unix/System.Native/pal_memory.c",
+        "discussion_id": "649469717",
+        "commented_code": "@@ -6,11 +6,26 @@\n #include <stdlib.h>\n #include <string.h>\n \n+void* SystemNative_MemAlignedAlloc(uintptr_t alignment, uintptr_t size)\n+{\n+    return aligned_alloc(alignment, size);",
+        "comment_created_at": "2021-06-10T19:49:24+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "So this will need ifdefs controlled by configure script based on what's available on different Unix flavors. You can always do polyfill using malloc when there is no native API.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "653005518",
+    "pr_number": 54006,
+    "pr_file": "src/libraries/Native/Unix/System.Native/pal_memory.c",
+    "created_at": "2021-06-16T20:03:23+00:00",
+    "commented_code": "// Licensed to the .NET Foundation under one or more agreements.\n// The .NET Foundation licenses this file to you under the MIT license.\n\n#include \"pal_config.h\"\n#include \"pal_memory.h\"\n\n#include <stdlib.h>\n#include <string.h>\n\nvoid* SystemNative_MemAlloc(uintptr_t size)\nvoid* SystemNative_AlignedAlloc(uintptr_t alignment, uintptr_t size)\n{\n    return malloc(size);\n#if HAVE_ALIGNED_ALLOC && !defined(__APPLE__)\n    // We want to prefer the standardized aligned_alloc function. However\n    // it cannot be used on __APPLE__ since we target 10.13 and it was\n    // only added in 10.15, but we might be compiling on a 10.15 box.",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "653005518",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 54006,
+        "pr_file": "src/libraries/Native/Unix/System.Native/pal_memory.c",
+        "discussion_id": "653005518",
+        "commented_code": "@@ -1,27 +1,54 @@\n // Licensed to the .NET Foundation under one or more agreements.\n // The .NET Foundation licenses this file to you under the MIT license.\n \n+#include \"pal_config.h\"\n #include \"pal_memory.h\"\n \n #include <stdlib.h>\n #include <string.h>\n \n-void* SystemNative_MemAlloc(uintptr_t size)\n+void* SystemNative_AlignedAlloc(uintptr_t alignment, uintptr_t size)\n {\n-    return malloc(size);\n+#if HAVE_ALIGNED_ALLOC && !defined(__APPLE__)\n+    // We want to prefer the standardized aligned_alloc function. However\n+    // it cannot be used on __APPLE__ since we target 10.13 and it was\n+    // only added in 10.15, but we might be compiling on a 10.15 box.",
+        "comment_created_at": "2021-06-16T20:03:23+00:00",
+        "comment_author": "stephentoub",
+        "comment_body": "We build on 10.15 with 10.15 headers for bits intended to run on 10.13?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "653007083",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 54006,
+        "pr_file": "src/libraries/Native/Unix/System.Native/pal_memory.c",
+        "discussion_id": "653005518",
+        "commented_code": "@@ -1,27 +1,54 @@\n // Licensed to the .NET Foundation under one or more agreements.\n // The .NET Foundation licenses this file to you under the MIT license.\n \n+#include \"pal_config.h\"\n #include \"pal_memory.h\"\n \n #include <stdlib.h>\n #include <string.h>\n \n-void* SystemNative_MemAlloc(uintptr_t size)\n+void* SystemNative_AlignedAlloc(uintptr_t alignment, uintptr_t size)\n {\n-    return malloc(size);\n+#if HAVE_ALIGNED_ALLOC && !defined(__APPLE__)\n+    // We want to prefer the standardized aligned_alloc function. However\n+    // it cannot be used on __APPLE__ since we target 10.13 and it was\n+    // only added in 10.15, but we might be compiling on a 10.15 box.",
+        "comment_created_at": "2021-06-16T20:06:06+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "We build on 10.15 saying we target 10.13 and the headers have annotations saying \"this API is only available on 10.xx+\" so using them raises a warning.\r\n\r\nSimilarly to say building for 10.0.10240 (Threshold 1) on a machine running 10.0.19043 (21H1).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "653009558",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 54006,
+        "pr_file": "src/libraries/Native/Unix/System.Native/pal_memory.c",
+        "discussion_id": "653005518",
+        "commented_code": "@@ -1,27 +1,54 @@\n // Licensed to the .NET Foundation under one or more agreements.\n // The .NET Foundation licenses this file to you under the MIT license.\n \n+#include \"pal_config.h\"\n #include \"pal_memory.h\"\n \n #include <stdlib.h>\n #include <string.h>\n \n-void* SystemNative_MemAlloc(uintptr_t size)\n+void* SystemNative_AlignedAlloc(uintptr_t alignment, uintptr_t size)\n {\n-    return malloc(size);\n+#if HAVE_ALIGNED_ALLOC && !defined(__APPLE__)\n+    // We want to prefer the standardized aligned_alloc function. However\n+    // it cannot be used on __APPLE__ since we target 10.13 and it was\n+    // only added in 10.15, but we might be compiling on a 10.15 box.",
+        "comment_created_at": "2021-06-16T20:09:43+00:00",
+        "comment_author": "stephentoub",
+        "comment_body": "> the headers have annotations saying \"this API is only available on 10.xx+\" so using them raises a warning\r\n\r\nAnd that doesn't cause check_symbol_exists to fail?  Is there an alternative configure.cmake construct we could use, e.g. check_c_source_compiles, that would enable HAVE_ALIGNED_ALLOC to be defined \"correctly\"?  We're almost certainly going to forget about this !defined(__APPLE__) even after we're only targeting versions that have the API available.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "653014641",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 54006,
+        "pr_file": "src/libraries/Native/Unix/System.Native/pal_memory.c",
+        "discussion_id": "653005518",
+        "commented_code": "@@ -1,27 +1,54 @@\n // Licensed to the .NET Foundation under one or more agreements.\n // The .NET Foundation licenses this file to you under the MIT license.\n \n+#include \"pal_config.h\"\n #include \"pal_memory.h\"\n \n #include <stdlib.h>\n #include <string.h>\n \n-void* SystemNative_MemAlloc(uintptr_t size)\n+void* SystemNative_AlignedAlloc(uintptr_t alignment, uintptr_t size)\n {\n-    return malloc(size);\n+#if HAVE_ALIGNED_ALLOC && !defined(__APPLE__)\n+    // We want to prefer the standardized aligned_alloc function. However\n+    // it cannot be used on __APPLE__ since we target 10.13 and it was\n+    // only added in 10.15, but we might be compiling on a 10.15 box.",
+        "comment_created_at": "2021-06-16T20:14:52+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "There is probably some other CMake magic or define checks that could be done here, but I think that can be tracked via a separate issue for follow up.\r\n\r\nThis impacts a range of Apple products (iOS, M1, OSX, etc) and may not be trivial to do correctly on all platforms.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "653024270",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 54006,
+        "pr_file": "src/libraries/Native/Unix/System.Native/pal_memory.c",
+        "discussion_id": "653005518",
+        "commented_code": "@@ -1,27 +1,54 @@\n // Licensed to the .NET Foundation under one or more agreements.\n // The .NET Foundation licenses this file to you under the MIT license.\n \n+#include \"pal_config.h\"\n #include \"pal_memory.h\"\n \n #include <stdlib.h>\n #include <string.h>\n \n-void* SystemNative_MemAlloc(uintptr_t size)\n+void* SystemNative_AlignedAlloc(uintptr_t alignment, uintptr_t size)\n {\n-    return malloc(size);\n+#if HAVE_ALIGNED_ALLOC && !defined(__APPLE__)\n+    // We want to prefer the standardized aligned_alloc function. However\n+    // it cannot be used on __APPLE__ since we target 10.13 and it was\n+    // only added in 10.15, but we might be compiling on a 10.15 box.",
+        "comment_created_at": "2021-06-16T20:26:52+00:00",
+        "comment_author": "stephentoub",
+        "comment_body": "As long as it actually is tracked somewhere for us to follow-up on.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "653028721",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 54006,
+        "pr_file": "src/libraries/Native/Unix/System.Native/pal_memory.c",
+        "discussion_id": "653005518",
+        "commented_code": "@@ -1,27 +1,54 @@\n // Licensed to the .NET Foundation under one or more agreements.\n // The .NET Foundation licenses this file to you under the MIT license.\n \n+#include \"pal_config.h\"\n #include \"pal_memory.h\"\n \n #include <stdlib.h>\n #include <string.h>\n \n-void* SystemNative_MemAlloc(uintptr_t size)\n+void* SystemNative_AlignedAlloc(uintptr_t alignment, uintptr_t size)\n {\n-    return malloc(size);\n+#if HAVE_ALIGNED_ALLOC && !defined(__APPLE__)\n+    // We want to prefer the standardized aligned_alloc function. However\n+    // it cannot be used on __APPLE__ since we target 10.13 and it was\n+    // only added in 10.15, but we might be compiling on a 10.15 box.",
+        "comment_created_at": "2021-06-16T20:31:48+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "https://github.com/dotnet/runtime/issues/54296",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "653058499",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 54006,
+        "pr_file": "src/libraries/Native/Unix/System.Native/pal_memory.c",
+        "discussion_id": "653005518",
+        "commented_code": "@@ -1,27 +1,54 @@\n // Licensed to the .NET Foundation under one or more agreements.\n // The .NET Foundation licenses this file to you under the MIT license.\n \n+#include \"pal_config.h\"\n #include \"pal_memory.h\"\n \n #include <stdlib.h>\n #include <string.h>\n \n-void* SystemNative_MemAlloc(uintptr_t size)\n+void* SystemNative_AlignedAlloc(uintptr_t alignment, uintptr_t size)\n {\n-    return malloc(size);\n+#if HAVE_ALIGNED_ALLOC && !defined(__APPLE__)\n+    // We want to prefer the standardized aligned_alloc function. However\n+    // it cannot be used on __APPLE__ since we target 10.13 and it was\n+    // only added in 10.15, but we might be compiling on a 10.15 box.",
+        "comment_created_at": "2021-06-16T21:14:11+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "Here is the existing place where all similar adjustment are concentrated today:\r\n\r\nhttps://github.com/dotnet/runtime/blob/9d771a26f058a9fa4a49850d4778bbab7aa79a22/src/libraries/Native/Unix/configure.cmake#L532-L558\r\n\r\nWe may want to move this one to this central place too.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "653089631",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 54006,
+        "pr_file": "src/libraries/Native/Unix/System.Native/pal_memory.c",
+        "discussion_id": "653005518",
+        "commented_code": "@@ -1,27 +1,54 @@\n // Licensed to the .NET Foundation under one or more agreements.\n // The .NET Foundation licenses this file to you under the MIT license.\n \n+#include \"pal_config.h\"\n #include \"pal_memory.h\"\n \n #include <stdlib.h>\n #include <string.h>\n \n-void* SystemNative_MemAlloc(uintptr_t size)\n+void* SystemNative_AlignedAlloc(uintptr_t alignment, uintptr_t size)\n {\n-    return malloc(size);\n+#if HAVE_ALIGNED_ALLOC && !defined(__APPLE__)\n+    // We want to prefer the standardized aligned_alloc function. However\n+    // it cannot be used on __APPLE__ since we target 10.13 and it was\n+    // only added in 10.15, but we might be compiling on a 10.15 box.",
+        "comment_created_at": "2021-06-16T22:10:02+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "Fixed.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

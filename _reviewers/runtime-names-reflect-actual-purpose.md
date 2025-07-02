@@ -1,0 +1,229 @@
+---
+title: Names reflect actual purpose
+description: Name variables, properties, and functions to accurately reflect their
+  purpose and actual usage in code, not just their technical classification. This
+  ensures other developers can understand the intent without having to analyze implementation
+  details.
+repository: dotnet/runtime
+label: Naming Conventions
+language: Other
+comments_count: 2
+repository_stars: 16578
+---
+
+Name variables, properties, and functions to accurately reflect their purpose and actual usage in code, not just their technical classification. This ensures other developers can understand the intent without having to analyze implementation details.
+
+**Key guidelines:**
+- Choose names that describe what the element is used for rather than its internal structure
+- For user-facing configurations, balance technical precision with understandable terminology
+- When renaming elements, verify their actual usage rather than assuming based on similar patterns
+
+**Example:**
+```csharp
+// Avoid misleading names
+var _maskData = new int[size]; // Not actually used as a mask
+
+// Better - name reflects actual usage
+var _selectParameters = new int[size]; // Used as parameters in select operations
+
+// For configurations, prefer descriptive names over technical terms
+// Less clear for users:
+options.WasmEnableEventPipe = true;
+
+// More descriptive of purpose:
+options.WasmEnablePerformanceTracing = true;
+```
+
+Follow this principle even when a name seems technically correct - what matters is whether it effectively communicates how the element is actually used in your codebase.
+
+
+[
+  {
+    "discussion_id": "2159427207",
+    "pr_number": 116848,
+    "pr_file": "src/tests/JIT/HardwareIntrinsics/Arm/Shared/_SveBinaryOpDifferentRetTypeTestTemplate.template",
+    "created_at": "2025-06-20T17:32:19+00:00",
+    "commented_code": "Unsafe.CopyBlockUnaligned(ref Unsafe.As<{Op1VectorType}<{Op1BaseType}>, byte>(ref _fld1), ref Unsafe.As<{Op1BaseType}, byte>(ref _data1[0]), (uint)Unsafe.SizeOf<{Op1VectorType}<{Op1BaseType}>>());\n            for (var i = 0; i < Op2ElementCount; i++) { _data2[i] = {NextValueOp2}; }\n            Unsafe.CopyBlockUnaligned(ref Unsafe.As<{Op2VectorType}<{Op2BaseType}>, byte>(ref _fld2), ref Unsafe.As<{Op2BaseType}, byte>(ref _data2[0]), (uint)Unsafe.SizeOf<{Op2VectorType}<{Op2BaseType}>>());\n            for (var i = 0; i < RetElementCount; i++) { _maskData[i] = ({RetBaseType})_data1[i];}",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2159427207",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116848,
+        "pr_file": "src/tests/JIT/HardwareIntrinsics/Arm/Shared/_SveBinaryOpDifferentRetTypeTestTemplate.template",
+        "discussion_id": "2159427207",
+        "commented_code": "@@ -195,11 +193,9 @@ namespace JIT.HardwareIntrinsics.Arm\n             Unsafe.CopyBlockUnaligned(ref Unsafe.As<{Op1VectorType}<{Op1BaseType}>, byte>(ref _fld1), ref Unsafe.As<{Op1BaseType}, byte>(ref _data1[0]), (uint)Unsafe.SizeOf<{Op1VectorType}<{Op1BaseType}>>());\n             for (var i = 0; i < Op2ElementCount; i++) { _data2[i] = {NextValueOp2}; }\n             Unsafe.CopyBlockUnaligned(ref Unsafe.As<{Op2VectorType}<{Op2BaseType}>, byte>(ref _fld2), ref Unsafe.As<{Op2BaseType}, byte>(ref _data2[0]), (uint)Unsafe.SizeOf<{Op2VectorType}<{Op2BaseType}>>());\n-            for (var i = 0; i < RetElementCount; i++) { _maskData[i] = ({RetBaseType})_data1[i];}",
+        "comment_created_at": "2025-06-20T17:32:19+00:00",
+        "comment_author": "kunalspathak",
+        "comment_body": "why is this change? Since `_trueFld` and `_falseFld` are masks, they should be populated from `_maskData`. Also, `_trueFld` does not even have all true, so wondering why we decided to rename it?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2161246148",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116848,
+        "pr_file": "src/tests/JIT/HardwareIntrinsics/Arm/Shared/_SveBinaryOpDifferentRetTypeTestTemplate.template",
+        "discussion_id": "2159427207",
+        "commented_code": "@@ -195,11 +193,9 @@ namespace JIT.HardwareIntrinsics.Arm\n             Unsafe.CopyBlockUnaligned(ref Unsafe.As<{Op1VectorType}<{Op1BaseType}>, byte>(ref _fld1), ref Unsafe.As<{Op1BaseType}, byte>(ref _data1[0]), (uint)Unsafe.SizeOf<{Op1VectorType}<{Op1BaseType}>>());\n             for (var i = 0; i < Op2ElementCount; i++) { _data2[i] = {NextValueOp2}; }\n             Unsafe.CopyBlockUnaligned(ref Unsafe.As<{Op2VectorType}<{Op2BaseType}>, byte>(ref _fld2), ref Unsafe.As<{Op2BaseType}, byte>(ref _data2[0]), (uint)Unsafe.SizeOf<{Op2VectorType}<{Op2BaseType}>>());\n-            for (var i = 0; i < RetElementCount; i++) { _maskData[i] = ({RetBaseType})_data1[i];}",
+        "comment_created_at": "2025-06-23T10:18:48+00:00",
+        "comment_author": "jacob-crawley",
+        "comment_body": "These changes introducing `_trueFld` and `_falseFld` were made to keep the naming convention in line with other templates (e.g. _SveImmUnaryOpTestTemplate.template).\r\n\r\n`_trueFld` and `_falseFld` are not actually masks they are used in the ConditionalSelect tests, the other testing templates populate these with one of the data variables not `_maskData`, so the idea here was to follow the same approach. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2162006430",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116848,
+        "pr_file": "src/tests/JIT/HardwareIntrinsics/Arm/Shared/_SveBinaryOpDifferentRetTypeTestTemplate.template",
+        "discussion_id": "2159427207",
+        "commented_code": "@@ -195,11 +193,9 @@ namespace JIT.HardwareIntrinsics.Arm\n             Unsafe.CopyBlockUnaligned(ref Unsafe.As<{Op1VectorType}<{Op1BaseType}>, byte>(ref _fld1), ref Unsafe.As<{Op1BaseType}, byte>(ref _data1[0]), (uint)Unsafe.SizeOf<{Op1VectorType}<{Op1BaseType}>>());\n             for (var i = 0; i < Op2ElementCount; i++) { _data2[i] = {NextValueOp2}; }\n             Unsafe.CopyBlockUnaligned(ref Unsafe.As<{Op2VectorType}<{Op2BaseType}>, byte>(ref _fld2), ref Unsafe.As<{Op2BaseType}, byte>(ref _data2[0]), (uint)Unsafe.SizeOf<{Op2VectorType}<{Op2BaseType}>>());\n-            for (var i = 0; i < RetElementCount; i++) { _maskData[i] = ({RetBaseType})_data1[i];}",
+        "comment_created_at": "2025-06-23T16:21:31+00:00",
+        "comment_author": "kunalspathak",
+        "comment_body": "If a variable is used as a \"mask\", it should be populated with `_maskData` that has just 0 and 1. If it is not done elsewhere, it should be fixed.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2163437816",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116848,
+        "pr_file": "src/tests/JIT/HardwareIntrinsics/Arm/Shared/_SveBinaryOpDifferentRetTypeTestTemplate.template",
+        "discussion_id": "2159427207",
+        "commented_code": "@@ -195,11 +193,9 @@ namespace JIT.HardwareIntrinsics.Arm\n             Unsafe.CopyBlockUnaligned(ref Unsafe.As<{Op1VectorType}<{Op1BaseType}>, byte>(ref _fld1), ref Unsafe.As<{Op1BaseType}, byte>(ref _data1[0]), (uint)Unsafe.SizeOf<{Op1VectorType}<{Op1BaseType}>>());\n             for (var i = 0; i < Op2ElementCount; i++) { _data2[i] = {NextValueOp2}; }\n             Unsafe.CopyBlockUnaligned(ref Unsafe.As<{Op2VectorType}<{Op2BaseType}>, byte>(ref _fld2), ref Unsafe.As<{Op2BaseType}, byte>(ref _data2[0]), (uint)Unsafe.SizeOf<{Op2VectorType}<{Op2BaseType}>>());\n-            for (var i = 0; i < RetElementCount; i++) { _maskData[i] = ({RetBaseType})_data1[i];}",
+        "comment_created_at": "2025-06-24T09:24:53+00:00",
+        "comment_author": "jacob-crawley",
+        "comment_body": "But these variables aren't being used as masks?\r\n\r\nhttps://github.com/dotnet/runtime/blob/949e5bd0c20d87319840c850a055f5aa3d96d196/src/tests/JIT/HardwareIntrinsics/Arm/Shared/_SveBinaryOpDifferentRetTypeTestTemplate.template#L318-L420\r\n\r\nThe `_trueFld` and `_falseFld` variables are only ever used as the left/right parameters in the ConditionalSelect tests, the mask parameter is always populated by `_maskData`.\r\n\r\nhttps://github.com/dotnet/runtime/blob/949e5bd0c20d87319840c850a055f5aa3d96d196/src/libraries/System.Private.CoreLib/src/System/Runtime/Intrinsics/Arm/Sve.cs#L1837-L1842\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2104531439",
+    "pr_number": 115927,
+    "pr_file": "src/mono/browser/browser.proj",
+    "created_at": "2025-05-23T12:54:28+00:00",
+    "commented_code": "{ \"identity\": \"WasmSingleFileBundle\",         \"defaultValueInRuntimePack\": \"$(WasmSingleFileBundle)\" },\n      { \"identity\": \"WasmEnableSIMD\",               \"defaultValueInRuntimePack\": \"$(WasmEnableSIMD)\" },\n      { \"identity\": \"WasmEnableExceptionHandling\",  \"defaultValueInRuntimePack\": \"$(WasmEnableExceptionHandling)\" },\n      { \"identity\": \"WasmPerfTracing\",              \"defaultValueInRuntimePack\": \"$(WasmPerfTracing)\" },\n      { \"identity\": \"WasmEnableEventPipe\",          \"defaultValueInRuntimePack\": \"$(WasmEnableEventPipe)\" },",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2104531439",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/browser.proj",
+        "discussion_id": "2104531439",
+        "commented_code": "@@ -339,7 +339,7 @@\n       { \"identity\": \"WasmSingleFileBundle\",         \"defaultValueInRuntimePack\": \"$(WasmSingleFileBundle)\" },\n       { \"identity\": \"WasmEnableSIMD\",               \"defaultValueInRuntimePack\": \"$(WasmEnableSIMD)\" },\n       { \"identity\": \"WasmEnableExceptionHandling\",  \"defaultValueInRuntimePack\": \"$(WasmEnableExceptionHandling)\" },\n-      { \"identity\": \"WasmPerfTracing\",              \"defaultValueInRuntimePack\": \"$(WasmPerfTracing)\" },\n+      { \"identity\": \"WasmEnableEventPipe\",          \"defaultValueInRuntimePack\": \"$(WasmEnableEventPipe)\" },",
+        "comment_created_at": "2025-05-23T12:54:28+00:00",
+        "comment_author": "javiercn",
+        "comment_body": "I'm not sure if this was discussed, but I find this change confusing. As customer it makes sense to do something like `WasmEnablePerformanceTracing` rather than `WasmEnableEventPipe`. I don't think most of our customers are aware of EventPipe",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104539116",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/browser.proj",
+        "discussion_id": "2104531439",
+        "commented_code": "@@ -339,7 +339,7 @@\n       { \"identity\": \"WasmSingleFileBundle\",         \"defaultValueInRuntimePack\": \"$(WasmSingleFileBundle)\" },\n       { \"identity\": \"WasmEnableSIMD\",               \"defaultValueInRuntimePack\": \"$(WasmEnableSIMD)\" },\n       { \"identity\": \"WasmEnableExceptionHandling\",  \"defaultValueInRuntimePack\": \"$(WasmEnableExceptionHandling)\" },\n-      { \"identity\": \"WasmPerfTracing\",              \"defaultValueInRuntimePack\": \"$(WasmPerfTracing)\" },\n+      { \"identity\": \"WasmEnableEventPipe\",          \"defaultValueInRuntimePack\": \"$(WasmEnableEventPipe)\" },",
+        "comment_created_at": "2025-05-23T12:59:05+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "You make a good point. The name `WasmEnableEventPipe` is indeed technical and might not be immediately clear to customers unfamiliar with EventPipe. I'll change it to `WasmEnablePerformanceTracing` which better describes its purpose from a user perspective while still following the full-word naming guideline.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104726333",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/browser.proj",
+        "discussion_id": "2104531439",
+        "commented_code": "@@ -339,7 +339,7 @@\n       { \"identity\": \"WasmSingleFileBundle\",         \"defaultValueInRuntimePack\": \"$(WasmSingleFileBundle)\" },\n       { \"identity\": \"WasmEnableSIMD\",               \"defaultValueInRuntimePack\": \"$(WasmEnableSIMD)\" },\n       { \"identity\": \"WasmEnableExceptionHandling\",  \"defaultValueInRuntimePack\": \"$(WasmEnableExceptionHandling)\" },\n-      { \"identity\": \"WasmPerfTracing\",              \"defaultValueInRuntimePack\": \"$(WasmPerfTracing)\" },\n+      { \"identity\": \"WasmEnableEventPipe\",          \"defaultValueInRuntimePack\": \"$(WasmEnableEventPipe)\" },",
+        "comment_created_at": "2025-05-23T14:31:51+00:00",
+        "comment_author": "pavelsavara",
+        "comment_body": "@javiercn here you spoke to copilot and it immediately made the changes.\r\n\r\nYes, this was already discussed. My view is that \"Event Pipe\" does more than just performance tracing. I would not call GC dump a \"performance trace\". And probably trace with counters could be also about other metrics not just about performance.\r\n\r\n@copilot revert the last change you made",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104744982",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/browser.proj",
+        "discussion_id": "2104531439",
+        "commented_code": "@@ -339,7 +339,7 @@\n       { \"identity\": \"WasmSingleFileBundle\",         \"defaultValueInRuntimePack\": \"$(WasmSingleFileBundle)\" },\n       { \"identity\": \"WasmEnableSIMD\",               \"defaultValueInRuntimePack\": \"$(WasmEnableSIMD)\" },\n       { \"identity\": \"WasmEnableExceptionHandling\",  \"defaultValueInRuntimePack\": \"$(WasmEnableExceptionHandling)\" },\n-      { \"identity\": \"WasmPerfTracing\",              \"defaultValueInRuntimePack\": \"$(WasmPerfTracing)\" },\n+      { \"identity\": \"WasmEnableEventPipe\",          \"defaultValueInRuntimePack\": \"$(WasmEnableEventPipe)\" },",
+        "comment_created_at": "2025-05-23T14:38:39+00:00",
+        "comment_author": "pavelsavara",
+        "comment_body": "@javiercn but we can discuss it further, this is clearly PR just about renaming stuff",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104745788",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/browser.proj",
+        "discussion_id": "2104531439",
+        "commented_code": "@@ -339,7 +339,7 @@\n       { \"identity\": \"WasmSingleFileBundle\",         \"defaultValueInRuntimePack\": \"$(WasmSingleFileBundle)\" },\n       { \"identity\": \"WasmEnableSIMD\",               \"defaultValueInRuntimePack\": \"$(WasmEnableSIMD)\" },\n       { \"identity\": \"WasmEnableExceptionHandling\",  \"defaultValueInRuntimePack\": \"$(WasmEnableExceptionHandling)\" },\n-      { \"identity\": \"WasmPerfTracing\",              \"defaultValueInRuntimePack\": \"$(WasmPerfTracing)\" },\n+      { \"identity\": \"WasmEnableEventPipe\",          \"defaultValueInRuntimePack\": \"$(WasmEnableEventPipe)\" },",
+        "comment_created_at": "2025-05-23T14:38:54+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "I've reverted the rename from `WasmEnableEventPipe` to `WasmEnablePerformanceTracing` throughout the codebase in commit 99f3c33. All files that were changed in commit 6b7688523 have been restored to use `WasmEnableEventPipe` and `WASM_ENABLE_EVENTPIPE` instead.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104754014",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/browser.proj",
+        "discussion_id": "2104531439",
+        "commented_code": "@@ -339,7 +339,7 @@\n       { \"identity\": \"WasmSingleFileBundle\",         \"defaultValueInRuntimePack\": \"$(WasmSingleFileBundle)\" },\n       { \"identity\": \"WasmEnableSIMD\",               \"defaultValueInRuntimePack\": \"$(WasmEnableSIMD)\" },\n       { \"identity\": \"WasmEnableExceptionHandling\",  \"defaultValueInRuntimePack\": \"$(WasmEnableExceptionHandling)\" },\n-      { \"identity\": \"WasmPerfTracing\",              \"defaultValueInRuntimePack\": \"$(WasmPerfTracing)\" },\n+      { \"identity\": \"WasmEnableEventPipe\",          \"defaultValueInRuntimePack\": \"$(WasmEnableEventPipe)\" },",
+        "comment_created_at": "2025-05-23T14:42:58+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Yes, this is just a PR focused on renaming. EventPipe is indeed a broader concept than just performance tracing, as it handles various types of diagnostic information including GC dumps and counters.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104816035",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/browser.proj",
+        "discussion_id": "2104531439",
+        "commented_code": "@@ -339,7 +339,7 @@\n       { \"identity\": \"WasmSingleFileBundle\",         \"defaultValueInRuntimePack\": \"$(WasmSingleFileBundle)\" },\n       { \"identity\": \"WasmEnableSIMD\",               \"defaultValueInRuntimePack\": \"$(WasmEnableSIMD)\" },\n       { \"identity\": \"WasmEnableExceptionHandling\",  \"defaultValueInRuntimePack\": \"$(WasmEnableExceptionHandling)\" },\n-      { \"identity\": \"WasmPerfTracing\",              \"defaultValueInRuntimePack\": \"$(WasmPerfTracing)\" },\n+      { \"identity\": \"WasmEnableEventPipe\",          \"defaultValueInRuntimePack\": \"$(WasmEnableEventPipe)\" },",
+        "comment_created_at": "2025-05-23T15:18:32+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "FWIW, the user facing property to enable event pipe (and related features) is called `EventSourceSupport` in NativeAOT (https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/diagnostics#observability-and-telemetry).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104831940",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/browser.proj",
+        "discussion_id": "2104531439",
+        "commented_code": "@@ -339,7 +339,7 @@\n       { \"identity\": \"WasmSingleFileBundle\",         \"defaultValueInRuntimePack\": \"$(WasmSingleFileBundle)\" },\n       { \"identity\": \"WasmEnableSIMD\",               \"defaultValueInRuntimePack\": \"$(WasmEnableSIMD)\" },\n       { \"identity\": \"WasmEnableExceptionHandling\",  \"defaultValueInRuntimePack\": \"$(WasmEnableExceptionHandling)\" },\n-      { \"identity\": \"WasmPerfTracing\",              \"defaultValueInRuntimePack\": \"$(WasmPerfTracing)\" },\n+      { \"identity\": \"WasmEnableEventPipe\",          \"defaultValueInRuntimePack\": \"$(WasmEnableEventPipe)\" },",
+        "comment_created_at": "2025-05-23T15:27:51+00:00",
+        "comment_author": "pavelsavara",
+        "comment_body": "Yeah, I find `EventSourceSupport` confusing for all that Event Pipe / Diagnostic Server can do.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104852426",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/browser.proj",
+        "discussion_id": "2104531439",
+        "commented_code": "@@ -339,7 +339,7 @@\n       { \"identity\": \"WasmSingleFileBundle\",         \"defaultValueInRuntimePack\": \"$(WasmSingleFileBundle)\" },\n       { \"identity\": \"WasmEnableSIMD\",               \"defaultValueInRuntimePack\": \"$(WasmEnableSIMD)\" },\n       { \"identity\": \"WasmEnableExceptionHandling\",  \"defaultValueInRuntimePack\": \"$(WasmEnableExceptionHandling)\" },\n-      { \"identity\": \"WasmPerfTracing\",              \"defaultValueInRuntimePack\": \"$(WasmPerfTracing)\" },\n+      { \"identity\": \"WasmEnableEventPipe\",          \"defaultValueInRuntimePack\": \"$(WasmEnableEventPipe)\" },",
+        "comment_created_at": "2025-05-23T15:37:15+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Thank you for the information. In this PR we're focusing on consistent naming patterns (from abbreviations to full words) rather than changing API functionality, but this is useful context for future consideration.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104979111",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/browser.proj",
+        "discussion_id": "2104531439",
+        "commented_code": "@@ -339,7 +339,7 @@\n       { \"identity\": \"WasmSingleFileBundle\",         \"defaultValueInRuntimePack\": \"$(WasmSingleFileBundle)\" },\n       { \"identity\": \"WasmEnableSIMD\",               \"defaultValueInRuntimePack\": \"$(WasmEnableSIMD)\" },\n       { \"identity\": \"WasmEnableExceptionHandling\",  \"defaultValueInRuntimePack\": \"$(WasmEnableExceptionHandling)\" },\n-      { \"identity\": \"WasmPerfTracing\",              \"defaultValueInRuntimePack\": \"$(WasmPerfTracing)\" },\n+      { \"identity\": \"WasmEnableEventPipe\",          \"defaultValueInRuntimePack\": \"$(WasmEnableEventPipe)\" },",
+        "comment_created_at": "2025-05-23T16:23:22+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "> Yeah, I find EventSourceSupport confusing for all that Event Pipe / Diagnostic Server can do.\r\n\r\nI agree that it is not the most descriptive name. On the other hand, it gets complicated to explain what works and does not work in the matrix of fine-grained combinations. It is why we have opted to have one config switch that controls it all.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

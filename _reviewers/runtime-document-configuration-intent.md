@@ -1,0 +1,291 @@
+---
+title: Document configuration intent
+description: Configuration settings should be self-documenting with clear intent.
+  When adding temporary workarounds, conditional flags, or platform-specific settings,
+  include descriptive comments explaining their purpose, limitations, and lifecycle.
+  Use TODO comments with issue references for temporary configurations, and choose
+  clear, descriptive names for all...
+repository: dotnet/runtime
+label: Configurations
+language: Other
+comments_count: 6
+repository_stars: 16578
+---
+
+Configuration settings should be self-documenting with clear intent. When adding temporary workarounds, conditional flags, or platform-specific settings, include descriptive comments explaining their purpose, limitations, and lifecycle. Use TODO comments with issue references for temporary configurations, and choose clear, descriptive names for all configuration properties. This practice helps future developers understand why certain configurations exist and when they can be modified or removed.
+
+Examples:
+1. For temporary workarounds:
+```xml
+<!-- TODO: Remove this workaround once https://github.com/dotnet/runtime/issues/116929 is fixed -->
+<_Crossgen2Supported Condition="'$(TargetOS)' != 'illumos' and '$(TargetOS)' != 'solaris'">true</_Crossgen2Supported>
+```
+
+2. For feature flags with specific scope:
+```xml
+<FeatureJavaMarshal Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == 'Checked' or '$(TargetOS)' == 'Android'">true</FeatureJavaMarshal>
+```
+
+3. For clear, descriptive naming:
+```xml
+<!-- Prefer clear names that indicate purpose -->
+<WasmEnableEventPipe>true</WasmEnableEventPipe>
+<!-- Instead of ambiguous names -->
+<WasmPerfTracing>true</WasmPerfTracing>
+```
+
+
+[
+  {
+    "discussion_id": "2164533046",
+    "pr_number": 105403,
+    "pr_file": "eng/Subsets.props",
+    "created_at": "2025-06-24T17:20:10+00:00",
+    "commented_code": "<_NativeAotSupportedArch Condition=\"'$(TargetArchitecture)' == 'x64' or '$(TargetArchitecture)' == 'arm64' or '$(TargetArchitecture)' == 'arm' or '$(TargetArchitecture)' == 'loongarch64' or '$(TargetArchitecture)' == 'riscv64' or ('$(TargetOS)' == 'windows' and '$(TargetArchitecture)' == 'x86')\">true</_NativeAotSupportedArch>\n    <NativeAotSupported Condition=\"'$(_NativeAotSupportedOS)' == 'true' and '$(_NativeAotSupportedArch)' == 'true'\">true</NativeAotSupported>\n\n    <_Crossgen2Supported Condition=\"'$(TargetOS)' != 'illumos' and '$(TargetOS)' != 'solaris'\">true</_Crossgen2Supported>",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2164533046",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 105403,
+        "pr_file": "eng/Subsets.props",
+        "discussion_id": "2164533046",
+        "commented_code": "@@ -51,6 +51,8 @@\n     <_NativeAotSupportedArch Condition=\"'$(TargetArchitecture)' == 'x64' or '$(TargetArchitecture)' == 'arm64' or '$(TargetArchitecture)' == 'arm' or '$(TargetArchitecture)' == 'loongarch64' or '$(TargetArchitecture)' == 'riscv64' or ('$(TargetOS)' == 'windows' and '$(TargetArchitecture)' == 'x86')\">true</_NativeAotSupportedArch>\n     <NativeAotSupported Condition=\"'$(_NativeAotSupportedOS)' == 'true' and '$(_NativeAotSupportedArch)' == 'true'\">true</NativeAotSupported>\n \n+    <_Crossgen2Supported Condition=\"'$(TargetOS)' != 'illumos' and '$(TargetOS)' != 'solaris'\">true</_Crossgen2Supported>",
+        "comment_created_at": "2025-06-24T17:20:10+00:00",
+        "comment_author": "am11",
+        "comment_body": "```suggestion\r\n    <!-- TODO: Remove this workaround once https://github.com/dotnet/runtime/issues/116929 is fixed -->\r\n    <_Crossgen2Supported Condition=\"'$(TargetOS)' != 'illumos' and '$(TargetOS)' != 'solaris'\">true</_Crossgen2Supported>\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2150535695",
+    "pr_number": 116310,
+    "pr_file": "src/coreclr/clr.featuredefines.props",
+    "created_at": "2025-06-16T17:48:53+00:00",
+    "commented_code": "<FeaturePerfTracing>true</FeaturePerfTracing>\n        <FeatureEHFunclets>true</FeatureEHFunclets>\n        <ProfilingSupportedBuild>true</ProfilingSupportedBuild>\n\n        <!-- !TODO-JAVA! Limit to Android build -->\n        <FeatureJavaMarshal>true</FeatureJavaMarshal>",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2150535695",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116310,
+        "pr_file": "src/coreclr/clr.featuredefines.props",
+        "discussion_id": "2150535695",
+        "commented_code": "@@ -4,6 +4,9 @@\n         <FeaturePerfTracing>true</FeaturePerfTracing>\n         <FeatureEHFunclets>true</FeatureEHFunclets>\n         <ProfilingSupportedBuild>true</ProfilingSupportedBuild>\n+\n+        <!-- !TODO-JAVA! Limit to Android build -->\n+        <FeatureJavaMarshal>true</FeatureJavaMarshal>",
+        "comment_created_at": "2025-06-16T17:48:53+00:00",
+        "comment_author": "AaronRobinsonMSFT",
+        "comment_body": "We should update this to only be true for Debug, Checked or Android builds.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2150544611",
+    "pr_number": 116310,
+    "pr_file": "src/coreclr/nativeaot/Directory.Build.props",
+    "created_at": "2025-06-16T17:54:51+00:00",
+    "commented_code": "<PropertyGroup>\n    <DefineConstants Condition=\"'$(FeaturePerfTracing)' == 'true'\">FEATURE_PERFTRACING;$(DefineConstants)</DefineConstants>\n  </PropertyGroup>\n\n  <PropertyGroup>\n    <!-- !TODO-JAVA! Limit to Android build -->\n    <FeatureJavaMarshal>true</FeatureJavaMarshal>",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2150544611",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116310,
+        "pr_file": "src/coreclr/nativeaot/Directory.Build.props",
+        "discussion_id": "2150544611",
+        "commented_code": "@@ -71,7 +71,13 @@\n   <PropertyGroup>\n     <DefineConstants Condition=\"'$(FeaturePerfTracing)' == 'true'\">FEATURE_PERFTRACING;$(DefineConstants)</DefineConstants>\n   </PropertyGroup>\n-\n+  <PropertyGroup>\n+    <!-- !TODO-JAVA! Limit to Android build -->\n+    <FeatureJavaMarshal>true</FeatureJavaMarshal>",
+        "comment_created_at": "2025-06-16T17:54:51+00:00",
+        "comment_author": "AaronRobinsonMSFT",
+        "comment_body": "Only enable for Debug, Checked or Android build.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2110094524",
+    "pr_number": 115983,
+    "pr_file": "src/coreclr/inc/clrconfigvalues.h",
+    "created_at": "2025-05-27T20:04:36+00:00",
+    "commented_code": "RETAIL_CONFIG_DWORD_INFO(EXTERNAL_EnableRiscV64Zbb,             W(\"EnableRiscV64Zbb\"),          1, \"Allows RiscV64 Zbb hardware intrinsics to be disabled\")\n#endif\n\n//\n// These are \"legacy\" ISA enablement knobs that aren't recommended for use anymore",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2110094524",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115983,
+        "pr_file": "src/coreclr/inc/clrconfigvalues.h",
+        "discussion_id": "2110094524",
+        "commented_code": "@@ -732,6 +722,28 @@ RETAIL_CONFIG_DWORD_INFO(EXTERNAL_EnableRiscV64Zba,             W(\"EnableRiscV64\n RETAIL_CONFIG_DWORD_INFO(EXTERNAL_EnableRiscV64Zbb,             W(\"EnableRiscV64Zbb\"),          1, \"Allows RiscV64 Zbb hardware intrinsics to be disabled\")\n #endif\n \n+//\n+// These are \"legacy\" ISA enablement knobs that aren't recommended for use anymore",
+        "comment_created_at": "2025-05-27T20:04:36+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "Are any of these documented in official docs? If they are not, I do not think we need to keep them.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2110520833",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115983,
+        "pr_file": "src/coreclr/inc/clrconfigvalues.h",
+        "discussion_id": "2110094524",
+        "commented_code": "@@ -732,6 +722,28 @@ RETAIL_CONFIG_DWORD_INFO(EXTERNAL_EnableRiscV64Zba,             W(\"EnableRiscV64\n RETAIL_CONFIG_DWORD_INFO(EXTERNAL_EnableRiscV64Zbb,             W(\"EnableRiscV64Zbb\"),          1, \"Allows RiscV64 Zbb hardware intrinsics to be disabled\")\n #endif\n \n+//\n+// These are \"legacy\" ISA enablement knobs that aren't recommended for use anymore",
+        "comment_created_at": "2025-05-27T23:27:17+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "They've been discussed in various blogs and are fairly well known in the space as the way to test fallback paths if your hardware supports the latest.\r\n\r\nI don't think it'd be the end of the world to drop them and the devs primarily using these switches could update, but didn't want to do so without discussion.\r\n\r\nWould the `--instruction-set` flags for R2R/NAOT be in the same boat? If we could remove the extras there it would also simplify things. I don't believe the flag is considered officially supported today, but does print out on the command line.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2110529063",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115983,
+        "pr_file": "src/coreclr/inc/clrconfigvalues.h",
+        "discussion_id": "2110094524",
+        "commented_code": "@@ -732,6 +722,28 @@ RETAIL_CONFIG_DWORD_INFO(EXTERNAL_EnableRiscV64Zba,             W(\"EnableRiscV64\n RETAIL_CONFIG_DWORD_INFO(EXTERNAL_EnableRiscV64Zbb,             W(\"EnableRiscV64Zbb\"),          1, \"Allows RiscV64 Zbb hardware intrinsics to be disabled\")\n #endif\n \n+//\n+// These are \"legacy\" ISA enablement knobs that aren't recommended for use anymore",
+        "comment_created_at": "2025-05-27T23:33:28+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "`IlcInstructionSet` is explicitly documented in the repo docs as [subject to change without a breaking change notice](https://github.com/dotnet/runtime/blob/main/src/coreclr/nativeaot/docs/optimizing.md).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2110536316",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115983,
+        "pr_file": "src/coreclr/inc/clrconfigvalues.h",
+        "discussion_id": "2110094524",
+        "commented_code": "@@ -732,6 +722,28 @@ RETAIL_CONFIG_DWORD_INFO(EXTERNAL_EnableRiscV64Zba,             W(\"EnableRiscV64\n RETAIL_CONFIG_DWORD_INFO(EXTERNAL_EnableRiscV64Zbb,             W(\"EnableRiscV64Zbb\"),          1, \"Allows RiscV64 Zbb hardware intrinsics to be disabled\")\n #endif\n \n+//\n+// These are \"legacy\" ISA enablement knobs that aren't recommended for use anymore",
+        "comment_created_at": "2025-05-27T23:39:12+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "Command line arguments for direct invocation of crossgen2/ilc are not officially documented/supported.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2110661627",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115983,
+        "pr_file": "src/coreclr/inc/clrconfigvalues.h",
+        "discussion_id": "2110094524",
+        "commented_code": "@@ -732,6 +722,28 @@ RETAIL_CONFIG_DWORD_INFO(EXTERNAL_EnableRiscV64Zba,             W(\"EnableRiscV64\n RETAIL_CONFIG_DWORD_INFO(EXTERNAL_EnableRiscV64Zbb,             W(\"EnableRiscV64Zbb\"),          1, \"Allows RiscV64 Zbb hardware intrinsics to be disabled\")\n #endif\n \n+//\n+// These are \"legacy\" ISA enablement knobs that aren't recommended for use anymore",
+        "comment_created_at": "2025-05-28T01:20:42+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "Removed the config knobs and instruction-set switches",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2103965079",
+    "pr_number": 115927,
+    "pr_file": "src/mono/browser/build/BrowserWasmApp.targets",
+    "created_at": "2025-05-23T07:16:17+00:00",
+    "commented_code": "<EmscriptenEnvVars Include=\"ENABLE_JS_INTEROP_BY_VALUE=0\" Condition=\"'$(WasmEnableJsInteropByValue)' != 'true'\" />\n      <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=1\" Condition=\"'$(WasmEnableSIMD)' != 'false'\" />\n      <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=0\" Condition=\"'$(WasmEnableSIMD)' == 'false'\" />\n      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmPerfTracing)' == 'true'\" />\n      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=0\" Condition=\"'$(WasmPerfTracing)' != 'true'\" />\n      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmEnableEventPipe)' == 'true'\" />",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2103965079",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/build/BrowserWasmApp.targets",
+        "discussion_id": "2103965079",
+        "commented_code": "@@ -391,8 +391,8 @@\n       <EmscriptenEnvVars Include=\"ENABLE_JS_INTEROP_BY_VALUE=0\" Condition=\"'$(WasmEnableJsInteropByValue)' != 'true'\" />\n       <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=1\" Condition=\"'$(WasmEnableSIMD)' != 'false'\" />\n       <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=0\" Condition=\"'$(WasmEnableSIMD)' == 'false'\" />\n-      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmPerfTracing)' == 'true'\" />\n-      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=0\" Condition=\"'$(WasmPerfTracing)' != 'true'\" />\n+      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmEnableEventPipe)' == 'true'\" />",
+        "comment_created_at": "2025-05-23T07:16:17+00:00",
+        "comment_author": "pavelsavara",
+        "comment_body": "@copilot also rename `WASM_PERFTRACING` thru the codebase to `WASM_ENABLE_EP`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2103971718",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/build/BrowserWasmApp.targets",
+        "discussion_id": "2103965079",
+        "commented_code": "@@ -391,8 +391,8 @@\n       <EmscriptenEnvVars Include=\"ENABLE_JS_INTEROP_BY_VALUE=0\" Condition=\"'$(WasmEnableJsInteropByValue)' != 'true'\" />\n       <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=1\" Condition=\"'$(WasmEnableSIMD)' != 'false'\" />\n       <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=0\" Condition=\"'$(WasmEnableSIMD)' == 'false'\" />\n-      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmPerfTracing)' == 'true'\" />\n-      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=0\" Condition=\"'$(WasmPerfTracing)' != 'true'\" />\n+      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmEnableEventPipe)' == 'true'\" />",
+        "comment_created_at": "2025-05-23T07:20:42+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "I've renamed `WASM_PERFTRACING` to `WASM_ENABLE_EP` throughout the codebase in commit bda67d1. Changes were made in two files:\n1. src/mono/browser/build/BrowserWasmApp.targets\n2. src/mono/browser/runtime/es6/dotnet.es6.lib.js",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104008125",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/build/BrowserWasmApp.targets",
+        "discussion_id": "2103965079",
+        "commented_code": "@@ -391,8 +391,8 @@\n       <EmscriptenEnvVars Include=\"ENABLE_JS_INTEROP_BY_VALUE=0\" Condition=\"'$(WasmEnableJsInteropByValue)' != 'true'\" />\n       <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=1\" Condition=\"'$(WasmEnableSIMD)' != 'false'\" />\n       <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=0\" Condition=\"'$(WasmEnableSIMD)' == 'false'\" />\n-      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmPerfTracing)' == 'true'\" />\n-      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=0\" Condition=\"'$(WasmPerfTracing)' != 'true'\" />\n+      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmEnableEventPipe)' == 'true'\" />",
+        "comment_created_at": "2025-05-23T07:39:28+00:00",
+        "comment_author": "pavelsavara",
+        "comment_body": "there is one more in src\\mono\\browser\\browser.proj",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104015685",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/build/BrowserWasmApp.targets",
+        "discussion_id": "2103965079",
+        "commented_code": "@@ -391,8 +391,8 @@\n       <EmscriptenEnvVars Include=\"ENABLE_JS_INTEROP_BY_VALUE=0\" Condition=\"'$(WasmEnableJsInteropByValue)' != 'true'\" />\n       <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=1\" Condition=\"'$(WasmEnableSIMD)' != 'false'\" />\n       <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=0\" Condition=\"'$(WasmEnableSIMD)' == 'false'\" />\n-      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmPerfTracing)' == 'true'\" />\n-      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=0\" Condition=\"'$(WasmPerfTracing)' != 'true'\" />\n+      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmEnableEventPipe)' == 'true'\" />",
+        "comment_created_at": "2025-05-23T07:43:55+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "I've renamed `WasmPerfTracing` to `WasmEnableEP` in the src/mono/browser/browser.proj file in commit 9b946ef. The changes include updating the property name and also the environment variables from `WASM_PERFTRACING` to `WASM_ENABLE_EP`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104035196",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/build/BrowserWasmApp.targets",
+        "discussion_id": "2103965079",
+        "commented_code": "@@ -391,8 +391,8 @@\n       <EmscriptenEnvVars Include=\"ENABLE_JS_INTEROP_BY_VALUE=0\" Condition=\"'$(WasmEnableJsInteropByValue)' != 'true'\" />\n       <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=1\" Condition=\"'$(WasmEnableSIMD)' != 'false'\" />\n       <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=0\" Condition=\"'$(WasmEnableSIMD)' == 'false'\" />\n-      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmPerfTracing)' == 'true'\" />\n-      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=0\" Condition=\"'$(WasmPerfTracing)' != 'true'\" />\n+      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmEnableEventPipe)' == 'true'\" />",
+        "comment_created_at": "2025-05-23T07:55:42+00:00",
+        "comment_author": "pavelsavara",
+        "comment_body": "Rename `WasmEnableEP` to `WasmEnableEventPipe`. The change to `WasmEnableEP` was wrong. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104045616",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/browser/build/BrowserWasmApp.targets",
+        "discussion_id": "2103965079",
+        "commented_code": "@@ -391,8 +391,8 @@\n       <EmscriptenEnvVars Include=\"ENABLE_JS_INTEROP_BY_VALUE=0\" Condition=\"'$(WasmEnableJsInteropByValue)' != 'true'\" />\n       <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=1\" Condition=\"'$(WasmEnableSIMD)' != 'false'\" />\n       <EmscriptenEnvVars Include=\"WASM_ENABLE_SIMD=0\" Condition=\"'$(WasmEnableSIMD)' == 'false'\" />\n-      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmPerfTracing)' == 'true'\" />\n-      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=0\" Condition=\"'$(WasmPerfTracing)' != 'true'\" />\n+      <EmscriptenEnvVars Include=\"WASM_PERFTRACING=1\" Condition=\"'$(WasmEnableEventPipe)' == 'true'\" />",
+        "comment_created_at": "2025-05-23T08:01:42+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "I've renamed `WasmEnableEP` to `WasmEnableEventPipe` throughout the codebase in commit d1917f950. I also updated all related environment variables from `WASM_ENABLE_EP` to `WASM_ENABLE_EVENTPIPE` in .proj files and JavaScript files, and updated remaining references in project files that were still using the old property names.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2104316036",
+    "pr_number": 115927,
+    "pr_file": "src/mono/wasm/build/WasmApp.Common.targets",
+    "created_at": "2025-05-23T10:37:35+00:00",
+    "commented_code": "<_WasmDebuggerSupport Condition=\"'$(WasmDebugLevel)' != '' and '$(WasmDebugLevel)' == '0'\">false</_WasmDebuggerSupport>\n    <_WasmDebuggerSupport Condition=\"'$(_WasmDebuggerSupport)' == '' and '$(WasmBuildingForNestedPublish)' == 'true'\">false</_WasmDebuggerSupport> <!-- publish -->\n    <_WasmDebuggerSupport Condition=\"'$(_WasmDebuggerSupport)' == ''\">true</_WasmDebuggerSupport>\n    <WasmPerfInstrumentation Condition=\"'$(WasmPerfInstrumentation)' == 'true'\">all</WasmPerfInstrumentation>\n    <_WasmProfilers Condition=\"'$(WasmPerfInstrumentation)' != ''\">browser:eventpipe,callspec=$(WasmPerfInstrumentation)</_WasmProfilers>\n    <WasmPerformanceInstrumentation Condition=\"'$(WasmPerformanceInstrumentation)' == 'true'\">all</WasmPerformanceInstrumentation>",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2104316036",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/wasm/build/WasmApp.Common.targets",
+        "discussion_id": "2104316036",
+        "commented_code": "@@ -256,15 +256,15 @@\n     <_WasmDebuggerSupport Condition=\"'$(WasmDebugLevel)' != '' and '$(WasmDebugLevel)' == '0'\">false</_WasmDebuggerSupport>\n     <_WasmDebuggerSupport Condition=\"'$(_WasmDebuggerSupport)' == '' and '$(WasmBuildingForNestedPublish)' == 'true'\">false</_WasmDebuggerSupport> <!-- publish -->\n     <_WasmDebuggerSupport Condition=\"'$(_WasmDebuggerSupport)' == ''\">true</_WasmDebuggerSupport>\n-    <WasmPerfInstrumentation Condition=\"'$(WasmPerfInstrumentation)' == 'true'\">all</WasmPerfInstrumentation>\n-    <_WasmProfilers Condition=\"'$(WasmPerfInstrumentation)' != ''\">browser:eventpipe,callspec=$(WasmPerfInstrumentation)</_WasmProfilers>\n+    <WasmPerformanceInstrumentation Condition=\"'$(WasmPerformanceInstrumentation)' == 'true'\">all</WasmPerformanceInstrumentation>",
+        "comment_created_at": "2025-05-23T10:37:35+00:00",
+        "comment_author": "akoeplinger",
+        "comment_body": "it's a bit weird that this property can be `true`, `false`, `all`, `none` etc. I'd stick with one or the other, in this case with the callspec format",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104326175",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 115927,
+        "pr_file": "src/mono/wasm/build/WasmApp.Common.targets",
+        "discussion_id": "2104316036",
+        "commented_code": "@@ -256,15 +256,15 @@\n     <_WasmDebuggerSupport Condition=\"'$(WasmDebugLevel)' != '' and '$(WasmDebugLevel)' == '0'\">false</_WasmDebuggerSupport>\n     <_WasmDebuggerSupport Condition=\"'$(_WasmDebuggerSupport)' == '' and '$(WasmBuildingForNestedPublish)' == 'true'\">false</_WasmDebuggerSupport> <!-- publish -->\n     <_WasmDebuggerSupport Condition=\"'$(_WasmDebuggerSupport)' == ''\">true</_WasmDebuggerSupport>\n-    <WasmPerfInstrumentation Condition=\"'$(WasmPerfInstrumentation)' == 'true'\">all</WasmPerfInstrumentation>\n-    <_WasmProfilers Condition=\"'$(WasmPerfInstrumentation)' != ''\">browser:eventpipe,callspec=$(WasmPerfInstrumentation)</_WasmProfilers>\n+    <WasmPerformanceInstrumentation Condition=\"'$(WasmPerformanceInstrumentation)' == 'true'\">all</WasmPerformanceInstrumentation>",
+        "comment_created_at": "2025-05-23T10:44:35+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "I've removed the confusing automatic conversion from `true` to `all` in 572b126. Now `WasmPerformanceInstrumentation` consistently accepts only string-based callspec values like `all`, `none`, or `N:Sample`. Also updated the property description to clarify the expected values.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

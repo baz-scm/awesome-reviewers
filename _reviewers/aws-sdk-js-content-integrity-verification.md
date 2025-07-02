@@ -1,0 +1,204 @@
+---
+title: Content integrity verification
+description: 'When handling HTTP responses, especially with streaming data, properly
+  verify content integrity and length to prevent data corruption or unexpected termination.
+  Key considerations:'
+repository: aws/aws-sdk-js
+label: Networking
+language: Javascript
+comments_count: 5
+repository_stars: 7628
+---
+
+When handling HTTP responses, especially with streaming data, properly verify content integrity and length to prevent data corruption or unexpected termination. Key considerations:
+
+1. **Content-Length may not match actual data size** when responses use compression (gzip, br, deflate). In such cases:
+   - Check for Content-Encoding header to determine if response is compressed
+   - Use actual byte counts rather than Content-Length for progress tracking
+   - Consider sending Accept-Encoding: identity for critical operations requiring precise progress tracking
+
+2. **Implement proper stream handling** based on environment:
+   - For Node.js, use Transform streams rather than 'data' event listeners to avoid backpressure issues:
+   ```javascript
+   // GOOD: Use piping with Transform streams
+   var contentLengthCheckerStream = new ContentLengthCheckerStream(
+     parseInt(headers['content-length'], 10)
+   );
+   responseStream.pipe(contentLengthCheckerStream).pipe(stream);
+   
+   // AVOID: Direct data event listeners can cause backpressure issues in older Node.js
+   responseStream.on('data', function(chunk) {
+     receivedLen += chunk.length;
+     // potential for data loss in Node.js <= 0.10.x
+   });
+   ```
+
+3. **Handle content integrity verification** for both Node.js and browser environments:
+   - In Node.js, implement pipe-through verification streams
+   - In browsers, buffer response data for integrity checks
+   - Verify checksums/hashes when provided in response headers
+   - Emit appropriate errors with descriptive messages when content length or integrity checks fail
+
+Implementing these practices ensures data is received completely and correctly, preventing subtle bugs in network communication.
+
+
+[
+  {
+    "discussion_id": "508372275",
+    "pr_number": 3505,
+    "pr_file": "lib/http/fetch.js",
+    "created_at": "2020-10-20T10:02:52+00:00",
+    "commented_code": "var AWS = require('../core');\nvar pipeThrough = AWS.util.pipeThrough;\nvar TransformStream = typeof TransformStream !== 'undefined' ? TransformStream :\n  AWS.util.stream && AWS.util.stream.TransformStream ? AWS.util.stream.TransformStream :\n  typeof WebStreamsPolyfill !== 'undefined' ? WebStreamsPolyfill.TransformStream :\n  undefined;\nrequire('../http');\n\n/**\n * @api private\n */\nAWS.FetchClient = AWS.util.inherit({\n  handleRequest: function handleRequest(httpRequest, httpOptions, callback, errCallback) {\n    var self = this;\n    var endpoint = httpRequest.endpoint;\n    if (!httpOptions) httpOptions = {};\n\n    var emitter = new EventEmitter();\n\n    // Construct href\n    var href = endpoint.protocol + '//' + endpoint.hostname;\n    if (endpoint.port !== 80 && endpoint.port !== 443) {\n      href += ':' + endpoint.port;\n    }\n    href += httpRequest.path;\n\n    // Construct headers\n    var headers = new Headers();\n    AWS.util.each(httpRequest.headers, function (key, value) {\n      // See: https://fetch.spec.whatwg.org/#forbidden-header-name\n      if (key !== 'Content-Length' && key !== 'Expect' && key !== 'Host') {\n        headers.set(key, value);\n      }\n    });\n\n    // Send cookies?\n    var credentials = 'omit';\n    if (httpOptions.xhrWithCredentials) {\n      credentials = 'include';\n    }\n\n    // Construct request\n    // See: https://developer.mozilla.org/en-US/docs/Web/API/Request/Request\n    var req = {\n      method: httpRequest.method,\n      headers: headers,\n      credentials: credentials\n    };\n    if (httpRequest.body) req.body = httpRequest.body;\n    var request = new Request(href, req);\n\n    // Send request\n    fetch(request).then(function(response) {\n        if (!response.ok) throw Error(response.statusText);\n        return response;\n    }).then(function(response) {\n      emitter.statusCode = response.status;\n      emitter.headers = self.parseHeaders(response.headers);\n      emitter.abort = function() { response.body.cancel(); };\n\n      httpRequest.responseStream = self.writeBody(emitter, response); // attach responseStream to httpRequest\n      httpRequest.stream = emitter; // attach emitter to httpRequest\n      emitter.didCallback = false; // Required for httpDone event\n\n      emitter.on('error', function() {\n        if (emitter.didCallback) return; emitter.didCallback = true;\n        errCallback.apply(emitter, arguments);\n      });\n\n      if (emitter.didCallback) return;\n      callback(emitter);\n      emitter.emit(\n        'headers',\n        emitter.statusCode,\n        emitter.headers,\n        response.statusText\n      );\n    }, function(err) {\n        if (emitter.didCallback) return; emitter.didCallback = true;\n        errCallback(AWS.util.error(new Error('Network Failure'), {\n        code: 'NetworkingError'\n      }));\n    }).catch(function(err) {\n      if (emitter.didCallback) return; emitter.didCallback = true;\n      errCallback(AWS.util.error(err, {\n        code: 'BadReplyError'\n      }));\n    });\n\n    return emitter;\n  },\n\n  writeBody: function writeBody(emitter, response) {\n    var body = response.body;\n    var totalBytes = parseInt(response.headers.get('Content-Length'), 10);",
+    "repo_full_name": "aws/aws-sdk-js",
+    "discussion_comments": [
+      {
+        "comment_id": "508372275",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 3505,
+        "pr_file": "lib/http/fetch.js",
+        "discussion_id": "508372275",
+        "commented_code": "@@ -0,0 +1,159 @@\n+var AWS = require('../core');\n+var pipeThrough = AWS.util.pipeThrough;\n+var TransformStream = typeof TransformStream !== 'undefined' ? TransformStream :\n+  AWS.util.stream && AWS.util.stream.TransformStream ? AWS.util.stream.TransformStream :\n+  typeof WebStreamsPolyfill !== 'undefined' ? WebStreamsPolyfill.TransformStream :\n+  undefined;\n+require('../http');\n+\n+/**\n+ * @api private\n+ */\n+AWS.FetchClient = AWS.util.inherit({\n+  handleRequest: function handleRequest(httpRequest, httpOptions, callback, errCallback) {\n+    var self = this;\n+    var endpoint = httpRequest.endpoint;\n+    if (!httpOptions) httpOptions = {};\n+\n+    var emitter = new EventEmitter();\n+\n+    // Construct href\n+    var href = endpoint.protocol + '//' + endpoint.hostname;\n+    if (endpoint.port !== 80 && endpoint.port !== 443) {\n+      href += ':' + endpoint.port;\n+    }\n+    href += httpRequest.path;\n+\n+    // Construct headers\n+    var headers = new Headers();\n+    AWS.util.each(httpRequest.headers, function (key, value) {\n+      // See: https://fetch.spec.whatwg.org/#forbidden-header-name\n+      if (key !== 'Content-Length' && key !== 'Expect' && key !== 'Host') {\n+        headers.set(key, value);\n+      }\n+    });\n+\n+    // Send cookies?\n+    var credentials = 'omit';\n+    if (httpOptions.xhrWithCredentials) {\n+      credentials = 'include';\n+    }\n+\n+    // Construct request\n+    // See: https://developer.mozilla.org/en-US/docs/Web/API/Request/Request\n+    var req = {\n+      method: httpRequest.method,\n+      headers: headers,\n+      credentials: credentials\n+    };\n+    if (httpRequest.body) req.body = httpRequest.body;\n+    var request = new Request(href, req);\n+\n+    // Send request\n+    fetch(request).then(function(response) {\n+        if (!response.ok) throw Error(response.statusText);\n+        return response;\n+    }).then(function(response) {\n+      emitter.statusCode = response.status;\n+      emitter.headers = self.parseHeaders(response.headers);\n+      emitter.abort = function() { response.body.cancel(); };\n+\n+      httpRequest.responseStream = self.writeBody(emitter, response); // attach responseStream to httpRequest\n+      httpRequest.stream = emitter; // attach emitter to httpRequest\n+      emitter.didCallback = false; // Required for httpDone event\n+\n+      emitter.on('error', function() {\n+        if (emitter.didCallback) return; emitter.didCallback = true;\n+        errCallback.apply(emitter, arguments);\n+      });\n+\n+      if (emitter.didCallback) return;\n+      callback(emitter);\n+      emitter.emit(\n+        'headers',\n+        emitter.statusCode,\n+        emitter.headers,\n+        response.statusText\n+      );\n+    }, function(err) {\n+        if (emitter.didCallback) return; emitter.didCallback = true;\n+        errCallback(AWS.util.error(new Error('Network Failure'), {\n+        code: 'NetworkingError'\n+      }));\n+    }).catch(function(err) {\n+      if (emitter.didCallback) return; emitter.didCallback = true;\n+      errCallback(AWS.util.error(err, {\n+        code: 'BadReplyError'\n+      }));\n+    });\n+\n+    return emitter;\n+  },\n+\n+  writeBody: function writeBody(emitter, response) {\n+    var body = response.body;\n+    var totalBytes = parseInt(response.headers.get('Content-Length'), 10);",
+        "comment_created_at": "2020-10-20T10:02:52+00:00",
+        "comment_author": "jimmywarting",
+        "comment_body": "just a heads up: if the response is encoded with gzip, br, deflate or anything then that will be what the content-length will also be (not the actual file size) so when you read the all the chunks then you will only increase the loadedBytes with uncompressed data.\r\n\r\nwhich means loadedBytes might be higher than content-length in some scenarios",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "508382288",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 3505,
+        "pr_file": "lib/http/fetch.js",
+        "discussion_id": "508372275",
+        "commented_code": "@@ -0,0 +1,159 @@\n+var AWS = require('../core');\n+var pipeThrough = AWS.util.pipeThrough;\n+var TransformStream = typeof TransformStream !== 'undefined' ? TransformStream :\n+  AWS.util.stream && AWS.util.stream.TransformStream ? AWS.util.stream.TransformStream :\n+  typeof WebStreamsPolyfill !== 'undefined' ? WebStreamsPolyfill.TransformStream :\n+  undefined;\n+require('../http');\n+\n+/**\n+ * @api private\n+ */\n+AWS.FetchClient = AWS.util.inherit({\n+  handleRequest: function handleRequest(httpRequest, httpOptions, callback, errCallback) {\n+    var self = this;\n+    var endpoint = httpRequest.endpoint;\n+    if (!httpOptions) httpOptions = {};\n+\n+    var emitter = new EventEmitter();\n+\n+    // Construct href\n+    var href = endpoint.protocol + '//' + endpoint.hostname;\n+    if (endpoint.port !== 80 && endpoint.port !== 443) {\n+      href += ':' + endpoint.port;\n+    }\n+    href += httpRequest.path;\n+\n+    // Construct headers\n+    var headers = new Headers();\n+    AWS.util.each(httpRequest.headers, function (key, value) {\n+      // See: https://fetch.spec.whatwg.org/#forbidden-header-name\n+      if (key !== 'Content-Length' && key !== 'Expect' && key !== 'Host') {\n+        headers.set(key, value);\n+      }\n+    });\n+\n+    // Send cookies?\n+    var credentials = 'omit';\n+    if (httpOptions.xhrWithCredentials) {\n+      credentials = 'include';\n+    }\n+\n+    // Construct request\n+    // See: https://developer.mozilla.org/en-US/docs/Web/API/Request/Request\n+    var req = {\n+      method: httpRequest.method,\n+      headers: headers,\n+      credentials: credentials\n+    };\n+    if (httpRequest.body) req.body = httpRequest.body;\n+    var request = new Request(href, req);\n+\n+    // Send request\n+    fetch(request).then(function(response) {\n+        if (!response.ok) throw Error(response.statusText);\n+        return response;\n+    }).then(function(response) {\n+      emitter.statusCode = response.status;\n+      emitter.headers = self.parseHeaders(response.headers);\n+      emitter.abort = function() { response.body.cancel(); };\n+\n+      httpRequest.responseStream = self.writeBody(emitter, response); // attach responseStream to httpRequest\n+      httpRequest.stream = emitter; // attach emitter to httpRequest\n+      emitter.didCallback = false; // Required for httpDone event\n+\n+      emitter.on('error', function() {\n+        if (emitter.didCallback) return; emitter.didCallback = true;\n+        errCallback.apply(emitter, arguments);\n+      });\n+\n+      if (emitter.didCallback) return;\n+      callback(emitter);\n+      emitter.emit(\n+        'headers',\n+        emitter.statusCode,\n+        emitter.headers,\n+        response.statusText\n+      );\n+    }, function(err) {\n+        if (emitter.didCallback) return; emitter.didCallback = true;\n+        errCallback(AWS.util.error(new Error('Network Failure'), {\n+        code: 'NetworkingError'\n+      }));\n+    }).catch(function(err) {\n+      if (emitter.didCallback) return; emitter.didCallback = true;\n+      errCallback(AWS.util.error(err, {\n+        code: 'BadReplyError'\n+      }));\n+    });\n+\n+    return emitter;\n+  },\n+\n+  writeBody: function writeBody(emitter, response) {\n+    var body = response.body;\n+    var totalBytes = parseInt(response.headers.get('Content-Length'), 10);",
+        "comment_created_at": "2020-10-20T10:19:05+00:00",
+        "comment_author": "heri16",
+        "comment_body": "This issue is very tricky indeed due to the fetch implementation, and I don't have a solution yet for `Content-Encoding` compression.\r\n\r\nSee discussion here:\r\nhttps://github.com/w3c/ServiceWorker/issues/339#issuecomment-372304884",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "508384763",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 3505,
+        "pr_file": "lib/http/fetch.js",
+        "discussion_id": "508372275",
+        "commented_code": "@@ -0,0 +1,159 @@\n+var AWS = require('../core');\n+var pipeThrough = AWS.util.pipeThrough;\n+var TransformStream = typeof TransformStream !== 'undefined' ? TransformStream :\n+  AWS.util.stream && AWS.util.stream.TransformStream ? AWS.util.stream.TransformStream :\n+  typeof WebStreamsPolyfill !== 'undefined' ? WebStreamsPolyfill.TransformStream :\n+  undefined;\n+require('../http');\n+\n+/**\n+ * @api private\n+ */\n+AWS.FetchClient = AWS.util.inherit({\n+  handleRequest: function handleRequest(httpRequest, httpOptions, callback, errCallback) {\n+    var self = this;\n+    var endpoint = httpRequest.endpoint;\n+    if (!httpOptions) httpOptions = {};\n+\n+    var emitter = new EventEmitter();\n+\n+    // Construct href\n+    var href = endpoint.protocol + '//' + endpoint.hostname;\n+    if (endpoint.port !== 80 && endpoint.port !== 443) {\n+      href += ':' + endpoint.port;\n+    }\n+    href += httpRequest.path;\n+\n+    // Construct headers\n+    var headers = new Headers();\n+    AWS.util.each(httpRequest.headers, function (key, value) {\n+      // See: https://fetch.spec.whatwg.org/#forbidden-header-name\n+      if (key !== 'Content-Length' && key !== 'Expect' && key !== 'Host') {\n+        headers.set(key, value);\n+      }\n+    });\n+\n+    // Send cookies?\n+    var credentials = 'omit';\n+    if (httpOptions.xhrWithCredentials) {\n+      credentials = 'include';\n+    }\n+\n+    // Construct request\n+    // See: https://developer.mozilla.org/en-US/docs/Web/API/Request/Request\n+    var req = {\n+      method: httpRequest.method,\n+      headers: headers,\n+      credentials: credentials\n+    };\n+    if (httpRequest.body) req.body = httpRequest.body;\n+    var request = new Request(href, req);\n+\n+    // Send request\n+    fetch(request).then(function(response) {\n+        if (!response.ok) throw Error(response.statusText);\n+        return response;\n+    }).then(function(response) {\n+      emitter.statusCode = response.status;\n+      emitter.headers = self.parseHeaders(response.headers);\n+      emitter.abort = function() { response.body.cancel(); };\n+\n+      httpRequest.responseStream = self.writeBody(emitter, response); // attach responseStream to httpRequest\n+      httpRequest.stream = emitter; // attach emitter to httpRequest\n+      emitter.didCallback = false; // Required for httpDone event\n+\n+      emitter.on('error', function() {\n+        if (emitter.didCallback) return; emitter.didCallback = true;\n+        errCallback.apply(emitter, arguments);\n+      });\n+\n+      if (emitter.didCallback) return;\n+      callback(emitter);\n+      emitter.emit(\n+        'headers',\n+        emitter.statusCode,\n+        emitter.headers,\n+        response.statusText\n+      );\n+    }, function(err) {\n+        if (emitter.didCallback) return; emitter.didCallback = true;\n+        errCallback(AWS.util.error(new Error('Network Failure'), {\n+        code: 'NetworkingError'\n+      }));\n+    }).catch(function(err) {\n+      if (emitter.didCallback) return; emitter.didCallback = true;\n+      errCallback(AWS.util.error(err, {\n+        code: 'BadReplyError'\n+      }));\n+    });\n+\n+    return emitter;\n+  },\n+\n+  writeBody: function writeBody(emitter, response) {\n+    var body = response.body;\n+    var totalBytes = parseInt(response.headers.get('Content-Length'), 10);",
+        "comment_created_at": "2020-10-20T10:23:04+00:00",
+        "comment_author": "heri16",
+        "comment_body": "Any suggestions are welcomed. :smiling_face_with_three_hearts: ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "508413111",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 3505,
+        "pr_file": "lib/http/fetch.js",
+        "discussion_id": "508372275",
+        "commented_code": "@@ -0,0 +1,159 @@\n+var AWS = require('../core');\n+var pipeThrough = AWS.util.pipeThrough;\n+var TransformStream = typeof TransformStream !== 'undefined' ? TransformStream :\n+  AWS.util.stream && AWS.util.stream.TransformStream ? AWS.util.stream.TransformStream :\n+  typeof WebStreamsPolyfill !== 'undefined' ? WebStreamsPolyfill.TransformStream :\n+  undefined;\n+require('../http');\n+\n+/**\n+ * @api private\n+ */\n+AWS.FetchClient = AWS.util.inherit({\n+  handleRequest: function handleRequest(httpRequest, httpOptions, callback, errCallback) {\n+    var self = this;\n+    var endpoint = httpRequest.endpoint;\n+    if (!httpOptions) httpOptions = {};\n+\n+    var emitter = new EventEmitter();\n+\n+    // Construct href\n+    var href = endpoint.protocol + '//' + endpoint.hostname;\n+    if (endpoint.port !== 80 && endpoint.port !== 443) {\n+      href += ':' + endpoint.port;\n+    }\n+    href += httpRequest.path;\n+\n+    // Construct headers\n+    var headers = new Headers();\n+    AWS.util.each(httpRequest.headers, function (key, value) {\n+      // See: https://fetch.spec.whatwg.org/#forbidden-header-name\n+      if (key !== 'Content-Length' && key !== 'Expect' && key !== 'Host') {\n+        headers.set(key, value);\n+      }\n+    });\n+\n+    // Send cookies?\n+    var credentials = 'omit';\n+    if (httpOptions.xhrWithCredentials) {\n+      credentials = 'include';\n+    }\n+\n+    // Construct request\n+    // See: https://developer.mozilla.org/en-US/docs/Web/API/Request/Request\n+    var req = {\n+      method: httpRequest.method,\n+      headers: headers,\n+      credentials: credentials\n+    };\n+    if (httpRequest.body) req.body = httpRequest.body;\n+    var request = new Request(href, req);\n+\n+    // Send request\n+    fetch(request).then(function(response) {\n+        if (!response.ok) throw Error(response.statusText);\n+        return response;\n+    }).then(function(response) {\n+      emitter.statusCode = response.status;\n+      emitter.headers = self.parseHeaders(response.headers);\n+      emitter.abort = function() { response.body.cancel(); };\n+\n+      httpRequest.responseStream = self.writeBody(emitter, response); // attach responseStream to httpRequest\n+      httpRequest.stream = emitter; // attach emitter to httpRequest\n+      emitter.didCallback = false; // Required for httpDone event\n+\n+      emitter.on('error', function() {\n+        if (emitter.didCallback) return; emitter.didCallback = true;\n+        errCallback.apply(emitter, arguments);\n+      });\n+\n+      if (emitter.didCallback) return;\n+      callback(emitter);\n+      emitter.emit(\n+        'headers',\n+        emitter.statusCode,\n+        emitter.headers,\n+        response.statusText\n+      );\n+    }, function(err) {\n+        if (emitter.didCallback) return; emitter.didCallback = true;\n+        errCallback(AWS.util.error(new Error('Network Failure'), {\n+        code: 'NetworkingError'\n+      }));\n+    }).catch(function(err) {\n+      if (emitter.didCallback) return; emitter.didCallback = true;\n+      errCallback(AWS.util.error(err, {\n+        code: 'BadReplyError'\n+      }));\n+    });\n+\n+    return emitter;\n+  },\n+\n+  writeBody: function writeBody(emitter, response) {\n+    var body = response.body;\n+    var totalBytes = parseInt(response.headers.get('Content-Length'), 10);",
+        "comment_created_at": "2020-10-20T11:10:34+00:00",
+        "comment_author": "jimmywarting",
+        "comment_body": "There is also this observer issue: https://github.com/whatwg/fetch/issues/607 but nothing have happened on that front for a long time now.\r\n\r\nYou could read the content-encoding as well and if it's null or \"identity\" then the content-length is the equivalent to the actual file size and it can be ok to use the progress observer. it's also possible to send a `accept-encoding: identity` request header to ask for raw bytes.  but i might best be done with a HEAD request\r\nI don't know exactly how the aws sdk/api looks like, but there looks to be a size metadata when you fetch the file list that may be accurate.\r\n\r\nI would probably just ditch the hole progress stuff and leave that up to the developer to handle b/c it can be unreliable. or give them the option to choose between XHR and Fetch (at least until https://github.com/whatwg/fetch/issues/607 have been implemented)\r\n\r\nAlso if you use the size option in streamsaver than you don't need to be subscribed to any progress event listener since browser native UI will show one for you. but it needs to be the uncompressed size as well - can't be the same content-length\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "61352499",
+    "pr_number": 945,
+    "pr_file": "lib/http/node.js",
+    "created_at": "2016-04-27T23:13:35+00:00",
+    "commented_code": "writeBody: function writeBody(stream, httpRequest) {\n    var body = httpRequest.body;\n\n    if (body && WritableStream && ReadableStream) { // progress support\n      if (!(body instanceof Stream)) body = AWS.util.buffer.toStream(body);\n      body.pipe(this.progressStream(stream, httpRequest));\n    }\n    var totalBytes = parseInt(httpRequest.headers['Content-Length'], 10);\n    var loadedBytes = 0;\n\n    if (body instanceof Stream) {\n      // for progress support of streaming content\n      // tap the data event of the stream in addition to piping\n      body.on('data', function(chunk) {",
+    "repo_full_name": "aws/aws-sdk-js",
+    "discussion_comments": [
+      {
+        "comment_id": "61352499",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 945,
+        "pr_file": "lib/http/node.js",
+        "discussion_id": "61352499",
+        "commented_code": "@@ -76,15 +75,40 @@ AWS.NodeHttpClient = AWS.util.inherit({\n \n   writeBody: function writeBody(stream, httpRequest) {\n     var body = httpRequest.body;\n-\n-    if (body && WritableStream && ReadableStream) { // progress support\n-      if (!(body instanceof Stream)) body = AWS.util.buffer.toStream(body);\n-      body.pipe(this.progressStream(stream, httpRequest));\n-    }\n+    var totalBytes = parseInt(httpRequest.headers['Content-Length'], 10);\n+    var loadedBytes = 0;\n \n     if (body instanceof Stream) {\n+      // for progress support of streaming content\n+      // tap the data event of the stream in addition to piping\n+      body.on('data', function(chunk) {",
+        "comment_created_at": "2016-04-27T23:13:35+00:00",
+        "comment_author": "chrisradek",
+        "comment_body": "I think tapping into the `data` event on a stream could cause some unintended side-effects. In node.js 0.10.x, binding a `data` listener on a stream will cause the stream to emit 'data' events as fast as it can, ignoring the back-pressure that's automatically in place when using `pipe`. If the writable stream is slow, then this could cause loss of data.\n\nI don't think this is an issue in versions of node.js >= 0.12.x, and some simple testing seems to confirm that. However, we need to work with node.js 0.10.x as well.\n\nThe current method creates a new `writable` stream that also gets piped into in order to emit the 'sendProgress' events. I know it'll require refactoring your logic but that path seems safer across all our supported versions of node.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "171932543",
+    "pr_number": 1956,
+    "pr_file": "lib/services/s3.js",
+    "created_at": "2018-03-02T18:56:47+00:00",
+    "commented_code": "}\n  },\n\n  /**\n   * @api private\n   */\n  validateMd5TrailingChecksum: function validateMd5TrailingChecksum(resp) {\n    var response = resp.httpResponse;\n    var buffer = response.body;",
+    "repo_full_name": "aws/aws-sdk-js",
+    "discussion_comments": [
+      {
+        "comment_id": "171932543",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1956,
+        "pr_file": "lib/services/s3.js",
+        "discussion_id": "171932543",
+        "commented_code": "@@ -479,6 +499,49 @@ AWS.util.update(AWS.S3.prototype, {\n     }\n   },\n \n+  /**\n+   * @api private\n+   */\n+  validateMd5TrailingChecksum: function validateMd5TrailingChecksum(resp) {\n+    var response = resp.httpResponse;\n+    var buffer = response.body;",
+        "comment_created_at": "2018-03-02T18:56:47+00:00",
+        "comment_author": "chrisradek",
+        "comment_body": "In node.js, the response body is likely to be a stream. It might be easier in node to create a passthrough stream that generates the md5 hash and compares against the checksum. You'll know the expected content-length since it's passed in the response headers. Your solution here should still cover the browser use-case though.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "174218206",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1956,
+        "pr_file": "lib/services/s3.js",
+        "discussion_id": "171932543",
+        "commented_code": "@@ -479,6 +499,49 @@ AWS.util.update(AWS.S3.prototype, {\n     }\n   },\n \n+  /**\n+   * @api private\n+   */\n+  validateMd5TrailingChecksum: function validateMd5TrailingChecksum(resp) {\n+    var response = resp.httpResponse;\n+    var buffer = response.body;",
+        "comment_created_at": "2018-03-13T17:27:39+00:00",
+        "comment_author": "AllanZhengYP",
+        "comment_body": "Mark: This part will only be performed on Browser.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "173921060",
+    "pr_number": 1956,
+    "pr_file": "lib/http/node.js",
+    "created_at": "2018-03-12T19:34:31+00:00",
+    "commented_code": "var stream = http.request(options, function (httpResp) {\n      if (stream.didCallback) return;\n      var headers = httpResp.headers;\n      var responseStream = httpResp;\n\n      //check content length\n      if (headers && headers['content-length'] && httpRequest.method !== 'HEAD') {\n        var contentLengthCheckerStream =\n          new ContentLengthCheckerStream(\n            parseInt(headers['content-length'], 10)\n          );\n        responseStream.on('error', function(err) {\n          contentLengthCheckerStream.emit('error', err);\n        });\n        responseStream = responseStream.pipe(contentLengthCheckerStream)\n      }\n      //if response contains checksum in payload, validate it and chop it off the resposne stream.\n      if (headers && headers['x-amz-transfer-encoding'] && headers['content-length']) {\n        var transferEncoding = headers['x-amz-transfer-encoding'];\n        var contentLength = headers['content-length'];\n        var integrityCheckerStream = new IntegrityCheckerStream(transferEncoding, contentLength);\n        responseStream.on('error', function(err) {\n          integrityCheckerStream.emit('error', err);",
+    "repo_full_name": "aws/aws-sdk-js",
+    "discussion_comments": [
+      {
+        "comment_id": "173921060",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1956,
+        "pr_file": "lib/http/node.js",
+        "discussion_id": "173921060",
+        "commented_code": "@@ -41,9 +43,40 @@ AWS.NodeHttpClient = AWS.util.inherit({\n \n     var stream = http.request(options, function (httpResp) {\n       if (stream.didCallback) return;\n+      var headers = httpResp.headers;\n+      var responseStream = httpResp;\n+\n+      //check content length\n+      if (headers && headers['content-length'] && httpRequest.method !== 'HEAD') {\n+        var contentLengthCheckerStream =\n+          new ContentLengthCheckerStream(\n+            parseInt(headers['content-length'], 10)\n+          );\n+        responseStream.on('error', function(err) {\n+          contentLengthCheckerStream.emit('error', err);\n+        });\n+        responseStream = responseStream.pipe(contentLengthCheckerStream)\n+      }\n+      //if response contains checksum in payload, validate it and chop it off the resposne stream.\n+      if (headers && headers['x-amz-transfer-encoding'] && headers['content-length']) {\n+        var transferEncoding = headers['x-amz-transfer-encoding'];\n+        var contentLength = headers['content-length'];\n+        var integrityCheckerStream = new IntegrityCheckerStream(transferEncoding, contentLength);\n+        responseStream.on('error', function(err) {\n+          integrityCheckerStream.emit('error', err);",
+        "comment_created_at": "2018-03-12T19:34:31+00:00",
+        "comment_author": "chrisradek",
+        "comment_body": "If `responseStream` is an `IncomingMessage`, you'll want to call `destroy` on it. As of node 8.0.0, readable streams also have the `destroy` method, so you can check if `destroy` is a function, then call it if it is.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "173931162",
+    "pr_number": 1956,
+    "pr_file": "lib/request.js",
+    "created_at": "2018-03-12T20:11:55+00:00",
+    "commented_code": "resp.error = error;\n          resp.error.retryable = false;\n        });\n\n        var shouldCheckContentLength = false;\n        var expectedLen;\n        if (req.httpRequest.method !== 'HEAD') {\n          expectedLen = parseInt(headers['content-length'], 10);\n        }\n        if (expectedLen !== undefined && !isNaN(expectedLen) && expectedLen >= 0) {\n          shouldCheckContentLength = true;\n          var receivedLen = 0;\n        }\n\n        var checkContentLengthAndEmit = function checkContentLengthAndEmit() {\n          if (shouldCheckContentLength && receivedLen !== expectedLen) {\n            stream.emit('error', AWS.util.error(\n              new Error('Stream content length mismatch. Received ' +\n                receivedLen + ' of ' + expectedLen + ' bytes.'),\n              { code: 'StreamContentLengthMismatch' }\n            ));\n          } else if (AWS.HttpClient.streamsApiVersion === 2) {\n            stream.end();\n          } else {\n            stream.emit('end');\n          }\n        };\n\n        var httpStream = resp.httpResponse.createUnbufferedStream();\n\n        if (AWS.HttpClient.streamsApiVersion === 2) {\n          if (shouldCheckContentLength) {\n            var lengthAccumulator = new streams.PassThrough();\n            lengthAccumulator._write = function(chunk) {\n              if (chunk && chunk.length) {\n                receivedLen += chunk.length;\n              }\n              return streams.PassThrough.prototype._write.apply(this, arguments);\n            };\n\n            lengthAccumulator.on('end', checkContentLengthAndEmit);\n            stream.on('error', function(err) {\n              shouldCheckContentLength = false;\n              httpStream.unpipe(lengthAccumulator);\n              lengthAccumulator.emit('end');\n              lengthAccumulator.end();\n            });\n            httpStream.pipe(lengthAccumulator).pipe(stream, { end: false });\n          } else {\n            httpStream.pipe(stream);\n          }\n        } else {\n\n          if (shouldCheckContentLength) {",
+    "repo_full_name": "aws/aws-sdk-js",
+    "discussion_comments": [
+      {
+        "comment_id": "173931162",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1956,
+        "pr_file": "lib/request.js",
+        "discussion_id": "173931162",
+        "commented_code": "@@ -595,77 +591,28 @@ AWS.Request = inherit({\n           resp.error = error;\n           resp.error.retryable = false;\n         });\n-\n-        var shouldCheckContentLength = false;\n-        var expectedLen;\n-        if (req.httpRequest.method !== 'HEAD') {\n-          expectedLen = parseInt(headers['content-length'], 10);\n-        }\n-        if (expectedLen !== undefined && !isNaN(expectedLen) && expectedLen >= 0) {\n-          shouldCheckContentLength = true;\n-          var receivedLen = 0;\n-        }\n-\n-        var checkContentLengthAndEmit = function checkContentLengthAndEmit() {\n-          if (shouldCheckContentLength && receivedLen !== expectedLen) {\n-            stream.emit('error', AWS.util.error(\n-              new Error('Stream content length mismatch. Received ' +\n-                receivedLen + ' of ' + expectedLen + ' bytes.'),\n-              { code: 'StreamContentLengthMismatch' }\n-            ));\n-          } else if (AWS.HttpClient.streamsApiVersion === 2) {\n-            stream.end();\n-          } else {\n-            stream.emit('end');\n-          }\n-        };\n-\n         var httpStream = resp.httpResponse.createUnbufferedStream();\n-\n         if (AWS.HttpClient.streamsApiVersion === 2) {\n-          if (shouldCheckContentLength) {\n-            var lengthAccumulator = new streams.PassThrough();\n-            lengthAccumulator._write = function(chunk) {\n-              if (chunk && chunk.length) {\n-                receivedLen += chunk.length;\n-              }\n-              return streams.PassThrough.prototype._write.apply(this, arguments);\n-            };\n-\n-            lengthAccumulator.on('end', checkContentLengthAndEmit);\n-            stream.on('error', function(err) {\n-              shouldCheckContentLength = false;\n-              httpStream.unpipe(lengthAccumulator);\n-              lengthAccumulator.emit('end');\n-              lengthAccumulator.end();\n-            });\n-            httpStream.pipe(lengthAccumulator).pipe(stream, { end: false });\n-          } else {\n             httpStream.pipe(stream);\n-          }\n         } else {\n-\n-          if (shouldCheckContentLength) {",
+        "comment_created_at": "2018-03-12T20:11:55+00:00",
+        "comment_author": "chrisradek",
+        "comment_body": "We'll still need to perform these checks for Node.js 0.8, especially if we start turning it on by default. Unfortunately 0.8.x doesn't include `Transform` in its `stream` package, so your implementation won't work for those cases. You'll likely need to resort to `data` listeners to perform your calculations if `Transform` doesn't exist.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,148 @@
+---
+title: Standardize API promise patterns
+description: When adding promise support to API methods, implement a consistent pattern
+  that handles both callback-style and multi-parameter methods. Use a standardized
+  promisification approach that appends the promise-determining callback as the last
+  argument.
+repository: aws/aws-sdk-js
+label: API
+language: Javascript
+comments_count: 2
+repository_stars: 7628
+---
+
+When adding promise support to API methods, implement a consistent pattern that handles both callback-style and multi-parameter methods. Use a standardized promisification approach that appends the promise-determining callback as the last argument.
+
+Example implementation:
+```javascript
+function promisifyMethod(methodName, PromiseDependency) {
+    return function promise() {
+        var self = this;
+        var args = Array.prototype.slice.call(arguments);
+        return new PromiseDependency(function(resolve, reject) {
+            args.push(function(err, data) {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve(data);
+                }
+            });
+            self[methodName].apply(self, args);
+        });
+    };
+}
+```
+
+This pattern ensures:
+- Consistent promise behavior across all API methods
+- Support for both simple callback methods and multi-parameter methods
+- Proper error handling and promise rejection
+- Compatibility with different promise implementations
+
+
+[
+  {
+    "discussion_id": "82888371",
+    "pr_number": 1079,
+    "pr_file": "lib/util.js",
+    "created_at": "2016-10-11T21:03:18+00:00",
+    "commented_code": "/**\n   * @api private\n   */\n  addPromisesToRequests: function addPromisesToRequests(constructor, PromiseDependency) {\n    PromiseDependency = PromiseDependency || null;\n    if (!PromiseDependency && typeof Promise !== 'undefined') {\n      PromiseDependency = Promise;\n    }\n    if (typeof PromiseDependency !== 'function') {\n      delete constructor.prototype.promise;\n      return;\n    }\n    constructor.prototype.promise = function promise() {\n      var self = this;\n      return new PromiseDependency(function(resolve, reject) {\n        self.on('complete', function(resp) {\n          if (resp.error) {\n            reject(resp.error);\n          } else {\n            resolve(resp.data);\n          }\n  addPromises: function addPromises(constructors, PromiseDependency) {\n    if (!AWS) AWS = require('./core');\n    if (!AWS.config) require('./config');\n    if (PromiseDependency === undefined) PromiseDependency = AWS.config.getPromisesDependency();\n    if (typeof PromiseDependency !== 'function') var deletePromise = true;\n    if (!Array.isArray(constructors)) constructors = [constructors];\n\n    var promisifyMethod = function(methodName) {\n      return function promise() {\n        var self = this;\n        return new PromiseDependency(function(resolve, reject) {\n          self[methodName](function(err, data) {\n            if (err) {\n              reject(err);\n            } else {\n              resolve(data);\n            }\n          });\n        });\n        self.runTo();\n      });\n      };\n    };\n\n    for (var ind = 0; ind < constructors.length; ind++) {\n      var constructor = constructors[ind];\n      switch (constructor.name) {",
+    "repo_full_name": "aws/aws-sdk-js",
+    "discussion_comments": [
+      {
+        "comment_id": "82888371",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1079,
+        "pr_file": "lib/util.js",
+        "discussion_id": "82888371",
+        "commented_code": "@@ -748,27 +748,74 @@ var util = {\n   /**\n    * @api private\n    */\n-  addPromisesToRequests: function addPromisesToRequests(constructor, PromiseDependency) {\n-    PromiseDependency = PromiseDependency || null;\n-    if (!PromiseDependency && typeof Promise !== 'undefined') {\n-      PromiseDependency = Promise;\n-    }\n-    if (typeof PromiseDependency !== 'function') {\n-      delete constructor.prototype.promise;\n-      return;\n-    }\n-    constructor.prototype.promise = function promise() {\n-      var self = this;\n-      return new PromiseDependency(function(resolve, reject) {\n-        self.on('complete', function(resp) {\n-          if (resp.error) {\n-            reject(resp.error);\n-          } else {\n-            resolve(resp.data);\n-          }\n+  addPromises: function addPromises(constructors, PromiseDependency) {\n+    if (!AWS) AWS = require('./core');\n+    if (!AWS.config) require('./config');\n+    if (PromiseDependency === undefined) PromiseDependency = AWS.config.getPromisesDependency();\n+    if (typeof PromiseDependency !== 'function') var deletePromise = true;\n+    if (!Array.isArray(constructors)) constructors = [constructors];\n+\n+    var promisifyMethod = function(methodName) {\n+      return function promise() {\n+        var self = this;\n+        return new PromiseDependency(function(resolve, reject) {\n+          self[methodName](function(err, data) {\n+            if (err) {\n+              reject(err);\n+            } else {\n+              resolve(data);\n+            }\n+          });\n         });\n-        self.runTo();\n-      });\n+      };\n+    };\n+\n+    for (var ind = 0; ind < constructors.length; ind++) {\n+      var constructor = constructors[ind];\n+      switch (constructor.name) {",
+        "comment_created_at": "2016-10-11T21:03:18+00:00",
+        "comment_author": "chrisradek",
+        "comment_body": "It looks like `constructor.name` may not work in all the browsers we support and could have issues when minifiers are used:\nhttps://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Function/name#Browser_compatibility\n\nCan you do an equality check against the constructor instead?\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "82890974",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1079,
+        "pr_file": "lib/util.js",
+        "discussion_id": "82888371",
+        "commented_code": "@@ -748,27 +748,74 @@ var util = {\n   /**\n    * @api private\n    */\n-  addPromisesToRequests: function addPromisesToRequests(constructor, PromiseDependency) {\n-    PromiseDependency = PromiseDependency || null;\n-    if (!PromiseDependency && typeof Promise !== 'undefined') {\n-      PromiseDependency = Promise;\n-    }\n-    if (typeof PromiseDependency !== 'function') {\n-      delete constructor.prototype.promise;\n-      return;\n-    }\n-    constructor.prototype.promise = function promise() {\n-      var self = this;\n-      return new PromiseDependency(function(resolve, reject) {\n-        self.on('complete', function(resp) {\n-          if (resp.error) {\n-            reject(resp.error);\n-          } else {\n-            resolve(resp.data);\n-          }\n+  addPromises: function addPromises(constructors, PromiseDependency) {\n+    if (!AWS) AWS = require('./core');\n+    if (!AWS.config) require('./config');\n+    if (PromiseDependency === undefined) PromiseDependency = AWS.config.getPromisesDependency();\n+    if (typeof PromiseDependency !== 'function') var deletePromise = true;\n+    if (!Array.isArray(constructors)) constructors = [constructors];\n+\n+    var promisifyMethod = function(methodName) {\n+      return function promise() {\n+        var self = this;\n+        return new PromiseDependency(function(resolve, reject) {\n+          self[methodName](function(err, data) {\n+            if (err) {\n+              reject(err);\n+            } else {\n+              resolve(data);\n+            }\n+          });\n         });\n-        self.runTo();\n-      });\n+      };\n+    };\n+\n+    for (var ind = 0; ind < constructors.length; ind++) {\n+      var constructor = constructors[ind];\n+      switch (constructor.name) {",
+        "comment_created_at": "2016-10-11T21:16:42+00:00",
+        "comment_author": "chrisradek",
+        "comment_body": "Actually, what do you think about giving each class that should return a promise a static method that accepts a Promise constructor, then the class can control how it should promisify itself?\n\nThe pros to that approach would be the logic for adding promises would be controlled by each class, rather than defined in a long if/switch statement within a utility function. If the method to promisify a class was named the same for all classes, you can just check if the constructor has that method then call it, instead of maintaining a list of enums to check a class against. You could still make the `promisifyMethod` a utility method if that reduces code duplication.\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "83119747",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1079,
+        "pr_file": "lib/util.js",
+        "discussion_id": "82888371",
+        "commented_code": "@@ -748,27 +748,74 @@ var util = {\n   /**\n    * @api private\n    */\n-  addPromisesToRequests: function addPromisesToRequests(constructor, PromiseDependency) {\n-    PromiseDependency = PromiseDependency || null;\n-    if (!PromiseDependency && typeof Promise !== 'undefined') {\n-      PromiseDependency = Promise;\n-    }\n-    if (typeof PromiseDependency !== 'function') {\n-      delete constructor.prototype.promise;\n-      return;\n-    }\n-    constructor.prototype.promise = function promise() {\n-      var self = this;\n-      return new PromiseDependency(function(resolve, reject) {\n-        self.on('complete', function(resp) {\n-          if (resp.error) {\n-            reject(resp.error);\n-          } else {\n-            resolve(resp.data);\n-          }\n+  addPromises: function addPromises(constructors, PromiseDependency) {\n+    if (!AWS) AWS = require('./core');\n+    if (!AWS.config) require('./config');\n+    if (PromiseDependency === undefined) PromiseDependency = AWS.config.getPromisesDependency();\n+    if (typeof PromiseDependency !== 'function') var deletePromise = true;\n+    if (!Array.isArray(constructors)) constructors = [constructors];\n+\n+    var promisifyMethod = function(methodName) {\n+      return function promise() {\n+        var self = this;\n+        return new PromiseDependency(function(resolve, reject) {\n+          self[methodName](function(err, data) {\n+            if (err) {\n+              reject(err);\n+            } else {\n+              resolve(data);\n+            }\n+          });\n         });\n-        self.runTo();\n-      });\n+      };\n+    };\n+\n+    for (var ind = 0; ind < constructors.length; ind++) {\n+      var constructor = constructors[ind];\n+      switch (constructor.name) {",
+        "comment_created_at": "2016-10-12T23:29:17+00:00",
+        "comment_author": "LiuJoyceC",
+        "comment_body": "The reason I originally checked `constructor.name` is because I hadn't originally planned on requiring `core.js`, so I didn't have access to the actual constructors for an equality check before I added that require statement. I may be refactoring the require out anyway (as discussed above). I'll look into adding the static method for each class.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "138417207",
+    "pr_number": 1711,
+    "pr_file": "lib/services/s3.js",
+    "created_at": "2017-09-12T17:36:01+00:00",
+    "commented_code": "return uploader;\n  }\n});\n\n\n/**\n * @api private\n */\nAWS.S3.addPromisesToClass = function addPromisesToClass(PromiseDependency) {\n  this.prototype.getSignedUrlPromise = AWS.util.promisifyMethod('getSignedUrl', PromiseDependency);",
+    "repo_full_name": "aws/aws-sdk-js",
+    "discussion_comments": [
+      {
+        "comment_id": "138417207",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1711,
+        "pr_file": "lib/services/s3.js",
+        "discussion_id": "138417207",
+        "commented_code": "@@ -1068,3 +1114,20 @@ AWS.util.update(AWS.S3.prototype, {\n     return uploader;\n   }\n });\n+\n+\n+/**\n+ * @api private\n+ */\n+AWS.S3.addPromisesToClass = function addPromisesToClass(PromiseDependency) {\n+  this.prototype.getSignedUrlPromise = AWS.util.promisifyMethod('getSignedUrl', PromiseDependency);",
+        "comment_created_at": "2017-09-12T17:36:01+00:00",
+        "comment_author": "chrisradek",
+        "comment_body": "The `AWS.util.promisifyMethod` function currently only works for functions that accept a callback function as the first parameter. For example, `AWS.Request.send` and `AWS.Credentials.get` both accept just a callback.\r\n\r\nThe `s3.getSignedUrl` method accepts an operation name, params, and a callback, so using this method won't work. You should be able to set `getSignedUrlPromise` to a function that returns a new Promise. This promise can simply wrap the getSignedUrl function.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "138644601",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1711,
+        "pr_file": "lib/services/s3.js",
+        "discussion_id": "138417207",
+        "commented_code": "@@ -1068,3 +1114,20 @@ AWS.util.update(AWS.S3.prototype, {\n     return uploader;\n   }\n });\n+\n+\n+/**\n+ * @api private\n+ */\n+AWS.S3.addPromisesToClass = function addPromisesToClass(PromiseDependency) {\n+  this.prototype.getSignedUrlPromise = AWS.util.promisifyMethod('getSignedUrl', PromiseDependency);",
+        "comment_created_at": "2017-09-13T14:55:49+00:00",
+        "comment_author": "IsaiahJTurner",
+        "comment_body": "Happy to do that but that solution could lead replicated code down the line. For example, if/when this functionality is added to `AWS.CloudFront.Signer.getSignedUrl`, we'd need to wrap it with the same logic.\r\n\r\nWhat do you think about modifying `AWS.util.promisifyMethod` so that the generated promise function accepts arguments? \r\n\r\nSomething like this:\r\n```js\r\nfunction promisifyMethod(methodName, PromiseDependency) {\r\n    return function promise() {\r\n        var self = this;\r\n        var args = Array.prototype.slice.call(arguments);\r\n        return new PromiseDependency(function(resolve, reject) {\r\n            args.push(function(err, data) {\r\n                if (err) {\r\n                    reject(err);\r\n                } else {\r\n                    resolve(data);\r\n                }\r\n            });\r\n            self[methodName].apply(null, args);\r\n        });\r\n    };\r\n}\r\n```\r\nMy solution does lead to one of two downsides:\r\n- Supplying too many arguments will give unexpected behavior like a \"callback is not a function\" error.\r\n- To prevent that with a more informative error like \"Too many arguments supplied\" I'd need to read `self[methodName].length` to get the expected arguments count but this would be incompatible with any functions that support the arguments style `Array.prototype.push([element1[, ...[, elementN]]])` since `Array.prototype.push.length` would only return 1. I'm not sure if any functions in the SDK work like this.\r\n\r\nRegardless of which downside chosen, I still think improving `AWS.util.promisifyMethod` rather than wrapping the function directly is the best option since it is the most extensible. Also, how `AWS.util.promisifyMethod` currently works in contrast with how other `promisify` functions within other JS libraries like Bluebird, es6-promisify, and promisify-node work. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "138655481",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1711,
+        "pr_file": "lib/services/s3.js",
+        "discussion_id": "138417207",
+        "commented_code": "@@ -1068,3 +1114,20 @@ AWS.util.update(AWS.S3.prototype, {\n     return uploader;\n   }\n });\n+\n+\n+/**\n+ * @api private\n+ */\n+AWS.S3.addPromisesToClass = function addPromisesToClass(PromiseDependency) {\n+  this.prototype.getSignedUrlPromise = AWS.util.promisifyMethod('getSignedUrl', PromiseDependency);",
+        "comment_created_at": "2017-09-13T15:30:28+00:00",
+        "comment_author": "IsaiahJTurner",
+        "comment_body": "Went ahead and pushed my concept. Let me know what you think, can easily change it back and use your idea.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "317850908",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1711,
+        "pr_file": "lib/services/s3.js",
+        "discussion_id": "138417207",
+        "commented_code": "@@ -1068,3 +1114,20 @@ AWS.util.update(AWS.S3.prototype, {\n     return uploader;\n   }\n });\n+\n+\n+/**\n+ * @api private\n+ */\n+AWS.S3.addPromisesToClass = function addPromisesToClass(PromiseDependency) {\n+  this.prototype.getSignedUrlPromise = AWS.util.promisifyMethod('getSignedUrl', PromiseDependency);",
+        "comment_created_at": "2019-08-27T00:32:33+00:00",
+        "comment_author": "AllanZhengYP",
+        "comment_body": "Confirmed that the [bluebird](http://bluebirdjs.com/docs/api/promise.promisify.html) also use the last argument as the callback function. The idea of appending the promise-determining callback function to the `arguments` looks good to me.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

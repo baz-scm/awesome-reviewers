@@ -1,0 +1,132 @@
+---
+title: Maintain consistent formatting
+description: 'Enhance code readability and maintainability by applying consistent
+  formatting practices throughout your codebase:
+
+
+  1. Properly indent continuation lines (lines that are part of the same statement
+  as the preceding line)'
+repository: aws/aws-sdk-js
+label: Code Style
+language: Javascript
+comments_count: 4
+repository_stars: 7628
+---
+
+Enhance code readability and maintainability by applying consistent formatting practices throughout your codebase:
+
+1. Properly indent continuation lines (lines that are part of the same statement as the preceding line)
+2. Separate logical blocks like test suites or function definitions with empty lines
+3. Structure complex conditionals for readability
+
+For complex conditionals, prefer nested if statements over lengthy, hard-to-parse single-line conditions:
+
+```javascript
+// Hard to read:
+if ((AWS.HttpClient.streamsApiVersion !== 2) ||
+  (!(operation.hasEventOutput && service.successfulResponse(resp)) &&
+  (!stream || !stream.didCallback)))
+
+// More readable:
+if (!stream || !stream.didCallback) {
+  // don't concat response chunks when using event streams unless response is unsuccessful
+  if ((AWS.HttpClient.streamsApiVersion === 2) && operation.hasEventOutput && service.successfulResponse(resp)) {
+    return;
+  }
+  // proceed with regular processing
+}
+```
+
+Consistent formatting makes code easier to scan, understand, and maintain, reducing the cognitive load for everyone working with the codebase.
+
+
+[
+  {
+    "discussion_id": "131797509",
+    "pr_number": 1662,
+    "pr_file": "scripts/lib/ts-generator.js",
+    "created_at": "2017-08-08T00:36:36+00:00",
+    "commented_code": "code += tabs(tabCount) + 'export type ' + shapeKey + ' = Date;\\n';\n    } else if (type === 'boolean') {\n        code += tabs(tabCount) + 'export type ' + shapeKey + ' = boolean;\\n';\n    } else if (type === 'blob' || type === 'binary') {\n        code += tabs(tabCount) + 'export type ' + shapeKey + ' = Buffer|Uint8Array|Blob|string;\\n';\n    } else if (type === 'blob' || type === 'binary') {     \n        code += tabs(tabCount) + 'export type ' + shapeKey + ' = Buffer|Uint8Array|Blob|string'\n        + self.addReadableType(shapeKey)",
+    "repo_full_name": "aws/aws-sdk-js",
+    "discussion_comments": [
+      {
+        "comment_id": "131797509",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1662,
+        "pr_file": "scripts/lib/ts-generator.js",
+        "discussion_id": "131797509",
+        "commented_code": "@@ -300,8 +333,10 @@ TSGenerator.prototype.generateTypingsFromShape = function generateTypingsFromSha\n         code += tabs(tabCount) + 'export type ' + shapeKey + ' = Date;\\n';\n     } else if (type === 'boolean') {\n         code += tabs(tabCount) + 'export type ' + shapeKey + ' = boolean;\\n';\n-    } else if (type === 'blob' || type === 'binary') {\n-        code += tabs(tabCount) + 'export type ' + shapeKey + ' = Buffer|Uint8Array|Blob|string;\\n';\n+    } else if (type === 'blob' || type === 'binary') {     \n+        code += tabs(tabCount) + 'export type ' + shapeKey + ' = Buffer|Uint8Array|Blob|string'\n+        + self.addReadableType(shapeKey)",
+        "comment_created_at": "2017-08-08T00:36:36+00:00",
+        "comment_author": "jeskew",
+        "comment_body": "Style nit: continuation lines (lines that are part of the same statement as the preceding line) should be indented.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "138405077",
+    "pr_number": 1716,
+    "pr_file": "test/service.spec.js",
+    "created_at": "2017-09-12T16:46:44+00:00",
+    "commented_code": "});\n      });\n    });\n    return describe('customizeRequests', function() {\n    describe('customizeRequests', function() {",
+    "repo_full_name": "aws/aws-sdk-js",
+    "discussion_comments": [
+      {
+        "comment_id": "138405077",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1716,
+        "pr_file": "test/service.spec.js",
+        "discussion_id": "138405077",
+        "commented_code": "@@ -718,7 +728,7 @@\n         });\n       });\n     });\n-    return describe('customizeRequests', function() {\n+    describe('customizeRequests', function() {",
+        "comment_created_at": "2017-09-12T16:46:44+00:00",
+        "comment_author": "jeskew",
+        "comment_body": "Ditto re: empty lines. One should be between each test suite, too.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "147299241",
+    "pr_number": 1782,
+    "pr_file": "test/event_listeners.spec.js",
+    "created_at": "2017-10-27T00:17:07+00:00",
+    "commented_code": "return expect(data).to.match(match);\n      });\n    });\n    describe('logging sensitive information', function() {",
+    "repo_full_name": "aws/aws-sdk-js",
+    "discussion_comments": [
+      {
+        "comment_id": "147299241",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 1782,
+        "pr_file": "test/event_listeners.spec.js",
+        "discussion_id": "147299241",
+        "commented_code": "@@ -801,6 +802,156 @@\n         return expect(data).to.match(match);\n       });\n     });\n+    describe('logging sensitive information', function() {",
+        "comment_created_at": "2017-10-27T00:17:07+00:00",
+        "comment_author": "jeskew",
+        "comment_body": "Make sure to keep tests and suites separated by empty lines.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "193825440",
+    "pr_number": 2074,
+    "pr_file": "lib/event_listeners.js",
+    "created_at": "2018-06-07T17:16:08+00:00",
+    "commented_code": "});\n\n        httpResp.on('end', function onEnd() {\n          if (!stream || !stream.didCallback) {\n          if ((AWS.HttpClient.streamsApiVersion !== 2) ||\n            // don't concat response chunks when using event streams with streams unless response is unsuccessful\n            (!(operation.hasEventOutput && service.successfulResponse(resp)) &&\n            (!stream || !stream.didCallback))",
+    "repo_full_name": "aws/aws-sdk-js",
+    "discussion_comments": [
+      {
+        "comment_id": "193825440",
+        "repo_full_name": "aws/aws-sdk-js",
+        "pr_number": 2074,
+        "pr_file": "lib/event_listeners.js",
+        "discussion_id": "193825440",
+        "commented_code": "@@ -264,7 +277,11 @@ AWS.EventListeners = {\n         });\n \n         httpResp.on('end', function onEnd() {\n-          if (!stream || !stream.didCallback) {\n+          if ((AWS.HttpClient.streamsApiVersion !== 2) ||\n+            // don't concat response chunks when using event streams with streams unless response is unsuccessful\n+            (!(operation.hasEventOutput && service.successfulResponse(resp)) &&\n+            (!stream || !stream.didCallback))",
+        "comment_created_at": "2018-06-07T17:16:08+00:00",
+        "comment_author": "AllanZhengYP",
+        "comment_body": "There's no issue here but a little hard to follow.  Will using another if statement be more readable? like this:\r\n\r\n```javascript\r\nif (!stream || !stream.didCallback) {\r\n//don't concat response chunks when using event streams unless response is unsuccessful\r\n    if ((AWS.HttpClient.streamsApiVersion === 2) && operation.hasEventOutput && service.successfulResponse(resp) ) {\r\n         return\r\n    }\r\n   resp.request.emit('httpDone');\r\n    done();\r\n}\r\n```\r\nI think it's more readable(?) It's your call.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

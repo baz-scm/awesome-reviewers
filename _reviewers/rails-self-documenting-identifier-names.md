@@ -1,0 +1,363 @@
+---
+title: Self-documenting identifier names
+description: "Use clear, self-documenting names for variables, methods, and classes\
+  \ that express intent without exposing unnecessary implementation details. \n\n\
+  **For methods and variables:**"
+repository: rails/rails
+label: Naming Conventions
+language: Ruby
+comments_count: 9
+repository_stars: 57027
+---
+
+Use clear, self-documenting names for variables, methods, and classes that express intent without exposing unnecessary implementation details. 
+
+**For methods and variables:**
+- Avoid abbreviations unless universally understood (use `connection` instead of `conn`, `source_location` instead of `line`)
+- Follow natural language patterns with adjectives before nouns (use `allowed_redirect_hosts` instead of `redirect_hosts_allowed`)
+- Remove implementation details from public API names (use `compute_checksum` instead of `compute_checksum_in_chunks`)
+
+**For error classes:**
+- Follow the "what? kind?" pattern (e.g., `ChecksumUnsupportedError` instead of `UnsupportedChecksumError`)
+- Make names descriptive enough to understand the problem (use `MissingRequiredOrderError` instead of `OrderError`)
+- Match existing conventions (like `AssociationNotFoundError` for consistency with `HasManyThroughAssociationNotFoundError`)
+
+**For method signatures:**
+- Choose concise yet descriptive names for parameters and methods
+- Avoid overly verbose names like `supports_disabling_use_of_index_for_queries?` when `supports_disabling_indexes?` would suffice
+
+Remember that code is read far more often than it's written. Thoughtful naming reduces cognitive load for future readers.
+
+
+[
+  {
+    "discussion_id": "1947844493",
+    "pr_number": 54468,
+    "pr_file": "activestorage/app/models/active_storage/blob.rb",
+    "created_at": "2025-02-08T15:29:06+00:00",
+    "commented_code": "end\n\n  def unfurl(io, identify: true) # :nodoc:\n    self.checksum     = compute_checksum_in_chunks(io)\n    self.checksum     = service&.compute_checksum_in_chunks(io)",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1947844493",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54468,
+        "pr_file": "activestorage/app/models/active_storage/blob.rb",
+        "discussion_id": "1947844493",
+        "commented_code": "@@ -246,7 +246,7 @@ def upload(io, identify: true)\n   end\n \n   def unfurl(io, identify: true) # :nodoc:\n-    self.checksum     = compute_checksum_in_chunks(io)\n+    self.checksum     = service&.compute_checksum_in_chunks(io)",
+        "comment_created_at": "2025-02-08T15:29:06+00:00",
+        "comment_author": "seanpdoyle",
+        "comment_body": "Similar to https://github.com/rails/rails/pull/54468/files#r1947500486, I wonder how we might improve the `compute_checksum_in_chunks` naming. \r\n\r\nSince it was previously a `private` method, it's likely that its name served as its only documentation. If it were promoted to the public API, it could be more thoroughly documented and wouldn't need to communicate argument type expectations in its name.\r\n\r\nWhat do you think about omitting the `_in_chunks` suffix?\r\n\r\n```suggestion\r\n    self.checksum     = service&.compute_checksum(io)\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1949156349",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54468,
+        "pr_file": "activestorage/app/models/active_storage/blob.rb",
+        "discussion_id": "1947844493",
+        "commented_code": "@@ -246,7 +246,7 @@ def upload(io, identify: true)\n   end\n \n   def unfurl(io, identify: true) # :nodoc:\n-    self.checksum     = compute_checksum_in_chunks(io)\n+    self.checksum     = service&.compute_checksum_in_chunks(io)",
+        "comment_created_at": "2025-02-10T14:24:14+00:00",
+        "comment_author": "mrpasquini",
+        "comment_body": "Would it be clear what the difference would be between `base64digest` vs `compute_checksum`?\r\n\r\nWe could keep `compute_checksum_in_chunks` private on the base service class and expand `base64digest` to something like\r\n`def base64digest(io, in_chunks: false)`\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1949424536",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54468,
+        "pr_file": "activestorage/app/models/active_storage/blob.rb",
+        "discussion_id": "1947844493",
+        "commented_code": "@@ -246,7 +246,7 @@ def upload(io, identify: true)\n   end\n \n   def unfurl(io, identify: true) # :nodoc:\n-    self.checksum     = compute_checksum_in_chunks(io)\n+    self.checksum     = service&.compute_checksum_in_chunks(io)",
+        "comment_created_at": "2025-02-10T16:10:21+00:00",
+        "comment_author": "byroot",
+        "comment_body": "I think it would be simpler if we assume `checksum_implementation` respond to `new` and `<<`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1949458752",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54468,
+        "pr_file": "activestorage/app/models/active_storage/blob.rb",
+        "discussion_id": "1947844493",
+        "commented_code": "@@ -246,7 +246,7 @@ def upload(io, identify: true)\n   end\n \n   def unfurl(io, identify: true) # :nodoc:\n-    self.checksum     = compute_checksum_in_chunks(io)\n+    self.checksum     = service&.compute_checksum_in_chunks(io)",
+        "comment_created_at": "2025-02-10T16:21:42+00:00",
+        "comment_author": "mrpasquini",
+        "comment_body": "I looking to avoid having to call `.base64digest` on the return of `file` or `<<` (in compute_checksum_in_chunks/compute_checksum method) but it would be possible to remove `base64digest` and `file` public methods on the services if we wanted to change calls from:\r\n`service.file(file)` to `service.checksum_implementation.file(file).base64digest)`\r\nand\r\n`service.base64digest(io)` to `service.checksum_implementation.base64digest(io)`\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2086481714",
+    "pr_number": 54468,
+    "pr_file": "activestorage/lib/active_storage/errors.rb",
+    "created_at": "2025-05-13T10:27:49+00:00",
+    "commented_code": "# Raised when a Previewer is unable to generate a preview image.\n  class PreviewError < Error; end\n\n  # Raised when a checksum is not supported by a service\n  class UnsupportedChecksumError < Error; end",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "2086481714",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54468,
+        "pr_file": "activestorage/lib/active_storage/errors.rb",
+        "discussion_id": "2086481714",
+        "commented_code": "@@ -26,4 +26,7 @@ class FileNotFoundError < Error; end\n \n   # Raised when a Previewer is unable to generate a preview image.\n   class PreviewError < Error; end\n+\n+  # Raised when a checksum is not supported by a service\n+  class UnsupportedChecksumError < Error; end",
+        "comment_created_at": "2025-05-13T10:27:49+00:00",
+        "comment_author": "bogdan",
+        "comment_body": "Conventionally it should be named `ChecksumUnsupportedError` to follow general convesion \"what? kind?\" like \"RecordNotFound\", \"InputInvalid\" etc.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2094605815",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54468,
+        "pr_file": "activestorage/lib/active_storage/errors.rb",
+        "discussion_id": "2086481714",
+        "commented_code": "@@ -26,4 +26,7 @@ class FileNotFoundError < Error; end\n \n   # Raised when a Previewer is unable to generate a preview image.\n   class PreviewError < Error; end\n+\n+  # Raised when a checksum is not supported by a service\n+  class UnsupportedChecksumError < Error; end",
+        "comment_created_at": "2025-05-18T19:20:57+00:00",
+        "comment_author": "mrpasquini",
+        "comment_body": "Removing as this is likely not needed until the direct upload implementation.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1975625723",
+    "pr_number": 54608,
+    "pr_file": "activerecord/lib/active_record/errors.rb",
+    "created_at": "2025-02-28T15:42:49+00:00",
+    "commented_code": "class Deadlocked < TransactionRollbackError\n  end\n\n  # OrderError is raised when a relation needs to be ordered but does not have any\n  # order columns to use.\n  class OrderError < ActiveRecordError\n  end\n\n  # IrreversibleOrderError is raised when a relation's order is too complex for\n  # +reverse_order+ to automatically reverse.\n  class IrreversibleOrderError < ActiveRecordError",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1975625723",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54608,
+        "pr_file": "activerecord/lib/active_record/errors.rb",
+        "discussion_id": "1975625723",
+        "commented_code": "@@ -552,6 +552,11 @@ class SerializationFailure < TransactionRollbackError\n   class Deadlocked < TransactionRollbackError\n   end\n \n+  # OrderError is raised when a relation needs to be ordered but does not have any\n+  # order columns to use.\n+  class OrderError < ActiveRecordError\n+  end\n+\n   # IrreversibleOrderError is raised when a relation's order is too complex for\n   # +reverse_order+ to automatically reverse.\n   class IrreversibleOrderError < ActiveRecordError",
+        "comment_created_at": "2025-02-28T15:42:49+00:00",
+        "comment_author": "skipkayhil",
+        "comment_body": "I like how `IrreversibleOrderError` is self-documenting; it has a sentence describing it but you can generally tell what it does without having to look it up. Should `OrderError` be something like `MissingRequiredOrderError` so that its more self-documenting?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1976030467",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54608,
+        "pr_file": "activerecord/lib/active_record/errors.rb",
+        "discussion_id": "1975625723",
+        "commented_code": "@@ -552,6 +552,11 @@ class SerializationFailure < TransactionRollbackError\n   class Deadlocked < TransactionRollbackError\n   end\n \n+  # OrderError is raised when a relation needs to be ordered but does not have any\n+  # order columns to use.\n+  class OrderError < ActiveRecordError\n+  end\n+\n   # IrreversibleOrderError is raised when a relation's order is too complex for\n   # +reverse_order+ to automatically reverse.\n   class IrreversibleOrderError < ActiveRecordError",
+        "comment_created_at": "2025-02-28T21:31:00+00:00",
+        "comment_author": "joshuay03",
+        "comment_body": "I like that, will action \ud83d\udc4d\ud83c\udffd",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1976045621",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54608,
+        "pr_file": "activerecord/lib/active_record/errors.rb",
+        "discussion_id": "1975625723",
+        "commented_code": "@@ -552,6 +552,11 @@ class SerializationFailure < TransactionRollbackError\n   class Deadlocked < TransactionRollbackError\n   end\n \n+  # OrderError is raised when a relation needs to be ordered but does not have any\n+  # order columns to use.\n+  class OrderError < ActiveRecordError\n+  end\n+\n   # IrreversibleOrderError is raised when a relation's order is too complex for\n   # +reverse_order+ to automatically reverse.\n   class IrreversibleOrderError < ActiveRecordError",
+        "comment_created_at": "2025-02-28T21:49:00+00:00",
+        "comment_author": "joshuay03",
+        "comment_body": "Done, thank you for the review!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "939206259",
+    "pr_number": 45680,
+    "pr_file": "actionpack/lib/action_controller/metal/redirecting.rb",
+    "created_at": "2022-08-05T20:29:55+00:00",
+    "commented_code": "included do\n      mattr_accessor :raise_on_open_redirects, default: false\n      mattr_accessor :redirect_hosts_allowed, default: []",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "939206259",
+        "repo_full_name": "rails/rails",
+        "pr_number": 45680,
+        "pr_file": "actionpack/lib/action_controller/metal/redirecting.rb",
+        "discussion_id": "939206259",
+        "commented_code": "@@ -11,6 +11,7 @@ class UnsafeRedirectError < StandardError; end\n \n     included do\n       mattr_accessor :raise_on_open_redirects, default: false\n+      mattr_accessor :redirect_hosts_allowed, default: []",
+        "comment_created_at": "2022-08-05T20:29:55+00:00",
+        "comment_author": "p8",
+        "comment_body": "As this accessor is a collection of hosts, what do you think about renaming the accessor?\r\n```suggestion\r\n      mattr_accessor :allowed_redirect_hosts, default: []\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "939498274",
+        "repo_full_name": "rails/rails",
+        "pr_number": 45680,
+        "pr_file": "actionpack/lib/action_controller/metal/redirecting.rb",
+        "discussion_id": "939206259",
+        "commented_code": "@@ -11,6 +11,7 @@ class UnsafeRedirectError < StandardError; end\n \n     included do\n       mattr_accessor :raise_on_open_redirects, default: false\n+      mattr_accessor :redirect_hosts_allowed, default: []",
+        "comment_created_at": "2022-08-06T07:46:21+00:00",
+        "comment_author": "Kevinrob",
+        "comment_body": "Yes, it's better! I changed that \ud83d\udc4d\ud83c\udffb",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1479612172",
+    "pr_number": 50979,
+    "pr_file": "actioncable/lib/action_cable/connection/base.rb",
+    "created_at": "2024-02-06T11:17:58+00:00",
+    "commented_code": "include Callbacks\n      include ActiveSupport::Rescuable\n\n      attr_reader :server, :env, :subscriptions, :logger, :worker_pool, :protocol\n      delegate :event_loop, :pubsub, :config, to: :server\n      attr_reader :subscriptions, :logger\n      private attr_reader :server, :raw_conn",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1479612172",
+        "repo_full_name": "rails/rails",
+        "pr_number": 50979,
+        "pr_file": "actioncable/lib/action_cable/connection/base.rb",
+        "discussion_id": "1479612172",
+        "commented_code": "@@ -52,47 +51,37 @@ class Base\n       include Callbacks\n       include ActiveSupport::Rescuable\n \n-      attr_reader :server, :env, :subscriptions, :logger, :worker_pool, :protocol\n-      delegate :event_loop, :pubsub, :config, to: :server\n+      attr_reader :subscriptions, :logger\n+      private attr_reader :server, :raw_conn",
+        "comment_created_at": "2024-02-06T11:17:58+00:00",
+        "comment_author": "ioquatix",
+        "comment_body": "What is `:raw_conn`? Can we make the name a little more explicit? I think I prefer `websocket` even if it more prescriptive... 99.99999% of the time, that's what it will be, no?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1480456984",
+        "repo_full_name": "rails/rails",
+        "pr_number": 50979,
+        "pr_file": "actioncable/lib/action_cable/connection/base.rb",
+        "discussion_id": "1479612172",
+        "commented_code": "@@ -52,47 +51,37 @@ class Base\n       include Callbacks\n       include ActiveSupport::Rescuable\n \n-      attr_reader :server, :env, :subscriptions, :logger, :worker_pool, :protocol\n-      delegate :event_loop, :pubsub, :config, to: :server\n+      attr_reader :subscriptions, :logger\n+      private attr_reader :server, :raw_conn",
+        "comment_created_at": "2024-02-06T19:48:03+00:00",
+        "comment_author": "palkan",
+        "comment_body": "We're not limited to WebSockets anymore (from the abstraction perspective), so I would prefer not to use \"websocket\".\r\n\r\nI used the term \"socket\" in the older PR (and I use it in AnyCable ,too); maybe, that's an option.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1566683598",
+        "repo_full_name": "rails/rails",
+        "pr_number": 50979,
+        "pr_file": "actioncable/lib/action_cable/connection/base.rb",
+        "discussion_id": "1479612172",
+        "commented_code": "@@ -52,47 +51,37 @@ class Base\n       include Callbacks\n       include ActiveSupport::Rescuable\n \n-      attr_reader :server, :env, :subscriptions, :logger, :worker_pool, :protocol\n-      delegate :event_loop, :pubsub, :config, to: :server\n+      attr_reader :subscriptions, :logger\n+      private attr_reader :server, :raw_conn",
+        "comment_created_at": "2024-04-16T04:15:40+00:00",
+        "comment_author": "palkan",
+        "comment_body": "Ended up with \"socket\"",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1479625217",
+    "pr_number": 50979,
+    "pr_file": "actioncable/lib/action_cable/server/connection.rb",
+    "created_at": "2024-02-06T11:29:29+00:00",
+    "commented_code": "# frozen_string_literal: true\n\nrequire \"action_dispatch\"\n\nmodule ActionCable\n  module Server\n    # This class encapsulates all the low-level logic of working with the underlying WebSocket conenctions\n    # and delegate all the business-logic to the user-level connection object (e.g., ApplicationCable::Connection).\n    # This connection object is also responsible for handling encoding and decoding of messages, so the user-level\n    # connection object shouldn't know about such details.\n    class Connection\n      attr_reader :server, :env, :protocol, :logger, :app_conn",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1479625217",
+        "repo_full_name": "rails/rails",
+        "pr_number": 50979,
+        "pr_file": "actioncable/lib/action_cable/server/connection.rb",
+        "discussion_id": "1479625217",
+        "commented_code": "@@ -0,0 +1,198 @@\n+# frozen_string_literal: true\n+\n+require \"action_dispatch\"\n+\n+module ActionCable\n+  module Server\n+    # This class encapsulates all the low-level logic of working with the underlying WebSocket conenctions\n+    # and delegate all the business-logic to the user-level connection object (e.g., ApplicationCable::Connection).\n+    # This connection object is also responsible for handling encoding and decoding of messages, so the user-level\n+    # connection object shouldn't know about such details.\n+    class Connection\n+      attr_reader :server, :env, :protocol, :logger, :app_conn",
+        "comment_created_at": "2024-02-06T11:29:29+00:00",
+        "comment_author": "ioquatix",
+        "comment_body": "I wonder if we can avoid abbreviations/improve the naming of `:app_conn`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1566683922",
+        "repo_full_name": "rails/rails",
+        "pr_number": 50979,
+        "pr_file": "actioncable/lib/action_cable/server/connection.rb",
+        "discussion_id": "1479625217",
+        "commented_code": "@@ -0,0 +1,198 @@\n+# frozen_string_literal: true\n+\n+require \"action_dispatch\"\n+\n+module ActionCable\n+  module Server\n+    # This class encapsulates all the low-level logic of working with the underlying WebSocket conenctions\n+    # and delegate all the business-logic to the user-level connection object (e.g., ApplicationCable::Connection).\n+    # This connection object is also responsible for handling encoding and decoding of messages, so the user-level\n+    # connection object shouldn't know about such details.\n+    class Connection\n+      attr_reader :server, :env, :protocol, :logger, :app_conn",
+        "comment_created_at": "2024-04-16T04:16:15+00:00",
+        "comment_author": "palkan",
+        "comment_body": "Renamed to \"connection\" (since it's an instance of ActionCable::Connection::Base)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1479020296",
+    "pr_number": 50969,
+    "pr_file": "activerecord/lib/active_record/query_logs.rb",
+    "created_at": "2024-02-05T22:48:01+00:00",
+    "commented_code": "# * +socket+\n  # * +db_host+\n  # * +database+\n  # * +line+",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1479020296",
+        "repo_full_name": "rails/rails",
+        "pr_number": 50969,
+        "pr_file": "activerecord/lib/active_record/query_logs.rb",
+        "discussion_id": "1479020296",
+        "commented_code": "@@ -26,6 +26,7 @@ module ActiveRecord\n   # * +socket+\n   # * +db_host+\n   # * +database+\n+  # * +line+",
+        "comment_created_at": "2024-02-05T22:48:01+00:00",
+        "comment_author": "byroot",
+        "comment_body": "Also I wonder if `line` really makes sense as a name, as it's not just the line, but the whole location. Maybe `location` or `source_location`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1479034438",
+        "repo_full_name": "rails/rails",
+        "pr_number": 50969,
+        "pr_file": "activerecord/lib/active_record/query_logs.rb",
+        "discussion_id": "1479020296",
+        "commented_code": "@@ -26,6 +26,7 @@ module ActiveRecord\n   # * +socket+\n   # * +db_host+\n   # * +database+\n+  # * +line+",
+        "comment_created_at": "2024-02-05T23:08:23+00:00",
+        "comment_author": "fatkodima",
+        "comment_body": "I named it after the marginalia's `:line`, but yeah, changed it to `:source_location`.\r\nCI is still red, but looks like is not related to this PR. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1947014684",
+    "pr_number": 54332,
+    "pr_file": "activerecord/lib/active_record/connection_adapters/abstract_adapter.rb",
+    "created_at": "2025-02-07T18:54:44+00:00",
+    "commented_code": "false\n      end\n\n      def supports_disabling_use_of_index_for_queries?",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1947014684",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54332,
+        "pr_file": "activerecord/lib/active_record/connection_adapters/abstract_adapter.rb",
+        "discussion_id": "1947014684",
+        "commented_code": "@@ -555,6 +555,11 @@ def supports_nulls_not_distinct?\n         false\n       end\n \n+      def supports_disabling_use_of_index_for_queries?",
+        "comment_created_at": "2025-02-07T18:54:44+00:00",
+        "comment_author": "adrianna-chang-shopify",
+        "comment_body": "This method is a bit verbose -- what about `supports_enabling_indexes?` / `supports_disabling_indexes?` instead? the `for_queries` part is kind of implied IMHO.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1620650464",
+    "pr_number": 51767,
+    "pr_file": "activerecord/lib/active_record/associations.rb",
+    "created_at": "2024-05-30T12:46:19+00:00",
+    "commented_code": "end\n  end\n\n  class InverseOfAssociationNotBidirectionalError < ActiveRecordError # :nodoc:",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1620650464",
+        "repo_full_name": "rails/rails",
+        "pr_number": 51767,
+        "pr_file": "activerecord/lib/active_record/associations.rb",
+        "discussion_id": "1620650464",
+        "commented_code": "@@ -71,6 +71,20 @@ def initialize(reflection = nil)\n     end\n   end\n \n+  class InverseOfAssociationNotBidirectionalError < ActiveRecordError # :nodoc:",
+        "comment_created_at": "2024-05-30T12:46:19+00:00",
+        "comment_author": "zzak",
+        "comment_body": "I think there was already some discussion about the name, but I prefer `InverseOfAssociationNotFoundError`, as it's explicit that the \"inverse of\" doesn't exist.\r\n\r\nThis matches the style for `HasManyThroughAssociationNotFoundError`.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

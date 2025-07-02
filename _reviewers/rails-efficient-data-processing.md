@@ -1,0 +1,169 @@
+---
+title: Efficient data processing
+description: When implementing algorithms that process large data streams or collections,
+  use a chunking approach rather than processing the entire input at once. This improves
+  memory efficiency and prevents out-of-memory errors for large inputs.
+repository: rails/rails
+label: Algorithms
+language: Ruby
+comments_count: 4
+repository_stars: 57027
+---
+
+When implementing algorithms that process large data streams or collections, use a chunking approach rather than processing the entire input at once. This improves memory efficiency and prevents out-of-memory errors for large inputs.
+
+Key practices to follow:
+
+1. Process data in manageable chunks when dealing with potentially large inputs
+2. Be consistent in chunking strategy across related operations
+3. Remember to properly initialize data structures that will grow during processing
+4. Reset stream positions (e.g., rewind) after processing when the data needs to be reused
+
+```ruby
+# Efficient implementation with chunking
+def compute_checksum_in_chunks(io, algorithm: default_algorithm)
+  raise ArgumentError, "io must be rewindable" unless io.respond_to?(:rewind)
+  
+  digest = checksum_implementation(algorithm).new.tap do |checksum|
+    read_buffer = "".b  # Binary string buffer for reuse
+    while io.read(5.megabytes, read_buffer)  # Process in 5MB chunks
+      checksum << read_buffer  # Update digest with each chunk
+    end
+    
+    io.rewind  # Reset stream position for reuse
+  end.base64digest
+end
+
+# Properly initialize a hash that will hold growing collections
+@collection_map = Hash.new { |h, k| h[k] = {} }  # Each key gets its own hash
+```
+
+Always consider the memory implications of your algorithm implementation, especially when processing user-generated content of unpredictable size. Using chunked processing patterns helps ensure your code performs well at scale while maintaining consistent memory usage.
+
+
+[
+  {
+    "discussion_id": "1971764130",
+    "pr_number": 54468,
+    "pr_file": "activestorage/lib/active_storage/service.rb",
+    "created_at": "2025-02-26T15:01:57+00:00",
+    "commented_code": "@public\n    end\n\n    def base64digest(io, algorithm: default_digest_algorithm)\n      digest = checksum_implementation(algorithm).base64digest(io)\n      if algorithm == :MD5\n        digest\n      else\n        \"#{algorithm}:#{digest}\"\n      end\n    end\n\n    def file(file, algorithm: default_digest_algorithm)\n      digest = checksum_implementation(algorithm).file(file).base64digest\n      if algorithm == :MD5\n        digest\n      else\n        \"#{algorithm}:#{digest}\"\n      end\n    end\n\n    def compute_checksum_in_chunks(io, algorithm: default_digest_algorithm)\n      raise ArgumentError, \"io must be rewindable\" unless io.respond_to?(:rewind)\n\n      digest = checksum_implementation(algorithm).new.tap do |checksum|\n        read_buffer = \"\".b\n        while io.read(5.megabytes, read_buffer)\n          checksum << read_buffer\n        end\n\n        io.rewind\n      end.base64digest\n      if algorithm == :MD5\n        digest\n      else\n        \"#{algorithm}:#{digest}\"\n      end\n    end\n\n    def checksum_implementation(algorithm = default_digest_algorithm)\n      case algorithm\n      when :MD5\n        ActiveStorage.checksum_implementation\n      else\n        send(algorithm.downcase)",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1971764130",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54468,
+        "pr_file": "activestorage/lib/active_storage/service.rb",
+        "discussion_id": "1971764130",
+        "commented_code": "@@ -148,6 +148,56 @@ def public?\n       @public\n     end\n \n+    def base64digest(io, algorithm: default_digest_algorithm)\n+      digest = checksum_implementation(algorithm).base64digest(io)\n+      if algorithm == :MD5\n+        digest\n+      else\n+        \"#{algorithm}:#{digest}\"\n+      end\n+    end\n+\n+    def file(file, algorithm: default_digest_algorithm)\n+      digest = checksum_implementation(algorithm).file(file).base64digest\n+      if algorithm == :MD5\n+        digest\n+      else\n+        \"#{algorithm}:#{digest}\"\n+      end\n+    end\n+\n+    def compute_checksum_in_chunks(io, algorithm: default_digest_algorithm)\n+      raise ArgumentError, \"io must be rewindable\" unless io.respond_to?(:rewind)\n+\n+      digest = checksum_implementation(algorithm).new.tap do |checksum|\n+        read_buffer = \"\".b\n+        while io.read(5.megabytes, read_buffer)\n+          checksum << read_buffer\n+        end\n+\n+        io.rewind\n+      end.base64digest\n+      if algorithm == :MD5\n+        digest\n+      else\n+        \"#{algorithm}:#{digest}\"\n+      end\n+    end\n+\n+    def checksum_implementation(algorithm = default_digest_algorithm)\n+      case algorithm\n+      when :MD5\n+        ActiveStorage.checksum_implementation\n+      else\n+        send(algorithm.downcase)",
+        "comment_created_at": "2025-02-26T15:01:57+00:00",
+        "comment_author": "bogdan",
+        "comment_body": "If I understood it correctly, I suppose to implement a method that matches the digest algoritm set. I don't understand this convention:\r\n\r\n* I am not able to use custom algorithm with built-in service as it would throw no method error.\r\n* if only MD5 is supported out of the box, I would need to subclass `ActiveStorage::Service` class to implement anything else. In this case why do I need to configure algorithm via yaml for my custom service?\r\n* If I set `SHA-256` as algorithm, I am not sure which method I should implement. It generates additional ambiguity.\r\n\r\nThe use case I have in mind is IPFS Service implementation where file can only be retried via checksum and the checksum on top of digest has addtional codec information, so the length of IPFS hash is 36 bytes not 32.\r\n\r\nI would be more happy to impelement `ActiveStorage::Services::IpfsService#compute_checksum_in_chunks` for that more than anything else because it is interface is clear unlike `checksum_implementation` which doesn't have defined return format.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1972008627",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54468,
+        "pr_file": "activestorage/lib/active_storage/service.rb",
+        "discussion_id": "1971764130",
+        "commented_code": "@@ -148,6 +148,56 @@ def public?\n       @public\n     end\n \n+    def base64digest(io, algorithm: default_digest_algorithm)\n+      digest = checksum_implementation(algorithm).base64digest(io)\n+      if algorithm == :MD5\n+        digest\n+      else\n+        \"#{algorithm}:#{digest}\"\n+      end\n+    end\n+\n+    def file(file, algorithm: default_digest_algorithm)\n+      digest = checksum_implementation(algorithm).file(file).base64digest\n+      if algorithm == :MD5\n+        digest\n+      else\n+        \"#{algorithm}:#{digest}\"\n+      end\n+    end\n+\n+    def compute_checksum_in_chunks(io, algorithm: default_digest_algorithm)\n+      raise ArgumentError, \"io must be rewindable\" unless io.respond_to?(:rewind)\n+\n+      digest = checksum_implementation(algorithm).new.tap do |checksum|\n+        read_buffer = \"\".b\n+        while io.read(5.megabytes, read_buffer)\n+          checksum << read_buffer\n+        end\n+\n+        io.rewind\n+      end.base64digest\n+      if algorithm == :MD5\n+        digest\n+      else\n+        \"#{algorithm}:#{digest}\"\n+      end\n+    end\n+\n+    def checksum_implementation(algorithm = default_digest_algorithm)\n+      case algorithm\n+      when :MD5\n+        ActiveStorage.checksum_implementation\n+      else\n+        send(algorithm.downcase)",
+        "comment_created_at": "2025-02-26T17:13:49+00:00",
+        "comment_author": "mrpasquini",
+        "comment_body": "Thank you for identifying the gap here allow a method missing. It was missed in the evolution to this branch. I understand your concerns to be that what should be service specific implementations have bled into the base service class. I agree.\r\n\r\nI will update the 2nd commit in this PR to not update the base service class. The base service shouldn't be concerned with `default_digest_algorithm` or `SUPPORTED_CHECKSUM_ALGORITHMS` etc... Those would be S3 service specific implementation.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2094405477",
+    "pr_number": 54468,
+    "pr_file": "activestorage/lib/active_storage/service/disk_service.rb",
+    "created_at": "2025-05-18T06:56:14+00:00",
+    "commented_code": "end\n\n      def ensure_integrity_of(key, checksum)\n        unless ActiveStorage.checksum_implementation.file(path_for(key)).base64digest == checksum\n        unless checksum_implementation.file(path_for(key)).base64digest == checksum",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "2094405477",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54468,
+        "pr_file": "activestorage/lib/active_storage/service/disk_service.rb",
+        "discussion_id": "2094405477",
+        "commented_code": "@@ -161,7 +161,7 @@ def make_path_for(key)\n       end\n \n       def ensure_integrity_of(key, checksum)\n-        unless ActiveStorage.checksum_implementation.file(path_for(key)).base64digest == checksum\n+        unless checksum_implementation.file(path_for(key)).base64digest == checksum",
+        "comment_created_at": "2025-05-18T06:56:14+00:00",
+        "comment_author": "bogdan",
+        "comment_body": "First, really happy that compute in chunks is now the same as compute. I think this is the right move. I believe chunking should be consistently used or not used across all operations. :+1:\r\n\r\nThe usage of `.file` feels weird. `compute_checksum` now uses chunking by default, but I believe `file` is not. How does it suppose to work?\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2094579684",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54468,
+        "pr_file": "activestorage/lib/active_storage/service/disk_service.rb",
+        "discussion_id": "2094405477",
+        "commented_code": "@@ -161,7 +161,7 @@ def make_path_for(key)\n       end\n \n       def ensure_integrity_of(key, checksum)\n-        unless ActiveStorage.checksum_implementation.file(path_for(key)).base64digest == checksum\n+        unless checksum_implementation.file(path_for(key)).base64digest == checksum",
+        "comment_created_at": "2025-05-18T17:07:52+00:00",
+        "comment_author": "mrpasquini",
+        "comment_body": "If we do a File.open on this path, instead of passing the path, I think we can handle easier in `compute_checksum` as a file.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2094406257",
+    "pr_number": 54468,
+    "pr_file": "activestorage/lib/active_storage/service.rb",
+    "created_at": "2025-05-18T07:00:24+00:00",
+    "commented_code": "\"#<#{self.class}#{name.present? ? \" name=#{name.inspect}\" : \"\"}>\"\n    end\n\n    def compute_checksum(io, **)",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "2094406257",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54468,
+        "pr_file": "activestorage/lib/active_storage/service.rb",
+        "discussion_id": "2094406257",
+        "commented_code": "@@ -152,6 +152,23 @@ def inspect # :nodoc:\n       \"#<#{self.class}#{name.present? ? \" name=#{name.inspect}\" : \"\"}>\"\n     end\n \n+    def compute_checksum(io, **)",
+        "comment_created_at": "2025-05-18T07:00:24+00:00",
+        "comment_author": "bogdan",
+        "comment_body": "Did I understand it correctly that custom storage impelmentations suppose to override this method?\r\n\r\nIn case of IPFS, it is absolutelly necessary because its hashing algorithm is using 256KB chunk and [Merkle DAG](https://docs.ipfs.tech/concepts/merkle-dag/) for chunk checksums (reading this doc might be too dangerous for unprepared person \ud83d\ude04 ).\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2094578408",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54468,
+        "pr_file": "activestorage/lib/active_storage/service.rb",
+        "discussion_id": "2094406257",
+        "commented_code": "@@ -152,6 +152,23 @@ def inspect # :nodoc:\n       \"#<#{self.class}#{name.present? ? \" name=#{name.inspect}\" : \"\"}>\"\n     end\n \n+    def compute_checksum(io, **)",
+        "comment_created_at": "2025-05-18T17:01:50+00:00",
+        "comment_author": "mrpasquini",
+        "comment_body": "Yes. We could move everything behind this method and no longer expose checksum_implementation or ActiveStorage.checksum_implementation outside of it. I think that would be ideal.\r\n\r\nI initially thought this may add more complexity than I wanted to introduce, but we should be able to just check if `io.is_a?(File)` and return `checksum_implementation.file(io).base64digest` from compute_checksum if we continued to want to use the .file implementation.\r\n\r\nMy assumption about chunking is that the digest classes like `OpenSSL::Digest::MD5.base64digest(io)` do a full read from IO, which would not preform well if it if it did not fit in memory.\r\n\r\nI can add a commit to enhance `compute_checksum` to use .file for file classes and remove use of `service.checksum_implementation.file(file).base64digest` in favor of `service.compute_checksum`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1712935607",
+    "pr_number": 52548,
+    "pr_file": "actionview/lib/action_view/renderable_registry.rb",
+    "created_at": "2024-08-11T08:21:37+00:00",
+    "commented_code": "# frozen_string_literal: true\n\nmodule ActionView # :nodoc:\n  module RenderableRegistry # :nodoc:\n    @renderables_by_class = Hash.new({})",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1712935607",
+        "repo_full_name": "rails/rails",
+        "pr_number": 52548,
+        "pr_file": "actionview/lib/action_view/renderable_registry.rb",
+        "discussion_id": "1712935607",
+        "commented_code": "@@ -0,0 +1,15 @@\n+# frozen_string_literal: true\n+\n+module ActionView # :nodoc:\n+  module RenderableRegistry # :nodoc:\n+    @renderables_by_class = Hash.new({})",
+        "comment_created_at": "2024-08-11T08:21:37+00:00",
+        "comment_author": "byroot",
+        "comment_body": "This is a bug. \r\n\r\n```suggestion\r\n    @renderables_by_class = Hash.new { |h, k| h[k] = {} }\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

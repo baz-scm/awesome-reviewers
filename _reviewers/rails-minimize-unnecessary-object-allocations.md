@@ -1,0 +1,239 @@
+---
+title: Minimize unnecessary object allocations
+description: Avoid creating unnecessary objects, especially in frequently executed
+  code paths. This includes being mindful of implicit object allocations from common
+  Ruby operations like array methods, string concatenations, and temporary variable
+  creation.
+repository: rails/rails
+label: Performance Optimization
+language: Ruby
+comments_count: 6
+repository_stars: 57027
+---
+
+Avoid creating unnecessary objects, especially in frequently executed code paths. This includes being mindful of implicit object allocations from common Ruby operations like array methods, string concatenations, and temporary variable creation.
+
+Key practices:
+1. Avoid unnecessary array allocations from methods like `first(n)`, `flatten`, or `map`
+2. Use direct iteration instead of intermediate collections when possible
+3. Consider using mutation methods (e.g., `<<`) over concatenation (+) for strings
+4. Cache computed values that are reused frequently
+
+Example - Before:
+```ruby
+def process_items
+  first_two = items.first(2)  # Creates new array
+  result = first_two.map { |x| x.to_s }  # Creates another array
+  result.flatten.compact  # Creates more arrays
+end
+```
+
+Example - After:
+```ruby
+def process_items
+  result = []
+  items.each_with_index do |item, index|
+    break if index >= 2
+    result << item.to_s  # Single array, built incrementally
+  end
+  result
+end
+```
+
+This optimization is especially important in hot code paths, such as request processing or data transformation pipelines, where the cumulative effect of unnecessary allocations can impact performance and trigger more frequent garbage collection.
+
+
+[
+  {
+    "discussion_id": "1938556782",
+    "pr_number": 54341,
+    "pr_file": "activesupport/lib/active_support/core_ext/enumerable.rb",
+    "created_at": "2025-02-02T19:07:35+00:00",
+    "commented_code": "#   Set.new.sole        # => Enumerable::SoleItemExpectedError: no item found\n  #   { a: 1, b: 2 }.sole # => Enumerable::SoleItemExpectedError: multiple items found\n  def sole\n    case count\n    when 1   then return first # rubocop:disable Style/RedundantReturn\n    first_two = first(2)\n\n    case first_two.count\n    when 1   then first_two.first\n    when 0   then raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"no item found\"\n    when 2.. then raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"multiple items found\"\n    when 2   then raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"multiple items found\"",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1938556782",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54341,
+        "pr_file": "activesupport/lib/active_support/core_ext/enumerable.rb",
+        "discussion_id": "1938556782",
+        "commented_code": "@@ -209,10 +209,12 @@ def in_order_of(key, series, filter: true)\n   #   Set.new.sole        # => Enumerable::SoleItemExpectedError: no item found\n   #   { a: 1, b: 2 }.sole # => Enumerable::SoleItemExpectedError: multiple items found\n   def sole\n-    case count\n-    when 1   then return first # rubocop:disable Style/RedundantReturn\n+    first_two = first(2)\n+\n+    case first_two.count\n+    when 1   then first_two.first\n     when 0   then raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"no item found\"\n-    when 2.. then raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"multiple items found\"\n+    when 2   then raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"multiple items found\"",
+        "comment_created_at": "2025-02-02T19:07:35+00:00",
+        "comment_author": "bogdan",
+        "comment_body": "This causes array allocation on `first(2)`. Maybe a better implementation memory wise would be:\r\n\r\n``` ruby\r\nresult = none = Object.new\r\neach do |element|\r\n  if result == none\r\n    result = element\r\n  else\r\n    raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"multiple items found\"\r\n  end\r\nend\r\nif result == none\r\n  raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"no item found\"\r\nelse\r\n  result\r\nend\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1938557894",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54341,
+        "pr_file": "activesupport/lib/active_support/core_ext/enumerable.rb",
+        "discussion_id": "1938556782",
+        "commented_code": "@@ -209,10 +209,12 @@ def in_order_of(key, series, filter: true)\n   #   Set.new.sole        # => Enumerable::SoleItemExpectedError: no item found\n   #   { a: 1, b: 2 }.sole # => Enumerable::SoleItemExpectedError: multiple items found\n   def sole\n-    case count\n-    when 1   then return first # rubocop:disable Style/RedundantReturn\n+    first_two = first(2)\n+\n+    case first_two.count\n+    when 1   then first_two.first\n     when 0   then raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"no item found\"\n-    when 2.. then raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"multiple items found\"\n+    when 2   then raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"multiple items found\"",
+        "comment_created_at": "2025-02-02T19:12:03+00:00",
+        "comment_author": "fatkodima",
+        "comment_body": "This causes object allocation (`Object.new`), which is the same. Can be extracted into a constant of course, but I would prefer simplicity over complexity in not performance critical code. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1940781631",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54341,
+        "pr_file": "activesupport/lib/active_support/core_ext/enumerable.rb",
+        "discussion_id": "1938556782",
+        "commented_code": "@@ -209,10 +209,12 @@ def in_order_of(key, series, filter: true)\n   #   Set.new.sole        # => Enumerable::SoleItemExpectedError: no item found\n   #   { a: 1, b: 2 }.sole # => Enumerable::SoleItemExpectedError: multiple items found\n   def sole\n-    case count\n-    when 1   then return first # rubocop:disable Style/RedundantReturn\n+    first_two = first(2)\n+\n+    case first_two.count\n+    when 1   then first_two.first\n     when 0   then raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"no item found\"\n-    when 2.. then raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"multiple items found\"\n+    when 2   then raise ActiveSupport::EnumerableCoreExt::SoleItemExpectedError, \"multiple items found\"",
+        "comment_created_at": "2025-02-04T09:12:15+00:00",
+        "comment_author": "byroot",
+        "comment_body": "The solution proposed at the end of https://github.com/rails/rails/issues/54335#issue-2807665461 doesn't allocate and is relatively simple too, but up to you.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1982851490",
+    "pr_number": 54679,
+    "pr_file": "activerecord/lib/active_record/relation/finder_methods.rb",
+    "created_at": "2025-03-06T07:49:25+00:00",
+    "commented_code": "oc = []\n\n        oc << model.implicit_order_column if model.implicit_order_column\n\n        return oc.flatten.uniq.compact if oc.flatten.include?(nil)",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1982851490",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54679,
+        "pr_file": "activerecord/lib/active_record/relation/finder_methods.rb",
+        "discussion_id": "1982851490",
+        "commented_code": "@@ -649,6 +649,9 @@ def _order_columns\n         oc = []\n \n         oc << model.implicit_order_column if model.implicit_order_column\n+\n+        return oc.flatten.uniq.compact if oc.flatten.include?(nil)",
+        "comment_created_at": "2025-03-06T07:49:25+00:00",
+        "comment_author": "matthewd",
+        "comment_body": "We should probably avoid the extra `flatten` here... it's not a super hot path, but still, this is an edge case behaviour, so unfortunate to add an allocation for every existing call.\r\n\r\nWe don't need to consider multiply-nested array levels; the existing unrestrained `flatten` below is just doing a bit more than it needs to.\r\n\r\nSo given that, I feel like we can ditch most flattening here entirely :thinking:\r\n\r\n(untested speculation)\r\n\r\n```ruby\r\ncolumns = Array(model.implicit_order_column)\r\nreturn columns.compact if columns.last.nil?\r\n\r\ncolumns += Array(model.query_constraints_list || model.primary_key)\r\n\r\ncolumns.uniq.compact\r\n```\r\n\r\n.. or something? \ud83e\udd37\ud83c\udffb\u200d\u2642\ufe0f",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1985269480",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54679,
+        "pr_file": "activerecord/lib/active_record/relation/finder_methods.rb",
+        "discussion_id": "1982851490",
+        "commented_code": "@@ -649,6 +649,9 @@ def _order_columns\n         oc = []\n \n         oc << model.implicit_order_column if model.implicit_order_column\n+\n+        return oc.flatten.uniq.compact if oc.flatten.include?(nil)",
+        "comment_created_at": "2025-03-07T15:31:35+00:00",
+        "comment_author": "issyl0",
+        "comment_body": "Managed to get a functioning version of this. It needed:\r\n\r\n`return columns.compact if columns.length.positive? && columns.last.nil?`\r\n\r\nbecause `columns = []` (where there aren't any `implicit_order_column`s) matches `columns.last.nil?` too.\r\n\r\nIt did not need any of the `flatten`s though, you're right - thanks!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1952940086",
+    "pr_number": 54505,
+    "pr_file": "actionpack/lib/action_dispatch/journey/visitors.rb",
+    "created_at": "2025-02-12T15:58:54+00:00",
+    "commented_code": "INSTANCE = new\n      end\n\n      class String < FunctionalVisitor # :nodoc:\n        private\n          def binary(node, seed)\n      class String # :nodoc:\n        def accept(node, seed)\n          case node.type\n          when :DOT\n            seed << node.left\n          when :LITERAL\n            seed << node.left\n          when :SYMBOL\n            seed << node.left\n          when :SLASH\n            seed << node.left\n          when :CAT\n            visit(node.right, visit(node.left, seed))\n          end\n\n          def nary(node, seed)\n          when :STAR\n            visit(node.left, seed)\n          when :OR\n            last_child = node.children.last\n            node.children.inject(seed) { |s, c|\n              string = visit(c, s)\n              string << \"|\" unless last_child == c\n              string\n            }\n          end\n\n          def terminal(node, seed)\n            seed + node.left\n            node.children.each do |c|\n              visit(c, seed)\n              seed << \"|\" unless last_child == c\n            end\n            seed\n          when :GROUP\n            visit(node.left, seed << \"(\") << \")\"\n          else\n            raise \"Unknown node type: #{node.type}\"\n          end\n        end\n\n          def visit_GROUP(node, seed)\n            visit(node.left, seed.dup << \"(\") << \")\"\n          end\n        INSTANCE = new\n\n          INSTANCE = new\n        private\n          alias_method :visit, :accept",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1952940086",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54505,
+        "pr_file": "actionpack/lib/action_dispatch/journey/visitors.rb",
+        "discussion_id": "1952940086",
+        "commented_code": "@@ -167,32 +167,67 @@ def visit(node, block)\n         INSTANCE = new\n       end\n \n-      class String < FunctionalVisitor # :nodoc:\n-        private\n-          def binary(node, seed)\n+      class String # :nodoc:\n+        def accept(node, seed)\n+          case node.type\n+          when :DOT\n+            seed << node.left\n+          when :LITERAL\n+            seed << node.left\n+          when :SYMBOL\n+            seed << node.left\n+          when :SLASH\n+            seed << node.left\n+          when :CAT\n             visit(node.right, visit(node.left, seed))\n-          end\n-\n-          def nary(node, seed)\n+          when :STAR\n+            visit(node.left, seed)\n+          when :OR\n             last_child = node.children.last\n-            node.children.inject(seed) { |s, c|\n-              string = visit(c, s)\n-              string << \"|\" unless last_child == c\n-              string\n-            }\n-          end\n-\n-          def terminal(node, seed)\n-            seed + node.left\n+            node.children.each do |c|\n+              visit(c, seed)\n+              seed << \"|\" unless last_child == c\n+            end\n+            seed\n+          when :GROUP\n+            visit(node.left, seed << \"(\") << \")\"\n+          else\n+            raise \"Unknown node type: #{node.type}\"\n           end\n+        end\n \n-          def visit_GROUP(node, seed)\n-            visit(node.left, seed.dup << \"(\") << \")\"\n-          end\n+        INSTANCE = new\n \n-          INSTANCE = new\n+        private\n+          alias_method :visit, :accept",
+        "comment_created_at": "2025-02-12T15:58:54+00:00",
+        "comment_author": "skipkayhil",
+        "comment_body": "Definitely :+1: to not re-allocating with `+`, I saw that as well.\r\n\r\nI was looking into double dispatch visiting where nodes define\r\n\r\n```\r\ndef visit(v, seed)\r\n  v.visit_group(seed)\r\nend\r\n```\r\n\r\nbut I think yours would be faster because there's less indirection? I'll try out a benchmark to verify.\r\n\r\nAnyways, is it worth even having this alias? We could just always call `accept` inside the visitor",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1953965895",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54505,
+        "pr_file": "actionpack/lib/action_dispatch/journey/visitors.rb",
+        "discussion_id": "1952940086",
+        "commented_code": "@@ -167,32 +167,67 @@ def visit(node, block)\n         INSTANCE = new\n       end\n \n-      class String < FunctionalVisitor # :nodoc:\n-        private\n-          def binary(node, seed)\n+      class String # :nodoc:\n+        def accept(node, seed)\n+          case node.type\n+          when :DOT\n+            seed << node.left\n+          when :LITERAL\n+            seed << node.left\n+          when :SYMBOL\n+            seed << node.left\n+          when :SLASH\n+            seed << node.left\n+          when :CAT\n             visit(node.right, visit(node.left, seed))\n-          end\n-\n-          def nary(node, seed)\n+          when :STAR\n+            visit(node.left, seed)\n+          when :OR\n             last_child = node.children.last\n-            node.children.inject(seed) { |s, c|\n-              string = visit(c, s)\n-              string << \"|\" unless last_child == c\n-              string\n-            }\n-          end\n-\n-          def terminal(node, seed)\n-            seed + node.left\n+            node.children.each do |c|\n+              visit(c, seed)\n+              seed << \"|\" unless last_child == c\n+            end\n+            seed\n+          when :GROUP\n+            visit(node.left, seed << \"(\") << \")\"\n+          else\n+            raise \"Unknown node type: #{node.type}\"\n           end\n+        end\n \n-          def visit_GROUP(node, seed)\n-            visit(node.left, seed.dup << \"(\") << \")\"\n-          end\n+        INSTANCE = new\n \n-          INSTANCE = new\n+        private\n+          alias_method :visit, :accept",
+        "comment_created_at": "2025-02-13T07:36:58+00:00",
+        "comment_author": "byroot",
+        "comment_body": "Yes, at this point the methods aren't doing much, so the bottleneck is the method call itself.\r\n\r\nHence why I went with a case with inline snippets that reduce the number of method calls.\r\n\r\nI also have a non-recursive version, that push and pop the nodes on an array, but apparently it's slower.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1638242358",
+    "pr_number": 52116,
+    "pr_file": "actionpack/lib/action_dispatch/request/utils.rb",
+    "created_at": "2024-06-13T13:41:01+00:00",
+    "commented_code": "when Array\n          params.each { |element| check_param_encoding(element) }\n        when Hash\n          params.each_value { |value| check_param_encoding(value) }\n          params.each { |value| check_param_encoding(value) }",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1638242358",
+        "repo_full_name": "rails/rails",
+        "pr_number": 52116,
+        "pr_file": "actionpack/lib/action_dispatch/request/utils.rb",
+        "discussion_id": "1638242358",
+        "commented_code": "@@ -33,7 +33,7 @@ def self.check_param_encoding(params)\n         when Array\n           params.each { |element| check_param_encoding(element) }\n         when Hash\n-          params.each_value { |value| check_param_encoding(value) }\n+          params.each { |value| check_param_encoding(value) }",
+        "comment_created_at": "2024-06-13T13:41:01+00:00",
+        "comment_author": "Earlopain",
+        "comment_body": "Faster implementation, either because it avoids array allocations or doesn't recurse as much (or both). If performance is even more of a concern, check out `proposed_2` in the benchmarking script, though it doesn't look as good anymore.\r\n\r\n```suggestion\r\n          params.each do |key, value|\r\n            check_param_encoding(key)\r\n            check_param_encoding(value)\r\n          end\r\n```\r\n\r\n```rb\r\nrequire \"benchmark/ips\"\r\n\r\ndef check_param_encoding(params)\r\n  case params\r\n  when Array\r\n    params.each { |element| check_param_encoding(element) }\r\n  when Hash\r\n    params.each_value { |value| check_param_encoding(value) }\r\n  when String\r\n    unless params.valid_encoding?\r\n      raise Rack::Utils::InvalidParameterError, \"Invalid encoding for parameter: #{params.scrub}\"\r\n    end\r\n  end\r\nend\r\n\r\ndef check_param_encoding_pr(params)\r\n  case params\r\n  when Array\r\n    params.each { |element| check_param_encoding(element) }\r\n  when Hash\r\n    params.each { |value| check_param_encoding(value) }\r\n  when String\r\n    unless params.valid_encoding?\r\n      raise Rack::Utils::InvalidParameterError, \"Invalid encoding for parameter: #{params.scrub}\"\r\n    end\r\n  end\r\nend\r\n\r\ndef check_param_encoding_proposed(params)\r\n  case params\r\n  when Array\r\n    params.each { |element| check_param_encoding(element) }\r\n  when Hash\r\n    params.each do |key, value|\r\n      check_param_encoding(key)\r\n      check_param_encoding(value)\r\n    end\r\n  when String\r\n    unless params.valid_encoding?\r\n      raise Rack::Utils::InvalidParameterError, \"Invalid encoding for parameter: #{params.scrub}\"\r\n    end\r\n  end\r\nend\r\n\r\ndef check_param_encoding_proposed_2(params)\r\n  case params\r\n  when Array\r\n    params.each { |element| check_param_encoding(element) }\r\n  when Hash\r\n    params.each do |key, value|\r\n      unless key.valid_encoding?\r\n        raise Rack::Utils::InvalidParameterError, \"Invalid encoding for parameter: #{key.scrub}\"\r\n      end\r\n      check_param_encoding(value)\r\n    end\r\n  when String\r\n    unless params.valid_encoding?\r\n      raise Rack::Utils::InvalidParameterError, \"Invalid encoding for parameter: #{params.scrub}\"\r\n    end\r\n  end\r\nend\r\n\r\nparams = { \"example\" => \"params\", \"for\" => [\"1\", \"2\", \"3\"], \"benchmarking\" => { \"purposes\" => \"foo\", \"bar\" => \"baz\" } }\r\n\r\nBenchmark.ips do |x|\r\n  x.report(\"current\") { check_param_encoding(params) }\r\n  x.report(\"pr\") { check_param_encoding_pr(params) }\r\n  x.report(\"proposed\") { check_param_encoding_proposed(params) }\r\n  x.report(\"proposed_2\") { check_param_encoding_proposed_2(params) }\r\n  \r\n  x.compare!\r\nend\r\n```\r\n\r\n```\r\nruby 3.3.1 (2024-04-23 revision c56cd86388) [x86_64-linux]\r\nWarming up --------------------------------------\r\n             current   110.359k i/100ms\r\n                  pr    64.145k i/100ms\r\n            proposed    83.416k i/100ms\r\n          proposed_2   106.491k i/100ms\r\nCalculating -------------------------------------\r\n             current      1.112M (\u00b1 0.6%) i/s -      5.628M in   5.062857s\r\n                  pr    648.208k (\u00b1 0.3%) i/s -      3.271M in   5.046882s\r\n            proposed    836.870k (\u00b1 2.0%) i/s -      4.254M in   5.085633s\r\n          proposed_2      1.053M (\u00b1 1.0%) i/s -      5.325M in   5.059225s\r\n\r\nComparison:\r\n             current:  1111722.8 i/s\r\n          proposed_2:  1052548.3 i/s - 1.06x  slower\r\n            proposed:   836870.2 i/s - 1.33x  slower\r\n                  pr:   648208.0 i/s - 1.72x  slower\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1638322990",
+        "repo_full_name": "rails/rails",
+        "pr_number": 52116,
+        "pr_file": "actionpack/lib/action_dispatch/request/utils.rb",
+        "discussion_id": "1638242358",
+        "commented_code": "@@ -33,7 +33,7 @@ def self.check_param_encoding(params)\n         when Array\n           params.each { |element| check_param_encoding(element) }\n         when Hash\n-          params.each_value { |value| check_param_encoding(value) }\n+          params.each { |value| check_param_encoding(value) }",
+        "comment_created_at": "2024-06-13T14:29:21+00:00",
+        "comment_author": "chrisdebruin",
+        "comment_body": "Cool thanks, did not crossed my mind to do this test. I like the `proposed` more because it does not duplicate logic",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1966717670",
+    "pr_number": 54598,
+    "pr_file": "activerecord/lib/arel/visitors/postgresql.rb",
+    "created_at": "2025-02-23T09:07:45+00:00",
+    "commented_code": "# The PostgreSQL dialect isn't flexible enough to allow anything other than a inner join\n            # for the first join:\n            #   UPDATE table SET .. FROM joined_table WHERE ...\n            (o.relation.right.all? { |join| join.is_a?(Arel::Nodes::InnerJoin) || join.right.expr.right.relation != o.relation.left })\n            (o.relation.right.all? { |join| join.is_a?(Arel::Nodes::InnerJoin) || join.right.expr.right.try(:relation) != o.relation.left })",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "1966717670",
+        "repo_full_name": "rails/rails",
+        "pr_number": 54598,
+        "pr_file": "activerecord/lib/arel/visitors/postgresql.rb",
+        "discussion_id": "1966717670",
+        "commented_code": "@@ -64,7 +64,7 @@ def prepare_update_statement(o)\n             # The PostgreSQL dialect isn't flexible enough to allow anything other than a inner join\n             # for the first join:\n             #   UPDATE table SET .. FROM joined_table WHERE ...\n-            (o.relation.right.all? { |join| join.is_a?(Arel::Nodes::InnerJoin) || join.right.expr.right.relation != o.relation.left })\n+            (o.relation.right.all? { |join| join.is_a?(Arel::Nodes::InnerJoin) || join.right.expr.right.try(:relation) != o.relation.left })",
+        "comment_created_at": "2025-02-23T09:07:45+00:00",
+        "comment_author": "byroot",
+        "comment_body": "`try` is awful for performance, we shouldn't use that. We should check the type of the node instead.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2075571067",
+    "pr_number": 55025,
+    "pr_file": "actiontext/lib/action_text/plain_text_conversion.rb",
+    "created_at": "2025-05-06T14:11:26+00:00",
+    "commented_code": "text\n        end\n      end\n\n      class BottomUpReplacer\n        def self.replace_content(node, &block)\n          new(node).replace_content(&block)\n        end\n\n        def initialize(node)\n          @node = node\n        end\n\n        def replace_content(&block)\n          @node.tap do |node|\n            traverse_bottom_up(node) do |n|\n              n.content = block.call(n)",
+    "repo_full_name": "rails/rails",
+    "discussion_comments": [
+      {
+        "comment_id": "2075571067",
+        "repo_full_name": "rails/rails",
+        "pr_number": 55025,
+        "pr_file": "actiontext/lib/action_text/plain_text_conversion.rb",
+        "discussion_id": "2075571067",
+        "commented_code": "@@ -121,5 +124,36 @@ def break_if_nested_list(node, text)\n           text\n         end\n       end\n+\n+      class BottomUpReplacer\n+        def self.replace_content(node, &block)\n+          new(node).replace_content(&block)\n+        end\n+\n+        def initialize(node)\n+          @node = node\n+        end\n+\n+        def replace_content(&block)\n+          @node.tap do |node|\n+            traverse_bottom_up(node) do |n|\n+              n.content = block.call(n)",
+        "comment_created_at": "2025-05-06T14:11:26+00:00",
+        "comment_author": "flavorjones",
+        "comment_body": "This is going to create a lot of short-lived strings as the children's plain text equivalents are joined together at each level of the hierarchy. Those strings add to the total compute time as well as cause GC churn.\r\n\r\nThis becomes noticeable if the \"deeply nested\" test is modified like:\r\n\r\n```patch\r\n   test \"deeply nested tags are converted\" do\r\n     assert_converted_to(\r\n       \"Hello world!\\nHow are you?\",\r\n-      ActionText::Fragment.wrap(\"<div>Hello world!</div><div></div>\").tap do |fragment|\r\n+      ActionText::Fragment.wrap(\"<div>Hello world!</div><div>Abc<span>Xyx</span></div>\").tap do |fragment|\r\n         node = fragment.source.children.last\r\n         10_000.times do\r\n           child = node.clone\r\n```\r\n\r\nand then the time it takes to run jumps from 1.8s to 5.5s on my machine.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

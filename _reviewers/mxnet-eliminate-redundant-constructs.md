@@ -1,0 +1,340 @@
+---
+title: Eliminate redundant constructs
+description: 'Remove unnecessary coding patterns that add complexity without providing
+  value. Focus on clarity and simplicity by:
+
+
+  1. Not using enumerate() when the index is unused:'
+repository: apache/mxnet
+label: Code Style
+language: Python
+comments_count: 12
+repository_stars: 20801
+---
+
+Remove unnecessary coding patterns that add complexity without providing value. Focus on clarity and simplicity by:
+
+1. Not using enumerate() when the index is unused:
+```python
+# Instead of:
+for _, item in enumerate(collection):
+    process(item)
+    
+# Use:
+for item in collection:
+    process(item)
+```
+
+2. Using generator expressions instead of list comprehensions when creating iterables directly:
+```python
+# Instead of:
+return tuple([x.astype(dtype) for x in args])
+
+# Use:
+return tuple(x.astype(dtype) for x in args)
+```
+
+3. Following Python's idiomatic expressions for boolean operations:
+```python
+# Instead of:
+if (upper == False):
+    do_something()
+    
+# Use:
+if not upper:
+    do_something()
+```
+
+These simplifications improve code readability and maintain a clean, Pythonic style that aligns with best practices.
+
+
+[
+  {
+    "discussion_id": "693931632",
+    "pr_number": 20505,
+    "pr_file": "python/mxnet/gluon/contrib/estimator/estimator.py",
+    "created_at": "2021-08-23T12:36:20+00:00",
+    "commented_code": "for handler in epoch_begin:\n                handler.epoch_begin(estimator_ref)\n\n            for i, batch in enumerate(train_data):\n            for _, batch in enumerate(train_data):",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "693931632",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20505,
+        "pr_file": "python/mxnet/gluon/contrib/estimator/estimator.py",
+        "discussion_id": "693931632",
+        "commented_code": "@@ -392,7 +392,7 @@ def fit(self, train_data,\n             for handler in epoch_begin:\n                 handler.epoch_begin(estimator_ref)\n \n-            for i, batch in enumerate(train_data):\n+            for _, batch in enumerate(train_data):",
+        "comment_created_at": "2021-08-23T12:36:20+00:00",
+        "comment_author": "bgawrych",
+        "comment_body": "in most of the cases enumerate makes no sense",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "695844534",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20505,
+        "pr_file": "python/mxnet/gluon/contrib/estimator/estimator.py",
+        "discussion_id": "693931632",
+        "commented_code": "@@ -392,7 +392,7 @@ def fit(self, train_data,\n             for handler in epoch_begin:\n                 handler.epoch_begin(estimator_ref)\n \n-            for i, batch in enumerate(train_data):\n+            for _, batch in enumerate(train_data):",
+        "comment_created_at": "2021-08-25T15:03:31+00:00",
+        "comment_author": "szha",
+        "comment_body": "```suggestion\r\n            for batch in train_data:\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "695844760",
+    "pr_number": 20505,
+    "pr_file": "python/mxnet/operator.py",
+    "created_at": "2021-08-25T15:03:48+00:00",
+    "commented_code": "\"entries in returned aux stypes, \" \\\n                        \"got %d.\"%(len(tensors[4]), len(ret[4]))\n                    rstype = []\n                    for i, ret_list in enumerate(ret):\n                    for _, ret_list in enumerate(ret):",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "695844760",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20505,
+        "pr_file": "python/mxnet/operator.py",
+        "discussion_id": "695844760",
+        "commented_code": "@@ -824,7 +824,7 @@ def infer_storage_type_backward_entry(num_tensor, tensor_stypes, tags, _):\n                         \"entries in returned aux stypes, \" \\\n                         \"got %d.\"%(len(tensors[4]), len(ret[4]))\n                     rstype = []\n-                    for i, ret_list in enumerate(ret):\n+                    for _, ret_list in enumerate(ret):",
+        "comment_created_at": "2021-08-25T15:03:48+00:00",
+        "comment_author": "szha",
+        "comment_body": "```suggestion\r\n                    for ret_list in ret:\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "695846443",
+    "pr_number": 20505,
+    "pr_file": "tests/python/unittest/test_gluon_data.py",
+    "created_at": "2021-08-25T15:05:38+00:00",
+    "commented_code": "a = mx.gluon.data.SimpleDataset([i for i in range(length)])\n    a_filtered = a.filter(lambda x: x % 10 == 0)\n    assert(len(a_filtered) == 10)\n    for idx, sample in enumerate(a_filtered):\n    for _, sample in enumerate(a_filtered):",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "695846443",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20505,
+        "pr_file": "tests/python/unittest/test_gluon_data.py",
+        "discussion_id": "695846443",
+        "commented_code": "@@ -382,25 +382,25 @@ def test_dataset_filter():\n     a = mx.gluon.data.SimpleDataset([i for i in range(length)])\n     a_filtered = a.filter(lambda x: x % 10 == 0)\n     assert(len(a_filtered) == 10)\n-    for idx, sample in enumerate(a_filtered):\n+    for _, sample in enumerate(a_filtered):",
+        "comment_created_at": "2021-08-25T15:05:38+00:00",
+        "comment_author": "szha",
+        "comment_body": "```suggestion\r\n    for sample in a_filtered:\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "695846885",
+    "pr_number": 20505,
+    "pr_file": "tests/python/unittest/test_gluon_data.py",
+    "created_at": "2021-08-25T15:06:07+00:00",
+    "commented_code": "a = mx.gluon.data.SimpleDataset([i for i in range(length)])\n    a_filtered = a.filter(lambda x: x % 10 == 0)\n    assert(len(a_filtered) == 10)\n    for idx, sample in enumerate(a_filtered):\n    for _, sample in enumerate(a_filtered):\n        assert sample % 10 == 0\n    a_xform_filtered = a.transform(lambda x: x + 1).filter(lambda x: x % 10 == 0)\n    assert(len(a_xform_filtered) == 10)\n    # the filtered data is already transformed\n    for idx, sample in enumerate(a_xform_filtered):\n    for _, sample in enumerate(a_xform_filtered):\n        assert sample % 10 == 0\n\ndef test_dataset_filter_handle():\n    length = 100\n    a = mx.gluon.data.SimpleDataset(np.arange(length))\n    a_filtered = a.filter(lambda x: x % 10 == 0).__mx_handle__()\n    assert(len(a_filtered) == 10)\n    for idx, sample in enumerate(a_filtered):\n    for _, sample in enumerate(a_filtered):",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "695846885",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20505,
+        "pr_file": "tests/python/unittest/test_gluon_data.py",
+        "discussion_id": "695846885",
+        "commented_code": "@@ -382,25 +382,25 @@ def test_dataset_filter():\n     a = mx.gluon.data.SimpleDataset([i for i in range(length)])\n     a_filtered = a.filter(lambda x: x % 10 == 0)\n     assert(len(a_filtered) == 10)\n-    for idx, sample in enumerate(a_filtered):\n+    for _, sample in enumerate(a_filtered):\n         assert sample % 10 == 0\n     a_xform_filtered = a.transform(lambda x: x + 1).filter(lambda x: x % 10 == 0)\n     assert(len(a_xform_filtered) == 10)\n     # the filtered data is already transformed\n-    for idx, sample in enumerate(a_xform_filtered):\n+    for _, sample in enumerate(a_xform_filtered):\n         assert sample % 10 == 0\n \n def test_dataset_filter_handle():\n     length = 100\n     a = mx.gluon.data.SimpleDataset(np.arange(length))\n     a_filtered = a.filter(lambda x: x % 10 == 0).__mx_handle__()\n     assert(len(a_filtered) == 10)\n-    for idx, sample in enumerate(a_filtered):\n+    for _, sample in enumerate(a_filtered):",
+        "comment_created_at": "2021-08-25T15:06:07+00:00",
+        "comment_author": "szha",
+        "comment_body": "```suggestion\r\n    for sample in a_filtered:\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "695847740",
+    "pr_number": 20505,
+    "pr_file": "tests/python/unittest/test_gluon_data.py",
+    "created_at": "2021-08-25T15:07:01+00:00",
+    "commented_code": "assert len(a_take_10) == count\n    expected_total = sum([i for i in range(count)])\n    total = 0\n    for idx, sample in enumerate(a_take_10):\n    for _, sample in enumerate(a_take_10):",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "695847740",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20505,
+        "pr_file": "tests/python/unittest/test_gluon_data.py",
+        "discussion_id": "695847740",
+        "commented_code": "@@ -451,7 +451,7 @@ def test_dataset_take():\n     assert len(a_take_10) == count\n     expected_total = sum([i for i in range(count)])\n     total = 0\n-    for idx, sample in enumerate(a_take_10):\n+    for _, sample in enumerate(a_take_10):",
+        "comment_created_at": "2021-08-25T15:07:01+00:00",
+        "comment_author": "szha",
+        "comment_body": "```suggestion\r\n    for sample in a_take_10:\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "695848016",
+    "pr_number": 20505,
+    "pr_file": "tests/python/unittest/test_gluon_data.py",
+    "created_at": "2021-08-25T15:07:16+00:00",
+    "commented_code": "assert len(a_xform_take_10) == count\n    expected_total = sum([i * 10 for i in range(count)])\n    total = 0\n    for idx, sample in enumerate(a_xform_take_10):\n    for _, sample in enumerate(a_xform_take_10):",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "695848016",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20505,
+        "pr_file": "tests/python/unittest/test_gluon_data.py",
+        "discussion_id": "695848016",
+        "commented_code": "@@ -460,7 +460,7 @@ def test_dataset_take():\n     assert len(a_xform_take_10) == count\n     expected_total = sum([i * 10 for i in range(count)])\n     total = 0\n-    for idx, sample in enumerate(a_xform_take_10):\n+    for _, sample in enumerate(a_xform_take_10):",
+        "comment_created_at": "2021-08-25T15:07:16+00:00",
+        "comment_author": "szha",
+        "comment_body": "```suggestion\r\n    for sample in a_xform_take_10:\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "695848243",
+    "pr_number": 20505,
+    "pr_file": "tests/python/unittest/test_gluon_data.py",
+    "created_at": "2021-08-25T15:07:30+00:00",
+    "commented_code": "assert len(a_take_10) == count\n    expected_total = sum([i for i in range(count)])\n    total = 0\n    for idx, sample in enumerate(a_take_10):\n    for _, sample in enumerate(a_take_10):",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "695848243",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20505,
+        "pr_file": "tests/python/unittest/test_gluon_data.py",
+        "discussion_id": "695848243",
+        "commented_code": "@@ -477,7 +477,7 @@ def test_dataset_take_handle():\n     assert len(a_take_10) == count\n     expected_total = sum([i for i in range(count)])\n     total = 0\n-    for idx, sample in enumerate(a_take_10):\n+    for _, sample in enumerate(a_take_10):",
+        "comment_created_at": "2021-08-25T15:07:30+00:00",
+        "comment_author": "szha",
+        "comment_body": "```suggestion\r\n    for sample in a_take_10:\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "695848426",
+    "pr_number": 20505,
+    "pr_file": "tests/python/unittest/test_gluon_data.py",
+    "created_at": "2021-08-25T15:07:43+00:00",
+    "commented_code": "assert len(a_xform_take_10) == count\n    expected_total = sum([i for i in range(count)])\n    total = 0\n    for idx, sample in enumerate(a_xform_take_10):\n    for _, sample in enumerate(a_xform_take_10):",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "695848426",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20505,
+        "pr_file": "tests/python/unittest/test_gluon_data.py",
+        "discussion_id": "695848426",
+        "commented_code": "@@ -486,7 +486,7 @@ def test_dataset_take_handle():\n     assert len(a_xform_take_10) == count\n     expected_total = sum([i for i in range(count)])\n     total = 0\n-    for idx, sample in enumerate(a_xform_take_10):\n+    for _, sample in enumerate(a_xform_take_10):",
+        "comment_created_at": "2021-08-25T15:07:43+00:00",
+        "comment_author": "szha",
+        "comment_body": "```suggestion\r\n    for sample in a_xform_take_10:\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "695853434",
+    "pr_number": 20505,
+    "pr_file": "tests/python/unittest/test_numpy_interoperability.py",
+    "created_at": "2021-08-25T15:13:00+00:00",
+    "commented_code": "# assertRaises(np.AxisError, np.swapaxes, -5, 0)\n    for i in range(-4, 4):\n        for j in range(-4, 4):\n            for k, src in enumerate((a, b)):\n            for _, src in enumerate((a, b)):",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "695853434",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20505,
+        "pr_file": "tests/python/unittest/test_numpy_interoperability.py",
+        "discussion_id": "695853434",
+        "commented_code": "@@ -421,7 +421,7 @@ def _add_workload_swapaxes():\n     # assertRaises(np.AxisError, np.swapaxes, -5, 0)\n     for i in range(-4, 4):\n         for j in range(-4, 4):\n-            for k, src in enumerate((a, b)):\n+            for _, src in enumerate((a, b)):",
+        "comment_created_at": "2021-08-25T15:13:00+00:00",
+        "comment_author": "szha",
+        "comment_body": "```suggestion\r\n            for src in (a, b):\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "695858106",
+    "pr_number": 20505,
+    "pr_file": "tests/python/unittest/test_numpy_op.py",
+    "created_at": "2021-08-25T15:17:56+00:00",
+    "commented_code": "assert_almost_equal(out_mx.asnumpy(), expected_np, rtol=rtol, atol=atol)\n                    out_mx.backward()\n                    cur_grad = []\n                    for (iop, op) in enumerate(x):\n                    for (_, op) in enumerate(x):",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "695858106",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20505,
+        "pr_file": "tests/python/unittest/test_numpy_op.py",
+        "discussion_id": "695858106",
+        "commented_code": "@@ -8410,10 +8410,10 @@ def dbg(name, data):\n                     assert_almost_equal(out_mx.asnumpy(), expected_np, rtol=rtol, atol=atol)\n                     out_mx.backward()\n                     cur_grad = []\n-                    for (iop, op) in enumerate(x):\n+                    for (_, op) in enumerate(x):",
+        "comment_created_at": "2021-08-25T15:17:56+00:00",
+        "comment_author": "szha",
+        "comment_body": "```suggestion\r\n                    for op in x:\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "646148463",
+    "pr_number": 20262,
+    "pr_file": "python/mxnet/gluon/data/vision/transforms/__init__.py",
+    "created_at": "2021-06-06T15:28:34+00:00",
+    "commented_code": "super(Cast, self).__init__()\n        self._dtype = dtype\n\n    def hybrid_forward(self, F, *args):\n        if is_np_array():\n            F = F.npx\n        return tuple([F.cast(x, self._dtype) for x in args])\n    def forward(self, *args):\n        return tuple([x.astype(self._dtype) for x in args])",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "646148463",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20262,
+        "pr_file": "python/mxnet/gluon/data/vision/transforms/__init__.py",
+        "discussion_id": "646148463",
+        "commented_code": "@@ -129,10 +131,8 @@ def __init__(self, dtype='float32'):\n         super(Cast, self).__init__()\n         self._dtype = dtype\n \n-    def hybrid_forward(self, F, *args):\n-        if is_np_array():\n-            F = F.npx\n-        return tuple([F.cast(x, self._dtype) for x in args])\n+    def forward(self, *args):\n+        return tuple([x.astype(self._dtype) for x in args])",
+        "comment_created_at": "2021-06-06T15:28:34+00:00",
+        "comment_author": "szha",
+        "comment_body": "nit: the list doesn't seem necessary",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "646148726",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20262,
+        "pr_file": "python/mxnet/gluon/data/vision/transforms/__init__.py",
+        "discussion_id": "646148463",
+        "commented_code": "@@ -129,10 +131,8 @@ def __init__(self, dtype='float32'):\n         super(Cast, self).__init__()\n         self._dtype = dtype\n \n-    def hybrid_forward(self, F, *args):\n-        if is_np_array():\n-            F = F.npx\n-        return tuple([F.cast(x, self._dtype) for x in args])\n+    def forward(self, *args):\n+        return tuple([x.astype(self._dtype) for x in args])",
+        "comment_created_at": "2021-06-06T15:30:43+00:00",
+        "comment_author": "szha",
+        "comment_body": "```suggestion\r\n        return tuple(x.astype(self._dtype) for x in args)\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "711215778",
+    "pr_number": 20592,
+    "pr_file": "python/mxnet/numpy/linalg.py",
+    "created_at": "2021-09-17T17:00:40+00:00",
+    "commented_code": ">>> a = np.array([[ 5.4119368 ,  8.996273  , -5.086096  ],\n    ...               [ 0.8866155 ,  1.7490431 , -4.6107802 ],\n    ...               [-0.08034172,  4.4172044 ,  1.4528792 ]])\n    >>> LA.eigvalsh(a, UPLO='L')\n    >>> LA.eigvalsh(a, upper=False)\n    array([-2.87381886,  5.10144682,  6.38623114]) # in ascending order\n    \"\"\"\n    if(upper==False):",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "711215778",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20592,
+        "pr_file": "python/mxnet/numpy/linalg.py",
+        "discussion_id": "711215778",
+        "commented_code": "@@ -890,9 +891,13 @@ def eigvalsh(a, UPLO='L'):\n     >>> a = np.array([[ 5.4119368 ,  8.996273  , -5.086096  ],\n     ...               [ 0.8866155 ,  1.7490431 , -4.6107802 ],\n     ...               [-0.08034172,  4.4172044 ,  1.4528792 ]])\n-    >>> LA.eigvalsh(a, UPLO='L')\n+    >>> LA.eigvalsh(a, upper=False)\n     array([-2.87381886,  5.10144682,  6.38623114]) # in ascending order\n     \"\"\"\n+    if(upper==False):",
+        "comment_created_at": "2021-09-17T17:00:40+00:00",
+        "comment_author": "barry-jin",
+        "comment_body": "Comparison to `False` in python should be not expression: `if(upper==False)` => `if not upper`",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

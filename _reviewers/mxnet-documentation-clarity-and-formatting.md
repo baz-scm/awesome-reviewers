@@ -1,0 +1,164 @@
+---
+title: Documentation clarity and formatting
+description: 'When writing documentation (README files, tutorials, API docs), ensure
+  clarity and proper formatting:
+
+
+  1. **Define technical terms and concepts** - Don''t assume readers are familiar
+  with specialized terminology. Include brief explanations and relevant links for
+  reference.'
+repository: apache/mxnet
+label: Documentation
+language: Markdown
+comments_count: 3
+repository_stars: 20801
+---
+
+When writing documentation (README files, tutorials, API docs), ensure clarity and proper formatting:
+
+1. **Define technical terms and concepts** - Don't assume readers are familiar with specialized terminology. Include brief explanations and relevant links for reference.
+
+```markdown
+# Arguments
+- batch_size: Define batch size (default=64)
+- epochs: Define total epochs (default=1000)
+- mu: Define μ in μ-Law encoding for audio quantization (see https://en.wikipedia.org/wiki/μ-law_algorithm)
+```
+
+2. **Understand markdown formatting rules** - Be aware that formatting details like trailing spaces affect rendering. Double spaces at line ends create line breaks in markdown.
+
+3. **Preview rendered output** - Always check how documentation will actually appear to users before committing changes.
+
+4. **Keep technical references current** - When documenting code structures, ensure descriptions match the actual implementation. Update documentation when code interfaces change.
+
+Following these practices ensures documentation is both technically accurate and genuinely helpful to other developers.
+
+
+[
+  {
+    "discussion_id": "245805403",
+    "pr_number": 13735,
+    "pr_file": "example/gluon/wavenet/README.md",
+    "created_at": "2019-01-07T21:34:08+00:00",
+    "commented_code": "# WaveNet with Gluon\n\nGluon implementation of [WaveNet: A Generative Model for Raw Audio](https://arxiv.org/abs/1609.03499)\n\n![net_structure1](assets/net_struc1.png)\n![net_structure2](assets/net_struc2.png)\n\n## Requirements\n- Python 3.6.1\n- Mxnet 1.2\n- tqdm\n- scipy.io\n\n\n## Usage\n\n- arguments\n  - batch_size : Define batch size (defualt=64)\n  - epoches : Define total epoches (default=1000)\n  - mu : Define mu (default=128)",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "245805403",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 13735,
+        "pr_file": "example/gluon/wavenet/README.md",
+        "discussion_id": "245805403",
+        "commented_code": "@@ -0,0 +1,53 @@\n+# WaveNet with Gluon\n+\n+Gluon implementation of [WaveNet: A Generative Model for Raw Audio](https://arxiv.org/abs/1609.03499)\n+\n+![net_structure1](assets/net_struc1.png)\n+![net_structure2](assets/net_struc2.png)\n+\n+## Requirements\n+- Python 3.6.1\n+- Mxnet 1.2\n+- tqdm\n+- scipy.io\n+\n+\n+## Usage\n+\n+- arguments\n+  - batch_size : Define batch size (defualt=64)\n+  - epoches : Define total epoches (default=1000)\n+  - mu : Define mu (default=128)",
+        "comment_created_at": "2019-01-07T21:34:08+00:00",
+        "comment_author": "vishaalkapoor",
+        "comment_body": "It would be clearer to give some context on what mu is as one would have to guess it's in the paper, which doesn't refer to the mu-law. E.g. Define \\mu in \\mu-Law (see the paper or https://en.wikipedia.org/wiki/%CE%9C-law_algorithm).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "246599398",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 13735,
+        "pr_file": "example/gluon/wavenet/README.md",
+        "discussion_id": "245805403",
+        "commented_code": "@@ -0,0 +1,53 @@\n+# WaveNet with Gluon\n+\n+Gluon implementation of [WaveNet: A Generative Model for Raw Audio](https://arxiv.org/abs/1609.03499)\n+\n+![net_structure1](assets/net_struc1.png)\n+![net_structure2](assets/net_struc2.png)\n+\n+## Requirements\n+- Python 3.6.1\n+- Mxnet 1.2\n+- tqdm\n+- scipy.io\n+\n+\n+## Usage\n+\n+- arguments\n+  - batch_size : Define batch size (defualt=64)\n+  - epoches : Define total epoches (default=1000)\n+  - mu : Define mu (default=128)",
+        "comment_created_at": "2019-01-10T00:23:21+00:00",
+        "comment_author": "seujung",
+        "comment_body": "Corrected by applying the contents. And add the link for the mu-law algorithm.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "916649711",
+    "pr_number": 21090,
+    "pr_file": "docs/python_docs/python/tutorials/getting-started/gluon_migration_guide.md",
+    "created_at": "2022-07-08T09:40:47+00:00",
+    "commented_code": "- **Gluon Metrics** and **Optimizers**: refactored with MXNet numpy interface and addressed legacy issues.\n\nAdopting these new functionalities may or may not require modifications on your models. But don't worry, this migration guide will go through a high-level mapping from old functionality to new APIs and make Gluon2.0 migration a hassle-free experience.  \nAdopting these new functionalities may or may not require modifications on your models. But don't worry, this migration guide will go through a high-level mapping from old functionality to new APIs and make Gluon2.0 migration a hassle-free experience.",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "916649711",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 21090,
+        "pr_file": "docs/python_docs/python/tutorials/getting-started/gluon_migration_guide.md",
+        "discussion_id": "916649711",
+        "commented_code": "@@ -33,41 +33,41 @@ In Gluon2.0, we extend the support to MXNet numpy and numpy extension with simpl\n \n - **Gluon Metrics** and **Optimizers**: refactored with MXNet numpy interface and addressed legacy issues.\n \n-Adopting these new functionalities may or may not require modifications on your models. But don't worry, this migration guide will go through a high-level mapping from old functionality to new APIs and make Gluon2.0 migration a hassle-free experience.  \n+Adopting these new functionalities may or may not require modifications on your models. But don't worry, this migration guide will go through a high-level mapping from old functionality to new APIs and make Gluon2.0 migration a hassle-free experience.",
+        "comment_created_at": "2022-07-08T09:40:47+00:00",
+        "comment_author": "anko-intel",
+        "comment_body": "Please check generated documentation. Space or especially 2 spaces are sometimes meaningfull. Without it  there will be no new line.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "916685610",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 21090,
+        "pr_file": "docs/python_docs/python/tutorials/getting-started/gluon_migration_guide.md",
+        "discussion_id": "916649711",
+        "commented_code": "@@ -33,41 +33,41 @@ In Gluon2.0, we extend the support to MXNet numpy and numpy extension with simpl\n \n - **Gluon Metrics** and **Optimizers**: refactored with MXNet numpy interface and addressed legacy issues.\n \n-Adopting these new functionalities may or may not require modifications on your models. But don't worry, this migration guide will go through a high-level mapping from old functionality to new APIs and make Gluon2.0 migration a hassle-free experience.  \n+Adopting these new functionalities may or may not require modifications on your models. But don't worry, this migration guide will go through a high-level mapping from old functionality to new APIs and make Gluon2.0 migration a hassle-free experience.",
+        "comment_created_at": "2022-07-08T10:27:25+00:00",
+        "comment_author": "bartekkuncer",
+        "comment_body": "I checked it already. Here are the screenshots:\r\n![image](https://user-images.githubusercontent.com/59650839/177974295-ebe5b812-3815-4c6e-bf4c-c875ae5224f4.png)\r\n![image](https://user-images.githubusercontent.com/59650839/177974315-7d5e9da6-0b82-4e70-acd9-07e8679ef4c9.png)\r\n![image](https://user-images.githubusercontent.com/59650839/177974335-56a30cd7-ab35-4ba1-839b-719efa6b27e2.png)\r\n![image](https://user-images.githubusercontent.com/59650839/177974345-c174bdda-bc90-41a8-9e4d-b293e06b4ea3.png)\r\n![image](https://user-images.githubusercontent.com/59650839/177974369-4d397961-05ca-4f16-b1be-88cd9ab2c0a4.png)\r\n![image](https://user-images.githubusercontent.com/59650839/177974379-b42b4cb3-e31c-4103-afcd-5b1854b3387a.png)\r\n\r\nI thought that adding a new line in text is enough to have a new line present in generated document. Could you point me to the markdown language documentation regarding spaces creating/necessary to create new line? This seems quite bizarre to me and would like to understand the logic behind it. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "916726087",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 21090,
+        "pr_file": "docs/python_docs/python/tutorials/getting-started/gluon_migration_guide.md",
+        "discussion_id": "916649711",
+        "commented_code": "@@ -33,41 +33,41 @@ In Gluon2.0, we extend the support to MXNet numpy and numpy extension with simpl\n \n - **Gluon Metrics** and **Optimizers**: refactored with MXNet numpy interface and addressed legacy issues.\n \n-Adopting these new functionalities may or may not require modifications on your models. But don't worry, this migration guide will go through a high-level mapping from old functionality to new APIs and make Gluon2.0 migration a hassle-free experience.  \n+Adopting these new functionalities may or may not require modifications on your models. But don't worry, this migration guide will go through a high-level mapping from old functionality to new APIs and make Gluon2.0 migration a hassle-free experience.",
+        "comment_created_at": "2022-07-08T11:24:42+00:00",
+        "comment_author": "anko-intel",
+        "comment_body": "Thank you for the screenshot. I've just observed such behaviour, when fixing documentation. Now I find some tips about it in the documentation:  https://www.markdownguide.org/basic-syntax#line-break-best-practices\r\nYou can see such behaviou if you generate this part documentation: https://github.com/apache/incubator-mxnet/pull/21060/files#diff-f16304c2f893c2e7d51d74dff3892e5e11b39b8043751ade78b0286bc49afbd2L225-L227\r\nfor the older version, where such double spaces where probably accidentally missing.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "916733346",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 21090,
+        "pr_file": "docs/python_docs/python/tutorials/getting-started/gluon_migration_guide.md",
+        "discussion_id": "916649711",
+        "commented_code": "@@ -33,41 +33,41 @@ In Gluon2.0, we extend the support to MXNet numpy and numpy extension with simpl\n \n - **Gluon Metrics** and **Optimizers**: refactored with MXNet numpy interface and addressed legacy issues.\n \n-Adopting these new functionalities may or may not require modifications on your models. But don't worry, this migration guide will go through a high-level mapping from old functionality to new APIs and make Gluon2.0 migration a hassle-free experience.  \n+Adopting these new functionalities may or may not require modifications on your models. But don't worry, this migration guide will go through a high-level mapping from old functionality to new APIs and make Gluon2.0 migration a hassle-free experience.",
+        "comment_created_at": "2022-07-08T11:36:20+00:00",
+        "comment_author": "bartekkuncer",
+        "comment_body": "Thanks for the links!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "646146854",
+    "pr_number": 20262,
+    "pr_file": "docs/python_docs/python/tutorials/packages/gluon/blocks/custom-layer.md",
+    "created_at": "2021-06-06T15:15:02+00:00",
+    "commented_code": "[-0.05046433]\n [-1.2375476 ]\n [-0.15506986]]\n<NDArray 5x1 @cpu(0)>\n```\n\n\n## Parameters of a custom layer\n\nUsually, a layer has a set of associated parameters, sometimes also referred as weights. This is an internal state of a layer. Most often, these parameters are the ones, that we want to learn during backpropogation step, but sometimes these parameters might be just constants we want to use during forward pass.\n\nAll parameters of a block are stored and accessed via [ParameterDict](https://github.com/apache/incubator-mxnet/blob/master/python/mxnet/gluon/parameter.py#L508) class. This class helps with initialization, updating, saving and loading of the parameters. Each layer can have multiple set of parameters, and all of them can be stored in a single instance of the `ParameterDict` class. On a block level, the instance of the `ParameterDict` class is accessible via `self.params` field, and outside of a block one can access all parameters of the network via [collect_params()](https://mxnet.apache.org/api/python/gluon/gluon.html#mxnet.gluon.Block.collect_params) method called on a `container`. `ParameterDict` uses [Parameter](https://mxnet.apache.org/api/python/gluon/gluon.html#mxnet.gluon.Parameter) class to represent parameters inside of Apache MxNet neural network. If parameter doesn't exist, trying to get a parameter via `self.params` will create it automatically.\nAll parameters of a block are stored and accessed via [ParameterDict](https://github.com/apache/incubator-mxnet/blob/master/python/mxnet/gluon/parameter.py#L508) class. This class helps with initialization, updating, saving and loading of the parameters. Each layer can have multiple set of parameters, and all of them can be stored in a single instance of the `ParameterDict` class. On a block level, the instance of the `ParameterDict` class is accessible via `self.params` field, and outside of a block one can access all parameters of the network via [collect_params()](https://mxnet.apache.org/api/python/gluon/gluon.html#mxnet.gluon.Block.collect_params) method called on a `container`. `ParameterDict` uses [Parameter](https://mxnet.apache.org/api/python/gluon/gluon.html#mxnet.gluon.Parameter) class to represent parameters inside of Apache MxNet neural network.",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "646146854",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20262,
+        "pr_file": "docs/python_docs/python/tutorials/packages/gluon/blocks/custom-layer.md",
+        "discussion_id": "646146854",
+        "commented_code": "@@ -131,50 +128,47 @@ Output:\n  [-0.05046433]\n  [-1.2375476 ]\n  [-0.15506986]]\n-<NDArray 5x1 @cpu(0)>\n ```\n \n \n ## Parameters of a custom layer\n \n Usually, a layer has a set of associated parameters, sometimes also referred as weights. This is an internal state of a layer. Most often, these parameters are the ones, that we want to learn during backpropogation step, but sometimes these parameters might be just constants we want to use during forward pass.\n \n-All parameters of a block are stored and accessed via [ParameterDict](https://github.com/apache/incubator-mxnet/blob/master/python/mxnet/gluon/parameter.py#L508) class. This class helps with initialization, updating, saving and loading of the parameters. Each layer can have multiple set of parameters, and all of them can be stored in a single instance of the `ParameterDict` class. On a block level, the instance of the `ParameterDict` class is accessible via `self.params` field, and outside of a block one can access all parameters of the network via [collect_params()](https://mxnet.apache.org/api/python/gluon/gluon.html#mxnet.gluon.Block.collect_params) method called on a `container`. `ParameterDict` uses [Parameter](https://mxnet.apache.org/api/python/gluon/gluon.html#mxnet.gluon.Parameter) class to represent parameters inside of Apache MxNet neural network. If parameter doesn't exist, trying to get a parameter via `self.params` will create it automatically.\n+All parameters of a block are stored and accessed via [ParameterDict](https://github.com/apache/incubator-mxnet/blob/master/python/mxnet/gluon/parameter.py#L508) class. This class helps with initialization, updating, saving and loading of the parameters. Each layer can have multiple set of parameters, and all of them can be stored in a single instance of the `ParameterDict` class. On a block level, the instance of the `ParameterDict` class is accessible via `self.params` field, and outside of a block one can access all parameters of the network via [collect_params()](https://mxnet.apache.org/api/python/gluon/gluon.html#mxnet.gluon.Block.collect_params) method called on a `container`. `ParameterDict` uses [Parameter](https://mxnet.apache.org/api/python/gluon/gluon.html#mxnet.gluon.Parameter) class to represent parameters inside of Apache MxNet neural network.",
+        "comment_created_at": "2021-06-06T15:15:02+00:00",
+        "comment_author": "szha",
+        "comment_body": "We don't have a custom class for the dictionary of parameters. `collect_params()` now returns a regular dictionary. @leezu anything you want to highlight here?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "647241837",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20262,
+        "pr_file": "docs/python_docs/python/tutorials/packages/gluon/blocks/custom-layer.md",
+        "discussion_id": "646146854",
+        "commented_code": "@@ -131,50 +128,47 @@ Output:\n  [-0.05046433]\n  [-1.2375476 ]\n  [-0.15506986]]\n-<NDArray 5x1 @cpu(0)>\n ```\n \n \n ## Parameters of a custom layer\n \n Usually, a layer has a set of associated parameters, sometimes also referred as weights. This is an internal state of a layer. Most often, these parameters are the ones, that we want to learn during backpropogation step, but sometimes these parameters might be just constants we want to use during forward pass.\n \n-All parameters of a block are stored and accessed via [ParameterDict](https://github.com/apache/incubator-mxnet/blob/master/python/mxnet/gluon/parameter.py#L508) class. This class helps with initialization, updating, saving and loading of the parameters. Each layer can have multiple set of parameters, and all of them can be stored in a single instance of the `ParameterDict` class. On a block level, the instance of the `ParameterDict` class is accessible via `self.params` field, and outside of a block one can access all parameters of the network via [collect_params()](https://mxnet.apache.org/api/python/gluon/gluon.html#mxnet.gluon.Block.collect_params) method called on a `container`. `ParameterDict` uses [Parameter](https://mxnet.apache.org/api/python/gluon/gluon.html#mxnet.gluon.Parameter) class to represent parameters inside of Apache MxNet neural network. If parameter doesn't exist, trying to get a parameter via `self.params` will create it automatically.\n+All parameters of a block are stored and accessed via [ParameterDict](https://github.com/apache/incubator-mxnet/blob/master/python/mxnet/gluon/parameter.py#L508) class. This class helps with initialization, updating, saving and loading of the parameters. Each layer can have multiple set of parameters, and all of them can be stored in a single instance of the `ParameterDict` class. On a block level, the instance of the `ParameterDict` class is accessible via `self.params` field, and outside of a block one can access all parameters of the network via [collect_params()](https://mxnet.apache.org/api/python/gluon/gluon.html#mxnet.gluon.Block.collect_params) method called on a `container`. `ParameterDict` uses [Parameter](https://mxnet.apache.org/api/python/gluon/gluon.html#mxnet.gluon.Parameter) class to represent parameters inside of Apache MxNet neural network.",
+        "comment_created_at": "2021-06-08T08:43:58+00:00",
+        "comment_author": "leezu",
+        "comment_body": "Good catch. Let's remove the reference to ParameterDict and call it a `dict` of Parameters. It's also an option to use the https://docs.python.org/3/library/typing.html syntax to describe the type.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

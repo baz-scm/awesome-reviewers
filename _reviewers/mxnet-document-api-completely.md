@@ -1,0 +1,130 @@
+---
+title: Document API completely
+description: 'Always provide comprehensive API documentation that clearly specifies:
+
+
+  1. **Parameter types** - Document all acceptable parameter types, not just specific
+  implementations. When a parameter accepts any object that satisfies certain behavior
+  (like iterables), explicitly state this rather than referencing a specific class.'
+repository: apache/mxnet
+label: API
+language: Python
+comments_count: 3
+repository_stars: 20801
+---
+
+Always provide comprehensive API documentation that clearly specifies:
+
+1. **Parameter types** - Document all acceptable parameter types, not just specific implementations. When a parameter accepts any object that satisfies certain behavior (like iterables), explicitly state this rather than referencing a specific class.
+
+2. **Function aliases** - When implementing function aliases (like `acos` for `arccos` or `pow` for `power`), clearly document their relationship to the original function and explain why the alias exists.
+
+3. **Standards compliance** - Reference any industry standards or specifications that the API follows, especially when they might differ from what users expect.
+
+Example:
+```python
+def process_data(data_source, options=None):
+    """Process data from the provided source.
+    
+    Parameters
+    ----------
+    data_source : iterable object
+        Any iterable that yields data batches. This can be a DataLoader 
+        instance, a list of arrays, or any custom iterable implementing 
+        the required interface.
+    options : dict, optional
+        Processing options.
+        
+    Notes
+    -----
+    This function follows the data processing standards specified in
+    https://example.org/standards/data-processing.
+    """
+```
+
+Or when documenting aliases:
+```python
+acos = arccos
+acos.__doc__ = """
+    Trigonometric inverse cosine, element-wise.
+    
+    Notes
+    ----------
+    `acos` is an alias for `arccos`. It is a standard API in
+    https://data-apis.org/array-api/latest/ instead of an official NumPy 
+    operator.
+    
+    >>> np.acos is np.arccos
+    True
+"""
+```
+
+
+[
+  {
+    "discussion_id": "360244161",
+    "pr_number": 17129,
+    "pr_file": "python/mxnet/gluon/contrib/estimator/estimator.py",
+    "created_at": "2019-12-20T06:39:31+00:00",
+    "commented_code": "Parameters\n        ----------\n        val_data : DataLoader\n        val_data : iterable Object\n            Validation data loader with data and labels.",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "360244161",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 17129,
+        "pr_file": "python/mxnet/gluon/contrib/estimator/estimator.py",
+        "discussion_id": "360244161",
+        "commented_code": "@@ -281,7 +281,7 @@ def evaluate(self,\n \n         Parameters\n         ----------\n-        val_data : DataLoader\n+        val_data : iterable Object\n             Validation data loader with data and labels.",
+        "comment_created_at": "2019-12-20T06:39:31+00:00",
+        "comment_author": "leezu",
+        "comment_body": "It's unclear that `data loader` refers to the `gluon.DataLoader`. It would be good to clarify that any iterable object yielding a sequence of batches is acceptable and that the `gluon.DataLoader` is one instance of such iterables.\r\nSame applies to the fit_batch below.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "711223058",
+    "pr_number": 20592,
+    "pr_file": "python/mxnet/numpy/multiarray.py",
+    "created_at": "2021-09-17T17:12:57+00:00",
+    "commented_code": "\"\"\"\n    return _mx_nd_np.remainder(x1, x2, out=out)\n\n@set_module('mxnet.numpy')\n@wrap_np_binary_func\ndef pow(x1, x2):",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "711223058",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20592,
+        "pr_file": "python/mxnet/numpy/multiarray.py",
+        "discussion_id": "711223058",
+        "commented_code": "@@ -3591,6 +3589,55 @@ def remainder(x1, x2, out=None, **kwargs):\n     \"\"\"\n     return _mx_nd_np.remainder(x1, x2, out=out)\n \n+@set_module('mxnet.numpy')\n+@wrap_np_binary_func\n+def pow(x1, x2):",
+        "comment_created_at": "2021-09-17T17:12:57+00:00",
+        "comment_author": "barry-jin",
+        "comment_body": "We can use assignment to make `pow` the alias of `power` and add notes to inform the user that `pow` is not a official NumPy operator but a standard API. \r\n\r\nExample:\r\n```\r\npow = power\r\npow.__doc__ = ```\r\n    ...\r\n    Notes\r\n    -----\r\n    `pow` is an alias for `power`. It is a standard API in https://data-apis.org/array-api/latest/API_specification/elementwise_functions.html#pow-x1-x2 instead of an official NumPy operator. \r\n\r\n    >>> np.pow is np.power\r\n    True\r\n    ...\r\n```\r\n\r\nWe can apply this to other operators in this PR. What do you think. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "720919840",
+    "pr_number": 20592,
+    "pr_file": "python/mxnet/numpy/multiarray.py",
+    "created_at": "2021-10-03T22:42:51+00:00",
+    "commented_code": "\"\"\"\n    return _mx_nd_np.arccos(x, out=out, **kwargs)\n\nacos = arccos\nacos.__doc__ = \"\"\"\n    Trigonometric inverse cosine, element-wise.\n    The inverse of cos so that, if y = cos(x), then x = acos(y).\n    \n    Notes\n    ----------\n    `acos` is a alias for `arccos`. It is a standard API in\n    https://data-apis.org/array-api/latest/API_specification/elementwise_functions.html#acos-x\n    instead of an official NumPy operator.\n    \n    >>>np.acos is np.arccos\n    True\n\n    Parameters\n    ----------\n    x : ndarray\n        x-coordinate on the unit circle. For real arguments, the domain is [-1, 1].\n    out : ndarray, optional\n        A location into which the result is stored. If provided, it must have a shape that\n        the inputs broadcast to. If not provided or None, a freshly-allocated array is returned.\n        A tuple (possible only as a keyword argument) must have length equal to the number of outputs.\n\n    Returns\n    ----------\n    angle : ndarray\n        The angle of the ray intersecting the unit circle at the given x-coordinate in radians [0, pi].\n        This is a scalar if x is a scalar.\n\n    Notes",
+    "repo_full_name": "apache/mxnet",
+    "discussion_comments": [
+      {
+        "comment_id": "720919840",
+        "repo_full_name": "apache/mxnet",
+        "pr_number": 20592,
+        "pr_file": "python/mxnet/numpy/multiarray.py",
+        "discussion_id": "720919840",
+        "commented_code": "@@ -4264,6 +4405,49 @@ def arccos(x, out=None, **kwargs):\n     \"\"\"\n     return _mx_nd_np.arccos(x, out=out, **kwargs)\n \n+acos = arccos\n+acos.__doc__ = \"\"\"\n+    Trigonometric inverse cosine, element-wise.\n+    The inverse of cos so that, if y = cos(x), then x = acos(y).\n+    \n+    Notes\n+    ----------\n+    `acos` is a alias for `arccos`. It is a standard API in\n+    https://data-apis.org/array-api/latest/API_specification/elementwise_functions.html#acos-x\n+    instead of an official NumPy operator.\n+    \n+    >>>np.acos is np.arccos\n+    True\n+\n+    Parameters\n+    ----------\n+    x : ndarray\n+        x-coordinate on the unit circle. For real arguments, the domain is [-1, 1].\n+    out : ndarray, optional\n+        A location into which the result is stored. If provided, it must have a shape that\n+        the inputs broadcast to. If not provided or None, a freshly-allocated array is returned.\n+        A tuple (possible only as a keyword argument) must have length equal to the number of outputs.\n+\n+    Returns\n+    ----------\n+    angle : ndarray\n+        The angle of the ray intersecting the unit circle at the given x-coordinate in radians [0, pi].\n+        This is a scalar if x is a scalar.\n+\n+    Notes",
+        "comment_created_at": "2021-10-03T22:42:51+00:00",
+        "comment_author": "barry-jin",
+        "comment_body": "Could you append a note here to elaborate that acos is a standardized API and is equivelant to arccos and also provide the reference. ",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

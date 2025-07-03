@@ -1,5 +1,5 @@
 // Add Repository modal handling
-window.CAN_USE_HEADERS = location.hostname.includes('baz.ninja');
+// Attempt POST with required header; if it fails, fall back to a GET request
 
 const modal = document.getElementById('add-repo-modal');
 const openBtn = document.getElementById('add-repo-card');
@@ -33,35 +33,43 @@ form && form.addEventListener('submit', async e => {
   }
   const repo = encodeURIComponent(m[1]);
   try {
-    const options = {
-      method: window.CAN_USE_HEADERS ? 'POST' : 'GET'
-    };
-    if (window.CAN_USE_HEADERS) {
-      options.headers = {
-        'Content-Type': 'application/json',
-        'x-amz-content-sha256':
-          'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-      };
-      options.body = '{}';
-    } else {
-      options.mode = 'no-cors';
+    let res;
+    try {
+      res = await fetch(
+        `https://awesome.baz.ninja/request?repo_name=${repo}`,
+        {
+          method: 'POST',
+          headers: {
+            'x-amz-content-sha256':
+              'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+          }
+        }
+      );
+      if (!res.ok && res.status !== 409) throw new Error(res.statusText);
+    } catch (postErr) {
+      res = await fetch(
+        `https://awesome.baz.ninja/request?repo_name=${repo}`
+      );
+      if (!res.ok && res.status !== 409) throw new Error(res.statusText);
     }
-    const res = await fetch(
-      `https://awesome.baz.ninja/request?repo_name=${repo}`,
-      options
-    );
-    if (window.CAN_USE_HEADERS) {
-      if (res.ok) {
-        feedbackEl.textContent = 'Repo valid';
-        feedbackEl.className = 'modal__feedback valid';
-      } else {
-        const txt = await res.text();
-        throw new Error(txt || res.statusText);
-      }
-    } else {
-      feedbackEl.textContent = 'Request sent';
-      feedbackEl.className = 'modal__feedback valid';
+
+    const status = res.status;
+    let message = '';
+    try {
+      const data = await res.json();
+      message = data.message || '';
+    } catch (e) {
+      // no JSON body
     }
+
+    if (status === 202) {
+      feedbackEl.textContent = '✅ Request accepted – processing soon.';
+    } else if (status === 409 && message) {
+      feedbackEl.textContent = `⚠️ ${message}`;
+    } else {
+      feedbackEl.textContent = '⚠️ Request submitted.';
+    }
+    feedbackEl.className = 'modal__feedback valid';
   } catch (err) {
     feedbackEl.textContent = 'Repo not valid';
     feedbackEl.className = 'modal__feedback invalid';

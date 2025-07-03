@@ -1,69 +1,32 @@
 ---
 title: Minimize permission scope
-description: Always apply the principle of least privilege by requesting only the
-  minimum permissions necessary for your application to function. Overly broad permissions
-  increase the attack surface and potential security risks. Regularly review permission
-  requests to ensure they are appropriately scoped.
+description: Always follow the principle of least privilege when requesting permissions
+  in browser extensions or any application. Request only the minimum permissions necessary
+  for functionality to operate. Broad permissions like `"http://*/*"` and `"https://*/*"`
+  significantly increase the security risk profile of your extension and should only
+  be used when absolutely...
 repository: facebook/react
 label: Security
 language: Json
 comments_count: 1
-repository_stars: 236861
+repository_stars: 236926
 ---
 
-Always apply the principle of least privilege by requesting only the minimum permissions necessary for your application to function. Overly broad permissions increase the attack surface and potential security risks. Regularly review permission requests to ensure they are appropriately scoped.
+Always follow the principle of least privilege when requesting permissions in browser extensions or any application. Request only the minimum permissions necessary for functionality to operate. Broad permissions like `"http://*/*"` and `"https://*/*"` significantly increase the security risk profile of your extension and should only be used when absolutely necessary.
 
-For example, instead of using broad URL patterns in browser extensions:
-```
+For Chrome extensions using Manifest v3:
+```json
 "permissions": [
-  "http://*/*",
-  "https://*/*"
+  "scripting",
+  "storage",
+  "tabs"
+  // Avoid broad host permissions unless absolutely necessary
 ]
 ```
 
-Consider more specific permissions or use the `host_permissions` field with only the domains you need:
-```
-"host_permissions": [
-  "https://specific-domain.com/*"
-]
-```
+When broad permissions are truly required, document the specific reasoning directly in the code to justify the security trade-off. Consider alternatives such as:
+1. Using more specific URL patterns that target only the domains you need
+2. Leveraging optional permissions that can be requested at runtime
+3. Using activeTab permission instead of broad host permissions where appropriate
 
-When adding new permissions, document the specific functionality that requires them and consider if there are alternatives that would require fewer privileges. During code reviews, challenge broad permission requests and evaluate if they can be further limited.
-
-
-[
-  {
-    "discussion_id": "1977288088",
-    "pr_number": 32471,
-    "pr_file": "packages/react-devtools-extensions/chrome/manifest.json",
-    "created_at": "2025-03-03T10:43:53+00:00",
-    "commented_code": "\"permissions\": [\n    \"scripting\",\n    \"storage\",\n    \"tabs\"\n    \"tabs\",\n    \"http://*/*\",\n    \"https://*/*\"",
-    "repo_full_name": "facebook/react",
-    "discussion_comments": [
-      {
-        "comment_id": "1977288088",
-        "repo_full_name": "facebook/react",
-        "pr_number": 32471,
-        "pr_file": "packages/react-devtools-extensions/chrome/manifest.json",
-        "discussion_id": "1977288088",
-        "commented_code": "@@ -43,7 +43,9 @@\n   \"permissions\": [\n     \"scripting\",\n     \"storage\",\n-    \"tabs\"\n+    \"tabs\",\n+    \"http://*/*\",\n+    \"https://*/*\"",
-        "comment_created_at": "2025-03-03T10:43:53+00:00",
-        "comment_author": "hoxyq",
-        "comment_body": "Since we are using Manifest v3, I don't think these are required",
-        "pr_file_module": null
-      },
-      {
-        "comment_id": "1977373931",
-        "repo_full_name": "facebook/react",
-        "pr_number": 32471,
-        "pr_file": "packages/react-devtools-extensions/chrome/manifest.json",
-        "discussion_id": "1977288088",
-        "commented_code": "@@ -43,7 +43,9 @@\n   \"permissions\": [\n     \"scripting\",\n     \"storage\",\n-    \"tabs\"\n+    \"tabs\",\n+    \"http://*/*\",\n+    \"https://*/*\"",
-        "comment_created_at": "2025-03-03T11:49:24+00:00",
-        "comment_author": "mrunsung7",
-        "comment_body": "We included those  because the devtools script needs broad access to interact with any possible user page, especially for debugging across different environments. That said, if this can be scoped down without losing functionality, I\u2019m happy to revisit this! Let me know if there\u2019s a more limited approach you\u2019d prefer.",
-        "pr_file_module": null
-      }
-    ]
-  }
-]
+If you must use broad permissions, be prepared to demonstrate why more limited permissions would not suffice during security review.

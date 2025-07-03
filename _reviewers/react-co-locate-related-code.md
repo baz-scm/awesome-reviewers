@@ -1,40 +1,37 @@
 ---
 title: Co-locate related code
-description: 'Place related code segments together, particularly when they perform
-  related operations or have shared dependencies. This includes:
-
-
-  1. Comments should be co-located with the code they describe'
+description: Place functionally related code and comments together to improve readability
+  and maintainability. When code elements interact with the same data structures or
+  contribute to the same logical operation, they should be grouped together, even
+  if it requires reorganizing existing code.
 repository: facebook/react
 label: Code Style
 language: Javascript
 comments_count: 2
-repository_stars: 236926
+repository_stars: 236925
 ---
 
-Place related code segments together, particularly when they perform related operations or have shared dependencies. This includes:
+Place functionally related code and comments together to improve readability and maintainability. When code elements interact with the same data structures or contribute to the same logical operation, they should be grouped together, even if it requires reorganizing existing code.
 
-1. Comments should be co-located with the code they describe
-2. Function calls that operate on the same data should be grouped
-3. Operations that may trigger related side-effects should be kept together
-
-This practice improves readability, maintainability, and helps prevent bugs when code is modified.
+Specifically:
+- Place comments directly adjacent to the code they describe
+- Group operations that affect the same resource or state
+- Keep initialization and cleanup code for the same feature together
+- When moving code, ensure related comments and operations move with it
 
 Example:
 ```javascript
-// Prefer this:
+// GOOD: Comment and related functionality are co-located
 if (__DEV__) {
-  // Comment explaining the initialization
+  // Initialize element properties after blocked references
   const init = initializeElement.bind(null, response, element);
   blockedChunk.then(init, init);
 }
 
-// Instead of separating related operations:
-if (__DEV__) {
-  const init = initializeElement.bind(null, response, element);
-  blockedChunk.then(init, init);
-}
-// Comment explaining initialization (misplaced)
+// BAD: Related operations are separated
+abortListeners.clear();
+// ... many lines of unrelated code ...
+callOnAllReadyIfReady(request); // Should be next to abortListeners.clear()
 ```
 
-When moving code during refactoring, always ensure that related comments, operations, and side-effects stay together to maintain logical coherence.
+This approach reduces cognitive load when reading code and decreases the likelihood of bugs when modifying related functionality.

@@ -1,0 +1,254 @@
+[
+  {
+    "discussion_id": "1374582897",
+    "pr_number": 13972,
+    "pr_file": "lib/chef/provider/package/chocolatey.rb",
+    "created_at": "2023-10-27T13:28:46+00:00",
+    "commented_code": "#\n        # @return [Hash] name-to-version mapping of available packages\n        def available_packages\n          return @available_packages if @available_packages\n          return @available_packages unless @available_packages.nil?\n\n          # @available_packages is per object - each resource is an object, meaning if you\n          # have a LOT of chocolatey package installs, then this quickly gets very slow.\n          # So we use @@choco_available_packages instead - BUT it's important to ensure that\n          # the cache is valid before you do this.  There are two cache items that can change:\n          # a) the sources - we check this with cache_is_valid?\n          if cache_is_valid? && @@choco_available_packages.is_a?(Hash) &&\n              @@choco_available_packages[new_resource.list_options]\n\n            # Ensure we have the package names, or else double check...\n            need_redo = false\n            package_name_array.each do |pkg|\n              need_redo = true unless @@choco_available_packages[new_resource.list_options][pkg.downcase]\n            end\n            return @@choco_available_packages[new_resource.list_options] unless need_redo\n          end\n          if new_resource.list_options\n            Chef::Log.info(\"Fetching chocolatey package list with options #{new_resource.list_options.inspect}\")\n          else\n            Chef::Log.info(\"Fetching chocolatey package list\")\n          end\n\n          @available_packages = {}\n          package_name_array.each do |pkg|\n          # Only reset the array if the cache is invalid - if we're just augmenting it, don't\n          # clear it\n          @@choco_available_packages = {} if @@choco_available_packages.nil? || !cache_is_valid?\n          if @@choco_available_packages[new_resource.list_options].nil?\n            @@choco_available_packages[new_resource.list_options] = {}\n          end\n\n          # Attempt to get everything we need in a single query.\n          # Grab 25 packages at a time at most, to avoid hurting servers too badly\n          #\n          # For v1 we actually used to grab the entire list of packages, but we found\n          # that it could cause undue load on really large package lists\n          collect_package_requests(\n            ignore_list: @@choco_available_packages[new_resource.list_options].keys\n          ).each_slice(25) do |pkg_set|\n            available_versions =\n              begin\n                cmd = [ query_command, \"-r\", pkg ]\n                cmd += common_options\n                cmd.push( new_resource.list_options ) if new_resource.list_options\n\n                raw = parse_list_output(*cmd)\n                raw.keys.each_with_object({}) do |name, available|\n                  available[name] = desired_name_versions[name] || raw[name]\n                end\n              cmd = [ query_command, \"-r\" ]\n\n              # Chocolatey doesn't actually take a wildcard for this query, however\n              # it will return all packages when using '*' as a query\n              unless pkg_set == [\"*\"]\n                cmd += pkg_set\n              end\n            @available_packages.merge! available_versions\n              cmd += common_options\n              cmd.push( new_resource.list_options ) if new_resource.list_options\n\n              Chef::Log.debug(\"Choco List Command: #{cmd}\")\n\n              raw = parse_list_output(*cmd)\n              raw.keys.each_with_object({}) do |name, available|\n                available[name] = desired_name_versions[name] || raw[name]\n              end\n            end\n            @@choco_available_packages[new_resource.list_options].merge!(available_versions)\n          end\n          @available_packages\n          # Mark the cache as valid, with the required metadata\n          set_package_cache\n          # Why both?  So when we fail to find a package once, we don't try on every\n          # retry, even though it would be reasonable to do so if queried in another\n          # resource (because the chocolatey configuration may well have changed!)\n          @available_packages = @@choco_available_packages[new_resource.list_options]\n        end\n\n        # Installed packages in chocolatey as a Hash of names mapped to versions\n        # (names are downcased for case-insensitive matching)\n        # (names are downcased for case-insensitive matching).  Depending on the user\n        # preference, we get these either from the local database, or from the choco\n        # list command\n        #\n        # @return [Hash] name-to-version mapping of installed packages\n        def installed_packages\n          if new_resource.use_choco_list == false || !Chef::Config[:always_use_choco_list]\n            installed_packages_via_choco\n          else\n            installed_packages_via_disk\n          end\n        end\n\n        # Beginning with Choco 2.0, \"list\" returns local packages only while \"search\" returns packages from external package sources\n        #\n        # @return [Hash] name-to-version mapping of installed packages\n        def installed_packages\n        def installed_packages_via_choco\n          @installed_packages ||= Hash[*parse_list_output(\"list\", \"-l\", \"-r\").flatten]\n          @installed_packages\n        end\n\n        # Return packages sourced from the local disk - because this doesn't have\n        # shell out overhead, this ends up being a significant performance win\n        # vs calling choco list\n        #\n        # @return [Hash] name-to-version mapping of installed packages\n        def installed_packages_via_disk\n          @installed_packages ||= begin\n            targets = new_resource.name\n            target_dirs = []\n            # If we're using a single package name, have it at the head of the list\n            # so we can get more performance\n            target_dirs << targets.first.downcase if targets.length == 1",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "1374582897",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13972,
+        "pr_file": "lib/chef/provider/package/chocolatey.rb",
+        "discussion_id": "1374582897",
+        "commented_code": "@@ -230,37 +309,124 @@ def cmd_args(include_source: true)\n         #\n         # @return [Hash] name-to-version mapping of available packages\n         def available_packages\n-          return @available_packages if @available_packages\n+          return @available_packages unless @available_packages.nil?\n+\n+          # @available_packages is per object - each resource is an object, meaning if you\n+          # have a LOT of chocolatey package installs, then this quickly gets very slow.\n+          # So we use @@choco_available_packages instead - BUT it's important to ensure that\n+          # the cache is valid before you do this.  There are two cache items that can change:\n+          # a) the sources - we check this with cache_is_valid?\n+          if cache_is_valid? && @@choco_available_packages.is_a?(Hash) &&\n+              @@choco_available_packages[new_resource.list_options]\n+\n+            # Ensure we have the package names, or else double check...\n+            need_redo = false\n+            package_name_array.each do |pkg|\n+              need_redo = true unless @@choco_available_packages[new_resource.list_options][pkg.downcase]\n+            end\n+            return @@choco_available_packages[new_resource.list_options] unless need_redo\n+          end\n+          if new_resource.list_options\n+            Chef::Log.info(\"Fetching chocolatey package list with options #{new_resource.list_options.inspect}\")\n+          else\n+            Chef::Log.info(\"Fetching chocolatey package list\")\n+          end\n \n-          @available_packages = {}\n-          package_name_array.each do |pkg|\n+          # Only reset the array if the cache is invalid - if we're just augmenting it, don't\n+          # clear it\n+          @@choco_available_packages = {} if @@choco_available_packages.nil? || !cache_is_valid?\n+          if @@choco_available_packages[new_resource.list_options].nil?\n+            @@choco_available_packages[new_resource.list_options] = {}\n+          end\n+\n+          # Attempt to get everything we need in a single query.\n+          # Grab 25 packages at a time at most, to avoid hurting servers too badly\n+          #\n+          # For v1 we actually used to grab the entire list of packages, but we found\n+          # that it could cause undue load on really large package lists\n+          collect_package_requests(\n+            ignore_list: @@choco_available_packages[new_resource.list_options].keys\n+          ).each_slice(25) do |pkg_set|\n             available_versions =\n               begin\n-                cmd = [ query_command, \"-r\", pkg ]\n-                cmd += common_options\n-                cmd.push( new_resource.list_options ) if new_resource.list_options\n-\n-                raw = parse_list_output(*cmd)\n-                raw.keys.each_with_object({}) do |name, available|\n-                  available[name] = desired_name_versions[name] || raw[name]\n-                end\n+              cmd = [ query_command, \"-r\" ]\n+\n+              # Chocolatey doesn't actually take a wildcard for this query, however\n+              # it will return all packages when using '*' as a query\n+              unless pkg_set == [\"*\"]\n+                cmd += pkg_set\n               end\n-            @available_packages.merge! available_versions\n+              cmd += common_options\n+              cmd.push( new_resource.list_options ) if new_resource.list_options\n+\n+              Chef::Log.debug(\"Choco List Command: #{cmd}\")\n+\n+              raw = parse_list_output(*cmd)\n+              raw.keys.each_with_object({}) do |name, available|\n+                available[name] = desired_name_versions[name] || raw[name]\n+              end\n+            end\n+            @@choco_available_packages[new_resource.list_options].merge!(available_versions)\n           end\n-          @available_packages\n+          # Mark the cache as valid, with the required metadata\n+          set_package_cache\n+          # Why both?  So when we fail to find a package once, we don't try on every\n+          # retry, even though it would be reasonable to do so if queried in another\n+          # resource (because the chocolatey configuration may well have changed!)\n+          @available_packages = @@choco_available_packages[new_resource.list_options]\n         end\n \n         # Installed packages in chocolatey as a Hash of names mapped to versions\n-        # (names are downcased for case-insensitive matching)\n+        # (names are downcased for case-insensitive matching).  Depending on the user\n+        # preference, we get these either from the local database, or from the choco\n+        # list command\n         #\n+        # @return [Hash] name-to-version mapping of installed packages\n+        def installed_packages\n+          if new_resource.use_choco_list == false || !Chef::Config[:always_use_choco_list]\n+            installed_packages_via_choco\n+          else\n+            installed_packages_via_disk\n+          end\n+        end\n+\n         # Beginning with Choco 2.0, \"list\" returns local packages only while \"search\" returns packages from external package sources\n         #\n         # @return [Hash] name-to-version mapping of installed packages\n-        def installed_packages\n+        def installed_packages_via_choco\n           @installed_packages ||= Hash[*parse_list_output(\"list\", \"-l\", \"-r\").flatten]\n           @installed_packages\n         end\n \n+        # Return packages sourced from the local disk - because this doesn't have\n+        # shell out overhead, this ends up being a significant performance win\n+        # vs calling choco list\n+        #\n+        # @return [Hash] name-to-version mapping of installed packages\n+        def installed_packages_via_disk\n+          @installed_packages ||= begin\n+            targets = new_resource.name\n+            target_dirs = []\n+            # If we're using a single package name, have it at the head of the list\n+            # so we can get more performance\n+            target_dirs << targets.first.downcase if targets.length == 1",
+        "comment_created_at": "2023-10-27T13:28:46+00:00",
+        "comment_author": "tpowell-progress",
+        "comment_body": "@jaymzjulian ok, one thing I'm not understanding in the current context is... is there ever an `(array length > 1)` scenario, and if so, what happens then?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1374840040",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13972,
+        "pr_file": "lib/chef/provider/package/chocolatey.rb",
+        "discussion_id": "1374582897",
+        "commented_code": "@@ -230,37 +309,124 @@ def cmd_args(include_source: true)\n         #\n         # @return [Hash] name-to-version mapping of available packages\n         def available_packages\n-          return @available_packages if @available_packages\n+          return @available_packages unless @available_packages.nil?\n+\n+          # @available_packages is per object - each resource is an object, meaning if you\n+          # have a LOT of chocolatey package installs, then this quickly gets very slow.\n+          # So we use @@choco_available_packages instead - BUT it's important to ensure that\n+          # the cache is valid before you do this.  There are two cache items that can change:\n+          # a) the sources - we check this with cache_is_valid?\n+          if cache_is_valid? && @@choco_available_packages.is_a?(Hash) &&\n+              @@choco_available_packages[new_resource.list_options]\n+\n+            # Ensure we have the package names, or else double check...\n+            need_redo = false\n+            package_name_array.each do |pkg|\n+              need_redo = true unless @@choco_available_packages[new_resource.list_options][pkg.downcase]\n+            end\n+            return @@choco_available_packages[new_resource.list_options] unless need_redo\n+          end\n+          if new_resource.list_options\n+            Chef::Log.info(\"Fetching chocolatey package list with options #{new_resource.list_options.inspect}\")\n+          else\n+            Chef::Log.info(\"Fetching chocolatey package list\")\n+          end\n \n-          @available_packages = {}\n-          package_name_array.each do |pkg|\n+          # Only reset the array if the cache is invalid - if we're just augmenting it, don't\n+          # clear it\n+          @@choco_available_packages = {} if @@choco_available_packages.nil? || !cache_is_valid?\n+          if @@choco_available_packages[new_resource.list_options].nil?\n+            @@choco_available_packages[new_resource.list_options] = {}\n+          end\n+\n+          # Attempt to get everything we need in a single query.\n+          # Grab 25 packages at a time at most, to avoid hurting servers too badly\n+          #\n+          # For v1 we actually used to grab the entire list of packages, but we found\n+          # that it could cause undue load on really large package lists\n+          collect_package_requests(\n+            ignore_list: @@choco_available_packages[new_resource.list_options].keys\n+          ).each_slice(25) do |pkg_set|\n             available_versions =\n               begin\n-                cmd = [ query_command, \"-r\", pkg ]\n-                cmd += common_options\n-                cmd.push( new_resource.list_options ) if new_resource.list_options\n-\n-                raw = parse_list_output(*cmd)\n-                raw.keys.each_with_object({}) do |name, available|\n-                  available[name] = desired_name_versions[name] || raw[name]\n-                end\n+              cmd = [ query_command, \"-r\" ]\n+\n+              # Chocolatey doesn't actually take a wildcard for this query, however\n+              # it will return all packages when using '*' as a query\n+              unless pkg_set == [\"*\"]\n+                cmd += pkg_set\n               end\n-            @available_packages.merge! available_versions\n+              cmd += common_options\n+              cmd.push( new_resource.list_options ) if new_resource.list_options\n+\n+              Chef::Log.debug(\"Choco List Command: #{cmd}\")\n+\n+              raw = parse_list_output(*cmd)\n+              raw.keys.each_with_object({}) do |name, available|\n+                available[name] = desired_name_versions[name] || raw[name]\n+              end\n+            end\n+            @@choco_available_packages[new_resource.list_options].merge!(available_versions)\n           end\n-          @available_packages\n+          # Mark the cache as valid, with the required metadata\n+          set_package_cache\n+          # Why both?  So when we fail to find a package once, we don't try on every\n+          # retry, even though it would be reasonable to do so if queried in another\n+          # resource (because the chocolatey configuration may well have changed!)\n+          @available_packages = @@choco_available_packages[new_resource.list_options]\n         end\n \n         # Installed packages in chocolatey as a Hash of names mapped to versions\n-        # (names are downcased for case-insensitive matching)\n+        # (names are downcased for case-insensitive matching).  Depending on the user\n+        # preference, we get these either from the local database, or from the choco\n+        # list command\n         #\n+        # @return [Hash] name-to-version mapping of installed packages\n+        def installed_packages\n+          if new_resource.use_choco_list == false || !Chef::Config[:always_use_choco_list]\n+            installed_packages_via_choco\n+          else\n+            installed_packages_via_disk\n+          end\n+        end\n+\n         # Beginning with Choco 2.0, \"list\" returns local packages only while \"search\" returns packages from external package sources\n         #\n         # @return [Hash] name-to-version mapping of installed packages\n-        def installed_packages\n+        def installed_packages_via_choco\n           @installed_packages ||= Hash[*parse_list_output(\"list\", \"-l\", \"-r\").flatten]\n           @installed_packages\n         end\n \n+        # Return packages sourced from the local disk - because this doesn't have\n+        # shell out overhead, this ends up being a significant performance win\n+        # vs calling choco list\n+        #\n+        # @return [Hash] name-to-version mapping of installed packages\n+        def installed_packages_via_disk\n+          @installed_packages ||= begin\n+            targets = new_resource.name\n+            target_dirs = []\n+            # If we're using a single package name, have it at the head of the list\n+            # so we can get more performance\n+            target_dirs << targets.first.downcase if targets.length == 1",
+        "comment_created_at": "2023-10-27T17:03:53+00:00",
+        "comment_author": "jaymzjulian",
+        "comment_body": "This is an optimization to try and push our particular package to the front of the queue if there is one and only one package specified.  If that doesn't happen, target_dirs instead gets filled at line 416 with:\r\n`target_dirs += get_local_pkg_dirs(choco_lib_path)`\r\n\r\nwhich gets all of the possible nupkg folders to search through.  This takes the 90% case to being \"search half of the package folders on average\" to \"search one package on average\"\r\n\r\nEDIT: I added a comment to make this clearer",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1267241022",
+    "pr_number": 13833,
+    "pr_file": "lib/chef/provider/package/chocolatey.rb",
+    "created_at": "2023-07-18T19:46:48+00:00",
+    "commented_code": "cmd_args\n        end\n\n        # Choco V2 uses 'Search' for remote repositories and 'List' for local packages\n        def query_command\n          choco_version = powershell_exec!(\"choco --version\").result",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "1267241022",
+        "repo_full_name": "chef/chef",
+        "pr_number": 13833,
+        "pr_file": "lib/chef/provider/package/chocolatey.rb",
+        "discussion_id": "1267241022",
+        "commented_code": "@@ -213,19 +213,26 @@ def cmd_args(include_source: true)\n           cmd_args\n         end\n \n+        # Choco V2 uses 'Search' for remote repositories and 'List' for local packages\n+        def query_command\n+          choco_version = powershell_exec!(\"choco --version\").result",
+        "comment_created_at": "2023-07-18T19:46:48+00:00",
+        "comment_author": "jaymzh",
+        "comment_body": "This needs to be memoized. Probably something like:\r\n\r\n```ruby\r\ndef choco_ver\r\n  @choco_ver ||= begin\r\n    powershell_exec!(\"choco --version\").result[0].to_i\r\n  end\r\nend\r\n\r\ndef query_command\r\n  choco_version == 1 ? 'list' : 'search'\r\nend\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "633920952",
+    "pr_number": 11579,
+    "pr_file": "lib/chef/provider/mount/linux.rb",
+    "created_at": "2021-05-17T23:04:31+00:00",
+    "commented_code": "def mounted?\n          mounted = false\n          loop_mount_points = shell_out!(\"losetup --list\").stdout",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "633920952",
+        "repo_full_name": "chef/chef",
+        "pr_number": 11579,
+        "pr_file": "lib/chef/provider/mount/linux.rb",
+        "discussion_id": "633920952",
+        "commented_code": "@@ -32,6 +32,7 @@ class Linux < Chef::Provider::Mount::Mount\n \n         def mounted?\n           mounted = false\n+          loop_mount_points = shell_out!(\"losetup --list\").stdout",
+        "comment_created_at": "2021-05-17T23:04:31+00:00",
+        "comment_author": "tas50",
+        "comment_body": "Won't this run every time even if we don't need the data now?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "634258415",
+        "repo_full_name": "chef/chef",
+        "pr_number": 11579,
+        "pr_file": "lib/chef/provider/mount/linux.rb",
+        "discussion_id": "633920952",
+        "commented_code": "@@ -32,6 +32,7 @@ class Linux < Chef::Provider::Mount::Mount\n \n         def mounted?\n           mounted = false\n+          loop_mount_points = shell_out!(\"losetup --list\").stdout",
+        "comment_created_at": "2021-05-18T10:40:47+00:00",
+        "comment_author": "msys-sgarg",
+        "comment_body": "That's right, earlier suggestion was to initialize this list of mount points as soon as the `Mount` class is initialised but there the specs fail.. Since rspec's mock up functionality is not ready by the time `Mount` class is initialized.  By running it once here we make sure its not run in the loop while we are going through all the mounts points in system with command `findmnt -rn`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "634911054",
+        "repo_full_name": "chef/chef",
+        "pr_number": 11579,
+        "pr_file": "lib/chef/provider/mount/linux.rb",
+        "discussion_id": "633920952",
+        "commented_code": "@@ -32,6 +32,7 @@ class Linux < Chef::Provider::Mount::Mount\n \n         def mounted?\n           mounted = false\n+          loop_mount_points = shell_out!(\"losetup --list\").stdout",
+        "comment_created_at": "2021-05-19T04:51:11+00:00",
+        "comment_author": "msys-sgarg",
+        "comment_body": "Also at this point of time in code its not possible for us to know if the mount is of type loop or not for sure . We need this data afterwards to make sure we have information of `loop` mount points",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "636954878",
+        "repo_full_name": "chef/chef",
+        "pr_number": 11579,
+        "pr_file": "lib/chef/provider/mount/linux.rb",
+        "discussion_id": "633920952",
+        "commented_code": "@@ -32,6 +32,7 @@ class Linux < Chef::Provider::Mount::Mount\n \n         def mounted?\n           mounted = false\n+          loop_mount_points = shell_out!(\"losetup --list\").stdout",
+        "comment_created_at": "2021-05-21T14:15:46+00:00",
+        "comment_author": "msys-sgarg",
+        "comment_body": "@tas50 does the PR look good ? or any need of updates ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "637259636",
+        "repo_full_name": "chef/chef",
+        "pr_number": 11579,
+        "pr_file": "lib/chef/provider/mount/linux.rb",
+        "discussion_id": "633920952",
+        "commented_code": "@@ -32,6 +32,7 @@ class Linux < Chef::Provider::Mount::Mount\n \n         def mounted?\n           mounted = false\n+          loop_mount_points = shell_out!(\"losetup --list\").stdout",
+        "comment_created_at": "2021-05-21T22:12:04+00:00",
+        "comment_author": "tas50",
+        "comment_body": "I still don't understand why we can't just do this shellout when we need the data vs. frontloading the work and doing extra shellouts we might not need.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "755491999",
+        "repo_full_name": "chef/chef",
+        "pr_number": 11579,
+        "pr_file": "lib/chef/provider/mount/linux.rb",
+        "discussion_id": "633920952",
+        "commented_code": "@@ -32,6 +32,7 @@ class Linux < Chef::Provider::Mount::Mount\n \n         def mounted?\n           mounted = false\n+          loop_mount_points = shell_out!(\"losetup --list\").stdout",
+        "comment_created_at": "2021-11-23T20:48:06+00:00",
+        "comment_author": "jaymzh",
+        "comment_body": "@tas50 because calling losetup 93048234092834 times is bad. I asked for that.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "637259296",
+    "pr_number": 11579,
+    "pr_file": "lib/chef/provider/mount/linux.rb",
+    "created_at": "2021-05-21T22:10:58+00:00",
+    "commented_code": "def mounted?\n          mounted = false\n\n          real_mount_point = if ::File.exists? @new_resource.mount_point\n                               ::File.realpath(@new_resource.mount_point)\n                             else\n                               @new_resource.mount_point\n                             end\n\n          # get the output of losetup command to check loop mount points\n          loop_mount_points = shell_out!(\"losetup -a\").stdout",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "637259296",
+        "repo_full_name": "chef/chef",
+        "pr_number": 11579,
+        "pr_file": "lib/chef/provider/mount/linux.rb",
+        "discussion_id": "637259296",
+        "commented_code": "@@ -32,19 +33,29 @@ class Linux < Chef::Provider::Mount::Mount\n \n         def mounted?\n           mounted = false\n-\n           real_mount_point = if ::File.exists? @new_resource.mount_point\n                                ::File.realpath(@new_resource.mount_point)\n                              else\n                                @new_resource.mount_point\n                              end\n \n+          # get the output of losetup command to check loop mount points\n+          loop_mount_points = shell_out!(\"losetup -a\").stdout",
+        "comment_created_at": "2021-05-21T22:10:58+00:00",
+        "comment_author": "tas50",
+        "comment_body": "This should really only be done when we need it down in the case statement on line 45. Otherwise we're shelling out here for no reason when the first when of the case statement is reached.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "637683618",
+        "repo_full_name": "chef/chef",
+        "pr_number": 11579,
+        "pr_file": "lib/chef/provider/mount/linux.rb",
+        "discussion_id": "637259296",
+        "commented_code": "@@ -32,19 +33,29 @@ class Linux < Chef::Provider::Mount::Mount\n \n         def mounted?\n           mounted = false\n-\n           real_mount_point = if ::File.exists? @new_resource.mount_point\n                                ::File.realpath(@new_resource.mount_point)\n                              else\n                                @new_resource.mount_point\n                              end\n \n+          # get the output of losetup command to check loop mount points\n+          loop_mount_points = shell_out!(\"losetup -a\").stdout",
+        "comment_created_at": "2021-05-24T04:43:35+00:00",
+        "comment_author": "msys-sgarg",
+        "comment_body": "Hi, as per this comment on earlier PR [11376 comment](https://github.com/chef/chef/pull/11376#discussion_r616854963), it was not a good idea to keep the `shell_out` in case-statement, hence i moved it at the top of loop. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "637731789",
+        "repo_full_name": "chef/chef",
+        "pr_number": 11579,
+        "pr_file": "lib/chef/provider/mount/linux.rb",
+        "discussion_id": "637259296",
+        "commented_code": "@@ -32,19 +33,29 @@ class Linux < Chef::Provider::Mount::Mount\n \n         def mounted?\n           mounted = false\n-\n           real_mount_point = if ::File.exists? @new_resource.mount_point\n                                ::File.realpath(@new_resource.mount_point)\n                              else\n                                @new_resource.mount_point\n                              end\n \n+          # get the output of losetup command to check loop mount points\n+          loop_mount_points = shell_out!(\"losetup -a\").stdout",
+        "comment_created_at": "2021-05-24T07:01:16+00:00",
+        "comment_author": "msys-sgarg",
+        "comment_body": "How about this approach ? \r\n```\r\n       def loop_mount_points\r\n          #get loop_moint_points only if not initialized earlier\r\n          @loop_mount_points ||= shell_out!(\"losetup -a\").stdout\r\n        end\r\n\r\n        def mounted?\r\n          mounted = false\r\n          real_mount_point = if ::File.exists? @new_resource.mount_point\r\n                               ::File.realpath(@new_resource.mount_point)\r\n                             else\r\n                               @new_resource.mount_point\r\n                             end\r\n\r\n          shell_out!(\"findmnt -rn\").stdout.each_line do |line|\r\n            case line\r\n            # Permalink for device already mounted to mount point for : https://rubular.com/r/L0RNnD4gf2DJGl\r\n            when /\\A#{Regexp.escape(real_mount_point)}\\s+#{device_mount_regex}\\s/\r\n              mounted = true\r\n              logger.trace(\"Special device #{device_logstring} mounted as #{real_mount_point}\")\r\n            # Permalink for loop type devices mount points https://rubular.com/r/a0bS4p2RvXsGxx\r\n            when %r{\\A#{Regexp.escape(real_mount_point)}\\s+\\/dev\\/loop+[0-9]+\\s}\r\n              loop_mount_points.each_line do |mount_point|\r\n                if mount_point.include? device_real\r\n                  mounted = true\r\n                  break\r\n                end\r\n              end\r\n   ```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "639696774",
+        "repo_full_name": "chef/chef",
+        "pr_number": 11579,
+        "pr_file": "lib/chef/provider/mount/linux.rb",
+        "discussion_id": "637259296",
+        "commented_code": "@@ -32,19 +33,29 @@ class Linux < Chef::Provider::Mount::Mount\n \n         def mounted?\n           mounted = false\n-\n           real_mount_point = if ::File.exists? @new_resource.mount_point\n                                ::File.realpath(@new_resource.mount_point)\n                              else\n                                @new_resource.mount_point\n                              end\n \n+          # get the output of losetup command to check loop mount points\n+          loop_mount_points = shell_out!(\"losetup -a\").stdout",
+        "comment_created_at": "2021-05-26T12:54:17+00:00",
+        "comment_author": "msys-sgarg",
+        "comment_body": "@tas50, please let me know if the above approach looks fine, i will make finalise the changes. Thanks",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "648262847",
+        "repo_full_name": "chef/chef",
+        "pr_number": 11579,
+        "pr_file": "lib/chef/provider/mount/linux.rb",
+        "discussion_id": "637259296",
+        "commented_code": "@@ -32,19 +33,29 @@ class Linux < Chef::Provider::Mount::Mount\n \n         def mounted?\n           mounted = false\n-\n           real_mount_point = if ::File.exists? @new_resource.mount_point\n                                ::File.realpath(@new_resource.mount_point)\n                              else\n                                @new_resource.mount_point\n                              end\n \n+          # get the output of losetup command to check loop mount points\n+          loop_mount_points = shell_out!(\"losetup -a\").stdout",
+        "comment_created_at": "2021-06-09T12:42:21+00:00",
+        "comment_author": "msys-sgarg",
+        "comment_body": "@tas50  Hi, shall I go ahead with this approach ? and update the PR ? ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "549524521",
+    "pr_number": 10776,
+    "pr_file": "lib/chef/provider/service/systemd.rb",
+    "created_at": "2020-12-29T00:12:09+00:00",
+    "commented_code": "end\n  end\n\n  def systemd_service_status\n    # If the status has already been collected, return that\n    return @service_status unless @service_status.nil?\n\n    # Collect all the status information for a service and returns it at once\n    options, args = get_systemctl_options_args\n    s = shell_out!(\"#{systemctl_path} #{args} show -p UnitFileState -p ActiveState #{new_resource.service_name}\", options)\n    # e.g. /bin/systemctl --system show  -p UnitFileState -p ActiveState sshd.service\n    # Returns something like:\n    # ActiveState=active\n    # UnitFileState=enabled\n    status = {}\n    s.stdout.each_line do |line|\n      k, v = line.strip.split(\"=\")\n      status[k] = v\n    end\n    # Assert requisite keys exist\n    unless status.key?(\"UnitFileState\") && status.key?(\"ActiveState\")\n      raise Mixlib::ShellOut::ShellCommandFailed, \"'#{systemctl_path} show' not reporting status for #{new_resource.service_name}!\"\n    end\n\n    @service_status = status\n    status\n  end",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "549524521",
+        "repo_full_name": "chef/chef",
+        "pr_number": 10776,
+        "pr_file": "lib/chef/provider/service/systemd.rb",
+        "discussion_id": "549524521",
+        "commented_code": "@@ -76,6 +76,31 @@ def define_resource_requirements\n     end\n   end\n \n+  def systemd_service_status\n+    # If the status has already been collected, return that\n+    return @service_status unless @service_status.nil?\n+\n+    # Collect all the status information for a service and returns it at once\n+    options, args = get_systemctl_options_args\n+    s = shell_out!(\"#{systemctl_path} #{args} show -p UnitFileState -p ActiveState #{new_resource.service_name}\", options)\n+    # e.g. /bin/systemctl --system show  -p UnitFileState -p ActiveState sshd.service\n+    # Returns something like:\n+    # ActiveState=active\n+    # UnitFileState=enabled\n+    status = {}\n+    s.stdout.each_line do |line|\n+      k, v = line.strip.split(\"=\")\n+      status[k] = v\n+    end\n+    # Assert requisite keys exist\n+    unless status.key?(\"UnitFileState\") && status.key?(\"ActiveState\")\n+      raise Mixlib::ShellOut::ShellCommandFailed, \"'#{systemctl_path} show' not reporting status for #{new_resource.service_name}!\"\n+    end\n+\n+    @service_status = status\n+    status\n+  end",
+        "comment_created_at": "2020-12-29T00:12:09+00:00",
+        "comment_author": "phiggins",
+        "comment_body": "The idiomatic ruby way to write this is memoized with a block:\r\n\r\n```suggestion\r\n  def systemd_service_status\r\n    @systemd_service_status ||= begin\r\n      # Collect all the status information for a service and returns it at once\r\n      options, args = get_systemctl_options_args\r\n      s = shell_out!(\"#{systemctl_path} #{args} show -p UnitFileState -p ActiveState #{new_resource.service_name}\", options)\r\n      # e.g. /bin/systemctl --system show  -p UnitFileState -p ActiveState sshd.service\r\n      # Returns something like:\r\n      # ActiveState=active\r\n      # UnitFileState=enabled\r\n      status = {}\r\n      s.stdout.each_line do |line|\r\n        k, v = line.strip.split(\"=\")\r\n        status[k] = v\r\n      end\r\n      \r\n      # Assert requisite keys exist\r\n      unless status.key?(\"UnitFileState\") && status.key?(\"ActiveState\")\r\n        raise Mixlib::ShellOut::ShellCommandFailed, \"'#{systemctl_path} show' not reporting status for #{new_resource.service_name}!\"\r\n      end\r\n      \r\n      status\r\n    end\r\n  end\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "551491650",
+    "pr_number": 10776,
+    "pr_file": "lib/chef/provider/service/systemd.rb",
+    "created_at": "2021-01-04T18:33:15+00:00",
+    "commented_code": "end\n  end\n\n  def systemd_service_status\n    @service_status ||= begin\n      # Collect all the status information for a service and returns it at once\n      options, args = get_systemctl_options_args\n      s = shell_out!(\"#{systemctl_path} #{args} show -p UnitFileState -p ActiveState #{new_resource.service_name}\", options)",
+    "repo_full_name": "chef/chef",
+    "discussion_comments": [
+      {
+        "comment_id": "551491650",
+        "repo_full_name": "chef/chef",
+        "pr_number": 10776,
+        "pr_file": "lib/chef/provider/service/systemd.rb",
+        "discussion_id": "551491650",
+        "commented_code": "@@ -76,6 +76,30 @@ def define_resource_requirements\n     end\n   end\n \n+  def systemd_service_status\n+    @service_status ||= begin\n+      # Collect all the status information for a service and returns it at once\n+      options, args = get_systemctl_options_args\n+      s = shell_out!(\"#{systemctl_path} #{args} show -p UnitFileState -p ActiveState #{new_resource.service_name}\", options)",
+        "comment_created_at": "2021-01-04T18:33:15+00:00",
+        "comment_author": "lamont-granquist",
+        "comment_body": "you should use the *splat args style of calling here so:\r\n\r\n```\r\nshell_out!(systemctl_path,  args,  \"show\", \"-p\", \"UnitFileState\", \"-p\", \"ActiveState\", new_resource.service_name, options)\r\n```\r\n\r\nif that gets done correctly then it should avoid invoking the shell to parse the arguments, which should increase the perf even more (and has other benefits in not needing to worry about filenames with spaces and quotes around them, etc, etc).",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

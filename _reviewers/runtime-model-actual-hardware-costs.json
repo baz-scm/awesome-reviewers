@@ -1,0 +1,254 @@
+[
+  {
+    "discussion_id": "2173528253",
+    "pr_number": 117118,
+    "pr_file": "src/coreclr/jit/optcse.cpp",
+    "created_at": "2025-06-28T21:15:31+00:00",
+    "commented_code": "#endif\n            }\n        }\n#ifdef TARGET_AMD64\n#ifdef TARGET_XARCH\n        if (varTypeIsFloating(candidate->Expr()->TypeGet()))\n        {\n            // floating point loads/store encode larger\n            cse_def_cost += 2;\n            cse_use_cost += 1;\n        }",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2173528253",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117118,
+        "pr_file": "src/coreclr/jit/optcse.cpp",
+        "discussion_id": "2173528253",
+        "commented_code": "@@ -4466,14 +4544,14 @@ bool CSE_Heuristic::PromotionCheck(CSE_Candidate* candidate)\n #endif\n             }\n         }\n-#ifdef TARGET_AMD64\n+#ifdef TARGET_XARCH\n         if (varTypeIsFloating(candidate->Expr()->TypeGet()))\n         {\n             // floating point loads/store encode larger\n             cse_def_cost += 2;\n             cse_use_cost += 1;\n         }",
+        "comment_created_at": "2025-06-28T21:15:31+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "I don't think these costs are \"accurate\" and likely deserve more investigation in the future. It also isn't accounting for SIMD/Mask. -- We have a similar issue with some of the costs in the gen tree computation, where a lot of them were modeled around the x87 FPU and never updated to account for modern SIMD considerations.\r\n\r\nHere's the rough costs of loads:\r\n* a 32-bit integer move: `encoding: 2 bytes; execution: 2-5 cycles`\r\n* a 64-bit integer move: `encoding: 3 bytes; execution: 2-5 cycles`\r\n* a 32-bit floating-point move: `encoding 4 bytes; execution: 4-7 cycles`\r\n* a 64-bit floating-point move: `encoding 4 bytes; execution: 4-7 cycles`\r\n* a 128-bit simd move: `encoding 3-4 bytes; execution: 4-7 cycles`\r\n* a 256-bit simd move: `encoding 4-5 bytes; execution: 5-8 cycles`\r\n* a 512-bit simd move: `encoding 6 bytes; execution: 5-9 cycles`\r\n\r\nStores tend to be up to more expensive than loads. You get roughly `4-10 cycles` for simd and floating-point, but nearly `2-10 cycles` for integers\r\n\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2173528780",
+    "pr_number": 117118,
+    "pr_file": "src/coreclr/jit/optcse.cpp",
+    "created_at": "2025-06-28T21:18:57+00:00",
+    "commented_code": "extra_yes_cost *= 2; // full cost if we are being Conservative\n            }\n        }\n\n#ifdef FEATURE_SIMD\n        // SIMD types may cause a SIMD register to be spilled/restored in the prolog and epilog.\n        //\n        if (varTypeIsSIMD(candidate->Expr()->TypeGet()))\n        {\n            // We don't have complete information about when these extra spilled/restore will be needed.\n            // Instead we are conservative and assume that each SIMD CSE that is live across a call\n            // will cause an additional spill/restore in the prolog and epilog.\n            //\n            int spillSimdRegInProlog = 1;\n\n#if defined(TARGET_XARCH)\n            // If we have a SIMD32/64 that is live across a call we have even higher spill costs\n            //\n            if (candidate->Expr()->TypeIs(TYP_SIMD32, TYP_SIMD64))\n            {\n                // Additionally for a simd32 CSE candidate we assume that and second spilled/restore will be needed.\n                // (to hold the upper half of the simd32 register that isn't preserved across the call)\n                //\n                spillSimdRegInProlog++;\n\n                // We also increase the CSE use cost here to because we may have to generate instructions\n                // to move the upper half of the simd32 before and after a call.\n                //\n                cse_use_cost += 2;\n            }\n#endif // TARGET_XARCH\n\n            extra_yes_cost = (BB_UNITY_WEIGHT_UNSIGNED * spillSimdRegInProlog) * 3;\n        }\n#endif // FEATURE_SIMD",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2173528780",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117118,
+        "pr_file": "src/coreclr/jit/optcse.cpp",
+        "discussion_id": "2173528780",
+        "commented_code": "@@ -4613,38 +4730,6 @@ bool CSE_Heuristic::PromotionCheck(CSE_Candidate* candidate)\n                 extra_yes_cost *= 2; // full cost if we are being Conservative\n             }\n         }\n-\n-#ifdef FEATURE_SIMD\n-        // SIMD types may cause a SIMD register to be spilled/restored in the prolog and epilog.\n-        //\n-        if (varTypeIsSIMD(candidate->Expr()->TypeGet()))\n-        {\n-            // We don't have complete information about when these extra spilled/restore will be needed.\n-            // Instead we are conservative and assume that each SIMD CSE that is live across a call\n-            // will cause an additional spill/restore in the prolog and epilog.\n-            //\n-            int spillSimdRegInProlog = 1;\n-\n-#if defined(TARGET_XARCH)\n-            // If we have a SIMD32/64 that is live across a call we have even higher spill costs\n-            //\n-            if (candidate->Expr()->TypeIs(TYP_SIMD32, TYP_SIMD64))\n-            {\n-                // Additionally for a simd32 CSE candidate we assume that and second spilled/restore will be needed.\n-                // (to hold the upper half of the simd32 register that isn't preserved across the call)\n-                //\n-                spillSimdRegInProlog++;\n-\n-                // We also increase the CSE use cost here to because we may have to generate instructions\n-                // to move the upper half of the simd32 before and after a call.\n-                //\n-                cse_use_cost += 2;\n-            }\n-#endif // TARGET_XARCH\n-\n-            extra_yes_cost = (BB_UNITY_WEIGHT_UNSIGNED * spillSimdRegInProlog) * 3;\n-        }\n-#endif // FEATURE_SIMD",
+        "comment_created_at": "2025-06-28T21:18:57+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "This logic hasn't really been applicable in a long time. We have single instruction spill/reload regardless of SIMD size, it's just that TYP_SIMD32/64 require spilling since the upper bits are volatile and we may only spill 128-bits instead of all bits, if possible (and which is no more expensive to do).\r\n\r\nA long time ago we did have more complex logic for upper save/restore, but now we can just follow the normal callee save/restore consideration instead.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1254621550",
+    "pr_number": 88449,
+    "pr_file": "src/coreclr/jit/optimizer.cpp",
+    "created_at": "2023-07-06T15:43:42+00:00",
+    "commented_code": "{\n            availRegCount += CNT_CALLEE_TRASH_FLOAT - 1;\n        }\n#if defined(TARGET_XARCH) && defined(FEATURE_SIMD)\n        else if ((varTypeIsSIMD(tree) && tree->TypeIs(TYP_SIMD32, TYP_SIMD64)) ||\n                 (tree->OperIsHWIntrinsic() && (tree->AsHWIntrinsic()->GetSimdSize() >= 32)))\n        {\n            // SIMD32/64 always spill due to the upper bits being volatile (callee trash)\n            // For now, avoid hoisting such constants when a call is present\n\n            // TODO-XArch-CQ: We should account for the spill cost as part of hoist determination\n            return false;\n        }",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "1254621550",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 88449,
+        "pr_file": "src/coreclr/jit/optimizer.cpp",
+        "discussion_id": "1254621550",
+        "commented_code": "@@ -7030,6 +7030,18 @@ bool Compiler::optIsProfitableToHoistTree(GenTree* tree, unsigned lnum)\n         {\n             availRegCount += CNT_CALLEE_TRASH_FLOAT - 1;\n         }\n+#if defined(TARGET_XARCH) && defined(FEATURE_SIMD)\n+        else if ((varTypeIsSIMD(tree) && tree->TypeIs(TYP_SIMD32, TYP_SIMD64)) ||\n+                 (tree->OperIsHWIntrinsic() && (tree->AsHWIntrinsic()->GetSimdSize() >= 32)))\n+        {\n+            // SIMD32/64 always spill due to the upper bits being volatile (callee trash)\n+            // For now, avoid hoisting such constants when a call is present\n+\n+            // TODO-XArch-CQ: We should account for the spill cost as part of hoist determination\n+            return false;\n+        }",
+        "comment_created_at": "2023-07-06T15:43:42+00:00",
+        "comment_author": "SingleAccretion",
+        "comment_body": "1) `varTypeIsSIMD(tree)` is redundant with `tree->TypeIs(TYP_SIMD32, TYP_SIMD64)`.\r\n2) Why have `tree->OperIsHWIntrinsic()` branch as well?\r\n3) This will not work for trees that contain SIMD expressions but do not evaluate to a SIMD/HWI.\r\n4) The comment mentions `...such constants...`, but the code does not contain checks for constants, so it is confusing.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1254650359",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 88449,
+        "pr_file": "src/coreclr/jit/optimizer.cpp",
+        "discussion_id": "1254621550",
+        "commented_code": "@@ -7030,6 +7030,18 @@ bool Compiler::optIsProfitableToHoistTree(GenTree* tree, unsigned lnum)\n         {\n             availRegCount += CNT_CALLEE_TRASH_FLOAT - 1;\n         }\n+#if defined(TARGET_XARCH) && defined(FEATURE_SIMD)\n+        else if ((varTypeIsSIMD(tree) && tree->TypeIs(TYP_SIMD32, TYP_SIMD64)) ||\n+                 (tree->OperIsHWIntrinsic() && (tree->AsHWIntrinsic()->GetSimdSize() >= 32)))\n+        {\n+            // SIMD32/64 always spill due to the upper bits being volatile (callee trash)\n+            // For now, avoid hoisting such constants when a call is present\n+\n+            // TODO-XArch-CQ: We should account for the spill cost as part of hoist determination\n+            return false;\n+        }",
+        "comment_created_at": "2023-07-06T16:09:54+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "> varTypeIsSIMD(tree) is redundant with tree->TypeIs(TYP_SIMD32, TYP_SIMD64).\r\n\r\n`varTypeIsSIMD(tree)` is cheaper and ensures the common case is 1 check (just checking the `varTypeClassification`).\r\n\r\n> Why have tree->OperIsHWIntrinsic() branch as well?\r\n\r\nThere are nodes that produce scalar results or small types but which still operate on V256/V512. It's an `||` condition so its handling either `node that produces a simd32/64` or `hwintrinsic node that uses simd32/64`\r\n\r\n> This will not work for tree that contain SIMD expression but do not evaluate to a SIMD/HWI.\r\n\r\nFor some arbitrary block copies or other operations, potentially. Most usages of SIMD32/64 are done via hwintrinsics, so this is getting the important bits.\r\n\r\n> The comment mentions ...such constants..., but the code does not contain checks for constants, so it is confusing.\r\n\r\nWill fix.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1254685778",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 88449,
+        "pr_file": "src/coreclr/jit/optimizer.cpp",
+        "discussion_id": "1254621550",
+        "commented_code": "@@ -7030,6 +7030,18 @@ bool Compiler::optIsProfitableToHoistTree(GenTree* tree, unsigned lnum)\n         {\n             availRegCount += CNT_CALLEE_TRASH_FLOAT - 1;\n         }\n+#if defined(TARGET_XARCH) && defined(FEATURE_SIMD)\n+        else if ((varTypeIsSIMD(tree) && tree->TypeIs(TYP_SIMD32, TYP_SIMD64)) ||\n+                 (tree->OperIsHWIntrinsic() && (tree->AsHWIntrinsic()->GetSimdSize() >= 32)))\n+        {\n+            // SIMD32/64 always spill due to the upper bits being volatile (callee trash)\n+            // For now, avoid hoisting such constants when a call is present\n+\n+            // TODO-XArch-CQ: We should account for the spill cost as part of hoist determination\n+            return false;\n+        }",
+        "comment_created_at": "2023-07-06T16:43:36+00:00",
+        "comment_author": "SingleAccretion",
+        "comment_body": "> For some arbitrary block copies or other operations, potentially\r\n\r\nThe concern is not about nodes that implicitly use SIMD, but cases like below:\r\n```\r\nADD ; tree\r\n  HWI_TREE_1\r\n  HWI_TREE_2\r\n```\r\nOne will notice that the rest of the method uses costs, which are calculated recursively.\r\n\r\nThis sort of conditioning will make hoisting sensitive to small changes to trees. E. g. you could have had that `ADD` hoisted before, but now something (e. g. the user) exposes `HWI_TREE`s, and they are not hoisted anymore.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1044993169",
+    "pr_number": 79478,
+    "pr_file": "src/coreclr/jit/emitxarch.cpp",
+    "created_at": "2022-12-10T05:58:50+00:00",
+    "commented_code": "//   * X and B must be set                (0x61 validates bits 5-6)\n        //   * m-mmmm must be 0-00001             (0x61 validates bits 0-4)\n        //   * W must be unset                    (0x00 validates bit 7)\n\n        if ((vexPrefix & 0xFFFF7F80) == 0x00C46100)\n        {\n            // Encoding optimization calculation is not done while estimating the instruction\n            // size and thus over-predict instruction size by 1 byte.\n            // If there are IGs that will be aligned, do not optimize encoding so the\n            // estimated alignment sizes are accurate.\n            if (emitCurIG->igNum > emitLastAlignedIgNum)\n            // Encoding optimization calculation when estimating the instruction size is\n            // only done when optimizations are enabled since its more expensive. So when\n            // optimizations are disabled we'll have over-predicted the instruction size\n            // by one byte. Due to how IG alignment is done, we only want to emit the 2-byte\n            // prefix if optimizations are enabled or we know we won't negatively impact the\n            // estimated alignment sizes.\n\n            if (emitComp->opts.OptimizationEnabled() || (emitCurIG->igNum > emitLastAlignedIgNum))",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "1044993169",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 79478,
+        "pr_file": "src/coreclr/jit/emitxarch.cpp",
+        "discussion_id": "1044993169",
+        "commented_code": "@@ -1795,23 +1648,29 @@ unsigned emitter::emitOutputRexOrVexPrefixIfNeeded(instruction ins, BYTE* dst, c\n         //   * X and B must be set                (0x61 validates bits 5-6)\n         //   * m-mmmm must be 0-00001             (0x61 validates bits 0-4)\n         //   * W must be unset                    (0x00 validates bit 7)\n+\n         if ((vexPrefix & 0xFFFF7F80) == 0x00C46100)\n         {\n-            // Encoding optimization calculation is not done while estimating the instruction\n-            // size and thus over-predict instruction size by 1 byte.\n-            // If there are IGs that will be aligned, do not optimize encoding so the\n-            // estimated alignment sizes are accurate.\n-            if (emitCurIG->igNum > emitLastAlignedIgNum)\n+            // Encoding optimization calculation when estimating the instruction size is\n+            // only done when optimizations are enabled since its more expensive. So when\n+            // optimizations are disabled we'll have over-predicted the instruction size\n+            // by one byte. Due to how IG alignment is done, we only want to emit the 2-byte\n+            // prefix if optimizations are enabled or we know we won't negatively impact the\n+            // estimated alignment sizes.\n+\n+            if (emitComp->opts.OptimizationEnabled() || (emitCurIG->igNum > emitLastAlignedIgNum))",
+        "comment_created_at": "2022-12-10T05:58:50+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "Talked with @kunalspathak and this is currently needed as we still try to do alignment when optimizations are disabled.\r\n\r\nWe may want to revisit that since OSR + TC should handle all the important cases and aligning debug code likely isn't worth the cycles required.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "606583766",
+    "pr_number": 50675,
+    "pr_file": "src/coreclr/jit/fgbasic.cpp",
+    "created_at": "2021-04-03T01:57:48+00:00",
+    "commented_code": "const bool  isForceInline          = (info.compFlags & CORINFO_FLG_FORCEINLINE) != 0;\n    const bool  makeInlineObservations = (compInlineResult != nullptr);\n    const bool  isInlining             = compIsForInlining();\n    const bool  isTier1                = opts.jitFlags->IsSet(JitFlags::JIT_FLAG_TIER1);\n    const bool  resolveTokens          = makeInlineObservations && isTier1;",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "606583766",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 50675,
+        "pr_file": "src/coreclr/jit/fgbasic.cpp",
+        "discussion_id": "606583766",
+        "commented_code": "@@ -849,7 +849,12 @@ void Compiler::fgFindJumpTargets(const BYTE* codeAddr, IL_OFFSET codeSize, Fixed\n     const bool  isForceInline          = (info.compFlags & CORINFO_FLG_FORCEINLINE) != 0;\n     const bool  makeInlineObservations = (compInlineResult != nullptr);\n     const bool  isInlining             = compIsForInlining();\n+    const bool  isTier1                = opts.jitFlags->IsSet(JitFlags::JIT_FLAG_TIER1);\n+    const bool  resolveTokens          = makeInlineObservations && isTier1;",
+        "comment_created_at": "2021-04-03T01:57:48+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "This should be enabled for crossgen too.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "606597812",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 50675,
+        "pr_file": "src/coreclr/jit/fgbasic.cpp",
+        "discussion_id": "606583766",
+        "commented_code": "@@ -849,7 +849,12 @@ void Compiler::fgFindJumpTargets(const BYTE* codeAddr, IL_OFFSET codeSize, Fixed\n     const bool  isForceInline          = (info.compFlags & CORINFO_FLG_FORCEINLINE) != 0;\n     const bool  makeInlineObservations = (compInlineResult != nullptr);\n     const bool  isInlining             = compIsForInlining();\n+    const bool  isTier1                = opts.jitFlags->IsSet(JitFlags::JIT_FLAG_TIER1);\n+    const bool  resolveTokens          = makeInlineObservations && isTier1;",
+        "comment_created_at": "2021-04-03T02:22:38+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "This covers the crossgen scenario, correct?\r\n```suggestion\r\n    const bool  isReadyToRun           = opts.IsReadyToRun();\r\n    const bool  resolveTokens          = makeInlineObservations && (isTier1 || isReadyToRun);\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "606599720",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 50675,
+        "pr_file": "src/coreclr/jit/fgbasic.cpp",
+        "discussion_id": "606583766",
+        "commented_code": "@@ -849,7 +849,12 @@ void Compiler::fgFindJumpTargets(const BYTE* codeAddr, IL_OFFSET codeSize, Fixed\n     const bool  isForceInline          = (info.compFlags & CORINFO_FLG_FORCEINLINE) != 0;\n     const bool  makeInlineObservations = (compInlineResult != nullptr);\n     const bool  isInlining             = compIsForInlining();\n+    const bool  isTier1                = opts.jitFlags->IsSet(JitFlags::JIT_FLAG_TIER1);\n+    const bool  resolveTokens          = makeInlineObservations && isTier1;",
+        "comment_created_at": "2021-04-03T02:25:59+00:00",
+        "comment_author": "AndyAyersMS",
+        "comment_body": "We usually use `opts.jitFlags->IsSet(JitFlags::JIT_FLAG_PREJIT)`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "606600831",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 50675,
+        "pr_file": "src/coreclr/jit/fgbasic.cpp",
+        "discussion_id": "606583766",
+        "commented_code": "@@ -849,7 +849,12 @@ void Compiler::fgFindJumpTargets(const BYTE* codeAddr, IL_OFFSET codeSize, Fixed\n     const bool  isForceInline          = (info.compFlags & CORINFO_FLG_FORCEINLINE) != 0;\n     const bool  makeInlineObservations = (compInlineResult != nullptr);\n     const bool  isInlining             = compIsForInlining();\n+    const bool  isTier1                = opts.jitFlags->IsSet(JitFlags::JIT_FLAG_TIER1);\n+    const bool  resolveTokens          = makeInlineObservations && isTier1;",
+        "comment_created_at": "2021-04-03T02:27:50+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "Will switch to that. Could I get a summary of the difference between the two for future reference?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "606601284",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 50675,
+        "pr_file": "src/coreclr/jit/fgbasic.cpp",
+        "discussion_id": "606583766",
+        "commented_code": "@@ -849,7 +849,12 @@ void Compiler::fgFindJumpTargets(const BYTE* codeAddr, IL_OFFSET codeSize, Fixed\n     const bool  isForceInline          = (info.compFlags & CORINFO_FLG_FORCEINLINE) != 0;\n     const bool  makeInlineObservations = (compInlineResult != nullptr);\n     const bool  isInlining             = compIsForInlining();\n+    const bool  isTier1                = opts.jitFlags->IsSet(JitFlags::JIT_FLAG_TIER1);\n+    const bool  resolveTokens          = makeInlineObservations && isTier1;",
+        "comment_created_at": "2021-04-03T02:28:33+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "```suggestion\r\n    const bool  isPreJit               = opts.jitFlags->IsSet(JitFlags::JIT_FLAG_PREJIT);\r\n    const bool  resolveTokens          = makeInlineObservations && (isTier1 || isPreJit);\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "606607881",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 50675,
+        "pr_file": "src/coreclr/jit/fgbasic.cpp",
+        "discussion_id": "606583766",
+        "commented_code": "@@ -849,7 +849,12 @@ void Compiler::fgFindJumpTargets(const BYTE* codeAddr, IL_OFFSET codeSize, Fixed\n     const bool  isForceInline          = (info.compFlags & CORINFO_FLG_FORCEINLINE) != 0;\n     const bool  makeInlineObservations = (compInlineResult != nullptr);\n     const bool  isInlining             = compIsForInlining();\n+    const bool  isTier1                = opts.jitFlags->IsSet(JitFlags::JIT_FLAG_TIER1);\n+    const bool  resolveTokens          = makeInlineObservations && isTier1;",
+        "comment_created_at": "2021-04-03T03:04:27+00:00",
+        "comment_author": "AndyAyersMS",
+        "comment_body": "R2R is a sub-genre of prejitting, so we use `IsReadyToRun()` when we need to do something specifically for R2R, and use the flag check when we're doing something because we are prejitting.\r\n\r\nIn our own use the two coincide. Samsung still is using fragile NGEN (non-R2R prejitting) last I knew. \r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "606621014",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 50675,
+        "pr_file": "src/coreclr/jit/fgbasic.cpp",
+        "discussion_id": "606583766",
+        "commented_code": "@@ -849,7 +849,12 @@ void Compiler::fgFindJumpTargets(const BYTE* codeAddr, IL_OFFSET codeSize, Fixed\n     const bool  isForceInline          = (info.compFlags & CORINFO_FLG_FORCEINLINE) != 0;\n     const bool  makeInlineObservations = (compInlineResult != nullptr);\n     const bool  isInlining             = compIsForInlining();\n+    const bool  isTier1                = opts.jitFlags->IsSet(JitFlags::JIT_FLAG_TIER1);\n+    const bool  resolveTokens          = makeInlineObservations && isTier1;",
+        "comment_created_at": "2021-04-03T05:21:44+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "Yep, as @AndyAyersMS said. PREJIT means AOT compilation in general. R2R means specific ABI for AOT compiled code, e.g. code sequence to access generic dictionaries, etc.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "424855381",
+    "pr_number": 36432,
+    "pr_file": "src/coreclr/src/jit/codegenxarch.cpp",
+    "created_at": "2020-05-14T03:50:13+00:00",
+    "commented_code": "if (*bitMask == nullptr)\n    {\n        assert(cnsAddr != nullptr);\n        *bitMask = GetEmitter()->emitAnyConst(cnsAddr, genTypeSize(targetType), emitDataAlignment::Preferred);\n\n        UNATIVE_OFFSET cnsSize  = genTypeSize(targetType);\n        UNATIVE_OFFSET cnsAlign = (compiler->compCodeOpt() != Compiler::SMALL_CODE) ? cnsSize : 1;",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "424855381",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 36432,
+        "pr_file": "src/coreclr/src/jit/codegenxarch.cpp",
+        "discussion_id": "424855381",
+        "commented_code": "@@ -7180,7 +7180,11 @@ void CodeGen::genSSE2BitwiseOp(GenTree* treeNode)\n     if (*bitMask == nullptr)\n     {\n         assert(cnsAddr != nullptr);\n-        *bitMask = GetEmitter()->emitAnyConst(cnsAddr, genTypeSize(targetType), emitDataAlignment::Preferred);\n+\n+        UNATIVE_OFFSET cnsSize  = genTypeSize(targetType);\n+        UNATIVE_OFFSET cnsAlign = (compiler->compCodeOpt() != Compiler::SMALL_CODE) ? cnsSize : 1;",
+        "comment_created_at": "2020-05-14T03:50:13+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "Rather than take `emitDataAlignment` which only had `None`, `Preferred`, and `Required`, we just pass in the actual alignment we want. This is normally the same as the constant size, but it isn't required to be (as is the case for `SMALL_CODE` where we want an alignment of whatever is smallest and works for the architecture).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "429037006",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 36432,
+        "pr_file": "src/coreclr/src/jit/codegenxarch.cpp",
+        "discussion_id": "424855381",
+        "commented_code": "@@ -7180,7 +7180,11 @@ void CodeGen::genSSE2BitwiseOp(GenTree* treeNode)\n     if (*bitMask == nullptr)\n     {\n         assert(cnsAddr != nullptr);\n-        *bitMask = GetEmitter()->emitAnyConst(cnsAddr, genTypeSize(targetType), emitDataAlignment::Preferred);\n+\n+        UNATIVE_OFFSET cnsSize  = genTypeSize(targetType);\n+        UNATIVE_OFFSET cnsAlign = (compiler->compCodeOpt() != Compiler::SMALL_CODE) ? cnsSize : 1;",
+        "comment_created_at": "2020-05-22T04:30:24+00:00",
+        "comment_author": "CarolEidt",
+        "comment_body": "I don't know if asmdiffs show any changes in data size, but I'm curious whether this changed anything?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "429045206",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 36432,
+        "pr_file": "src/coreclr/src/jit/codegenxarch.cpp",
+        "discussion_id": "424855381",
+        "commented_code": "@@ -7180,7 +7180,11 @@ void CodeGen::genSSE2BitwiseOp(GenTree* treeNode)\n     if (*bitMask == nullptr)\n     {\n         assert(cnsAddr != nullptr);\n-        *bitMask = GetEmitter()->emitAnyConst(cnsAddr, genTypeSize(targetType), emitDataAlignment::Preferred);\n+\n+        UNATIVE_OFFSET cnsSize  = genTypeSize(targetType);\n+        UNATIVE_OFFSET cnsAlign = (compiler->compCodeOpt() != Compiler::SMALL_CODE) ? cnsSize : 1;",
+        "comment_created_at": "2020-05-22T05:10:24+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "It didn't when I checked but most of the methods that involve vector constants also don't contain other constants.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

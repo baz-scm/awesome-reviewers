@@ -1,0 +1,304 @@
+[
+  {
+    "discussion_id": "2145674830",
+    "pr_number": 116555,
+    "pr_file": "src/tools/illink/src/linker/Linker/TypeMapHandler.cs",
+    "created_at": "2025-06-13T17:44:45+00:00",
+    "commented_code": "﻿// Copyright (c) .NET Foundation and contributors. All rights reserved.\n// Licensed under the MIT license. See LICENSE file in the project root for full license information.\n\nusing System;\nusing System.Collections.Generic;\nusing System.Diagnostics;\nusing System.Text;\nusing ILLink.Shared.TrimAnalysis;\nusing Mono.Cecil;\nusing Mono.CompilerServices.SymbolWriter;\nusing Mono.Linker.Steps;\n\nusing CustomAttributeWithOrigin = (Mono.Cecil.CustomAttribute Attribute, Mono.Cecil.AssemblyDefinition Origin);\n\nnamespace Mono.Linker\n{\n\tsealed class TypeMapHandler\n\t{\n\t\treadonly TypeMapResolver _lazyTypeMapResolver;\n\n\t\t// [trim target: [type map group: custom attributes with assembly origin]]\n\t\treadonly Dictionary<TypeDefinition, Dictionary<TypeReference, List<CustomAttributeWithOrigin>>> _unmarkedExternalTypeMapEntries = [];\n\n\t\t// [source type: [type map group: custom attributes]]\n\t\treadonly Dictionary<TypeDefinition, Dictionary<TypeReference, List<CustomAttributeWithOrigin>>> _unmarkedProxyTypeMapEntries = [];\n\n\t\t// CustomAttributes that we want to mark when the type mapping APIs are used.\n\t\t// [type map group: custom attributes]\n\t\tDictionary<TypeReference, List<CustomAttributeWithOrigin>> _pendingExternalTypeMapEntries = [];\n\t\tDictionary<TypeReference, List<CustomAttributeWithOrigin>> _pendingProxyTypeMapEntries = [];\n\t\tHashSet<TypeReference> _referencedExternalTypeMaps = [];\n\t\tHashSet<TypeReference> _referencedProxyTypeMaps = [];\n\n\t\tLinkContext _context = null!;\n\t\tMarkStep _markStep = null!;\n\n\t\tpublic TypeMapHandler ()\n\t\t{\n\t\t\t_lazyTypeMapResolver = new TypeMapResolver (new HashSet<AssemblyNameReference>());\n\t\t}\n\n\t\tpublic TypeMapHandler (AssemblyDefinition entryPointAssembly)\n\t\t{\n\t\t\tHashSet<AssemblyNameReference> assemblies = [AssemblyNameReference.Parse (entryPointAssembly.FullName)];\n\t\t\tforeach (var attr in entryPointAssembly.CustomAttributes) {\n\t\t\t\tif (attr.AttributeType is not GenericInstanceType {\n\t\t\t\t\tNamespace: \"System.Runtime.InteropServices\",\n\t\t\t\t\tGenericArguments: [_]\n\t\t\t\t}) {\n\t\t\t\t\tcontinue; // Only interested in System.Runtime.InteropServices attributes\n\t\t\t\t}\n\n\t\t\t\tif (attr.AttributeType.Name != \"TypeMapAssemblyTarget`1\"\n\t\t\t\t\t|| attr.ConstructorArguments[0].Value is not string str) {\n\t\t\t\t\t// Invalid attribute, skip it.\n\t\t\t\t\t// Let the runtime handle the failure.\n\t\t\t\t\tcontinue;\n\t\t\t\t}\n\n\t\t\t\tassemblies.Add (AssemblyNameReference.Parse(str));\n\t\t\t}\n\n\t\t\t_lazyTypeMapResolver = new TypeMapResolver (assemblies);\n\t\t}\n\n\t\tpublic void Initialize (LinkContext context, MarkStep markStep)\n\t\t{\n\t\t\t_context = context;\n\t\t\t_markStep = markStep;\n\t\t\t_lazyTypeMapResolver.Resolve (context, this);\n\t\t}\n\n\t\tpublic void ProcessExternalTypeMapGroupSeen (MethodDefinition callingMethod, TypeReference typeMapGroup)\n\t\t{\n\t\t\t_referencedExternalTypeMaps.Add(typeMapGroup);\n\t\t\tif (!_pendingExternalTypeMapEntries.Remove (typeMapGroup, out List<CustomAttributeWithOrigin>? pendingEntries)) {\n\t\t\t\treturn;\n\t\t\t}\n\n\t\t\tforeach (var entry in pendingEntries) {\n\t\t\t\tMarkTypeMapAttribute (entry, new DependencyInfo (DependencyKind.TypeMapEntry, callingMethod));\n\t\t\t}\n\t\t}\n\n\t\tpublic void ProcessProxyTypeMapGroupSeen (MethodDefinition callingMethod, TypeReference typeMapGroup)\n\t\t{\n\t\t\t_referencedProxyTypeMaps.Add (typeMapGroup);\n\t\t\tif (!_pendingProxyTypeMapEntries.Remove (typeMapGroup, out List<CustomAttributeWithOrigin>? pendingEntries)) {\n\t\t\t\treturn;\n\t\t\t}\n\n\t\t\tforeach (var entry in pendingEntries) {\n\t\t\t\tMarkTypeMapAttribute (entry, new DependencyInfo (DependencyKind.TypeMapEntry, callingMethod));\n\t\t\t}\n\t\t}\n\n\t\tvoid MarkTypeMapAttribute (CustomAttributeWithOrigin entry, DependencyInfo info)\n\t\t{\n\t\t\t_markStep.MarkCustomAttribute (entry.Attribute, info, new MessageOrigin (entry.Origin));\n\n\t\t\t// Mark the target type as instantiated\n\t\t\tTypeReference targetType = (TypeReference) entry.Attribute.ConstructorArguments[1].Value;\n\t\t\tif (targetType is not null && _context.Resolve (targetType) is TypeDefinition targetTypeDef)\n\t\t\t\t_context.Annotations.MarkInstantiated (targetTypeDef);\n\t\t}\n\n\t\tpublic void ProcessType (TypeDefinition definition)\n\t\t{\n\t\t\tRecordTargetTypeSeen (definition, _unmarkedExternalTypeMapEntries, _referencedExternalTypeMaps, _pendingExternalTypeMapEntries);\n\t\t}\n\n\t\tvoid RecordTargetTypeSeen (TypeDefinition definition, Dictionary<TypeDefinition, Dictionary<TypeReference, List<CustomAttributeWithOrigin>>> unmarked, HashSet<TypeReference> referenced, Dictionary<TypeReference, List<CustomAttributeWithOrigin>> pending)\n\t\t{\n\t\t\tif (unmarked.Remove (definition, out Dictionary<TypeReference, List<CustomAttributeWithOrigin>>? entries)) {\n\t\t\t\tforeach (var (key, attributes) in entries) {\n\n\t\t\t\t\tif (referenced.Contains (key)) {\n\t\t\t\t\t\tforeach (var attr in attributes) {\n\t\t\t\t\t\t\tMarkTypeMapAttribute (attr, new DependencyInfo (DependencyKind.TypeMapEntry, definition));\n\t\t\t\t\t\t}\n\t\t\t\t\t}\n\n\t\t\t\t\tif (!pending.TryGetValue (key, out List<CustomAttributeWithOrigin>? value)) {\n\t\t\t\t\t\tpending[key] = [.. attributes];\n\t\t\t\t\t} else {\n\t\t\t\t\t\tvalue.AddRange (attributes);\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t\tunmarked.Remove (definition);\n\t\t\t}\n\t\t}",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2145674830",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116555,
+        "pr_file": "src/tools/illink/src/linker/Linker/TypeMapHandler.cs",
+        "discussion_id": "2145674830",
+        "commented_code": "@@ -0,0 +1,218 @@\n+﻿// Copyright (c) .NET Foundation and contributors. All rights reserved.\n+// Licensed under the MIT license. See LICENSE file in the project root for full license information.\n+\n+using System;\n+using System.Collections.Generic;\n+using System.Diagnostics;\n+using System.Text;\n+using ILLink.Shared.TrimAnalysis;\n+using Mono.Cecil;\n+using Mono.CompilerServices.SymbolWriter;\n+using Mono.Linker.Steps;\n+\n+using CustomAttributeWithOrigin = (Mono.Cecil.CustomAttribute Attribute, Mono.Cecil.AssemblyDefinition Origin);\n+\n+namespace Mono.Linker\n+{\n+\tsealed class TypeMapHandler\n+\t{\n+\t\treadonly TypeMapResolver _lazyTypeMapResolver;\n+\n+\t\t// [trim target: [type map group: custom attributes with assembly origin]]\n+\t\treadonly Dictionary<TypeDefinition, Dictionary<TypeReference, List<CustomAttributeWithOrigin>>> _unmarkedExternalTypeMapEntries = [];\n+\n+\t\t// [source type: [type map group: custom attributes]]\n+\t\treadonly Dictionary<TypeDefinition, Dictionary<TypeReference, List<CustomAttributeWithOrigin>>> _unmarkedProxyTypeMapEntries = [];\n+\n+\t\t// CustomAttributes that we want to mark when the type mapping APIs are used.\n+\t\t// [type map group: custom attributes]\n+\t\tDictionary<TypeReference, List<CustomAttributeWithOrigin>> _pendingExternalTypeMapEntries = [];\n+\t\tDictionary<TypeReference, List<CustomAttributeWithOrigin>> _pendingProxyTypeMapEntries = [];\n+\t\tHashSet<TypeReference> _referencedExternalTypeMaps = [];\n+\t\tHashSet<TypeReference> _referencedProxyTypeMaps = [];\n+\n+\t\tLinkContext _context = null!;\n+\t\tMarkStep _markStep = null!;\n+\n+\t\tpublic TypeMapHandler ()\n+\t\t{\n+\t\t\t_lazyTypeMapResolver = new TypeMapResolver (new HashSet<AssemblyNameReference>());\n+\t\t}\n+\n+\t\tpublic TypeMapHandler (AssemblyDefinition entryPointAssembly)\n+\t\t{\n+\t\t\tHashSet<AssemblyNameReference> assemblies = [AssemblyNameReference.Parse (entryPointAssembly.FullName)];\n+\t\t\tforeach (var attr in entryPointAssembly.CustomAttributes) {\n+\t\t\t\tif (attr.AttributeType is not GenericInstanceType {\n+\t\t\t\t\tNamespace: \"System.Runtime.InteropServices\",\n+\t\t\t\t\tGenericArguments: [_]\n+\t\t\t\t}) {\n+\t\t\t\t\tcontinue; // Only interested in System.Runtime.InteropServices attributes\n+\t\t\t\t}\n+\n+\t\t\t\tif (attr.AttributeType.Name != \"TypeMapAssemblyTarget`1\"\n+\t\t\t\t\t|| attr.ConstructorArguments[0].Value is not string str) {\n+\t\t\t\t\t// Invalid attribute, skip it.\n+\t\t\t\t\t// Let the runtime handle the failure.\n+\t\t\t\t\tcontinue;\n+\t\t\t\t}\n+\n+\t\t\t\tassemblies.Add (AssemblyNameReference.Parse(str));\n+\t\t\t}\n+\n+\t\t\t_lazyTypeMapResolver = new TypeMapResolver (assemblies);\n+\t\t}\n+\n+\t\tpublic void Initialize (LinkContext context, MarkStep markStep)\n+\t\t{\n+\t\t\t_context = context;\n+\t\t\t_markStep = markStep;\n+\t\t\t_lazyTypeMapResolver.Resolve (context, this);\n+\t\t}\n+\n+\t\tpublic void ProcessExternalTypeMapGroupSeen (MethodDefinition callingMethod, TypeReference typeMapGroup)\n+\t\t{\n+\t\t\t_referencedExternalTypeMaps.Add(typeMapGroup);\n+\t\t\tif (!_pendingExternalTypeMapEntries.Remove (typeMapGroup, out List<CustomAttributeWithOrigin>? pendingEntries)) {\n+\t\t\t\treturn;\n+\t\t\t}\n+\n+\t\t\tforeach (var entry in pendingEntries) {\n+\t\t\t\tMarkTypeMapAttribute (entry, new DependencyInfo (DependencyKind.TypeMapEntry, callingMethod));\n+\t\t\t}\n+\t\t}\n+\n+\t\tpublic void ProcessProxyTypeMapGroupSeen (MethodDefinition callingMethod, TypeReference typeMapGroup)\n+\t\t{\n+\t\t\t_referencedProxyTypeMaps.Add (typeMapGroup);\n+\t\t\tif (!_pendingProxyTypeMapEntries.Remove (typeMapGroup, out List<CustomAttributeWithOrigin>? pendingEntries)) {\n+\t\t\t\treturn;\n+\t\t\t}\n+\n+\t\t\tforeach (var entry in pendingEntries) {\n+\t\t\t\tMarkTypeMapAttribute (entry, new DependencyInfo (DependencyKind.TypeMapEntry, callingMethod));\n+\t\t\t}\n+\t\t}\n+\n+\t\tvoid MarkTypeMapAttribute (CustomAttributeWithOrigin entry, DependencyInfo info)\n+\t\t{\n+\t\t\t_markStep.MarkCustomAttribute (entry.Attribute, info, new MessageOrigin (entry.Origin));\n+\n+\t\t\t// Mark the target type as instantiated\n+\t\t\tTypeReference targetType = (TypeReference) entry.Attribute.ConstructorArguments[1].Value;\n+\t\t\tif (targetType is not null && _context.Resolve (targetType) is TypeDefinition targetTypeDef)\n+\t\t\t\t_context.Annotations.MarkInstantiated (targetTypeDef);\n+\t\t}\n+\n+\t\tpublic void ProcessType (TypeDefinition definition)\n+\t\t{\n+\t\t\tRecordTargetTypeSeen (definition, _unmarkedExternalTypeMapEntries, _referencedExternalTypeMaps, _pendingExternalTypeMapEntries);\n+\t\t}\n+\n+\t\tvoid RecordTargetTypeSeen (TypeDefinition definition, Dictionary<TypeDefinition, Dictionary<TypeReference, List<CustomAttributeWithOrigin>>> unmarked, HashSet<TypeReference> referenced, Dictionary<TypeReference, List<CustomAttributeWithOrigin>> pending)\n+\t\t{\n+\t\t\tif (unmarked.Remove (definition, out Dictionary<TypeReference, List<CustomAttributeWithOrigin>>? entries)) {\n+\t\t\t\tforeach (var (key, attributes) in entries) {\n+\n+\t\t\t\t\tif (referenced.Contains (key)) {\n+\t\t\t\t\t\tforeach (var attr in attributes) {\n+\t\t\t\t\t\t\tMarkTypeMapAttribute (attr, new DependencyInfo (DependencyKind.TypeMapEntry, definition));\n+\t\t\t\t\t\t}\n+\t\t\t\t\t}\n+\n+\t\t\t\t\tif (!pending.TryGetValue (key, out List<CustomAttributeWithOrigin>? value)) {\n+\t\t\t\t\t\tpending[key] = [.. attributes];\n+\t\t\t\t\t} else {\n+\t\t\t\t\t\tvalue.AddRange (attributes);\n+\t\t\t\t\t}\n+\t\t\t\t}\n+\t\t\t\tunmarked.Remove (definition);\n+\t\t\t}\n+\t\t}",
+        "comment_created_at": "2025-06-13T17:44:45+00:00",
+        "comment_author": "jtschuster",
+        "comment_body": "To make sure I understand this, would these renames be accurate?\r\n\r\n```suggestion\r\n\t\tvoid RecordTargetTypeSeen (TypeDefinition targetType, Dictionary<TypeDefinition, Dictionary<TypeReference, List<CustomAttributeWithOrigin>>> unmarkedTypeMapAttributes, HashSet<TypeReference> referenceTypeMapUniverses, Dictionary<TypeReference, List<CustomAttributeWithOrigin>> typeMapAttributesPendingUniverseMarking)\r\n\t\t{\r\n\t\t\tif (unmarkedTypeMapAttributes.Remove (targetType, out Dictionary<TypeReference, List<CustomAttributeWithOrigin>>? entries)) {\r\n\t\t\t\tforeach (var (typeMapUniverse, attributes) in entries) {\r\n\r\n\t\t\t\t\tif (referenceTypeMapUniverses.Contains (typeMapUniverse)) {\r\n\t\t\t\t\t\tforeach (var attr in attributes) {\r\n\t\t\t\t\t\t\tMarkTypeMapAttribute (attr, new DependencyInfo (DependencyKind.TypeMapEntry, targetType));\r\n\t\t\t\t\t\t}\r\n\t\t\t\t\t}\r\n\r\n\t\t\t\t\tif (!typeMapAttributesPendingUniverseMarking.TryGetValue (typeMapUniverse, out List<CustomAttributeWithOrigin>? value)) {\r\n\t\t\t\t\t\ttypeMapAttributesPendingUniverseMarking[key] = [.. attributes];\r\n\t\t\t\t\t} else {\r\n\t\t\t\t\t\tvalue.AddRange (attributes);\r\n\t\t\t\t\t}\r\n\t\t\t\t}\r\n\t\t\t}\r\n\t\t}\r\n```\r\n\r\nAlso, could we move adding the attributes to the pending list to the `else` case for the `if (referencedTypeMapUniverses.Contains(typeMapUniverse)`? In other words, if we already mark the attributes because the typeMapUniverse is referenced, we don't also need to add them as pending?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2146340039",
+    "pr_number": 116659,
+    "pr_file": "src/installer/managed/Microsoft.NET.HostModel/Bundle/Manifest.cs",
+    "created_at": "2025-06-14T01:16:08+00:00",
+    "commented_code": "{\n                entry.Write(writer);\n            }\n            Debug.Assert(writer.BaseStream.Position - startOffset == GetManifestLength(BundleMajorVersion, Files.Select(static f => f.RelativePath)),\n                $\"Manifest size mismatch: {writer.BaseStream.Position - startOffset} != {GetManifestLength(BundleMajorVersion, Files.Select(static f => f.RelativePath))}\");\n\n            return startOffset;\n        }\n\n        /// <summary>\n        /// Calculates the length of the manifest in bytes.\n        /// </summary>\n        public long GetManifestLength(uint bundleMajorVersion, IEnumerable<string> fileSpecs)\n        {\n            // Size of the header\n            long size = sizeof(uint) * 2 + // BundleMajorVersion + BundleMinorVersion\n                        sizeof(int) + // NumEmbeddedFiles\n                        (bundleMajorVersion >= 2 ? (sizeof(long) * 4 + sizeof(ulong)) : 0); // DepsJson and RuntimeConfigJson offsets and sizes, and Flags\n#pragma warning disable CA1850 // Prefer static 'System.Security.Cryptography.SHA256.HashData' method over 'ComputeHash'\n            size += Bundler.GetBinaryWriterStringLength(Convert.ToBase64String(SHA256.Create().ComputeHash([])).Substring(BundleIdLength).Replace('/', '_'));",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2146340039",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116659,
+        "pr_file": "src/installer/managed/Microsoft.NET.HostModel/Bundle/Manifest.cs",
+        "discussion_id": "2146340039",
+        "commented_code": "@@ -165,10 +166,33 @@ public long Write(BinaryWriter writer)\n             {\n                 entry.Write(writer);\n             }\n+            Debug.Assert(writer.BaseStream.Position - startOffset == GetManifestLength(BundleMajorVersion, Files.Select(static f => f.RelativePath)),\n+                $\"Manifest size mismatch: {writer.BaseStream.Position - startOffset} != {GetManifestLength(BundleMajorVersion, Files.Select(static f => f.RelativePath))}\");\n \n             return startOffset;\n         }\n \n+        /// <summary>\n+        /// Calculates the length of the manifest in bytes.\n+        /// </summary>\n+        public long GetManifestLength(uint bundleMajorVersion, IEnumerable<string> fileSpecs)\n+        {\n+            // Size of the header\n+            long size = sizeof(uint) * 2 + // BundleMajorVersion + BundleMinorVersion\n+                        sizeof(int) + // NumEmbeddedFiles\n+                        (bundleMajorVersion >= 2 ? (sizeof(long) * 4 + sizeof(ulong)) : 0); // DepsJson and RuntimeConfigJson offsets and sizes, and Flags\n+#pragma warning disable CA1850 // Prefer static 'System.Security.Cryptography.SHA256.HashData' method over 'ComputeHash'\n+            size += Bundler.GetBinaryWriterStringLength(Convert.ToBase64String(SHA256.Create().ComputeHash([])).Substring(BundleIdLength).Replace('/', '_'));",
+        "comment_created_at": "2025-06-14T01:16:08+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Consider replacing the literal '[]' with 'Array.Empty<byte>()' to improve readability and clearly indicate an empty byte array.\n```suggestion\n            size += Bundler.GetBinaryWriterStringLength(Convert.ToBase64String(SHA256.Create().ComputeHash(Array.Empty<byte>())).Substring(BundleIdLength).Replace('/', '_'));\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2164699387",
+    "pr_number": 116659,
+    "pr_file": "src/installer/managed/Microsoft.NET.HostModel/MachO/BinaryFormat/Blobs/CodeDirectoryBlob.cs",
+    "created_at": "2025-06-24T18:58:51+00:00",
+    "commented_code": "+ SpecialSlotCount * HashSize\n        + CodeSlotCount * HashSize;\n\n    public string Identifier => _identifier;\n    public CodeDirectoryFlags Flags => (CodeDirectoryFlags)((uint)_cdHeader._flags).ConvertFromBigEndian();\n    public CodeDirectoryVersion Version => (CodeDirectoryVersion)((uint)_cdHeader._version).ConvertFromBigEndian();\n    public IReadOnlyList<IReadOnlyList<byte>> SpecialSlotHashes => _specialSlotHashes;\n    public IReadOnlyList<IReadOnlyList<byte>> CodeHashes => _codeHashes;\n    public ulong ExecutableSegmentBase => _cdHeader._execSegmentBase.ConvertFromBigEndian();\n    public ulong ExecutableSegmentLimit => _cdHeader._execSegmentLimit.ConvertFromBigEndian();\n    public ExecutableSegmentFlags ExecutableSegmentFlags => (ExecutableSegmentFlags)((ulong)_cdHeader._execSegmentFlags).ConvertFromBigEndian();\n\n    private uint SpecialSlotCount => _cdHeader._specialSlotCount.ConvertFromBigEndian();\n    private uint CodeSlotCount => _cdHeader._codeSlotCount.ConvertFromBigEndian();\n    private byte HashSize => _cdHeader.HashSize;\n    private uint HashesOffset => _cdHeader._hashesOffset.ConvertFromBigEndian();\n\n    public static CodeDirectoryBlob Create(\n        IMachOFileReader accessor,\n        long signatureStart,\n        string identifier,\n        RequirementsBlob requirementsBlob,\n        EntitlementsBlob? entitlementsBlob = null,\n        DerEntitlementsBlob? derEntitlementsBlob = null,\n        HashType hashType = HashType.SHA256,\n        uint pageSize = MachObjectFile.DefaultPageSize)\n    {\n        uint codeSlotCount = GetCodeSlotCount((uint)signatureStart, pageSize);\n        uint specialCodeSlotCount = (uint)CodeDirectorySpecialSlot.Requirements;\n        uint specialCodeSlotCount = (uint)(derEntitlementsBlob != null ? CodeDirectorySpecialSlot.DerEntitlements :\n            entitlementsBlob != null ? CodeDirectorySpecialSlot.Entitlements :\n            CodeDirectorySpecialSlot.Requirements);",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2164699387",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116659,
+        "pr_file": "src/installer/managed/Microsoft.NET.HostModel/MachO/BinaryFormat/Blobs/CodeDirectoryBlob.cs",
+        "discussion_id": "2164699387",
+        "commented_code": "@@ -97,16 +99,34 @@ private CodeDirectoryBlob(\n         + SpecialSlotCount * HashSize\n         + CodeSlotCount * HashSize;\n \n+    public string Identifier => _identifier;\n+    public CodeDirectoryFlags Flags => (CodeDirectoryFlags)((uint)_cdHeader._flags).ConvertFromBigEndian();\n+    public CodeDirectoryVersion Version => (CodeDirectoryVersion)((uint)_cdHeader._version).ConvertFromBigEndian();\n+    public IReadOnlyList<IReadOnlyList<byte>> SpecialSlotHashes => _specialSlotHashes;\n+    public IReadOnlyList<IReadOnlyList<byte>> CodeHashes => _codeHashes;\n+    public ulong ExecutableSegmentBase => _cdHeader._execSegmentBase.ConvertFromBigEndian();\n+    public ulong ExecutableSegmentLimit => _cdHeader._execSegmentLimit.ConvertFromBigEndian();\n+    public ExecutableSegmentFlags ExecutableSegmentFlags => (ExecutableSegmentFlags)((ulong)_cdHeader._execSegmentFlags).ConvertFromBigEndian();\n+\n+    private uint SpecialSlotCount => _cdHeader._specialSlotCount.ConvertFromBigEndian();\n+    private uint CodeSlotCount => _cdHeader._codeSlotCount.ConvertFromBigEndian();\n+    private byte HashSize => _cdHeader.HashSize;\n+    private uint HashesOffset => _cdHeader._hashesOffset.ConvertFromBigEndian();\n+\n     public static CodeDirectoryBlob Create(\n         IMachOFileReader accessor,\n         long signatureStart,\n         string identifier,\n         RequirementsBlob requirementsBlob,\n+        EntitlementsBlob? entitlementsBlob = null,\n+        DerEntitlementsBlob? derEntitlementsBlob = null,\n         HashType hashType = HashType.SHA256,\n         uint pageSize = MachObjectFile.DefaultPageSize)\n     {\n         uint codeSlotCount = GetCodeSlotCount((uint)signatureStart, pageSize);\n-        uint specialCodeSlotCount = (uint)CodeDirectorySpecialSlot.Requirements;\n+        uint specialCodeSlotCount = (uint)(derEntitlementsBlob != null ? CodeDirectorySpecialSlot.DerEntitlements :\n+            entitlementsBlob != null ? CodeDirectorySpecialSlot.Entitlements :\n+            CodeDirectorySpecialSlot.Requirements);",
+        "comment_created_at": "2025-06-24T18:58:51+00:00",
+        "comment_author": "elinor-fung",
+        "comment_body": "nit: I find this easier to read.\r\n```suggestion\r\n        uint specialCodeSlotCount = (uint)(derEntitlementsBlob != null\r\n            ? CodeDirectorySpecialSlot.DerEntitlements\r\n            : entitlementsBlob != null ? CodeDirectorySpecialSlot.Entitlements : CodeDirectorySpecialSlot.Requirements);\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2164748680",
+    "pr_number": 116659,
+    "pr_file": "src/installer/managed/Microsoft.NET.HostModel/Bundle/Bundler.cs",
+    "created_at": "2025-06-24T19:31:49+00:00",
+    "commented_code": "throw new ArgumentException(\"Invalid input specification: Must specify the host binary\");\n            }\n\n            var relativePathToSpec = GetFilteredFileSpecs(fileSpecs);",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2164748680",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116659,
+        "pr_file": "src/installer/managed/Microsoft.NET.HostModel/Bundle/Bundler.cs",
+        "discussion_id": "2164748680",
+        "commented_code": "@@ -266,86 +279,232 @@ public string GenerateBundle(IReadOnlyList<FileSpec> fileSpecs)\n                 throw new ArgumentException(\"Invalid input specification: Must specify the host binary\");\n             }\n \n+            var relativePathToSpec = GetFilteredFileSpecs(fileSpecs);",
+        "comment_created_at": "2025-06-24T19:31:49+00:00",
+        "comment_author": "elinor-fung",
+        "comment_body": "nit: use the actual type instead of `var`, since it is not obvious from the right side.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2179821456",
+    "pr_number": 117238,
+    "pr_file": "src/coreclr/tools/aot/ILCompiler.Compiler/Compiler/CompilerTypeSystemContext.ValueTypeMethods.cs",
+    "created_at": "2025-07-02T11:32:16+00:00",
+    "commented_code": "if (IsAsyncStateMachineType(valueType))\n                return false;\n\n            // ValueTuples override Equals/GetHashCode and don't have a `base.GetHashCode` call. So avoid the infrastructure.\n            if (valueType.Module == SystemModule && valueType.Name.StartsWith(\"ValueTuple`\", StringComparison.OrdinalIgnoreCase) && valueType.Namespace == \"System\")",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2179821456",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117238,
+        "pr_file": "src/coreclr/tools/aot/ILCompiler.Compiler/Compiler/CompilerTypeSystemContext.ValueTypeMethods.cs",
+        "discussion_id": "2179821456",
+        "commented_code": "@@ -102,6 +102,10 @@ private bool RequiresValueTypeGetFieldHelperMethod(MetadataType valueType)\n             if (IsAsyncStateMachineType(valueType))\n                 return false;\n \n+            // ValueTuples override Equals/GetHashCode and don't have a `base.GetHashCode` call. So avoid the infrastructure.\n+            if (valueType.Module == SystemModule && valueType.Name.StartsWith(\"ValueTuple`\", StringComparison.OrdinalIgnoreCase) && valueType.Namespace == \"System\")",
+        "comment_created_at": "2025-07-02T11:32:16+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "[nitpick] Extract the magic string `\"ValueTuple`\" and the namespace literal into named constants or a helper method to improve readability and avoid duplication.\n```suggestion\n            if (valueType.Module == SystemModule && valueType.Name.StartsWith(ValueTuplePrefix, StringComparison.OrdinalIgnoreCase) && valueType.Namespace == SystemNamespace)\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "783635433",
+    "pr_number": 63722,
+    "pr_file": "src/libraries/System.Collections/src/System/Collections/BitArray.cs",
+    "created_at": "2022-01-13T05:12:58+00:00",
+    "commented_code": "}\n\n            uint i = 0;\n            if (Avx2.IsSupported)\n            {\n                fixed (int* leftPtr = thisArray)\n                fixed (int* rightPtr = valueArray)\n                {\n                    for (; i < (uint)count - (Vector256IntCount - 1u); i += Vector256IntCount)\n                    {\n                        Vector256<int> leftVec = Avx.LoadVector256(leftPtr + i);\n                        Vector256<int> rightVec = Avx.LoadVector256(rightPtr + i);\n                        Avx.Store(leftPtr + i, Avx2.And(leftVec, rightVec));\n                    }\n                }\n            }\n            else if (Sse2.IsSupported)\n\n            ref int left = ref MemoryMarshal.GetArrayDataReference<int>(thisArray);\n            ref int right = ref MemoryMarshal.GetArrayDataReference<int>(valueArray);\n\n            if (Vector256.IsHardwareAccelerated)\n            {\n                fixed (int* leftPtr = thisArray)\n                fixed (int* rightPtr = valueArray)\n                for (; i < (uint)count - (Vector256IntCount - 1u); i += Vector256IntCount)\n                {\n                    for (; i < (uint)count - (Vector128IntCount - 1u); i += Vector128IntCount)\n                    {\n                        Vector128<int> leftVec = Sse2.LoadVector128(leftPtr + i);\n                        Vector128<int> rightVec = Sse2.LoadVector128(rightPtr + i);\n                        Sse2.Store(leftPtr + i, Sse2.And(leftVec, rightVec));\n                    }\n                    Vector256<int> result = Vector256.LoadUnsafe(ref left, i) & Vector256.LoadUnsafe(ref right, i);",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "783635433",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 63722,
+        "pr_file": "src/libraries/System.Collections/src/System/Collections/BitArray.cs",
+        "discussion_id": "783635433",
+        "commented_code": "@@ -400,43 +353,24 @@ public unsafe BitArray And(BitArray value)\n             }\n \n             uint i = 0;\n-            if (Avx2.IsSupported)\n-            {\n-                fixed (int* leftPtr = thisArray)\n-                fixed (int* rightPtr = valueArray)\n-                {\n-                    for (; i < (uint)count - (Vector256IntCount - 1u); i += Vector256IntCount)\n-                    {\n-                        Vector256<int> leftVec = Avx.LoadVector256(leftPtr + i);\n-                        Vector256<int> rightVec = Avx.LoadVector256(rightPtr + i);\n-                        Avx.Store(leftPtr + i, Avx2.And(leftVec, rightVec));\n-                    }\n-                }\n-            }\n-            else if (Sse2.IsSupported)\n+\n+            ref int left = ref MemoryMarshal.GetArrayDataReference<int>(thisArray);\n+            ref int right = ref MemoryMarshal.GetArrayDataReference<int>(valueArray);\n+\n+            if (Vector256.IsHardwareAccelerated)\n             {\n-                fixed (int* leftPtr = thisArray)\n-                fixed (int* rightPtr = valueArray)\n+                for (; i < (uint)count - (Vector256IntCount - 1u); i += Vector256IntCount)\n                 {\n-                    for (; i < (uint)count - (Vector128IntCount - 1u); i += Vector128IntCount)\n-                    {\n-                        Vector128<int> leftVec = Sse2.LoadVector128(leftPtr + i);\n-                        Vector128<int> rightVec = Sse2.LoadVector128(rightPtr + i);\n-                        Sse2.Store(leftPtr + i, Sse2.And(leftVec, rightVec));\n-                    }\n+                    Vector256<int> result = Vector256.LoadUnsafe(ref left, i) & Vector256.LoadUnsafe(ref right, i);",
+        "comment_created_at": "2022-01-13T05:12:58+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "The xplat helper intrinsics support operators and so we can make this \"more readable\" by just using `x & y`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2175437899",
+    "pr_number": 117103,
+    "pr_file": "src/libraries/System.Numerics.Tensors/src/System/Numerics/Tensors/netcore/Tensor.cs",
+    "created_at": "2025-06-30T16:07:29+00:00",
+    "commented_code": "}\n            Span<T> dstSpan = MemoryMarshal.CreateSpan(ref destination._reference, (int)totalLength);\n\n            if (dimension == 0 || dimension == -1)\n            if (dimension is 0 or (-1))",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2175437899",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117103,
+        "pr_file": "src/libraries/System.Numerics.Tensors/src/System/Numerics/Tensors/netcore/Tensor.cs",
+        "discussion_id": "2175437899",
+        "commented_code": "@@ -243,7 +240,7 @@ public static ref readonly TensorSpan<T> ConcatenateOnDimension<T>(int dimension\n             }\n             Span<T> dstSpan = MemoryMarshal.CreateSpan(ref destination._reference, (int)totalLength);\n \n-            if (dimension == 0 || dimension == -1)\n+            if (dimension is 0 or (-1))",
+        "comment_created_at": "2025-06-30T16:07:29+00:00",
+        "comment_author": "stephentoub",
+        "comment_body": "are these parens around the -1 required?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2175479582",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117103,
+        "pr_file": "src/libraries/System.Numerics.Tensors/src/System/Numerics/Tensors/netcore/Tensor.cs",
+        "discussion_id": "2175437899",
+        "commented_code": "@@ -243,7 +240,7 @@ public static ref readonly TensorSpan<T> ConcatenateOnDimension<T>(int dimension\n             }\n             Span<T> dstSpan = MemoryMarshal.CreateSpan(ref destination._reference, (int)totalLength);\n \n-            if (dimension == 0 || dimension == -1)\n+            if (dimension is 0 or (-1))",
+        "comment_created_at": "2025-06-30T16:31:39+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "Believe so, the fixer automatically applied them.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2175638476",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117103,
+        "pr_file": "src/libraries/System.Numerics.Tensors/src/System/Numerics/Tensors/netcore/Tensor.cs",
+        "discussion_id": "2175437899",
+        "commented_code": "@@ -243,7 +240,7 @@ public static ref readonly TensorSpan<T> ConcatenateOnDimension<T>(int dimension\n             }\n             Span<T> dstSpan = MemoryMarshal.CreateSpan(ref destination._reference, (int)totalLength);\n \n-            if (dimension == 0 || dimension == -1)\n+            if (dimension is 0 or (-1))",
+        "comment_created_at": "2025-06-30T18:16:25+00:00",
+        "comment_author": "stephentoub",
+        "comment_body": "It shouldn't be.\r\n[SharpLab](https://sharplab.io/#v2:EYLgxg9gTgpgtADwGwBYA+ABATARgLABQGAzAATakDCpA3oaQ+WcBBADakCyAFAJYB2AF1IATXgFsY/AM68IMgJT1GdAo3WleAM1LcxkmXJmbppAAylopODiVqNDVQ4cYA7KUFQArjADcyhwBfAI0Q9TdSLQBDNmk/EOCCQKA===)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2175647686",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117103,
+        "pr_file": "src/libraries/System.Numerics.Tensors/src/System/Numerics/Tensors/netcore/Tensor.cs",
+        "discussion_id": "2175437899",
+        "commented_code": "@@ -243,7 +240,7 @@ public static ref readonly TensorSpan<T> ConcatenateOnDimension<T>(int dimension\n             }\n             Span<T> dstSpan = MemoryMarshal.CreateSpan(ref destination._reference, (int)totalLength);\n \n-            if (dimension == 0 || dimension == -1)\n+            if (dimension is 0 or (-1))",
+        "comment_created_at": "2025-06-30T18:23:14+00:00",
+        "comment_author": "tannergooding",
+        "comment_body": "```suggestion\r\n            if (dimension is 0 or -1)\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2112011595",
+    "pr_number": 116057,
+    "pr_file": "src/libraries/System.Private.CoreLib/src/System/String.Comparison.cs",
+    "created_at": "2025-05-28T14:04:54+00:00",
+    "commented_code": "return Marvin.ComputeHash32OrdinalIgnoreCase(ref MemoryMarshal.GetReference(value), value.Length /* in chars, not bytes */, (uint)seed, (uint)(seed >> 32));\n        }\n\n#if USE_XXHASH3\n#if TARGET_AMD64\n        private const int XxHash3Threshold = 64;\n#else\n        // XxHash3 is less efficient on ARM64 due to the lack of 256/512-bit vectors\n        // We should revisit this if we start using SVE in the hash implementation.\n        private const int XxHash3Threshold = 128;",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2112011595",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 116057,
+        "pr_file": "src/libraries/System.Private.CoreLib/src/System/String.Comparison.cs",
+        "discussion_id": "2112011595",
+        "commented_code": "@@ -812,6 +816,16 @@ internal static int GetHashCodeOrdinalIgnoreCase(ReadOnlySpan<char> value)\n             return Marvin.ComputeHash32OrdinalIgnoreCase(ref MemoryMarshal.GetReference(value), value.Length /* in chars, not bytes */, (uint)seed, (uint)(seed >> 32));\n         }\n \n+#if USE_XXHASH3\n+#if TARGET_AMD64\n+        private const int XxHash3Threshold = 64;\n+#else\n+        // XxHash3 is less efficient on ARM64 due to the lack of 256/512-bit vectors\n+        // We should revisit this if we start using SVE in the hash implementation.\n+        private const int XxHash3Threshold = 128;",
+        "comment_created_at": "2025-05-28T14:04:54+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "The threshold constants (64 and 128) are magic numbers. Consider adding a comment or linking to benchmarks/rationale, or centralize them in a shared configuration to improve readability and future tweaks.\n```suggestion\n        private static class XxHash3Thresholds\n        {\n            // Threshold for using XxHash3 on AMD64. This value was chosen based on performance benchmarks\n            // indicating that XxHash3 is more efficient for strings of length 64 or greater on this architecture.\n            public const int AMD64 = 64;\n\n            // Threshold for using XxHash3 on ARM64. Due to the lack of 256/512-bit vector support on ARM64,\n            // XxHash3 is less efficient for shorter strings. The threshold of 128 was determined based on\n            // current performance characteristics. This may need to be revisited if SVE (Scalable Vector Extension)\n            // is utilized in the future.\n            public const int ARM64 = 128;\n        }\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2172068909",
+    "pr_number": 117084,
+    "pr_file": "src/coreclr/tools/aot/ILCompiler.Compiler/Compiler/SubstitutedILProvider.cs",
+    "created_at": "2025-06-27T13:37:56+00:00",
+    "commented_code": "|| method.IsNoOptimization\n                || _nestedILProvider.GetMethodIL(method) is not MethodIL methodIL)\n            {\n                constant = 0;\n                return false;\n                return Fail(out constant);\n            }\n\n            Stack<int?> stack = new Stack<int?>(methodIL.MaxStack);\n\n            int instructionCounter = 0;\n\n            var reader = new ILReader(methodIL.GetILBytes());\n            var opcode = reader.ReadILOpcode();\n            switch (opcode)\n            while (reader.HasNext && instructionCounter++ < 1000)\n            {\n                case ILOpcode.ldc_i4: constant = (int)reader.ReadILUInt32(); break;\n                case ILOpcode.ldc_i4_s: constant = (sbyte)reader.ReadILByte(); break;\n                case >= ILOpcode.ldc_i4_0 and <= ILOpcode.ldc_i4_8: constant = opcode - ILOpcode.ldc_i4_0; break;\n                case ILOpcode.ldc_i4_m1: constant = -1; break;\n\n                case ILOpcode.call:\n                var opcode = reader.ReadILOpcode();\n                switch (opcode)\n                {\n                    MethodDesc callee = (MethodDesc)methodIL.GetObject(reader.ReadILToken());\n                    if (reader.ReadILOpcode() != ILOpcode.ret)\n                    case ILOpcode.ldc_i4: stack.Push((int)reader.ReadILUInt32()); break;\n                    case ILOpcode.ldc_i4_s: stack.Push((sbyte)reader.ReadILByte()); break;\n                    case >= ILOpcode.ldc_i4_0 and <= ILOpcode.ldc_i4_8: stack.Push(opcode - ILOpcode.ldc_i4_0); break;\n                    case ILOpcode.ldc_i4_m1: stack.Push(-1); break;\n\n                    case ILOpcode.ldsfld:\n                    {\n                        constant = 0;\n                        return false;\n                        reader.ReadILToken();\n                        stack.Push(null);\n                        break;\n                    }\n\n                    BodySubstitution substitution = _substitutionProvider.GetSubstitution(method);\n                    if (substitution != null && substitution.Value is int c)\n                    case ILOpcode.brtrue:\n                    case ILOpcode.brtrue_s:\n                    case ILOpcode.brfalse:\n                    case ILOpcode.brfalse_s:\n                    {\n                        constant = c;\n                        return true;\n                        if (!stack.TryPop(out int? val) || !val.HasValue)\n                            return Fail(out constant);\n\n                        bool taken = (opcode is ILOpcode.brtrue or ILOpcode.brtrue_s && val.Value != 0)\n                            || (opcode is ILOpcode.brfalse or ILOpcode.brfalse_s && val.Value == 0);",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2172068909",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117084,
+        "pr_file": "src/coreclr/tools/aot/ILCompiler.Compiler/Compiler/SubstitutedILProvider.cs",
+        "discussion_id": "2172068909",
+        "commented_code": "@@ -675,56 +675,107 @@ private bool TryGetMethodConstantValue(MethodDesc method, out int constant, int\n                 || method.IsNoOptimization\n                 || _nestedILProvider.GetMethodIL(method) is not MethodIL methodIL)\n             {\n-                constant = 0;\n-                return false;\n+                return Fail(out constant);\n             }\n \n+            Stack<int?> stack = new Stack<int?>(methodIL.MaxStack);\n+\n+            int instructionCounter = 0;\n+\n             var reader = new ILReader(methodIL.GetILBytes());\n-            var opcode = reader.ReadILOpcode();\n-            switch (opcode)\n+            while (reader.HasNext && instructionCounter++ < 1000)\n             {\n-                case ILOpcode.ldc_i4: constant = (int)reader.ReadILUInt32(); break;\n-                case ILOpcode.ldc_i4_s: constant = (sbyte)reader.ReadILByte(); break;\n-                case >= ILOpcode.ldc_i4_0 and <= ILOpcode.ldc_i4_8: constant = opcode - ILOpcode.ldc_i4_0; break;\n-                case ILOpcode.ldc_i4_m1: constant = -1; break;\n-\n-                case ILOpcode.call:\n+                var opcode = reader.ReadILOpcode();\n+                switch (opcode)\n                 {\n-                    MethodDesc callee = (MethodDesc)methodIL.GetObject(reader.ReadILToken());\n-                    if (reader.ReadILOpcode() != ILOpcode.ret)\n+                    case ILOpcode.ldc_i4: stack.Push((int)reader.ReadILUInt32()); break;\n+                    case ILOpcode.ldc_i4_s: stack.Push((sbyte)reader.ReadILByte()); break;\n+                    case >= ILOpcode.ldc_i4_0 and <= ILOpcode.ldc_i4_8: stack.Push(opcode - ILOpcode.ldc_i4_0); break;\n+                    case ILOpcode.ldc_i4_m1: stack.Push(-1); break;\n+\n+                    case ILOpcode.ldsfld:\n                     {\n-                        constant = 0;\n-                        return false;\n+                        reader.ReadILToken();\n+                        stack.Push(null);\n+                        break;\n                     }\n \n-                    BodySubstitution substitution = _substitutionProvider.GetSubstitution(method);\n-                    if (substitution != null && substitution.Value is int c)\n+                    case ILOpcode.brtrue:\n+                    case ILOpcode.brtrue_s:\n+                    case ILOpcode.brfalse:\n+                    case ILOpcode.brfalse_s:\n                     {\n-                        constant = c;\n-                        return true;\n+                        if (!stack.TryPop(out int? val) || !val.HasValue)\n+                            return Fail(out constant);\n+\n+                        bool taken = (opcode is ILOpcode.brtrue or ILOpcode.brtrue_s && val.Value != 0)\n+                            || (opcode is ILOpcode.brfalse or ILOpcode.brfalse_s && val.Value == 0);",
+        "comment_created_at": "2025-06-27T13:37:56+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "The pattern combinators in the branch condition lack parentheses and could be misparsed. I recommend grouping the opcode check before the value check, e.g.: `bool taken = ((opcode is ILOpcode.brtrue or ILOpcode.brtrue_s) && val.Value != 0) || ((opcode is ILOpcode.brfalse or ILOpcode.brfalse_s) && val.Value == 0);`\n```suggestion\n                        bool taken = ((opcode is ILOpcode.brtrue or ILOpcode.brtrue_s) && val.Value != 0)\n                            || ((opcode is ILOpcode.brfalse or ILOpcode.brfalse_s) && val.Value == 0);\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2172068930",
+    "pr_number": 117084,
+    "pr_file": "src/coreclr/tools/aot/ILCompiler.Compiler/Compiler/SubstitutedILProvider.cs",
+    "created_at": "2025-06-27T13:37:57+00:00",
+    "commented_code": "|| method.IsNoOptimization\n                || _nestedILProvider.GetMethodIL(method) is not MethodIL methodIL)\n            {\n                constant = 0;\n                return false;\n                return Fail(out constant);\n            }\n\n            Stack<int?> stack = new Stack<int?>(methodIL.MaxStack);\n\n            int instructionCounter = 0;\n\n            var reader = new ILReader(methodIL.GetILBytes());\n            var opcode = reader.ReadILOpcode();\n            switch (opcode)\n            while (reader.HasNext && instructionCounter++ < 1000)",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "2172068930",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 117084,
+        "pr_file": "src/coreclr/tools/aot/ILCompiler.Compiler/Compiler/SubstitutedILProvider.cs",
+        "discussion_id": "2172068930",
+        "commented_code": "@@ -675,56 +675,107 @@ private bool TryGetMethodConstantValue(MethodDesc method, out int constant, int\n                 || method.IsNoOptimization\n                 || _nestedILProvider.GetMethodIL(method) is not MethodIL methodIL)\n             {\n-                constant = 0;\n-                return false;\n+                return Fail(out constant);\n             }\n \n+            Stack<int?> stack = new Stack<int?>(methodIL.MaxStack);\n+\n+            int instructionCounter = 0;\n+\n             var reader = new ILReader(methodIL.GetILBytes());\n-            var opcode = reader.ReadILOpcode();\n-            switch (opcode)\n+            while (reader.HasNext && instructionCounter++ < 1000)",
+        "comment_created_at": "2025-06-27T13:37:57+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "[nitpick] The hardcoded limit of 1000 on interpreted instructions is a magic number. Consider extracting it to a named constant (e.g. `const int MaxInterpretedInstructions = 1000;`) for clarity and easier tuning.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1898591279",
+    "pr_number": 110945,
+    "pr_file": "src/coreclr/System.Private.CoreLib/src/System/Reflection/RuntimePropertyInfo.cs",
+    "created_at": "2024-12-27T15:48:01+00:00",
+    "commented_code": "scope.GetPropertyProps(tkProperty, out m_utf8name, out m_flags, out _);\n\n            Associates.AssignAssociates(scope, tkProperty, declaredType, reflectedTypeCache.GetRuntimeType(),\n            RuntimeType reflectedRuntimeType = reflectedTypeCache.GetRuntimeType();\n            Associates.AssignAssociates(scope, tkProperty, declaredType, reflectedRuntimeType,\n                out _, out _, out _,\n                out m_getterMethod, out m_setterMethod, out m_otherMethod,\n                out isPrivate, out m_bindingFlags);\n\n            // lookup getter/setter when getter and setter are inherited from base class but just a setter/getter is overridden on a sub type\n            if ((m_getterMethod != null && m_getterMethod.IsVirtual && m_setterMethod == null)",
+    "repo_full_name": "dotnet/runtime",
+    "discussion_comments": [
+      {
+        "comment_id": "1898591279",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 110945,
+        "pr_file": "src/coreclr/System.Private.CoreLib/src/System/Reflection/RuntimePropertyInfo.cs",
+        "discussion_id": "1898591279",
+        "commented_code": "@@ -44,10 +44,63 @@ internal RuntimePropertyInfo(\n \n             scope.GetPropertyProps(tkProperty, out m_utf8name, out m_flags, out _);\n \n-            Associates.AssignAssociates(scope, tkProperty, declaredType, reflectedTypeCache.GetRuntimeType(),\n+            RuntimeType reflectedRuntimeType = reflectedTypeCache.GetRuntimeType();\n+            Associates.AssignAssociates(scope, tkProperty, declaredType, reflectedRuntimeType,\n                 out _, out _, out _,\n                 out m_getterMethod, out m_setterMethod, out m_otherMethod,\n                 out isPrivate, out m_bindingFlags);\n+\n+            // lookup getter/setter when getter and setter are inherited from base class but just a setter/getter is overridden on a sub type\n+            if ((m_getterMethod != null && m_getterMethod.IsVirtual && m_setterMethod == null)",
+        "comment_created_at": "2024-12-27T15:48:01+00:00",
+        "comment_author": "steveharter",
+        "comment_body": "nit: as mentioned earlier, `is null` and `is not null` is preferred over `== null` and `!= null` since it will prevent a call to the `==` or `!=` operator if that is overridden. ~In this case, `RuntimeMethodInfo` doesn't overload those operators so it doesn't matter but~ it is just more obvious to understand intent when using `is`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1898600483",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 110945,
+        "pr_file": "src/coreclr/System.Private.CoreLib/src/System/Reflection/RuntimePropertyInfo.cs",
+        "discussion_id": "1898591279",
+        "commented_code": "@@ -44,10 +44,63 @@ internal RuntimePropertyInfo(\n \n             scope.GetPropertyProps(tkProperty, out m_utf8name, out m_flags, out _);\n \n-            Associates.AssignAssociates(scope, tkProperty, declaredType, reflectedTypeCache.GetRuntimeType(),\n+            RuntimeType reflectedRuntimeType = reflectedTypeCache.GetRuntimeType();\n+            Associates.AssignAssociates(scope, tkProperty, declaredType, reflectedRuntimeType,\n                 out _, out _, out _,\n                 out m_getterMethod, out m_setterMethod, out m_otherMethod,\n                 out isPrivate, out m_bindingFlags);\n+\n+            // lookup getter/setter when getter and setter are inherited from base class but just a setter/getter is overridden on a sub type\n+            if ((m_getterMethod != null && m_getterMethod.IsVirtual && m_setterMethod == null)",
+        "comment_created_at": "2024-12-27T16:07:40+00:00",
+        "comment_author": "jkotas",
+        "comment_body": "> RuntimeMethodInfo doesn't overload those operators so it doesn't matter\r\n\r\nMethodInfo does overload those operators. MethodInfo operators are going to be selected to compare RuntimeMethodInfo [quick test](https://sharplab.io/#v2:EYLgtghglgdgNAFxFANgHwAIAYAEGCMAdAEoCmAZiqQMYJQD2MA3ALABQ7EwAzggE4RaeAEw5iAVxh0wpALKkEAC3oATAJIxy9HCBzylqjVvYBvdjgt4AzHnwA2HMHr0UOACqleACglSoM/WV1TW0wAEpzSzM2S1i8AHYcMBwAXhScGHEUFFYYywBfdnygA=)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1898607786",
+        "repo_full_name": "dotnet/runtime",
+        "pr_number": 110945,
+        "pr_file": "src/coreclr/System.Private.CoreLib/src/System/Reflection/RuntimePropertyInfo.cs",
+        "discussion_id": "1898591279",
+        "commented_code": "@@ -44,10 +44,63 @@ internal RuntimePropertyInfo(\n \n             scope.GetPropertyProps(tkProperty, out m_utf8name, out m_flags, out _);\n \n-            Associates.AssignAssociates(scope, tkProperty, declaredType, reflectedTypeCache.GetRuntimeType(),\n+            RuntimeType reflectedRuntimeType = reflectedTypeCache.GetRuntimeType();\n+            Associates.AssignAssociates(scope, tkProperty, declaredType, reflectedRuntimeType,\n                 out _, out _, out _,\n                 out m_getterMethod, out m_setterMethod, out m_otherMethod,\n                 out isPrivate, out m_bindingFlags);\n+\n+            // lookup getter/setter when getter and setter are inherited from base class but just a setter/getter is overridden on a sub type\n+            if ((m_getterMethod != null && m_getterMethod.IsVirtual && m_setterMethod == null)",
+        "comment_created_at": "2024-12-27T16:24:23+00:00",
+        "comment_author": "steveharter",
+        "comment_body": "Oops thanks; updated comment",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

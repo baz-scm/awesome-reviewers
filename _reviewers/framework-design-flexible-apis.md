@@ -1,0 +1,259 @@
+---
+title: Design flexible APIs
+description: 'When designing APIs, prioritize flexibility and developer experience
+  by:
+
+
+  1. **Accept broader parameter types** - Use `callable` instead of `Closure` to support
+  various invocation patterns:'
+repository: laravel/framework
+label: API
+language: PHP
+comments_count: 5
+repository_stars: 33763
+---
+
+When designing APIs, prioritize flexibility and developer experience by:
+
+1. **Accept broader parameter types** - Use `callable` instead of `Closure` to support various invocation patterns:
+
+```php
+// Instead of this (restrictive):
+public function throw(?Closure $callback = null)
+
+// Do this (flexible):
+public function throw(?callable $callback = null)
+```
+
+2. **Support fluent method chaining** - Allow methods to return the instance for chainable calls:
+
+```php
+// Example from date formatting:
+public function format(string $format): static
+{
+    $this->format = $format;
+    return $this;
+}
+
+// Usage:
+$date->format('Y-m-d')->after('2023-01-01');
+```
+
+3. **Accept multiple parameter formats** - Make your API handle different input types intelligently:
+
+```php
+// Example with status code handling:
+if (is_numeric($callback) || is_string($callback) || is_array($callback)) {
+    $callback = static::response($callback);
+}
+```
+
+4. **Use enums for constrained options** - Instead of arbitrary integers, use typed enums:
+
+```php
+// Instead of:
+public static function query($array, $encodingType = PHP_QUERY_RFC3986)
+
+// Do this:
+public static function query($array, HttpQueryEncoding $encodingType = HttpQueryEncoding::Rfc3986)
+```
+
+Flexible APIs improve developer experience by being intuitive, reducing errors, and accommodating different coding styles while maintaining robustness and clarity.
+
+
+[
+  {
+    "discussion_id": "909053006",
+    "pr_number": 42976,
+    "pr_file": "src/Illuminate/Foundation/Console/Kernel.php",
+    "created_at": "2022-06-28T22:30:59+00:00",
+    "commented_code": "* Register a Closure based command with the application.\n     *\n     * @param  string  $signature\n     * @param  \\Closure  $callback\n     * @param  \\Closure|callable  $callback\n     * @return \\Illuminate\\Foundation\\Console\\ClosureCommand\n     */\n    public function command($signature, Closure $callback)\n    public function command($signature, $callback)\n    {\n        $command = new ClosureCommand($signature, $callback);\n        $command = $callback instanceof Closure\n            ? new ClosureCommand($signature, $callback)\n            : new CallableCommand($signature, $callback);",
+    "repo_full_name": "laravel/framework",
+    "discussion_comments": [
+      {
+        "comment_id": "909053006",
+        "repo_full_name": "laravel/framework",
+        "pr_number": 42976,
+        "pr_file": "src/Illuminate/Foundation/Console/Kernel.php",
+        "discussion_id": "909053006",
+        "commented_code": "@@ -185,12 +185,14 @@ protected function commands()\n      * Register a Closure based command with the application.\n      *\n      * @param  string  $signature\n-     * @param  \\Closure  $callback\n+     * @param  \\Closure|callable  $callback\n      * @return \\Illuminate\\Foundation\\Console\\ClosureCommand\n      */\n-    public function command($signature, Closure $callback)\n+    public function command($signature, $callback)\n     {\n-        $command = new ClosureCommand($signature, $callback);\n+        $command = $callback instanceof Closure\n+            ? new ClosureCommand($signature, $callback)\n+            : new CallableCommand($signature, $callback);",
+        "comment_created_at": "2022-06-28T22:30:59+00:00",
+        "comment_author": "ziadoz",
+        "comment_body": "If you wrapped the callable in a closure here, would you be able to get rid of the `CallableCommand` class?\r\n\r\n```suggestion\r\n        if (! $callback instanceof Closure && is_callable($callback)) {\r\n            $callback = Closure::fromCallable($callback);\r\n        }\r\n\r\n        $command = new ClosureCommand($signature, $callback)\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "920243479",
+        "repo_full_name": "laravel/framework",
+        "pr_number": 42976,
+        "pr_file": "src/Illuminate/Foundation/Console/Kernel.php",
+        "discussion_id": "909053006",
+        "commented_code": "@@ -185,12 +185,14 @@ protected function commands()\n      * Register a Closure based command with the application.\n      *\n      * @param  string  $signature\n-     * @param  \\Closure  $callback\n+     * @param  \\Closure|callable  $callback\n      * @return \\Illuminate\\Foundation\\Console\\ClosureCommand\n      */\n-    public function command($signature, Closure $callback)\n+    public function command($signature, $callback)\n     {\n-        $command = new ClosureCommand($signature, $callback);\n+        $command = $callback instanceof Closure\n+            ? new ClosureCommand($signature, $callback)\n+            : new CallableCommand($signature, $callback);",
+        "comment_created_at": "2022-07-13T15:50:36+00:00",
+        "comment_author": "chu121su12",
+        "comment_body": "I tried this logic and the code here\r\n\r\nhttps://github.com/laravel/framework/blob/1f77f3d586debda17be6a886b172e7336d65bb60/src/Illuminate/Foundation/Console/CallableCommand.php#L34-L77\r\n\r\nis quite difficult to be spliced around the section in the `Console::command` suggested.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1715170843",
+    "pr_number": 52466,
+    "pr_file": "src/Illuminate/Http/Client/Response.php",
+    "created_at": "2024-08-13T11:57:14+00:00",
+    "commented_code": "/**\n     * Throw an exception if a server or client error occurred.\n     *\n     * @param  \\Closure|null  $callback\n     * @return $this\n     *\n     * @throws \\Illuminate\\Http\\Client\\RequestException\n     */\n    public function throw()\n    public function throw(?Closure $callback = null)",
+    "repo_full_name": "laravel/framework",
+    "discussion_comments": [
+      {
+        "comment_id": "1715170843",
+        "repo_full_name": "laravel/framework",
+        "pr_number": 52466,
+        "pr_file": "src/Illuminate/Http/Client/Response.php",
+        "discussion_id": "1715170843",
+        "commented_code": "@@ -277,17 +278,16 @@ public function toException()\n     /**\n      * Throw an exception if a server or client error occurred.\n      *\n+     * @param  \\Closure|null  $callback\n      * @return $this\n      *\n      * @throws \\Illuminate\\Http\\Client\\RequestException\n      */\n-    public function throw()\n+    public function throw(?Closure $callback = null)",
+        "comment_created_at": "2024-08-13T11:57:14+00:00",
+        "comment_author": "rodrigopedra",
+        "comment_body": "I'd use `?callable` instead of `?Closure` to allow for invokable objects, and other callable (such as denoted by the array syntax).\r\n\r\n```php\r\npublic function throw(?callable $callback = null)\r\n```\r\n\r\nP.S.: don't forget to update the docblock",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1715219915",
+        "repo_full_name": "laravel/framework",
+        "pr_number": 52466,
+        "pr_file": "src/Illuminate/Http/Client/Response.php",
+        "discussion_id": "1715170843",
+        "commented_code": "@@ -277,17 +278,16 @@ public function toException()\n     /**\n      * Throw an exception if a server or client error occurred.\n      *\n+     * @param  \\Closure|null  $callback\n      * @return $this\n      *\n      * @throws \\Illuminate\\Http\\Client\\RequestException\n      */\n-    public function throw()\n+    public function throw(?Closure $callback = null)",
+        "comment_created_at": "2024-08-13T12:36:10+00:00",
+        "comment_author": "alirezadp10",
+        "comment_body": "Thanks for your help.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1997723700",
+    "pr_number": 55033,
+    "pr_file": "src/Illuminate/Validation/Rules/Date.php",
+    "created_at": "2025-03-16T21:31:20+00:00",
+    "commented_code": "*/\n    public function format(string $format): static\n    {\n        array_shift($this->constraints);",
+    "repo_full_name": "laravel/framework",
+    "discussion_comments": [
+      {
+        "comment_id": "1997723700",
+        "repo_full_name": "laravel/framework",
+        "pr_number": 55033,
+        "pr_file": "src/Illuminate/Validation/Rules/Date.php",
+        "discussion_id": "1997723700",
+        "commented_code": "@@ -22,6 +22,8 @@ class Date implements Stringable\n      */\n     public function format(string $format): static\n     {\n+        array_shift($this->constraints);",
+        "comment_created_at": "2025-03-16T21:31:20+00:00",
+        "comment_author": "AndrewMast",
+        "comment_body": "I propose we add a `$format` property (`protected ?string $format = null;`) and make the `format` method simply do:\r\n\r\n```php\r\n/**\r\n * Ensure the date has the given format.\r\n */\r\npublic function format(string $format): static\r\n{\r\n    $this->format = $format;\r\n\r\n    return $this;\r\n}\r\n```\r\n\r\nThen, in the `__toString` method, we can simply do:\r\n```php\r\n/**\r\n * Convert the rule to a validation string.\r\n */\r\npublic function __toString(): string\r\n{\r\n    return implode('|', [\r\n        $this->format === null ? 'date' : 'date_format:'.$this->format,\r\n        ...$this->constraints,\r\n    ]);\r\n}\r\n```\r\n\r\nAnd in `formatDate()`:\r\n```php\r\n/**\r\n * Format the date for the validation rule.\r\n */\r\nprotected function formatDate(DateTimeInterface|string $date): string\r\n{\r\n    return $date instanceof DateTimeInterface\r\n        ? $date->format($this->format ?? 'Y-m-d')\r\n        : $date;\r\n}\r\n```\r\n\r\nWe would also need to make the `$constraints` property start out empty:\r\n```php\r\nprotected ?string $format = null;\r\n\r\nprotected array $constraints = [];\r\n```\r\n\r\nOne downside to this approach is this would require `format` to be called before `after()` or `before()`, but the only way I can think of to solve this would be to include the DateTime instances in the `$constraints` array and only format them in the `__toString()` method, but that would require a rather large rewrite of this class and wouldn't seem very straight forward.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1860845192",
+    "pr_number": 53663,
+    "pr_file": "src/Illuminate/Http/Client/Factory.php",
+    "created_at": "2024-11-27T15:16:42+00:00",
+    "commented_code": "return;\n            }\n\n            return $callback instanceof Closure || $callback instanceof ResponseSequence\n                        ? $callback($request, $options)\n                        : $callback;\n            if (is_int($callback) && $callback >= 100 && $callback < 600) {\n                return static::response(status: $callback);",
+    "repo_full_name": "laravel/framework",
+    "discussion_comments": [
+      {
+        "comment_id": "1860845192",
+        "repo_full_name": "laravel/framework",
+        "pr_number": 53663,
+        "pr_file": "src/Illuminate/Http/Client/Factory.php",
+        "discussion_id": "1860845192",
+        "commented_code": "@@ -267,9 +267,19 @@ public function stubUrl($url, $callback)\n                 return;\n             }\n \n-            return $callback instanceof Closure || $callback instanceof ResponseSequence\n-                        ? $callback($request, $options)\n-                        : $callback;\n+            if (is_int($callback) && $callback >= 100 && $callback < 600) {\n+                return static::response(status: $callback);",
+        "comment_created_at": "2024-11-27T15:16:42+00:00",
+        "comment_author": "andrey-helldar",
+        "comment_body": "Wow. I took another look at the code and was very surprised!\r\n\r\n@jasonmccreary, okay, let's say `200` is the status code and `'204'` is the response body.\r\n\r\nBut what is the difference between, for example, `500` and `600`? Here `500` is the **status code**, and `600` is the **response body** \ud83d\ude00\r\n\r\n@taylorotwell, you'll be interested too (I wrote my thoughts above, and here's an addendum).\r\n\r\n```php\r\nHttp::fake([\r\n    'google.com' => 'Hello World', // no problem\r\n    'github.com' => ['foo' => 'bar'], // no problem\r\n\r\n    'bar.laravel.com' => '204', // it's a response body with status code 200\r\n\r\n    'foo.laravel.com' => 99, // it's a response body with status code 200\r\n    'foo.laravel.com' => 100, // it's a status code 100\r\n    'foo.laravel.com' => 204, // it's a status code 204\r\n    'foo.laravel.com' => 204.99, // it's a response body with status code 200\r\n    'foo.laravel.com' => 599, // it's a status code 599\r\n    'foo.laravel.com' => 600, // it's a response body with status code 200\r\n]);\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1860904761",
+        "repo_full_name": "laravel/framework",
+        "pr_number": 53663,
+        "pr_file": "src/Illuminate/Http/Client/Factory.php",
+        "discussion_id": "1860845192",
+        "commented_code": "@@ -267,9 +267,19 @@ public function stubUrl($url, $callback)\n                 return;\n             }\n \n-            return $callback instanceof Closure || $callback instanceof ResponseSequence\n-                        ? $callback($request, $options)\n-                        : $callback;\n+            if (is_int($callback) && $callback >= 100 && $callback < 600) {\n+                return static::response(status: $callback);",
+        "comment_created_at": "2024-11-27T15:52:20+00:00",
+        "comment_author": "andrey-helldar",
+        "comment_body": "My suggestion:\r\n\r\n```php\r\npublic function stubUrl($url, $callback)\r\n{\r\n    return $this->fake(function ($request, $options) use ($url, $callback) {\r\n        if (! Str::is(Str::start($url, '*'), $request->url())) {\r\n            return;\r\n        }\r\n\r\n        if ($callback instanceof Closure || $callback instanceof ResponseSequence) {\r\n            return $callback($request, $options);\r\n        }\r\n\r\n        if (is_numeric($callback) || is_string($callback) || is_array($callback)) { // here\r\n            return static::response($callback);\r\n        }\r\n\r\n        return $callback;\r\n    });\r\n}\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1860983198",
+        "repo_full_name": "laravel/framework",
+        "pr_number": 53663,
+        "pr_file": "src/Illuminate/Http/Client/Factory.php",
+        "discussion_id": "1860845192",
+        "commented_code": "@@ -267,9 +267,19 @@ public function stubUrl($url, $callback)\n                 return;\n             }\n \n-            return $callback instanceof Closure || $callback instanceof ResponseSequence\n-                        ? $callback($request, $options)\n-                        : $callback;\n+            if (is_int($callback) && $callback >= 100 && $callback < 600) {\n+                return static::response(status: $callback);",
+        "comment_created_at": "2024-11-27T16:46:20+00:00",
+        "comment_author": "shaedrich",
+        "comment_body": "What about just wrapping the callback? This would be following the original train of thought of this PR:\r\n```diff\r\npublic function stubUrl($url, $callback)\r\n{\r\n    return $this->fake(function ($request, $options) use ($url, $callback) {\r\n        if (! Str::is(Str::start($url, '*'), $request->url())) {\r\n            return;\r\n        }\r\n\r\n+        if (is_numeric($callback) || is_string($callback) || is_array($callback) {\r\n+            $callback = static::response($callback);\r\n+        }\r\n\r\n        if ($callback instanceof Closure || $callback instanceof ResponseSequence) {\r\n            return $callback($request, $options);\r\n        }\r\n-\r\n-        if (is_numeric($callback) || is_string($callback) || is_array($callback)) { // here\r\n-            return static::response($callback);\r\n-        }\r\n\r\n        return $callback;\r\n    });\r\n}\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1861197986",
+        "repo_full_name": "laravel/framework",
+        "pr_number": 53663,
+        "pr_file": "src/Illuminate/Http/Client/Factory.php",
+        "discussion_id": "1860845192",
+        "commented_code": "@@ -267,9 +267,19 @@ public function stubUrl($url, $callback)\n                 return;\n             }\n \n-            return $callback instanceof Closure || $callback instanceof ResponseSequence\n-                        ? $callback($request, $options)\n-                        : $callback;\n+            if (is_int($callback) && $callback >= 100 && $callback < 600) {\n+                return static::response(status: $callback);",
+        "comment_created_at": "2024-11-27T20:09:55+00:00",
+        "comment_author": "andrey-helldar",
+        "comment_body": "Yeah, you can do that too :)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1861200387",
+        "repo_full_name": "laravel/framework",
+        "pr_number": 53663,
+        "pr_file": "src/Illuminate/Http/Client/Factory.php",
+        "discussion_id": "1860845192",
+        "commented_code": "@@ -267,9 +267,19 @@ public function stubUrl($url, $callback)\n                 return;\n             }\n \n-            return $callback instanceof Closure || $callback instanceof ResponseSequence\n-                        ? $callback($request, $options)\n-                        : $callback;\n+            if (is_int($callback) && $callback >= 100 && $callback < 600) {\n+                return static::response(status: $callback);",
+        "comment_created_at": "2024-11-27T20:12:51+00:00",
+        "comment_author": "shaedrich",
+        "comment_body": "Oh, I misread `ResponseSequence` as `Response` \ud83e\udd26\ud83c\udffb\u200d\u2642\ufe0f Your suggestion makes more sense then \ud83d\ude05 ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1941509492",
+    "pr_number": 54464,
+    "pr_file": "src/Illuminate/Collections/Arr.php",
+    "created_at": "2025-02-04T16:28:36+00:00",
+    "commented_code": "* Convert the array into a query string.\n     *\n     * @param  array  $array\n     * @param  int-mask-of<PHP_QUERY_*> $encodingType (optional) Query encoding type.\n     * @return string\n     */\n    public static function query($array)\n    public static function query($array, $encodingType = PHP_QUERY_RFC3986)\n    {\n        return http_build_query($array, '', '&', PHP_QUERY_RFC3986);\n        return http_build_query($array, '', '&', $encodingType);",
+    "repo_full_name": "laravel/framework",
+    "discussion_comments": [
+      {
+        "comment_id": "1941509492",
+        "repo_full_name": "laravel/framework",
+        "pr_number": 54464,
+        "pr_file": "src/Illuminate/Collections/Arr.php",
+        "discussion_id": "1941509492",
+        "commented_code": "@@ -702,11 +702,12 @@ public static function pull(&$array, $key, $default = null)\n      * Convert the array into a query string.\n      *\n      * @param  array  $array\n+     * @param  int-mask-of<PHP_QUERY_*> $encodingType (optional) Query encoding type.\n      * @return string\n      */\n-    public static function query($array)\n+    public static function query($array, $encodingType = PHP_QUERY_RFC3986)\n     {\n-        return http_build_query($array, '', '&', PHP_QUERY_RFC3986);\n+        return http_build_query($array, '', '&', $encodingType);",
+        "comment_created_at": "2025-02-04T16:28:36+00:00",
+        "comment_author": "shaedrich",
+        "comment_body": "> I've added all the changes except your enum idea because I merged one in early by accident and I can't merge that in now due to it being classed as outdated. Could you suggest that change again and I'll pull that in\r\n\r\nRe-adding the enum suggestion from https://github.com/laravel/framework/pull/54464#discussion_r1941450711 as requested per https://github.com/laravel/framework/pull/54464#issuecomment-2634468189\r\n```suggestion\r\n     * @param  int-mask-of<PHP_QUERY_*>|HttpQueryEncoding $encodingType (optional) Query encoding type.\r\n     * @return string\r\n     */\r\n    public static function query($array, $encodingType = HttpQueryEncoding::Rfc3986)\r\n    {\r\n        return http_build_query($array, '', '&', enum_value($encodingType))\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1941516190",
+        "repo_full_name": "laravel/framework",
+        "pr_number": 54464,
+        "pr_file": "src/Illuminate/Collections/Arr.php",
+        "discussion_id": "1941509492",
+        "commented_code": "@@ -702,11 +702,12 @@ public static function pull(&$array, $key, $default = null)\n      * Convert the array into a query string.\n      *\n      * @param  array  $array\n+     * @param  int-mask-of<PHP_QUERY_*> $encodingType (optional) Query encoding type.\n      * @return string\n      */\n-    public static function query($array)\n+    public static function query($array, $encodingType = PHP_QUERY_RFC3986)\n     {\n-        return http_build_query($array, '', '&', PHP_QUERY_RFC3986);\n+        return http_build_query($array, '', '&', $encodingType);",
+        "comment_created_at": "2025-02-04T16:32:20+00:00",
+        "comment_author": "shaedrich",
+        "comment_body": "Please keep in mind, that you have to manually\r\n* import `enum_value` via `use function Illuminate\\Support\\enum_value;`\r\n* create said enum as\r\n  ```php\r\n  <?php\r\n\r\n  namespace Illuminate\\Http\\Request\\Enums;\r\n\r\n  enum HttpQueryEncoding: int\r\n  {\r\n      case Rfc3986 = PHP_QUERY_RFC3986;\r\n      case Rfc1738 = PHP_QUERY_RFC1738;\r\n  }\r\n  ```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -18,7 +18,7 @@
 
 <div align="center">
 
-📝 **474** Review Prompts &nbsp;&nbsp;•&nbsp;&nbsp; 💬 **Thousands** of Real Discussions &nbsp;&nbsp;•&nbsp;&nbsp; ⭐ Popular OSS repositories &nbsp;&nbsp;•&nbsp;&nbsp; 🚀 **15+** Languages
+📝 **474** Reviewers &nbsp;&nbsp;•&nbsp;&nbsp; 💬 **Thousands** of Discussions &nbsp;&nbsp;•&nbsp;&nbsp; ⭐ Popular OSS repositories &nbsp;&nbsp;•&nbsp;&nbsp; 🚀 **15+** Languages
 
 </div>
 

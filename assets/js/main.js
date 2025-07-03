@@ -2,7 +2,7 @@
 // Attempt POST with required header; if it fails, fall back to a GET request
 
 const modal = document.getElementById('add-repo-modal');
-const openBtn = document.getElementById('add-repo-card');
+const openBtn = document.getElementById('add-repo-button');
 const closeBtn = modal.querySelector('.modal__close');
 const backdrop = modal.querySelector('.modal__backdrop');
 const form = document.getElementById('add-repo-form');
@@ -62,14 +62,18 @@ form && form.addEventListener('submit', async e => {
       // no JSON body
     }
 
+    let valid = true;
     if (status === 202) {
       feedbackEl.textContent = '✅ Request accepted – processing soon.';
     } else if (status === 409 && message) {
       feedbackEl.textContent = `⚠️ ${message}`;
+    } else if (status === 400 && message) {
+      feedbackEl.textContent = `❌ ${message}`;
+      valid = false;
     } else {
       feedbackEl.textContent = '⚠️ Request submitted.';
     }
-    feedbackEl.className = 'modal__feedback valid';
+    feedbackEl.className = valid ? 'modal__feedback valid' : 'modal__feedback invalid';
   } catch (err) {
     feedbackEl.textContent = 'Repo not valid';
     feedbackEl.className = 'modal__feedback invalid';

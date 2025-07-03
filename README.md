@@ -2,14 +2,19 @@
    <img align="center" width="128px" src="https://avatars.githubusercontent.com/u/140384842?s=200&v=4" />
    <h1 align="center"><b>Awesome Reviewers ✨ </b></h1>
    <p align="center">
-      Ready-to-use system prompts for AI-assisted code review.
+      Ready-to-use system prompts for Agentic Code Review.
       <br />
       <a href="https://github.com/baz-scm/"><strong>Baz on GitHub »</strong></a>
       <br />
    </p>
 </div>
 
-**Awesome Reviewers** is an open-source registry of ready-to-use **system prompts** for AI-assisted code review. Each “reviewer” prompt is distilled from thousands of real code review comments in leading open source repositories. These prompts capture best practices and coding standards that developers can easily apply during pull request reviews. Simply **copy and paste** a prompt into your AI coding assistant (e.g. VS Code, Cursor, Claude, or any AI agent) to instantly get code review suggestions aligned with proven standards
+<div align="center">
+   <img align="center" width="600px" src="assets/images/ar-web.png" />
+</div>
+
+
+**Awesome Reviewers** is an open-source registry of ready-to-use **system prompts** for agentic code review. Each “reviewer” prompt is distilled from thousands of real code review comments in leading open source repositories. These prompts capture best practices and coding standards that developers can easily apply during pull request reviews. Simply **copy and paste** a prompt into your AI coding agents (e.g. VS Code, Cursor, Claude, or any AI agent) to instantly get code review suggestions aligned with proven standards
 
 ## Features
 
@@ -17,11 +22,11 @@
 
 * **Real Open-Source Insights:** Every reviewer includes context from the open-source repository it came from, including a link to the source repo and stats like how many times that feedback appeared and the repo’s popularity. This transparency helps you trust the guidance – it’s based on patterns that occurred in high-quality projects (e.g. a prompt might note **9** prior comments advocating a rule in a project with **16k⭐** on GitHub). In short, these AI prompts encapsulate community-agreed best practices.
 
-* **Easy Integration in Developer Workflows:** Using an Awesome Reviewer prompt is as simple as copy-pasting its text into your AI tool of choice. You can prepend the prompt as a **system** or **assistant** instruction in chat-based coding assistants (like VS Code’s AI extensions, ChatGPT, Cursor IDE, or Claude) to guide the AI’s code review. The prompts are written to be **IDE-ready** – no extra formatting needed. Just pick a prompt that matches your review focus (for example, “Never commit secrets” for a security review, or “Optimize memory access” for a performance review) and let your AI reviewer follow those guidelines.
+* **Easy Integration in Developer Workflows:** Using an Awesome Reviewer prompt is as simple as copy-pasting its text into your AI tool of choice. You can prepend the prompt as a **system** or **agent** instruction in chat-based coding assistants (like VS Code’s AI extensions, ChatGPT, Cursor IDE, or Claude) to guide the AI’s code review. The prompts are written to be **IDE-ready** – no extra formatting needed. Just pick a prompt that matches your review focus (for example, “Never commit secrets” for a security review, or “Optimize memory access” for a performance review) and let your AI reviewer follow those guidelines.
 
 * **Searchable Library with Filters:** The entire prompt library is available on the [Awesome Reviewers site](https://awesomereviewers.com) with a fast UI for browsing. You can **search** by keywords or **filter** prompts by category, repository source, or programming language. This makes it easy to find, say, all JavaScript-related testing prompts or all prompts about documentation in Python projects. Each prompt card on the site shows its title, origin repo, comment count, star count, a short description, and tags for category/language for quick scanning.
 
-* **One-Click Deployment with Baz:** For an even smoother experience, you can run these reviewer agents automatically on your pull requests using **[Baz](https://baz.co)**. The site includes a **“🚀 Deploy to baz”** button that lets you spin up the selected reviewer as an AI code review bot in a single click. Baz is a platform for AI-powered code reviews, and with this integration it can apply the Awesome Reviewers prompts to your PRs without any manual copy-paste. In other words, you get automated code review comments on your GitHub PRs based on the same proven guidelines (with no configuration needed beyond the click). *This is a nod to how Awesome Reviewers works hand-in-hand with Baz to supercharge developer workflows.*
+* **One-Click Deployment with Baz:** For an even smoother experience, you can run these reviewer agents automatically on your pull requests using **[Baz](https://baz.co)**. The site includes a **“🚀 Deploy to baz”** button that lets you spin up the selected reviewer as an AI code review bot in a single click. Baz is a platform for agentic code reviews, and with this integration it can apply the Awesome Reviewers prompts to your PRs without any manual copy-paste. In other words, you get automated code review comments on your GitHub PRs based on the same proven guidelines (with no configuration needed beyond the click). *This is a nod to how Awesome Reviewers works hand-in-hand with Baz to supercharge developer workflows.*
 
 ## Getting Started
 
@@ -31,7 +36,7 @@ Using **Awesome Reviewers** is straightforward:
 
 2. **Copy a Prompt:** Click on a reviewer to view the full prompt text and guidelines. Copy the prompt text provided. Each prompt typically consists of a set of guidelines or rules that an AI should follow when reviewing code (written in clear, checklist-style instructions).
 
-3. **Use in Your AI Tool:** Paste the copied prompt into your AI code assistant as a **system message** or initial instruction. For example:
+3. **Use in Your AI Tool:** Paste the copied prompt into your AI code reviewer as a **system message** or initial instruction. For example:
 
    * **VS Code**: If using an AI extension (like GitHub Copilot Chat or ChatGPT VS Code extension), paste the prompt at the start of the conversation or as the system role content if supported.
    * **Cursor** (or other IDEs with AI chat): Provide the prompt in the tool’s AI chat before asking it to review your code/PR.

@@ -1,4 +1,6 @@
 <div align="center">
+   <a href="https://awesomereviewers.com"><img src="https://img.shields.io/badge/Visit-awesomereviewers.com-blue?style=for-the-badge" alt="Visit awesomereviewers.com" /></a>
+   <br />
    <img align="center" width="128px" src="https://avatars.githubusercontent.com/u/140384842?s=200&v=4" />
    <h1 align="center"><b>Awesome Reviewers ✨ </b></h1>
    <p align="center">
@@ -16,17 +18,23 @@
 
 **Awesome Reviewers** is an open-source registry of ready-to-use **system prompts** for agentic code review. Each “reviewer” prompt is distilled from thousands of real code review comments in leading open source repositories. These prompts capture best practices and coding standards that developers can easily apply during pull request reviews. Simply **copy and paste** a prompt into your AI coding agents (e.g. VS Code, Cursor, Claude, or any AI agent) to instantly get code review suggestions aligned with proven standards
 
+<div align="center">
+
+📝 **474** Review Prompts &nbsp;&nbsp;•&nbsp;&nbsp; 💬 **Thousands** of Real Discussions &nbsp;&nbsp;•&nbsp;&nbsp; ⭐ Popular OSS repositories &nbsp;&nbsp;•&nbsp;&nbsp; 🚀 **15+** Languages
+
+</div>
+
 ## Features
 
-* **Hundreds of Curated Prompts:** Contains **hundreds of specialized review prompts** (over 470 and counting) covering many languages and frameworks. Each prompt is distilled from actual pull request comments, ensuring **practical, actionable advice** grounded in real code review scenarios. Prompts span categories like *Code Style*, *Documentation*, *Testing*, *Security*, *Performance*, *API Design*, *Naming Conventions*, and more – addressing the areas developers care about most.
+* **🎯 Hundreds of Curated Prompts:** Over 470 specialized review prompts covering many languages and frameworks. Each prompt is distilled from actual pull request comments, ensuring practical, actionable advice grounded in real code review scenarios.
 
-* **Real Open-Source Insights:** Every reviewer includes context from the open-source repository it came from, including a link to the source repo and stats like how many times that feedback appeared and the repo’s popularity. This transparency helps you trust the guidance – it’s based on patterns that occurred in high-quality projects (e.g. a prompt might note **9** prior comments advocating a rule in a project with **16k⭐** on GitHub). In short, these AI prompts encapsulate community-agreed best practices.
+* **📊 Real Open-Source Insights:** Every reviewer includes context from the open-source repository it came from, including a link to the source repo and stats like how many times that feedback appeared and the repo’s popularity. This transparency helps you trust the guidance – it’s based on patterns that occurred in high-quality projects (e.g. a prompt might note **9** prior comments advocating a rule in a project with **16k⭐** on GitHub). In short, these AI prompts encapsulate community-agreed best practices.
 
-* **Easy Integration in Developer Workflows:** Using an Awesome Reviewer prompt is as simple as copy-pasting its text into your AI tool of choice. You can prepend the prompt as a **system** or **agent** instruction in chat-based coding assistants (like VS Code’s AI extensions, ChatGPT, Cursor IDE, or Claude) to guide the AI’s code review. The prompts are written to be **IDE-ready** – no extra formatting needed. Just pick a prompt that matches your review focus (for example, “Never commit secrets” for a security review, or “Optimize memory access” for a performance review) and let your AI reviewer follow those guidelines.
+* **⚡ Easy Integration:** Using an Awesome Reviewer prompt is as simple as copy-pasting its text into your AI tool of choice. You can prepend the prompt as a **system** or **agent** instruction in chat-based coding assistants (like VS Code’s AI extensions, ChatGPT, Cursor IDE, or Claude) to guide the AI’s code review. The prompts are written to be **IDE-ready** – no extra formatting needed. Just pick a prompt that matches your review focus (for example, “Never commit secrets” for a security review, or “Optimize memory access” for a performance review) and let your AI reviewer follow those guidelines.
 
-* **Searchable Library with Filters:** The entire prompt library is available on the [Awesome Reviewers site](https://awesomereviewers.com) with a fast UI for browsing. You can **search** by keywords or **filter** prompts by category, repository source, or programming language. This makes it easy to find, say, all JavaScript-related testing prompts or all prompts about documentation in Python projects. Each prompt card on the site shows its title, origin repo, comment count, star count, a short description, and tags for category/language for quick scanning.
+* **🔍 Searchable Library:** Browse the entire library at [awesomereviewers.com](https://awesomereviewers.com) with fast search and filtering by category, language, or repository source. Each prompt shows origin repo, stats, and clear descriptions.
 
-* **One-Click Deployment with Baz:** For an even smoother experience, you can run these reviewer agents automatically on your pull requests using **[Baz](https://baz.co)**. The site includes a **“🚀 Deploy to baz”** button that lets you spin up the selected reviewer as an AI code review bot in a single click. Baz is a platform for agentic code reviews, and with this integration it can apply the Awesome Reviewers prompts to your PRs without any manual copy-paste. In other words, you get automated code review comments on your GitHub PRs based on the same proven guidelines (with no configuration needed beyond the click). *This is a nod to how Awesome Reviewers works hand-in-hand with Baz to supercharge developer workflows.*
+* **🚀 One-Click Deployment:** Deploy reviewer agents automatically on your PRs using **[Baz](https://baz.co)**. The site includes a **“🚀 Deploy to baz”** button that lets you spin up the selected reviewer as an AI code review bot in a single click. Baz is a platform for agentic code reviews, and with this integration it can apply the Awesome Reviewers prompts to your PRs without any manual copy-paste. In other words, you get automated code review comments on your GitHub PRs based on the same proven guidelines (with no configuration needed beyond the click). *This is a nod to how Awesome Reviewers works hand-in-hand with Baz to supercharge developer workflows.*
 
 ## Getting Started
 

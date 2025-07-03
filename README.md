@@ -1,6 +1,4 @@
 <div align="center">
-   <a href="https://awesomereviewers.com"><img src="https://img.shields.io/badge/Visit-awesomereviewers.com-blue?style=for-the-badge" alt="Visit awesomereviewers.com" /></a>
-   <br />
    <img align="center" width="128px" src="https://avatars.githubusercontent.com/u/140384842?s=200&v=4" />
    <h1 align="center"><b>Awesome Reviewers ✨ </b></h1>
    <p align="center">

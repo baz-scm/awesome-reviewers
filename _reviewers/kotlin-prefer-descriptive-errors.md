@@ -1,0 +1,270 @@
+---
+title: Prefer descriptive errors
+description: When handling errors in your code, always provide detailed context in
+  error messages to aid debugging. Use Kotlin's standard error handling functions
+  instead of directly throwing exceptions or using non-null assertions.
+repository: JetBrains/kotlin
+label: Error Handling
+language: Kotlin
+comments_count: 6
+repository_stars: 50857
+---
+
+When handling errors in your code, always provide detailed context in error messages to aid debugging. Use Kotlin's standard error handling functions instead of directly throwing exceptions or using non-null assertions.
+
+1. Use `error()` function with descriptive messages instead of throwing exceptions directly:
+```kotlin
+// Bad
+if (companion.isCompanion == false) {
+    throw AssertionError() // Unhelpful message
+}
+
+// Good
+if (companion.isCompanion == false) {
+    error("Expected $companion to be a companion object")
+}
+```
+
+2. When reporting errors from caught exceptions, preserve cause information:
+```kotlin
+// Bad
+catch (e: IllegalStateException) {
+    reportError(e.message!!)
+    throw CompilationErrorException()
+}
+
+// Good
+catch (e: IllegalStateException) {
+    reportError("${e.message}\nCaused by: ${e.cause?.javaClass?.name}: ${e.cause?.message}")
+    throw CompilationErrorException()
+}
+```
+
+3. Use null-safe operators with descriptive error messages instead of non-null assertions:
+```kotlin
+// Bad
+val fieldName = getterCall.symbol.owner.name.getFieldName()!!
+
+// Good
+val fieldName = getterCall.symbol.owner.name.getFieldName() 
+    ?: error("Expected getter call to have a field name")
+```
+
+4. Include relevant context in assertion messages:
+```kotlin
+// Bad
+assert(companion.isCompanion)
+
+// Good
+assert(companion.isCompanion) { "Expected $companion to be a companion object" }
+```
+
+By following these practices, you'll make your code more maintainable and debugging much easier when errors inevitably occur.
+
+
+[
+  {
+    "discussion_id": "1045585301",
+    "pr_number": 5044,
+    "pr_file": "compiler/ir/backend.jvm/src/org/jetbrains/kotlin/backend/jvm/JvmCachedDeclarations.kt",
+    "created_at": "2022-12-12T09:31:15+00:00",
+    "commented_code": "}\n        }\n\n    fun getStaticCompanionReplacementDeclaration(jvmStaticFunction: IrSimpleFunction): IrSimpleFunction =\n        staticCompanionReplacementDeclarations.getOrPut(jvmStaticFunction) {\n            val companion = jvmStaticFunction.parentAsClass\n            assert(companion.isCompanion)",
+    "repo_full_name": "JetBrains/kotlin",
+    "discussion_comments": [
+      {
+        "comment_id": "1045585301",
+        "repo_full_name": "JetBrains/kotlin",
+        "pr_number": 5044,
+        "pr_file": "compiler/ir/backend.jvm/src/org/jetbrains/kotlin/backend/jvm/JvmCachedDeclarations.kt",
+        "discussion_id": "1045585301",
+        "commented_code": "@@ -182,6 +186,29 @@ class JvmCachedDeclarations(\n             }\n         }\n \n+    fun getStaticCompanionReplacementDeclaration(jvmStaticFunction: IrSimpleFunction): IrSimpleFunction =\n+        staticCompanionReplacementDeclarations.getOrPut(jvmStaticFunction) {\n+            val companion = jvmStaticFunction.parentAsClass\n+            assert(companion.isCompanion)",
+        "comment_created_at": "2022-12-12T09:31:15+00:00",
+        "comment_author": "ilmirus",
+        "comment_body": "Please, add lambda to `assert` call, otherwise, there will be unhelpful `assertion failed` without further explanation.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1046202170",
+        "repo_full_name": "JetBrains/kotlin",
+        "pr_number": 5044,
+        "pr_file": "compiler/ir/backend.jvm/src/org/jetbrains/kotlin/backend/jvm/JvmCachedDeclarations.kt",
+        "discussion_id": "1045585301",
+        "commented_code": "@@ -182,6 +186,29 @@ class JvmCachedDeclarations(\n             }\n         }\n \n+    fun getStaticCompanionReplacementDeclaration(jvmStaticFunction: IrSimpleFunction): IrSimpleFunction =\n+        staticCompanionReplacementDeclarations.getOrPut(jvmStaticFunction) {\n+            val companion = jvmStaticFunction.parentAsClass\n+            assert(companion.isCompanion)",
+        "comment_created_at": "2022-12-12T18:06:55+00:00",
+        "comment_author": "BomBardyGamer",
+        "comment_body": "Apologies. This was done this way because this is what the method above it (which gets the static proxy from cache) does. I'll add this.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1665765123",
+    "pr_number": 5306,
+    "pr_file": "compiler/cli/cli-base/src/org/jetbrains/kotlin/cli/jvm/modules/CliJavaModuleFinder.kt",
+    "created_at": "2024-07-04T14:08:01+00:00",
+    "commented_code": "private fun findSystemModule(moduleRoot: VirtualFile, useSig: Boolean = false): JavaModule.Explicit? {\n        val file = moduleRoot.findChild(if (useSig) PsiJavaModule.MODULE_INFO_CLASS + \".sig\" else PsiJavaModule.MODULE_INFO_CLS_FILE)\n            ?: return null\n        val moduleInfo = JavaModuleInfo.read(file, javaFileManager, allScope) ?: return null\n        val moduleInfo = try {\n            JavaModuleInfo.read(file, javaFileManager, allScope) ?: return null\n        } catch (e: IllegalStateException) {\n            reportError(e.message!!)\n            throw CompilationErrorException()",
+    "repo_full_name": "JetBrains/kotlin",
+    "discussion_comments": [
+      {
+        "comment_id": "1665765123",
+        "repo_full_name": "JetBrains/kotlin",
+        "pr_number": 5306,
+        "pr_file": "compiler/cli/cli-base/src/org/jetbrains/kotlin/cli/jvm/modules/CliJavaModuleFinder.kt",
+        "discussion_id": "1665765123",
+        "commented_code": "@@ -119,7 +120,13 @@ class CliJavaModuleFinder(\n     private fun findSystemModule(moduleRoot: VirtualFile, useSig: Boolean = false): JavaModule.Explicit? {\n         val file = moduleRoot.findChild(if (useSig) PsiJavaModule.MODULE_INFO_CLASS + \".sig\" else PsiJavaModule.MODULE_INFO_CLS_FILE)\n             ?: return null\n-        val moduleInfo = JavaModuleInfo.read(file, javaFileManager, allScope) ?: return null\n+        val moduleInfo = try {\n+            JavaModuleInfo.read(file, javaFileManager, allScope) ?: return null\n+        } catch (e: IllegalStateException) {\n+            reportError(e.message!!)\n+            throw CompilationErrorException()",
+        "comment_created_at": "2024-07-04T14:08:01+00:00",
+        "comment_author": "udalov",
+        "comment_body": "This way we'll lose all important information from `e.cause` that would help us in diagnosing the problem. How about we at least append something like `\"\\nCaused by: ${e.cause::class.java.name}: ${e.cause.message}\"` to the error?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1666502069",
+        "repo_full_name": "JetBrains/kotlin",
+        "pr_number": 5306,
+        "pr_file": "compiler/cli/cli-base/src/org/jetbrains/kotlin/cli/jvm/modules/CliJavaModuleFinder.kt",
+        "discussion_id": "1665765123",
+        "commented_code": "@@ -119,7 +120,13 @@ class CliJavaModuleFinder(\n     private fun findSystemModule(moduleRoot: VirtualFile, useSig: Boolean = false): JavaModule.Explicit? {\n         val file = moduleRoot.findChild(if (useSig) PsiJavaModule.MODULE_INFO_CLASS + \".sig\" else PsiJavaModule.MODULE_INFO_CLS_FILE)\n             ?: return null\n-        val moduleInfo = JavaModuleInfo.read(file, javaFileManager, allScope) ?: return null\n+        val moduleInfo = try {\n+            JavaModuleInfo.read(file, javaFileManager, allScope) ?: return null\n+        } catch (e: IllegalStateException) {\n+            reportError(e.message!!)\n+            throw CompilationErrorException()",
+        "comment_created_at": "2024-07-05T08:25:11+00:00",
+        "comment_author": "scaventz",
+        "comment_body": "Agree, updated.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1422626599",
+    "pr_number": 5220,
+    "pr_file": "compiler/ir/backend.js/src/org/jetbrains/kotlin/ir/backend/js/transformers/irToJs/JsIntrinsicTransformers.kt",
+    "created_at": "2023-12-11T15:13:19+00:00",
+    "commented_code": "}\n\n            for ((type, prefix) in intrinsics.primitiveToTypedArrayMap) {\n                add(intrinsics.primitiveToSizeConstructor[type]!!) { call, context ->\n                add(intrinsics.primitiveToSizeConstructor[type] ?: doError(intrinsics.primitiveToSizeConstructor)) { call, context ->\n                    JsNew(JsNameRef(\"${prefix}Array\"), translateCallArguments(call, context))\n                }\n                add(intrinsics.primitiveToLiteralConstructor[type]!!) { call, context ->\n                add(intrinsics.primitiveToLiteralConstructor[type] ?: doError(intrinsics.primitiveToSizeConstructor)) { call, context ->",
+    "repo_full_name": "JetBrains/kotlin",
+    "discussion_comments": [
+      {
+        "comment_id": "1422626599",
+        "repo_full_name": "JetBrains/kotlin",
+        "pr_number": 5220,
+        "pr_file": "compiler/ir/backend.js/src/org/jetbrains/kotlin/ir/backend/js/transformers/irToJs/JsIntrinsicTransformers.kt",
+        "discussion_id": "1422626599",
+        "commented_code": "@@ -167,17 +170,17 @@ class JsIntrinsicTransformers(backendContext: JsIrBackendContext) {\n             }\n \n             for ((type, prefix) in intrinsics.primitiveToTypedArrayMap) {\n-                add(intrinsics.primitiveToSizeConstructor[type]!!) { call, context ->\n+                add(intrinsics.primitiveToSizeConstructor[type] ?: doError(intrinsics.primitiveToSizeConstructor)) { call, context ->\n                     JsNew(JsNameRef(\"${prefix}Array\"), translateCallArguments(call, context))\n                 }\n-                add(intrinsics.primitiveToLiteralConstructor[type]!!) { call, context ->\n+                add(intrinsics.primitiveToLiteralConstructor[type] ?: doError(intrinsics.primitiveToSizeConstructor)) { call, context ->",
+        "comment_created_at": "2023-12-11T15:13:19+00:00",
+        "comment_author": "udalov",
+        "comment_body": "I don't think these will ever fail",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1422935649",
+        "repo_full_name": "JetBrains/kotlin",
+        "pr_number": 5220,
+        "pr_file": "compiler/ir/backend.js/src/org/jetbrains/kotlin/ir/backend/js/transformers/irToJs/JsIntrinsicTransformers.kt",
+        "discussion_id": "1422626599",
+        "commented_code": "@@ -167,17 +170,17 @@ class JsIntrinsicTransformers(backendContext: JsIrBackendContext) {\n             }\n \n             for ((type, prefix) in intrinsics.primitiveToTypedArrayMap) {\n-                add(intrinsics.primitiveToSizeConstructor[type]!!) { call, context ->\n+                add(intrinsics.primitiveToSizeConstructor[type] ?: doError(intrinsics.primitiveToSizeConstructor)) { call, context ->\n                     JsNew(JsNameRef(\"${prefix}Array\"), translateCallArguments(call, context))\n                 }\n-                add(intrinsics.primitiveToLiteralConstructor[type]!!) { call, context ->\n+                add(intrinsics.primitiveToLiteralConstructor[type] ?: doError(intrinsics.primitiveToSizeConstructor)) { call, context ->",
+        "comment_created_at": "2023-12-11T18:24:39+00:00",
+        "comment_author": "InsanusMokrassar",
+        "comment_body": "I think it is related to a lot of lines in this file, but I already faced some issues in compiler without adequate message or environment info before several times",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1423852356",
+        "repo_full_name": "JetBrains/kotlin",
+        "pr_number": 5220,
+        "pr_file": "compiler/ir/backend.js/src/org/jetbrains/kotlin/ir/backend/js/transformers/irToJs/JsIntrinsicTransformers.kt",
+        "discussion_id": "1422626599",
+        "commented_code": "@@ -167,17 +170,17 @@ class JsIntrinsicTransformers(backendContext: JsIrBackendContext) {\n             }\n \n             for ((type, prefix) in intrinsics.primitiveToTypedArrayMap) {\n-                add(intrinsics.primitiveToSizeConstructor[type]!!) { call, context ->\n+                add(intrinsics.primitiveToSizeConstructor[type] ?: doError(intrinsics.primitiveToSizeConstructor)) { call, context ->\n                     JsNew(JsNameRef(\"${prefix}Array\"), translateCallArguments(call, context))\n                 }\n-                add(intrinsics.primitiveToLiteralConstructor[type]!!) { call, context ->\n+                add(intrinsics.primitiveToLiteralConstructor[type] ?: doError(intrinsics.primitiveToSizeConstructor)) { call, context ->",
+        "comment_created_at": "2023-12-12T11:21:58+00:00",
+        "comment_author": "udalov",
+        "comment_body": "I'm not convinced. I don't see a reason to add effectively dead code.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1424189222",
+        "repo_full_name": "JetBrains/kotlin",
+        "pr_number": 5220,
+        "pr_file": "compiler/ir/backend.js/src/org/jetbrains/kotlin/ir/backend/js/transformers/irToJs/JsIntrinsicTransformers.kt",
+        "discussion_id": "1422626599",
+        "commented_code": "@@ -167,17 +170,17 @@ class JsIntrinsicTransformers(backendContext: JsIrBackendContext) {\n             }\n \n             for ((type, prefix) in intrinsics.primitiveToTypedArrayMap) {\n-                add(intrinsics.primitiveToSizeConstructor[type]!!) { call, context ->\n+                add(intrinsics.primitiveToSizeConstructor[type] ?: doError(intrinsics.primitiveToSizeConstructor)) { call, context ->\n                     JsNew(JsNameRef(\"${prefix}Array\"), translateCallArguments(call, context))\n                 }\n-                add(intrinsics.primitiveToLiteralConstructor[type]!!) { call, context ->\n+                add(intrinsics.primitiveToLiteralConstructor[type] ?: doError(intrinsics.primitiveToSizeConstructor)) { call, context ->",
+        "comment_created_at": "2023-12-12T15:34:57+00:00",
+        "comment_author": "InsanusMokrassar",
+        "comment_body": "So, may you guarantee somehow that this code will not be used? :) As I have said, in the whole file were a lot of `!!` which means `it is potential thrown error without any useful info`. I just have added some explanation to these things. In case you have some suggestion better than use `!!` or `?: doError`, I would be glad to see it and even realize, I think",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1265437800",
+    "pr_number": 5158,
+    "pr_file": "compiler/ir/backend.jvm/codegen/src/org/jetbrains/kotlin/backend/jvm/codegen/AnnotationCodegen.kt",
+    "created_at": "2023-07-17T14:17:40+00:00",
+    "commented_code": "else if (param.defaultValue != null)\n                continue // Default value will be supplied by JVM at runtime.\n            else if (context.state.classBuilderMode.generateBodies) //skip error for KAPT\n                error(\"No value for annotation parameter $param\")\n                error(\"No value for annotation parameter ${param.dumpKotlinLike()}\")",
+    "repo_full_name": "JetBrains/kotlin",
+    "discussion_comments": [
+      {
+        "comment_id": "1265437800",
+        "repo_full_name": "JetBrains/kotlin",
+        "pr_number": 5158,
+        "pr_file": "compiler/ir/backend.jvm/codegen/src/org/jetbrains/kotlin/backend/jvm/codegen/AnnotationCodegen.kt",
+        "discussion_id": "1265437800",
+        "commented_code": "@@ -216,7 +216,7 @@ abstract class AnnotationCodegen(\n             else if (param.defaultValue != null)\n                 continue // Default value will be supplied by JVM at runtime.\n             else if (context.state.classBuilderMode.generateBodies) //skip error for KAPT\n-                error(\"No value for annotation parameter $param\")\n+                error(\"No value for annotation parameter ${param.dumpKotlinLike()}\")",
+        "comment_created_at": "2023-07-17T14:17:40+00:00",
+        "comment_author": "udalov",
+        "comment_body": "Please use `render()` instead, as it's more resilient to errors and more tested (you wouldn't want another exception to happen when you're rendering an exception message)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1265478745",
+        "repo_full_name": "JetBrains/kotlin",
+        "pr_number": 5158,
+        "pr_file": "compiler/ir/backend.jvm/codegen/src/org/jetbrains/kotlin/backend/jvm/codegen/AnnotationCodegen.kt",
+        "discussion_id": "1265437800",
+        "commented_code": "@@ -216,7 +216,7 @@ abstract class AnnotationCodegen(\n             else if (param.defaultValue != null)\n                 continue // Default value will be supplied by JVM at runtime.\n             else if (context.state.classBuilderMode.generateBodies) //skip error for KAPT\n-                error(\"No value for annotation parameter $param\")\n+                error(\"No value for annotation parameter ${param.dumpKotlinLike()}\")",
+        "comment_created_at": "2023-07-17T14:45:23+00:00",
+        "comment_author": "JavierSegoviaCordoba",
+        "comment_body": "Done!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1035132877",
+    "pr_number": 5030,
+    "pr_file": "compiler/fir/semantics/src/org/jetbrains/kotlin/fir/resolve/dfa/PersistentLogicSystem.kt",
+    "created_at": "2022-11-29T18:36:32+00:00",
+    "commented_code": "override fun getTypeStatement(variable: RealVariable): TypeStatement? =\n        approvedTypeStatements[unwrapVariable(variable)]?.copy(variable = variable)\n\n    fun lowestCommonAncestor(other: PersistentFlow): PersistentFlow? {\n        var left = this\n        var right = other\n        while (left.level > right.level) {\n            left = left.previousFlow ?: return null\n        }\n        while (right.level > left.level) {\n            right = right.previousFlow ?: return null\n        }\n        while (left != right) {\n            left = left.previousFlow ?: return null\n            right = right.previousFlow ?: return null\n        }\n        return left\n    }\n\n    fun fork(): MutableFlow = MutableFlow(\n        this,\n        approvedTypeStatements.builder(),\n        logicStatements.builder(),\n        assignmentIndex.builder(),\n        directAliasMap.builder(),\n        backwardsAliasMap.builder(),\n    )\n}\n\nabstract class PersistentLogicSystem(context: ConeInferenceContext) : LogicSystem<PersistentFlow>(context) {\n    abstract val variableStorage: VariableStorageImpl\nclass MutableFlow internal constructor(\n    private val previousFlow: PersistentFlow?,\n    internal val approvedTypeStatements: PersistentMap.Builder<RealVariable, PersistentTypeStatement>,\n    internal val logicStatements: PersistentMap.Builder<DataFlowVariable, PersistentList<Implication>>,\n    internal val assignmentIndex: PersistentMap.Builder<RealVariable, Int>,\n    internal val directAliasMap: PersistentMap.Builder<RealVariable, RealVariable>,\n    internal val backwardsAliasMap: PersistentMap.Builder<RealVariable, PersistentSet<RealVariable>>,\n) : Flow {\n    constructor() : this(\n        null,\n        emptyPersistentHashMapBuilder(),\n        emptyPersistentHashMapBuilder(),\n        emptyPersistentHashMapBuilder(),\n        emptyPersistentHashMapBuilder(),\n        emptyPersistentHashMapBuilder(),\n    )\n\n    override fun createEmptyFlow(): PersistentFlow =\n        PersistentFlow()\n    override val knownVariables: Set<RealVariable>\n        get() = approvedTypeStatements.keys + directAliasMap.keys\n\n    override fun forkFlow(flow: PersistentFlow): PersistentFlow =\n        PersistentFlow(flow)\n    override fun unwrapVariable(variable: RealVariable): RealVariable =\n        directAliasMap[variable] ?: variable\n\n    override fun copyAllInformation(from: PersistentFlow, to: PersistentFlow) {\n        to.approvedTypeStatements = from.approvedTypeStatements\n        to.logicStatements = from.logicStatements\n        to.directAliasMap = from.directAliasMap\n        to.backwardsAliasMap = from.backwardsAliasMap\n        to.assignmentIndex = from.assignmentIndex\n    }\n    override fun getTypeStatement(variable: RealVariable): TypeStatement? =\n        approvedTypeStatements[unwrapVariable(variable)]?.copy(variable = variable)\n\n    override fun joinFlow(flows: Collection<PersistentFlow>): PersistentFlow =\n        foldFlow(flows, allExecute = false)\n    fun freeze(): PersistentFlow = PersistentFlow(\n        previousFlow,\n        approvedTypeStatements.build(),\n        logicStatements.build(),\n        assignmentIndex.build(),\n        directAliasMap.build(),\n        backwardsAliasMap.build(),\n    )\n}\n\n    override fun unionFlow(flows: Collection<PersistentFlow>): PersistentFlow =\n        foldFlow(flows, allExecute = true)\nprivate fun <K, V> emptyPersistentHashMapBuilder(): PersistentMap.Builder<K, V> =\n    persistentHashMapOf<K, V>().builder()\n\n    private fun foldFlow(flows: Collection<PersistentFlow>, allExecute: Boolean): PersistentFlow {\nabstract class PersistentLogicSystem(context: ConeInferenceContext) : LogicSystem(context) {\n    abstract val variableStorage: VariableStorageImpl\n\n    override fun joinFlow(flows: Collection<PersistentFlow>, union: Boolean): MutableFlow {\n        when (flows.size) {\n            0 -> return createEmptyFlow()\n            1 -> return forkFlow(flows.first())\n            0 -> return MutableFlow()\n            1 -> return flows.first().fork()\n        }\n\n        val commonFlow = flows.reduce(::lowestCommonFlow)\n        val result = forkFlow(commonFlow)\n        val commonFlow = flows.reduce { a, b ->\n            a.lowestCommonAncestor(b) ?: throw AssertionError(\"no common ancestor in $a, $b\")",
+    "repo_full_name": "JetBrains/kotlin",
+    "discussion_comments": [
+      {
+        "comment_id": "1035132877",
+        "repo_full_name": "JetBrains/kotlin",
+        "pr_number": 5030,
+        "pr_file": "compiler/fir/semantics/src/org/jetbrains/kotlin/fir/resolve/dfa/PersistentLogicSystem.kt",
+        "discussion_id": "1035132877",
+        "commented_code": "@@ -68,45 +41,91 @@ class PersistentFlow : Flow {\n \n     override fun getTypeStatement(variable: RealVariable): TypeStatement? =\n         approvedTypeStatements[unwrapVariable(variable)]?.copy(variable = variable)\n+\n+    fun lowestCommonAncestor(other: PersistentFlow): PersistentFlow? {\n+        var left = this\n+        var right = other\n+        while (left.level > right.level) {\n+            left = left.previousFlow ?: return null\n+        }\n+        while (right.level > left.level) {\n+            right = right.previousFlow ?: return null\n+        }\n+        while (left != right) {\n+            left = left.previousFlow ?: return null\n+            right = right.previousFlow ?: return null\n+        }\n+        return left\n+    }\n+\n+    fun fork(): MutableFlow = MutableFlow(\n+        this,\n+        approvedTypeStatements.builder(),\n+        logicStatements.builder(),\n+        assignmentIndex.builder(),\n+        directAliasMap.builder(),\n+        backwardsAliasMap.builder(),\n+    )\n }\n \n-abstract class PersistentLogicSystem(context: ConeInferenceContext) : LogicSystem<PersistentFlow>(context) {\n-    abstract val variableStorage: VariableStorageImpl\n+class MutableFlow internal constructor(\n+    private val previousFlow: PersistentFlow?,\n+    internal val approvedTypeStatements: PersistentMap.Builder<RealVariable, PersistentTypeStatement>,\n+    internal val logicStatements: PersistentMap.Builder<DataFlowVariable, PersistentList<Implication>>,\n+    internal val assignmentIndex: PersistentMap.Builder<RealVariable, Int>,\n+    internal val directAliasMap: PersistentMap.Builder<RealVariable, RealVariable>,\n+    internal val backwardsAliasMap: PersistentMap.Builder<RealVariable, PersistentSet<RealVariable>>,\n+) : Flow {\n+    constructor() : this(\n+        null,\n+        emptyPersistentHashMapBuilder(),\n+        emptyPersistentHashMapBuilder(),\n+        emptyPersistentHashMapBuilder(),\n+        emptyPersistentHashMapBuilder(),\n+        emptyPersistentHashMapBuilder(),\n+    )\n \n-    override fun createEmptyFlow(): PersistentFlow =\n-        PersistentFlow()\n+    override val knownVariables: Set<RealVariable>\n+        get() = approvedTypeStatements.keys + directAliasMap.keys\n \n-    override fun forkFlow(flow: PersistentFlow): PersistentFlow =\n-        PersistentFlow(flow)\n+    override fun unwrapVariable(variable: RealVariable): RealVariable =\n+        directAliasMap[variable] ?: variable\n \n-    override fun copyAllInformation(from: PersistentFlow, to: PersistentFlow) {\n-        to.approvedTypeStatements = from.approvedTypeStatements\n-        to.logicStatements = from.logicStatements\n-        to.directAliasMap = from.directAliasMap\n-        to.backwardsAliasMap = from.backwardsAliasMap\n-        to.assignmentIndex = from.assignmentIndex\n-    }\n+    override fun getTypeStatement(variable: RealVariable): TypeStatement? =\n+        approvedTypeStatements[unwrapVariable(variable)]?.copy(variable = variable)\n \n-    override fun joinFlow(flows: Collection<PersistentFlow>): PersistentFlow =\n-        foldFlow(flows, allExecute = false)\n+    fun freeze(): PersistentFlow = PersistentFlow(\n+        previousFlow,\n+        approvedTypeStatements.build(),\n+        logicStatements.build(),\n+        assignmentIndex.build(),\n+        directAliasMap.build(),\n+        backwardsAliasMap.build(),\n+    )\n+}\n \n-    override fun unionFlow(flows: Collection<PersistentFlow>): PersistentFlow =\n-        foldFlow(flows, allExecute = true)\n+private fun <K, V> emptyPersistentHashMapBuilder(): PersistentMap.Builder<K, V> =\n+    persistentHashMapOf<K, V>().builder()\n \n-    private fun foldFlow(flows: Collection<PersistentFlow>, allExecute: Boolean): PersistentFlow {\n+abstract class PersistentLogicSystem(context: ConeInferenceContext) : LogicSystem(context) {\n+    abstract val variableStorage: VariableStorageImpl\n+\n+    override fun joinFlow(flows: Collection<PersistentFlow>, union: Boolean): MutableFlow {\n         when (flows.size) {\n-            0 -> return createEmptyFlow()\n-            1 -> return forkFlow(flows.first())\n+            0 -> return MutableFlow()\n+            1 -> return flows.first().fork()\n         }\n \n-        val commonFlow = flows.reduce(::lowestCommonFlow)\n-        val result = forkFlow(commonFlow)\n+        val commonFlow = flows.reduce { a, b ->\n+            a.lowestCommonAncestor(b) ?: throw AssertionError(\"no common ancestor in $a, $b\")",
+        "comment_created_at": "2022-11-29T18:36:32+00:00",
+        "comment_author": "demiurg906",
+        "comment_body": "It's better to use `error(\"...\")` function from stdlib instead of `AssertionError`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "429178775",
+    "pr_number": 3415,
+    "pr_file": "plugins/atomicfu/atomicfu-compiler/src/org.jetbrains.kotlinx.atomicfu.compiler/extensions/AtomicFUTransformerJsIr.kt",
+    "created_at": "2020-05-22T10:52:48+00:00",
+    "commented_code": "/*\n * Copyright 2010-2020 JetBrains s.r.o. and Kotlin Programming Language contributors.\n * Use of this source code is governed by the Apache 2.0 license that can be found in the license/LICENSE.txt file.\n */\n\npackage org.jetbrains.kotlinx.atomicfu.compiler.extensions\n\nimport org.jetbrains.kotlin.backend.common.deepCopyWithVariables\nimport org.jetbrains.kotlin.backend.common.extensions.IrPluginContext\nimport org.jetbrains.kotlin.builtins.PrimitiveType\nimport org.jetbrains.kotlin.descriptors.*\nimport org.jetbrains.kotlin.descriptors.impl.FunctionDescriptorImpl\nimport org.jetbrains.kotlin.ir.*\nimport org.jetbrains.kotlin.ir.backend.js.ir.JsIrBuilder.buildValueParameter\nimport org.jetbrains.kotlin.ir.backend.js.ir.JsIrBuilder.buildFunction\nimport org.jetbrains.kotlin.ir.backend.js.ir.JsIrBuilder.buildBlockBody\nimport org.jetbrains.kotlin.ir.declarations.*\nimport org.jetbrains.kotlin.ir.declarations.impl.*\nimport org.jetbrains.kotlin.ir.expressions.*\nimport org.jetbrains.kotlin.ir.expressions.impl.*\nimport org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol\nimport org.jetbrains.kotlin.ir.symbols.IrSymbol\nimport org.jetbrains.kotlin.ir.symbols.impl.*\nimport org.jetbrains.kotlin.ir.types.*\nimport org.jetbrains.kotlin.ir.util.*\nimport org.jetbrains.kotlin.ir.visitors.IrElementTransformerVoid\nimport java.lang.IllegalStateException\n\nprivate const val AFU_PKG = \"kotlinx/atomicfu\"\nprivate const val LOCKS = \"locks\"\nprivate const val ATOMIC_CONSTRUCTOR = \"atomic\"\nprivate const val ATOMICFU_VALUE_TYPE = \"\"\"Atomic(Int|Long|Boolean|Ref)\"\"\"\nprivate const val ATOMIC_ARRAY_TYPE = \"\"\"Atomic(Int|Long|Boolean|)Array\"\"\"\nprivate const val ATOMIC_ARRAY_FACTORY_FUNCTION = \"atomicArrayOfNulls\"\nprivate const val ATOMICFU_RUNTIME_FUNCTION_PREDICATE = \"atomicfu_\"\nprivate const val REENTRANT_LOCK_TYPE = \"ReentrantLock\"\nprivate const val GETTER = \"atomicfu\\$getter\"\nprivate const val SETTER = \"atomicfu\\$setter\"\nprivate const val GET = \"get\"\nprivate const val SET = \"set\"\n\nprivate fun String.prettyStr() = replace('/', '.')\n\nclass AtomicFUTransformer(override val context: IrPluginContext) : IrElementTransformerVoid(), TransformerHelpers {\n\n    private val irBuiltIns = context.irBuiltIns\n\n    private val AFU_CLASSES: Map<String, IrType> = mapOf(\n        \"AtomicInt\" to irBuiltIns.intType,\n        \"AtomicLong\" to irBuiltIns.longType,\n        \"AtomicRef\" to irBuiltIns.anyType,\n        \"AtomicBoolean\" to irBuiltIns.booleanType\n    )\n\n    private val AFU_ARRAY_CLASSES: Map<String, ClassDescriptor> = mapOf(\n        \"AtomicIntArray\" to context.builtIns.getPrimitiveArrayClassDescriptor(PrimitiveType.INT),\n        \"AtomicLongArray\" to context.builtIns.getPrimitiveArrayClassDescriptor(PrimitiveType.LONG),\n        \"AtomicBooleanArray\" to context.builtIns.getPrimitiveArrayClassDescriptor(PrimitiveType.BOOLEAN),\n        \"AtomicArray\" to context.builtIns.array\n    )\n\n    override fun visitFile(irFile: IrFile): IrFile {\n        irFile.declarations.map { declaration ->\n            declaration.transformAtomicInlineDeclaration()\n        }\n        return super.visitFile(irFile)\n    }\n\n    override fun visitClass(irClass: IrClass): IrStatement {\n        irClass.declarations.map { declaration ->\n            declaration.transformAtomicInlineDeclaration()\n        }\n        return super.visitClass(irClass)\n    }\n\n    override fun visitProperty(property: IrProperty): IrStatement {\n        if (property.backingField != null) {\n            val backingField = property.backingField!!\n            if (backingField.initializer != null) {\n                val initializer = backingField.initializer!!.expression.transformAtomicValueInitializer()\n                property.backingField!!.initializer = IrExpressionBodyImpl(initializer)\n            }\n        }\n        return super.visitProperty(property)\n    }\n\n    override fun visitBlockBody(body: IrBlockBody): IrBody {\n        body.statements.forEachIndexed { i, stmt ->\n            if (stmt is IrCall) {\n                body.statements[i] = stmt.transformAtomicFunctionCall()\n            }\n        }\n        return super.visitBlockBody(body)\n    }\n\n    override fun visitBlock(block: IrBlock): IrExpression {\n        block.statements.forEachIndexed { i, stmt ->\n            if (stmt is IrCall) {\n                block.statements[i] = stmt.transformAtomicFunctionCall()\n            }\n        }\n        return super.visitBlock(block)\n    }\n\n    override fun visitReturn(returnExpr: IrReturn): IrExpression {\n        returnExpr.value = returnExpr.value.transformAtomicFunctionCall()\n        return super.visitReturn(returnExpr)\n    }\n\n    override fun visitTypeOperator(typeOp: IrTypeOperatorCall): IrExpression {\n        typeOp.argument = typeOp.argument.transformAtomicFunctionCall()\n        return super.visitTypeOperator(typeOp)\n    }\n\n    override fun visitSetVariable(setVar: IrSetVariable): IrExpression {\n        setVar.value = setVar.value.transformAtomicFunctionCall()\n        return super.visitSetVariable(setVar)\n    }\n\n    override fun visitSetField(setField: IrSetField): IrExpression {\n        setField.value = setField.value.transformAtomicFunctionCall()\n        return super.visitSetField(setField)\n    }\n\n    override fun visitVariable(declaration: IrVariable): IrStatement {\n        declaration.initializer = declaration.initializer?.transformAtomicFunctionCall()\n        return super.visitVariable(declaration)\n    }\n\n    override fun visitBranch(branch: IrBranch): IrBranch {\n        branch.apply {\n            condition = condition.transformAtomicFunctionCall()\n            result = result.transformAtomicFunctionCall()\n        }\n        return super.visitBranch(branch)\n    }\n\n    override fun visitElseBranch(branch: IrElseBranch): IrElseBranch {\n        branch.apply {\n            condition = condition.transformAtomicFunctionCall()\n            result = result.transformAtomicFunctionCall()\n        }\n        return super.visitElseBranch(branch)\n    }\n\n    private fun IrExpression.transformAtomicValueInitializer() =\n        when {\n            type.isAtomicValueType() -> getPureTypeValue()\n            type.isAtomicArrayType() -> buildPureTypeArrayConstructor()\n            type.isReentrantLockType() -> buildConstNull()\n            else -> this\n        }\n\n    private fun IrDeclaration.transformAtomicInlineDeclaration() {\n        if (this is IrFunction &&\n            isInline &&\n            extensionReceiverParameter != null &&\n            extensionReceiverParameter!!.type.isAtomicValueType()\n        ) {\n            val type = extensionReceiverParameter!!.type\n            val valueType = type.atomicToValueType()\n            val getterType = buildFunctionSimpleType(listOf(irBuiltIns.unitType, valueType))\n            val setterType = buildFunctionSimpleType(listOf(valueType, irBuiltIns.unitType))\n            val valueParametersCount = valueParameters.size\n            val extendedValueParameters = mutableListOf<IrValueParameter>().apply {\n                addAll(valueParameters)\n                add(buildValueParameter(GETTER, valueParametersCount, getterType))\n                add(buildValueParameter(SETTER, valueParametersCount + 1, setterType))\n            }\n            this as IrSimpleFunction\n            (descriptor as FunctionDescriptorImpl).initialize(\n                null,\n                descriptor.dispatchReceiverParameter,\n                descriptor.typeParameters,\n                extendedValueParameters.map { it.descriptor as ValueParameterDescriptor },\n                descriptor.returnType,\n                descriptor.modality,\n                descriptor.visibility\n            )\n            extensionReceiverParameter = null\n            valueParameters = extendedValueParameters\n        }\n    }\n\n    private fun IrExpression.getPureTypeValue(): IrExpression {\n        require(this is IrCall && isAtomicFactoryFunction()) { \"Illegal initializer for the atomic property $this\" }\n        return getValueArgument(0)!!.transformAtomicFunctionCall()\n    }\n\n    private fun IrExpression.buildPureTypeArrayConstructor() =\n        when (this) {\n            is IrConstructorCall -> {\n                require(isAtomicArrayConstructor())\n                val arrayConstructorSymbol = referenceBuiltInConstructor(type.getArrayClassDescriptor()) { it.valueParameters.size == 1 }\n                val size = getValueArgument(0)\n                IrConstructorCallImpl(\n                    UNDEFINED_OFFSET, UNDEFINED_OFFSET,\n                    irBuiltIns.unitType, arrayConstructorSymbol,\n                    0, 0, 1\n                ).apply {\n                    putValueArgument(0, size)\n                }\n            }\n            is IrCall -> {\n                require(isAtomicArrayFactoryFunction()) { \"Unsupported atomic array factory function $this\" }\n                val arrayFactorySymbol = referencePackageFunction(\"kotlin\", \"arrayOfNulls\")\n                val arrayElementType = getTypeArgument(0)!!\n                val size = getValueArgument(0)\n                buildCall(\n                    target = arrayFactorySymbol,\n                    type = type,\n                    origin = IrStatementOrigin.INVOKE,\n                    typeArguments = listOf(arrayElementType),\n                    valueArguments = listOf(size)\n                )\n            }\n            else -> throw IllegalStateException(\"Illegal type of atomic array initializer\")",
+    "repo_full_name": "JetBrains/kotlin",
+    "discussion_comments": [
+      {
+        "comment_id": "429178775",
+        "repo_full_name": "JetBrains/kotlin",
+        "pr_number": 3415,
+        "pr_file": "plugins/atomicfu/atomicfu-compiler/src/org.jetbrains.kotlinx.atomicfu.compiler/extensions/AtomicFUTransformerJsIr.kt",
+        "discussion_id": "429178775",
+        "commented_code": "@@ -0,0 +1,473 @@\n+/*\n+ * Copyright 2010-2020 JetBrains s.r.o. and Kotlin Programming Language contributors.\n+ * Use of this source code is governed by the Apache 2.0 license that can be found in the license/LICENSE.txt file.\n+ */\n+\n+package org.jetbrains.kotlinx.atomicfu.compiler.extensions\n+\n+import org.jetbrains.kotlin.backend.common.deepCopyWithVariables\n+import org.jetbrains.kotlin.backend.common.extensions.IrPluginContext\n+import org.jetbrains.kotlin.builtins.PrimitiveType\n+import org.jetbrains.kotlin.descriptors.*\n+import org.jetbrains.kotlin.descriptors.impl.FunctionDescriptorImpl\n+import org.jetbrains.kotlin.ir.*\n+import org.jetbrains.kotlin.ir.backend.js.ir.JsIrBuilder.buildValueParameter\n+import org.jetbrains.kotlin.ir.backend.js.ir.JsIrBuilder.buildFunction\n+import org.jetbrains.kotlin.ir.backend.js.ir.JsIrBuilder.buildBlockBody\n+import org.jetbrains.kotlin.ir.declarations.*\n+import org.jetbrains.kotlin.ir.declarations.impl.*\n+import org.jetbrains.kotlin.ir.expressions.*\n+import org.jetbrains.kotlin.ir.expressions.impl.*\n+import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol\n+import org.jetbrains.kotlin.ir.symbols.IrSymbol\n+import org.jetbrains.kotlin.ir.symbols.impl.*\n+import org.jetbrains.kotlin.ir.types.*\n+import org.jetbrains.kotlin.ir.util.*\n+import org.jetbrains.kotlin.ir.visitors.IrElementTransformerVoid\n+import java.lang.IllegalStateException\n+\n+private const val AFU_PKG = \"kotlinx/atomicfu\"\n+private const val LOCKS = \"locks\"\n+private const val ATOMIC_CONSTRUCTOR = \"atomic\"\n+private const val ATOMICFU_VALUE_TYPE = \"\"\"Atomic(Int|Long|Boolean|Ref)\"\"\"\n+private const val ATOMIC_ARRAY_TYPE = \"\"\"Atomic(Int|Long|Boolean|)Array\"\"\"\n+private const val ATOMIC_ARRAY_FACTORY_FUNCTION = \"atomicArrayOfNulls\"\n+private const val ATOMICFU_RUNTIME_FUNCTION_PREDICATE = \"atomicfu_\"\n+private const val REENTRANT_LOCK_TYPE = \"ReentrantLock\"\n+private const val GETTER = \"atomicfu\\$getter\"\n+private const val SETTER = \"atomicfu\\$setter\"\n+private const val GET = \"get\"\n+private const val SET = \"set\"\n+\n+private fun String.prettyStr() = replace('/', '.')\n+\n+class AtomicFUTransformer(override val context: IrPluginContext) : IrElementTransformerVoid(), TransformerHelpers {\n+\n+    private val irBuiltIns = context.irBuiltIns\n+\n+    private val AFU_CLASSES: Map<String, IrType> = mapOf(\n+        \"AtomicInt\" to irBuiltIns.intType,\n+        \"AtomicLong\" to irBuiltIns.longType,\n+        \"AtomicRef\" to irBuiltIns.anyType,\n+        \"AtomicBoolean\" to irBuiltIns.booleanType\n+    )\n+\n+    private val AFU_ARRAY_CLASSES: Map<String, ClassDescriptor> = mapOf(\n+        \"AtomicIntArray\" to context.builtIns.getPrimitiveArrayClassDescriptor(PrimitiveType.INT),\n+        \"AtomicLongArray\" to context.builtIns.getPrimitiveArrayClassDescriptor(PrimitiveType.LONG),\n+        \"AtomicBooleanArray\" to context.builtIns.getPrimitiveArrayClassDescriptor(PrimitiveType.BOOLEAN),\n+        \"AtomicArray\" to context.builtIns.array\n+    )\n+\n+    override fun visitFile(irFile: IrFile): IrFile {\n+        irFile.declarations.map { declaration ->\n+            declaration.transformAtomicInlineDeclaration()\n+        }\n+        return super.visitFile(irFile)\n+    }\n+\n+    override fun visitClass(irClass: IrClass): IrStatement {\n+        irClass.declarations.map { declaration ->\n+            declaration.transformAtomicInlineDeclaration()\n+        }\n+        return super.visitClass(irClass)\n+    }\n+\n+    override fun visitProperty(property: IrProperty): IrStatement {\n+        if (property.backingField != null) {\n+            val backingField = property.backingField!!\n+            if (backingField.initializer != null) {\n+                val initializer = backingField.initializer!!.expression.transformAtomicValueInitializer()\n+                property.backingField!!.initializer = IrExpressionBodyImpl(initializer)\n+            }\n+        }\n+        return super.visitProperty(property)\n+    }\n+\n+    override fun visitBlockBody(body: IrBlockBody): IrBody {\n+        body.statements.forEachIndexed { i, stmt ->\n+            if (stmt is IrCall) {\n+                body.statements[i] = stmt.transformAtomicFunctionCall()\n+            }\n+        }\n+        return super.visitBlockBody(body)\n+    }\n+\n+    override fun visitBlock(block: IrBlock): IrExpression {\n+        block.statements.forEachIndexed { i, stmt ->\n+            if (stmt is IrCall) {\n+                block.statements[i] = stmt.transformAtomicFunctionCall()\n+            }\n+        }\n+        return super.visitBlock(block)\n+    }\n+\n+    override fun visitReturn(returnExpr: IrReturn): IrExpression {\n+        returnExpr.value = returnExpr.value.transformAtomicFunctionCall()\n+        return super.visitReturn(returnExpr)\n+    }\n+\n+    override fun visitTypeOperator(typeOp: IrTypeOperatorCall): IrExpression {\n+        typeOp.argument = typeOp.argument.transformAtomicFunctionCall()\n+        return super.visitTypeOperator(typeOp)\n+    }\n+\n+    override fun visitSetVariable(setVar: IrSetVariable): IrExpression {\n+        setVar.value = setVar.value.transformAtomicFunctionCall()\n+        return super.visitSetVariable(setVar)\n+    }\n+\n+    override fun visitSetField(setField: IrSetField): IrExpression {\n+        setField.value = setField.value.transformAtomicFunctionCall()\n+        return super.visitSetField(setField)\n+    }\n+\n+    override fun visitVariable(declaration: IrVariable): IrStatement {\n+        declaration.initializer = declaration.initializer?.transformAtomicFunctionCall()\n+        return super.visitVariable(declaration)\n+    }\n+\n+    override fun visitBranch(branch: IrBranch): IrBranch {\n+        branch.apply {\n+            condition = condition.transformAtomicFunctionCall()\n+            result = result.transformAtomicFunctionCall()\n+        }\n+        return super.visitBranch(branch)\n+    }\n+\n+    override fun visitElseBranch(branch: IrElseBranch): IrElseBranch {\n+        branch.apply {\n+            condition = condition.transformAtomicFunctionCall()\n+            result = result.transformAtomicFunctionCall()\n+        }\n+        return super.visitElseBranch(branch)\n+    }\n+\n+    private fun IrExpression.transformAtomicValueInitializer() =\n+        when {\n+            type.isAtomicValueType() -> getPureTypeValue()\n+            type.isAtomicArrayType() -> buildPureTypeArrayConstructor()\n+            type.isReentrantLockType() -> buildConstNull()\n+            else -> this\n+        }\n+\n+    private fun IrDeclaration.transformAtomicInlineDeclaration() {\n+        if (this is IrFunction &&\n+            isInline &&\n+            extensionReceiverParameter != null &&\n+            extensionReceiverParameter!!.type.isAtomicValueType()\n+        ) {\n+            val type = extensionReceiverParameter!!.type\n+            val valueType = type.atomicToValueType()\n+            val getterType = buildFunctionSimpleType(listOf(irBuiltIns.unitType, valueType))\n+            val setterType = buildFunctionSimpleType(listOf(valueType, irBuiltIns.unitType))\n+            val valueParametersCount = valueParameters.size\n+            val extendedValueParameters = mutableListOf<IrValueParameter>().apply {\n+                addAll(valueParameters)\n+                add(buildValueParameter(GETTER, valueParametersCount, getterType))\n+                add(buildValueParameter(SETTER, valueParametersCount + 1, setterType))\n+            }\n+            this as IrSimpleFunction\n+            (descriptor as FunctionDescriptorImpl).initialize(\n+                null,\n+                descriptor.dispatchReceiverParameter,\n+                descriptor.typeParameters,\n+                extendedValueParameters.map { it.descriptor as ValueParameterDescriptor },\n+                descriptor.returnType,\n+                descriptor.modality,\n+                descriptor.visibility\n+            )\n+            extensionReceiverParameter = null\n+            valueParameters = extendedValueParameters\n+        }\n+    }\n+\n+    private fun IrExpression.getPureTypeValue(): IrExpression {\n+        require(this is IrCall && isAtomicFactoryFunction()) { \"Illegal initializer for the atomic property $this\" }\n+        return getValueArgument(0)!!.transformAtomicFunctionCall()\n+    }\n+\n+    private fun IrExpression.buildPureTypeArrayConstructor() =\n+        when (this) {\n+            is IrConstructorCall -> {\n+                require(isAtomicArrayConstructor())\n+                val arrayConstructorSymbol = referenceBuiltInConstructor(type.getArrayClassDescriptor()) { it.valueParameters.size == 1 }\n+                val size = getValueArgument(0)\n+                IrConstructorCallImpl(\n+                    UNDEFINED_OFFSET, UNDEFINED_OFFSET,\n+                    irBuiltIns.unitType, arrayConstructorSymbol,\n+                    0, 0, 1\n+                ).apply {\n+                    putValueArgument(0, size)\n+                }\n+            }\n+            is IrCall -> {\n+                require(isAtomicArrayFactoryFunction()) { \"Unsupported atomic array factory function $this\" }\n+                val arrayFactorySymbol = referencePackageFunction(\"kotlin\", \"arrayOfNulls\")\n+                val arrayElementType = getTypeArgument(0)!!\n+                val size = getValueArgument(0)\n+                buildCall(\n+                    target = arrayFactorySymbol,\n+                    type = type,\n+                    origin = IrStatementOrigin.INVOKE,\n+                    typeArguments = listOf(arrayElementType),\n+                    valueArguments = listOf(size)\n+                )\n+            }\n+            else -> throw IllegalStateException(\"Illegal type of atomic array initializer\")",
+        "comment_created_at": "2020-05-22T10:52:48+00:00",
+        "comment_author": "romanart",
+        "comment_body": "Use kotlin equivalent `error(..)` instead",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

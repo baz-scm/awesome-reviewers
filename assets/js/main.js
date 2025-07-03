@@ -33,25 +33,34 @@ form && form.addEventListener('submit', async e => {
   }
   const repo = encodeURIComponent(m[1]);
   try {
-    const res = await fetch(
-      `https://awesome.baz.ninja/request?repo_name=${repo}`, {
-        method: window.CAN_USE_HEADERS ? 'POST' : 'GET',
-        ...(window.CAN_USE_HEADERS && {
-          headers: {
-            'Content-Type': 'application/json',
-            'x-amz-content-sha256':
-              'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-          },
-          body: '{}'
-        })
-      }
-    );
-    if (res.ok) {
-      feedbackEl.textContent = 'Repo valid';
-      feedbackEl.className = 'modal__feedback valid';
+    const options = {
+      method: window.CAN_USE_HEADERS ? 'POST' : 'GET'
+    };
+    if (window.CAN_USE_HEADERS) {
+      options.headers = {
+        'Content-Type': 'application/json',
+        'x-amz-content-sha256':
+          'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+      };
+      options.body = '{}';
     } else {
-      const txt = await res.text();
-      throw new Error(txt || res.statusText);
+      options.mode = 'no-cors';
+    }
+    const res = await fetch(
+      `https://awesome.baz.ninja/request?repo_name=${repo}`,
+      options
+    );
+    if (window.CAN_USE_HEADERS) {
+      if (res.ok) {
+        feedbackEl.textContent = 'Repo valid';
+        feedbackEl.className = 'modal__feedback valid';
+      } else {
+        const txt = await res.text();
+        throw new Error(txt || res.statusText);
+      }
+    } else {
+      feedbackEl.textContent = 'Request sent';
+      feedbackEl.className = 'modal__feedback valid';
     }
   } catch (err) {
     feedbackEl.textContent = 'Repo not valid';

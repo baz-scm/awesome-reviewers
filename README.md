@@ -4,7 +4,7 @@
    <p align="center">
       Ready-to-use system prompts for Agentic Code Review.
       <br />
-      <a href="https://github.com/baz-scm/"><strong>Baz on GitHub »</strong></a>
+      <a href="https://awesomereviewers.com"><strong>AwesomeReviewers.com »</strong></a>
       <br />
    </p>
 </div>

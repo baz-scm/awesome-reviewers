@@ -1,28 +1,30 @@
 ---
 title: Minimize permission scope
-description: Always follow the principle of least privilege by requesting only the
-  minimum permissions necessary for your application to function. Overly broad permissions
-  increase security risks and potential attack surfaces. When working with browser
-  extensions, APIs, or any system requiring explicit permissions, regularly review
-  and restrict access scopes.
+description: When developing browser extensions or applications that use permission
+  systems, always follow the principle of least privilege by requesting only the minimum
+  permissions necessary for functionality. Broad permissions like `http://*/*` and
+  `https://*/*` increase security risks if your code is compromised.
 repository: facebook/react
 label: Security
 language: Json
 comments_count: 1
-repository_stars: 236925
+repository_stars: 236926
 ---
 
-Always follow the principle of least privilege by requesting only the minimum permissions necessary for your application to function. Overly broad permissions increase security risks and potential attack surfaces. When working with browser extensions, APIs, or any system requiring explicit permissions, regularly review and restrict access scopes.
+When developing browser extensions or applications that use permission systems, always follow the principle of least privilege by requesting only the minimum permissions necessary for functionality. Broad permissions like `http://*/*` and `https://*/*` increase security risks if your code is compromised.
 
-For example, instead of broad URL patterns like:
+Instead of:
 ```json
 "permissions": [
+  "scripting",
+  "storage",
+  "tabs",
   "http://*/*",
   "https://*/*"
 ]
 ```
 
-Consider using more targeted permissions:
+Consider more specific scopes when possible:
 ```json
 "permissions": [
   "scripting",
@@ -34,4 +36,4 @@ Consider using more targeted permissions:
 ]
 ```
 
-For Manifest V3 extensions, evaluate whether you can use alternatives like activeTab, declarativeNetRequest, or specific host permissions to achieve the same functionality without requesting broad access to all websites.
+Only request broad URL permissions when absolutely necessary for the application's core functionality, and document why such permissions are required. Regularly review permissions as APIs evolve (e.g., Manifest v3 changes) to ensure you're not requesting unnecessary access.

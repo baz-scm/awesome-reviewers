@@ -1,0 +1,422 @@
+[
+  {
+    "discussion_id": "1919659116",
+    "pr_number": 14690,
+    "pr_file": "transport-classes-io_uring/src/main/java/io/netty/channel/uring/IoUringBufferRing.java",
+    "created_at": "2025-01-17T07:12:18+00:00",
+    "commented_code": "+/*\n+ * Copyright 2025 The Netty Project\n+ *\n+ * The Netty Project licenses this file to you under the Apache License,\n+ * version 2.0 (the \"License\"); you may not use this file except in compliance\n+ * with the License. You may obtain a copy of the License at:\n+ *\n+ *   https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT\n+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the\n+ * License for the specific language governing permissions and limitations\n+ * under the License.\n+ */\n+package io.netty.channel.uring;\n+\n+import io.netty.buffer.AbstractReferenceCountedByteBuf;\n+import io.netty.buffer.ByteBuf;\n+import io.netty.buffer.ByteBufAllocator;\n+import io.netty.util.internal.PlatformDependent;\n+\n+import java.io.IOException;\n+import java.io.InputStream;\n+import java.io.OutputStream;\n+import java.nio.ByteBuffer;\n+import java.nio.ByteOrder;\n+import java.nio.channels.FileChannel;\n+import java.nio.channels.GatheringByteChannel;\n+import java.nio.channels.ScatteringByteChannel;\n+\n+public final class IoUringBufferRing {\n+\n+    private final long ioUringBufRingAddr;\n+\n+    private final short entries;\n+\n+    private final short bufferGroupId;\n+\n+    private final int ringFd;\n+\n+    private final ByteBuf[] userspaceBufferHolder;\n+    private final int chunkSize;\n+    private short nextIndex;\n+    private boolean hasSpareBuffer;\n+    private IoUringIoHandler source;\n+\n+    IoUringBufferRing(int ringFd, long ioUringBufRingAddr,\n+                      short entries, short bufferGroupId,\n+                      int chunkSize, IoUringIoHandler ioUringIoHandler\n+    ) {\n+        this.ioUringBufRingAddr = ioUringBufRingAddr;\n+        this.entries = entries;\n+        this.bufferGroupId = bufferGroupId;\n+        this.ringFd = ringFd;\n+        this.userspaceBufferHolder = new ByteBuf[entries];\n+        this.nextIndex = 0;\n+        this.chunkSize = chunkSize;\n+        this.hasSpareBuffer = false;\n+        this.source = ioUringIoHandler;\n+    }\n+\n+    public void markReadFail() {\n+        hasSpareBuffer = false;\n+    }\n+\n+    public boolean hasSpareBuffer() {\n+        return hasSpareBuffer;\n+    }\n+\n+    void recycleBuffer(short bid) {\n+        source.submitBeforeIO(new Runnable() {\n+            @Override\n+            public void run() {\n+                addToRing(bid, true);\n+            }\n+        });\n+    }\n+\n+    void addToRing(short bid, boolean needAdvance) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        int mask = entries - 1;\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        int ringIndex = oldTail & mask;\n+        long ioUringBufAddress = ioUringBufRingAddr + (long) Native.SIZEOF_IOURING_BUF * ringIndex;\n+        PlatformDependent.putLong(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_ADDR, byteBuf.memoryAddress());\n+        PlatformDependent.putInt(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_LEN, (short) byteBuf.capacity());\n+        PlatformDependent.putShort(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_BID, bid);\n+        if (needAdvance) {\n+            advanceTail(1);\n+        }\n+    }\n+\n+    void appendBuffer(ByteBufAllocator byteBufAllocator, int count) {\n+        int expectedIndex = nextIndex + count;\n+        if (expectedIndex > entries) {\n+            throw new IllegalStateException(\"Buffer ring is full\");\n+        }\n+\n+        for (int i = 0; i < count; i++) {\n+            ByteBuf buffer = byteBufAllocator.ioBuffer(chunkSize);\n+            userspaceBufferHolder[nextIndex] = buffer;\n+            addToRing(nextIndex, false);\n+            nextIndex++;\n+        }\n+        advanceTail(count);\n+    }\n+\n+    ByteBuf borrowBuffer(int bid, int maxCap) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        ByteBuf slice = byteBuf.slice(0, maxCap);\n+        return new UserspaceIoUringBuffer(maxCap, (short) bid, slice);\n+    }\n+\n+    private void advanceTail(int count) {\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        short newTail = (short) (oldTail + count);\n+        PlatformDependent.putShortVolatile(tailFieldAddress, newTail);",
+    "repo_full_name": "netty/netty",
+    "discussion_comments": [
+      {
+        "comment_id": "1919659116",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14690,
+        "pr_file": "transport-classes-io_uring/src/main/java/io/netty/channel/uring/IoUringBufferRing.java",
+        "discussion_id": "1919659116",
+        "commented_code": "@@ -0,0 +1,413 @@\n+/*\n+ * Copyright 2025 The Netty Project\n+ *\n+ * The Netty Project licenses this file to you under the Apache License,\n+ * version 2.0 (the \"License\"); you may not use this file except in compliance\n+ * with the License. You may obtain a copy of the License at:\n+ *\n+ *   https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT\n+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the\n+ * License for the specific language governing permissions and limitations\n+ * under the License.\n+ */\n+package io.netty.channel.uring;\n+\n+import io.netty.buffer.AbstractReferenceCountedByteBuf;\n+import io.netty.buffer.ByteBuf;\n+import io.netty.buffer.ByteBufAllocator;\n+import io.netty.util.internal.PlatformDependent;\n+\n+import java.io.IOException;\n+import java.io.InputStream;\n+import java.io.OutputStream;\n+import java.nio.ByteBuffer;\n+import java.nio.ByteOrder;\n+import java.nio.channels.FileChannel;\n+import java.nio.channels.GatheringByteChannel;\n+import java.nio.channels.ScatteringByteChannel;\n+\n+public final class IoUringBufferRing {\n+\n+    private final long ioUringBufRingAddr;\n+\n+    private final short entries;\n+\n+    private final short bufferGroupId;\n+\n+    private final int ringFd;\n+\n+    private final ByteBuf[] userspaceBufferHolder;\n+    private final int chunkSize;\n+    private short nextIndex;\n+    private boolean hasSpareBuffer;\n+    private IoUringIoHandler source;\n+\n+    IoUringBufferRing(int ringFd, long ioUringBufRingAddr,\n+                      short entries, short bufferGroupId,\n+                      int chunkSize, IoUringIoHandler ioUringIoHandler\n+    ) {\n+        this.ioUringBufRingAddr = ioUringBufRingAddr;\n+        this.entries = entries;\n+        this.bufferGroupId = bufferGroupId;\n+        this.ringFd = ringFd;\n+        this.userspaceBufferHolder = new ByteBuf[entries];\n+        this.nextIndex = 0;\n+        this.chunkSize = chunkSize;\n+        this.hasSpareBuffer = false;\n+        this.source = ioUringIoHandler;\n+    }\n+\n+    public void markReadFail() {\n+        hasSpareBuffer = false;\n+    }\n+\n+    public boolean hasSpareBuffer() {\n+        return hasSpareBuffer;\n+    }\n+\n+    void recycleBuffer(short bid) {\n+        source.submitBeforeIO(new Runnable() {\n+            @Override\n+            public void run() {\n+                addToRing(bid, true);\n+            }\n+        });\n+    }\n+\n+    void addToRing(short bid, boolean needAdvance) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        int mask = entries - 1;\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        int ringIndex = oldTail & mask;\n+        long ioUringBufAddress = ioUringBufRingAddr + (long) Native.SIZEOF_IOURING_BUF * ringIndex;\n+        PlatformDependent.putLong(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_ADDR, byteBuf.memoryAddress());\n+        PlatformDependent.putInt(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_LEN, (short) byteBuf.capacity());\n+        PlatformDependent.putShort(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_BID, bid);\n+        if (needAdvance) {\n+            advanceTail(1);\n+        }\n+    }\n+\n+    void appendBuffer(ByteBufAllocator byteBufAllocator, int count) {\n+        int expectedIndex = nextIndex + count;\n+        if (expectedIndex > entries) {\n+            throw new IllegalStateException(\"Buffer ring is full\");\n+        }\n+\n+        for (int i = 0; i < count; i++) {\n+            ByteBuf buffer = byteBufAllocator.ioBuffer(chunkSize);\n+            userspaceBufferHolder[nextIndex] = buffer;\n+            addToRing(nextIndex, false);\n+            nextIndex++;\n+        }\n+        advanceTail(count);\n+    }\n+\n+    ByteBuf borrowBuffer(int bid, int maxCap) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        ByteBuf slice = byteBuf.slice(0, maxCap);\n+        return new UserspaceIoUringBuffer(maxCap, (short) bid, slice);\n+    }\n+\n+    private void advanceTail(int count) {\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        short newTail = (short) (oldTail + count);\n+        PlatformDependent.putShortVolatile(tailFieldAddress, newTail);",
+        "comment_created_at": "2025-01-17T07:12:18+00:00",
+        "comment_author": "franz1981",
+        "comment_body": "why volatile? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1919669111",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14690,
+        "pr_file": "transport-classes-io_uring/src/main/java/io/netty/channel/uring/IoUringBufferRing.java",
+        "discussion_id": "1919659116",
+        "commented_code": "@@ -0,0 +1,413 @@\n+/*\n+ * Copyright 2025 The Netty Project\n+ *\n+ * The Netty Project licenses this file to you under the Apache License,\n+ * version 2.0 (the \"License\"); you may not use this file except in compliance\n+ * with the License. You may obtain a copy of the License at:\n+ *\n+ *   https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT\n+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the\n+ * License for the specific language governing permissions and limitations\n+ * under the License.\n+ */\n+package io.netty.channel.uring;\n+\n+import io.netty.buffer.AbstractReferenceCountedByteBuf;\n+import io.netty.buffer.ByteBuf;\n+import io.netty.buffer.ByteBufAllocator;\n+import io.netty.util.internal.PlatformDependent;\n+\n+import java.io.IOException;\n+import java.io.InputStream;\n+import java.io.OutputStream;\n+import java.nio.ByteBuffer;\n+import java.nio.ByteOrder;\n+import java.nio.channels.FileChannel;\n+import java.nio.channels.GatheringByteChannel;\n+import java.nio.channels.ScatteringByteChannel;\n+\n+public final class IoUringBufferRing {\n+\n+    private final long ioUringBufRingAddr;\n+\n+    private final short entries;\n+\n+    private final short bufferGroupId;\n+\n+    private final int ringFd;\n+\n+    private final ByteBuf[] userspaceBufferHolder;\n+    private final int chunkSize;\n+    private short nextIndex;\n+    private boolean hasSpareBuffer;\n+    private IoUringIoHandler source;\n+\n+    IoUringBufferRing(int ringFd, long ioUringBufRingAddr,\n+                      short entries, short bufferGroupId,\n+                      int chunkSize, IoUringIoHandler ioUringIoHandler\n+    ) {\n+        this.ioUringBufRingAddr = ioUringBufRingAddr;\n+        this.entries = entries;\n+        this.bufferGroupId = bufferGroupId;\n+        this.ringFd = ringFd;\n+        this.userspaceBufferHolder = new ByteBuf[entries];\n+        this.nextIndex = 0;\n+        this.chunkSize = chunkSize;\n+        this.hasSpareBuffer = false;\n+        this.source = ioUringIoHandler;\n+    }\n+\n+    public void markReadFail() {\n+        hasSpareBuffer = false;\n+    }\n+\n+    public boolean hasSpareBuffer() {\n+        return hasSpareBuffer;\n+    }\n+\n+    void recycleBuffer(short bid) {\n+        source.submitBeforeIO(new Runnable() {\n+            @Override\n+            public void run() {\n+                addToRing(bid, true);\n+            }\n+        });\n+    }\n+\n+    void addToRing(short bid, boolean needAdvance) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        int mask = entries - 1;\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        int ringIndex = oldTail & mask;\n+        long ioUringBufAddress = ioUringBufRingAddr + (long) Native.SIZEOF_IOURING_BUF * ringIndex;\n+        PlatformDependent.putLong(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_ADDR, byteBuf.memoryAddress());\n+        PlatformDependent.putInt(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_LEN, (short) byteBuf.capacity());\n+        PlatformDependent.putShort(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_BID, bid);\n+        if (needAdvance) {\n+            advanceTail(1);\n+        }\n+    }\n+\n+    void appendBuffer(ByteBufAllocator byteBufAllocator, int count) {\n+        int expectedIndex = nextIndex + count;\n+        if (expectedIndex > entries) {\n+            throw new IllegalStateException(\"Buffer ring is full\");\n+        }\n+\n+        for (int i = 0; i < count; i++) {\n+            ByteBuf buffer = byteBufAllocator.ioBuffer(chunkSize);\n+            userspaceBufferHolder[nextIndex] = buffer;\n+            addToRing(nextIndex, false);\n+            nextIndex++;\n+        }\n+        advanceTail(count);\n+    }\n+\n+    ByteBuf borrowBuffer(int bid, int maxCap) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        ByteBuf slice = byteBuf.slice(0, maxCap);\n+        return new UserspaceIoUringBuffer(maxCap, (short) bid, slice);\n+    }\n+\n+    private void advanceTail(int count) {\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        short newTail = (short) (oldTail + count);\n+        PlatformDependent.putShortVolatile(tailFieldAddress, newTail);",
+        "comment_created_at": "2025-01-17T07:23:31+00:00",
+        "comment_author": "dreamlike-ocean",
+        "comment_body": "In fact, it should be \u201cstore release\u201d. [liburing](https://github.com/axboe/liburing/blob/1a5e9e65b7519b2f82298c9df6130da2099d580a/src/include/liburing.h#L1583)\r\nHowever, this memory order is not available in the Unsafe class of Java 8.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1922362890",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14690,
+        "pr_file": "transport-classes-io_uring/src/main/java/io/netty/channel/uring/IoUringBufferRing.java",
+        "discussion_id": "1919659116",
+        "commented_code": "@@ -0,0 +1,413 @@\n+/*\n+ * Copyright 2025 The Netty Project\n+ *\n+ * The Netty Project licenses this file to you under the Apache License,\n+ * version 2.0 (the \"License\"); you may not use this file except in compliance\n+ * with the License. You may obtain a copy of the License at:\n+ *\n+ *   https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT\n+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the\n+ * License for the specific language governing permissions and limitations\n+ * under the License.\n+ */\n+package io.netty.channel.uring;\n+\n+import io.netty.buffer.AbstractReferenceCountedByteBuf;\n+import io.netty.buffer.ByteBuf;\n+import io.netty.buffer.ByteBufAllocator;\n+import io.netty.util.internal.PlatformDependent;\n+\n+import java.io.IOException;\n+import java.io.InputStream;\n+import java.io.OutputStream;\n+import java.nio.ByteBuffer;\n+import java.nio.ByteOrder;\n+import java.nio.channels.FileChannel;\n+import java.nio.channels.GatheringByteChannel;\n+import java.nio.channels.ScatteringByteChannel;\n+\n+public final class IoUringBufferRing {\n+\n+    private final long ioUringBufRingAddr;\n+\n+    private final short entries;\n+\n+    private final short bufferGroupId;\n+\n+    private final int ringFd;\n+\n+    private final ByteBuf[] userspaceBufferHolder;\n+    private final int chunkSize;\n+    private short nextIndex;\n+    private boolean hasSpareBuffer;\n+    private IoUringIoHandler source;\n+\n+    IoUringBufferRing(int ringFd, long ioUringBufRingAddr,\n+                      short entries, short bufferGroupId,\n+                      int chunkSize, IoUringIoHandler ioUringIoHandler\n+    ) {\n+        this.ioUringBufRingAddr = ioUringBufRingAddr;\n+        this.entries = entries;\n+        this.bufferGroupId = bufferGroupId;\n+        this.ringFd = ringFd;\n+        this.userspaceBufferHolder = new ByteBuf[entries];\n+        this.nextIndex = 0;\n+        this.chunkSize = chunkSize;\n+        this.hasSpareBuffer = false;\n+        this.source = ioUringIoHandler;\n+    }\n+\n+    public void markReadFail() {\n+        hasSpareBuffer = false;\n+    }\n+\n+    public boolean hasSpareBuffer() {\n+        return hasSpareBuffer;\n+    }\n+\n+    void recycleBuffer(short bid) {\n+        source.submitBeforeIO(new Runnable() {\n+            @Override\n+            public void run() {\n+                addToRing(bid, true);\n+            }\n+        });\n+    }\n+\n+    void addToRing(short bid, boolean needAdvance) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        int mask = entries - 1;\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        int ringIndex = oldTail & mask;\n+        long ioUringBufAddress = ioUringBufRingAddr + (long) Native.SIZEOF_IOURING_BUF * ringIndex;\n+        PlatformDependent.putLong(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_ADDR, byteBuf.memoryAddress());\n+        PlatformDependent.putInt(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_LEN, (short) byteBuf.capacity());\n+        PlatformDependent.putShort(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_BID, bid);\n+        if (needAdvance) {\n+            advanceTail(1);\n+        }\n+    }\n+\n+    void appendBuffer(ByteBufAllocator byteBufAllocator, int count) {\n+        int expectedIndex = nextIndex + count;\n+        if (expectedIndex > entries) {\n+            throw new IllegalStateException(\"Buffer ring is full\");\n+        }\n+\n+        for (int i = 0; i < count; i++) {\n+            ByteBuf buffer = byteBufAllocator.ioBuffer(chunkSize);\n+            userspaceBufferHolder[nextIndex] = buffer;\n+            addToRing(nextIndex, false);\n+            nextIndex++;\n+        }\n+        advanceTail(count);\n+    }\n+\n+    ByteBuf borrowBuffer(int bid, int maxCap) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        ByteBuf slice = byteBuf.slice(0, maxCap);\n+        return new UserspaceIoUringBuffer(maxCap, (short) bid, slice);\n+    }\n+\n+    private void advanceTail(int count) {\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        short newTail = (short) (oldTail + count);\n+        PlatformDependent.putShortVolatile(tailFieldAddress, newTail);",
+        "comment_created_at": "2025-01-20T12:54:39+00:00",
+        "comment_author": "franz1981",
+        "comment_body": "how is not? it is...it's the putOrdered",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1922373002",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14690,
+        "pr_file": "transport-classes-io_uring/src/main/java/io/netty/channel/uring/IoUringBufferRing.java",
+        "discussion_id": "1919659116",
+        "commented_code": "@@ -0,0 +1,413 @@\n+/*\n+ * Copyright 2025 The Netty Project\n+ *\n+ * The Netty Project licenses this file to you under the Apache License,\n+ * version 2.0 (the \"License\"); you may not use this file except in compliance\n+ * with the License. You may obtain a copy of the License at:\n+ *\n+ *   https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT\n+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the\n+ * License for the specific language governing permissions and limitations\n+ * under the License.\n+ */\n+package io.netty.channel.uring;\n+\n+import io.netty.buffer.AbstractReferenceCountedByteBuf;\n+import io.netty.buffer.ByteBuf;\n+import io.netty.buffer.ByteBufAllocator;\n+import io.netty.util.internal.PlatformDependent;\n+\n+import java.io.IOException;\n+import java.io.InputStream;\n+import java.io.OutputStream;\n+import java.nio.ByteBuffer;\n+import java.nio.ByteOrder;\n+import java.nio.channels.FileChannel;\n+import java.nio.channels.GatheringByteChannel;\n+import java.nio.channels.ScatteringByteChannel;\n+\n+public final class IoUringBufferRing {\n+\n+    private final long ioUringBufRingAddr;\n+\n+    private final short entries;\n+\n+    private final short bufferGroupId;\n+\n+    private final int ringFd;\n+\n+    private final ByteBuf[] userspaceBufferHolder;\n+    private final int chunkSize;\n+    private short nextIndex;\n+    private boolean hasSpareBuffer;\n+    private IoUringIoHandler source;\n+\n+    IoUringBufferRing(int ringFd, long ioUringBufRingAddr,\n+                      short entries, short bufferGroupId,\n+                      int chunkSize, IoUringIoHandler ioUringIoHandler\n+    ) {\n+        this.ioUringBufRingAddr = ioUringBufRingAddr;\n+        this.entries = entries;\n+        this.bufferGroupId = bufferGroupId;\n+        this.ringFd = ringFd;\n+        this.userspaceBufferHolder = new ByteBuf[entries];\n+        this.nextIndex = 0;\n+        this.chunkSize = chunkSize;\n+        this.hasSpareBuffer = false;\n+        this.source = ioUringIoHandler;\n+    }\n+\n+    public void markReadFail() {\n+        hasSpareBuffer = false;\n+    }\n+\n+    public boolean hasSpareBuffer() {\n+        return hasSpareBuffer;\n+    }\n+\n+    void recycleBuffer(short bid) {\n+        source.submitBeforeIO(new Runnable() {\n+            @Override\n+            public void run() {\n+                addToRing(bid, true);\n+            }\n+        });\n+    }\n+\n+    void addToRing(short bid, boolean needAdvance) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        int mask = entries - 1;\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        int ringIndex = oldTail & mask;\n+        long ioUringBufAddress = ioUringBufRingAddr + (long) Native.SIZEOF_IOURING_BUF * ringIndex;\n+        PlatformDependent.putLong(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_ADDR, byteBuf.memoryAddress());\n+        PlatformDependent.putInt(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_LEN, (short) byteBuf.capacity());\n+        PlatformDependent.putShort(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_BID, bid);\n+        if (needAdvance) {\n+            advanceTail(1);\n+        }\n+    }\n+\n+    void appendBuffer(ByteBufAllocator byteBufAllocator, int count) {\n+        int expectedIndex = nextIndex + count;\n+        if (expectedIndex > entries) {\n+            throw new IllegalStateException(\"Buffer ring is full\");\n+        }\n+\n+        for (int i = 0; i < count; i++) {\n+            ByteBuf buffer = byteBufAllocator.ioBuffer(chunkSize);\n+            userspaceBufferHolder[nextIndex] = buffer;\n+            addToRing(nextIndex, false);\n+            nextIndex++;\n+        }\n+        advanceTail(count);\n+    }\n+\n+    ByteBuf borrowBuffer(int bid, int maxCap) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        ByteBuf slice = byteBuf.slice(0, maxCap);\n+        return new UserspaceIoUringBuffer(maxCap, (short) bid, slice);\n+    }\n+\n+    private void advanceTail(int count) {\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        short newTail = (short) (oldTail + count);\n+        PlatformDependent.putShortVolatile(tailFieldAddress, newTail);",
+        "comment_created_at": "2025-01-20T13:02:34+00:00",
+        "comment_author": "dreamlike-ocean",
+        "comment_body": "> how is not? it is...it's the putOrdered\r\n\r\nThe JDK has putOrderedInt and putOrderedLong, but there is no putOrderedShort. Do you have any good ideas?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1922404594",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14690,
+        "pr_file": "transport-classes-io_uring/src/main/java/io/netty/channel/uring/IoUringBufferRing.java",
+        "discussion_id": "1919659116",
+        "commented_code": "@@ -0,0 +1,413 @@\n+/*\n+ * Copyright 2025 The Netty Project\n+ *\n+ * The Netty Project licenses this file to you under the Apache License,\n+ * version 2.0 (the \"License\"); you may not use this file except in compliance\n+ * with the License. You may obtain a copy of the License at:\n+ *\n+ *   https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT\n+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the\n+ * License for the specific language governing permissions and limitations\n+ * under the License.\n+ */\n+package io.netty.channel.uring;\n+\n+import io.netty.buffer.AbstractReferenceCountedByteBuf;\n+import io.netty.buffer.ByteBuf;\n+import io.netty.buffer.ByteBufAllocator;\n+import io.netty.util.internal.PlatformDependent;\n+\n+import java.io.IOException;\n+import java.io.InputStream;\n+import java.io.OutputStream;\n+import java.nio.ByteBuffer;\n+import java.nio.ByteOrder;\n+import java.nio.channels.FileChannel;\n+import java.nio.channels.GatheringByteChannel;\n+import java.nio.channels.ScatteringByteChannel;\n+\n+public final class IoUringBufferRing {\n+\n+    private final long ioUringBufRingAddr;\n+\n+    private final short entries;\n+\n+    private final short bufferGroupId;\n+\n+    private final int ringFd;\n+\n+    private final ByteBuf[] userspaceBufferHolder;\n+    private final int chunkSize;\n+    private short nextIndex;\n+    private boolean hasSpareBuffer;\n+    private IoUringIoHandler source;\n+\n+    IoUringBufferRing(int ringFd, long ioUringBufRingAddr,\n+                      short entries, short bufferGroupId,\n+                      int chunkSize, IoUringIoHandler ioUringIoHandler\n+    ) {\n+        this.ioUringBufRingAddr = ioUringBufRingAddr;\n+        this.entries = entries;\n+        this.bufferGroupId = bufferGroupId;\n+        this.ringFd = ringFd;\n+        this.userspaceBufferHolder = new ByteBuf[entries];\n+        this.nextIndex = 0;\n+        this.chunkSize = chunkSize;\n+        this.hasSpareBuffer = false;\n+        this.source = ioUringIoHandler;\n+    }\n+\n+    public void markReadFail() {\n+        hasSpareBuffer = false;\n+    }\n+\n+    public boolean hasSpareBuffer() {\n+        return hasSpareBuffer;\n+    }\n+\n+    void recycleBuffer(short bid) {\n+        source.submitBeforeIO(new Runnable() {\n+            @Override\n+            public void run() {\n+                addToRing(bid, true);\n+            }\n+        });\n+    }\n+\n+    void addToRing(short bid, boolean needAdvance) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        int mask = entries - 1;\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        int ringIndex = oldTail & mask;\n+        long ioUringBufAddress = ioUringBufRingAddr + (long) Native.SIZEOF_IOURING_BUF * ringIndex;\n+        PlatformDependent.putLong(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_ADDR, byteBuf.memoryAddress());\n+        PlatformDependent.putInt(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_LEN, (short) byteBuf.capacity());\n+        PlatformDependent.putShort(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_BID, bid);\n+        if (needAdvance) {\n+            advanceTail(1);\n+        }\n+    }\n+\n+    void appendBuffer(ByteBufAllocator byteBufAllocator, int count) {\n+        int expectedIndex = nextIndex + count;\n+        if (expectedIndex > entries) {\n+            throw new IllegalStateException(\"Buffer ring is full\");\n+        }\n+\n+        for (int i = 0; i < count; i++) {\n+            ByteBuf buffer = byteBufAllocator.ioBuffer(chunkSize);\n+            userspaceBufferHolder[nextIndex] = buffer;\n+            addToRing(nextIndex, false);\n+            nextIndex++;\n+        }\n+        advanceTail(count);\n+    }\n+\n+    ByteBuf borrowBuffer(int bid, int maxCap) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        ByteBuf slice = byteBuf.slice(0, maxCap);\n+        return new UserspaceIoUringBuffer(maxCap, (short) bid, slice);\n+    }\n+\n+    private void advanceTail(int count) {\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        short newTail = (short) (oldTail + count);\n+        PlatformDependent.putShortVolatile(tailFieldAddress, newTail);",
+        "comment_created_at": "2025-01-20T13:27:34+00:00",
+        "comment_author": "franz1981",
+        "comment_body": "yep, place the right barriers.\r\nIf the short is aligned, you can just use storeFence + putShort - that is a decent one \r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1922415039",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14690,
+        "pr_file": "transport-classes-io_uring/src/main/java/io/netty/channel/uring/IoUringBufferRing.java",
+        "discussion_id": "1919659116",
+        "commented_code": "@@ -0,0 +1,413 @@\n+/*\n+ * Copyright 2025 The Netty Project\n+ *\n+ * The Netty Project licenses this file to you under the Apache License,\n+ * version 2.0 (the \"License\"); you may not use this file except in compliance\n+ * with the License. You may obtain a copy of the License at:\n+ *\n+ *   https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT\n+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the\n+ * License for the specific language governing permissions and limitations\n+ * under the License.\n+ */\n+package io.netty.channel.uring;\n+\n+import io.netty.buffer.AbstractReferenceCountedByteBuf;\n+import io.netty.buffer.ByteBuf;\n+import io.netty.buffer.ByteBufAllocator;\n+import io.netty.util.internal.PlatformDependent;\n+\n+import java.io.IOException;\n+import java.io.InputStream;\n+import java.io.OutputStream;\n+import java.nio.ByteBuffer;\n+import java.nio.ByteOrder;\n+import java.nio.channels.FileChannel;\n+import java.nio.channels.GatheringByteChannel;\n+import java.nio.channels.ScatteringByteChannel;\n+\n+public final class IoUringBufferRing {\n+\n+    private final long ioUringBufRingAddr;\n+\n+    private final short entries;\n+\n+    private final short bufferGroupId;\n+\n+    private final int ringFd;\n+\n+    private final ByteBuf[] userspaceBufferHolder;\n+    private final int chunkSize;\n+    private short nextIndex;\n+    private boolean hasSpareBuffer;\n+    private IoUringIoHandler source;\n+\n+    IoUringBufferRing(int ringFd, long ioUringBufRingAddr,\n+                      short entries, short bufferGroupId,\n+                      int chunkSize, IoUringIoHandler ioUringIoHandler\n+    ) {\n+        this.ioUringBufRingAddr = ioUringBufRingAddr;\n+        this.entries = entries;\n+        this.bufferGroupId = bufferGroupId;\n+        this.ringFd = ringFd;\n+        this.userspaceBufferHolder = new ByteBuf[entries];\n+        this.nextIndex = 0;\n+        this.chunkSize = chunkSize;\n+        this.hasSpareBuffer = false;\n+        this.source = ioUringIoHandler;\n+    }\n+\n+    public void markReadFail() {\n+        hasSpareBuffer = false;\n+    }\n+\n+    public boolean hasSpareBuffer() {\n+        return hasSpareBuffer;\n+    }\n+\n+    void recycleBuffer(short bid) {\n+        source.submitBeforeIO(new Runnable() {\n+            @Override\n+            public void run() {\n+                addToRing(bid, true);\n+            }\n+        });\n+    }\n+\n+    void addToRing(short bid, boolean needAdvance) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        int mask = entries - 1;\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        int ringIndex = oldTail & mask;\n+        long ioUringBufAddress = ioUringBufRingAddr + (long) Native.SIZEOF_IOURING_BUF * ringIndex;\n+        PlatformDependent.putLong(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_ADDR, byteBuf.memoryAddress());\n+        PlatformDependent.putInt(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_LEN, (short) byteBuf.capacity());\n+        PlatformDependent.putShort(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_BID, bid);\n+        if (needAdvance) {\n+            advanceTail(1);\n+        }\n+    }\n+\n+    void appendBuffer(ByteBufAllocator byteBufAllocator, int count) {\n+        int expectedIndex = nextIndex + count;\n+        if (expectedIndex > entries) {\n+            throw new IllegalStateException(\"Buffer ring is full\");\n+        }\n+\n+        for (int i = 0; i < count; i++) {\n+            ByteBuf buffer = byteBufAllocator.ioBuffer(chunkSize);\n+            userspaceBufferHolder[nextIndex] = buffer;\n+            addToRing(nextIndex, false);\n+            nextIndex++;\n+        }\n+        advanceTail(count);\n+    }\n+\n+    ByteBuf borrowBuffer(int bid, int maxCap) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        ByteBuf slice = byteBuf.slice(0, maxCap);\n+        return new UserspaceIoUringBuffer(maxCap, (short) bid, slice);\n+    }\n+\n+    private void advanceTail(int count) {\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        short newTail = (short) (oldTail + count);\n+        PlatformDependent.putShortVolatile(tailFieldAddress, newTail);",
+        "comment_created_at": "2025-01-20T13:35:18+00:00",
+        "comment_author": "dreamlike-ocean",
+        "comment_body": "> yep, place the right barriers. If the short is aligned, you can just use storeFence + putShort - that is a decent one\r\n\r\nI get it! just like: \r\n```java \r\n    static void putShortOrdered(long adddress, short newValue) {\r\n        UNSAFE.putShort(null, adddress, newValue);\r\n        UNSAFE.storeFence();\r\n    }\r\n\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1922444604",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14690,
+        "pr_file": "transport-classes-io_uring/src/main/java/io/netty/channel/uring/IoUringBufferRing.java",
+        "discussion_id": "1919659116",
+        "commented_code": "@@ -0,0 +1,413 @@\n+/*\n+ * Copyright 2025 The Netty Project\n+ *\n+ * The Netty Project licenses this file to you under the Apache License,\n+ * version 2.0 (the \"License\"); you may not use this file except in compliance\n+ * with the License. You may obtain a copy of the License at:\n+ *\n+ *   https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT\n+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the\n+ * License for the specific language governing permissions and limitations\n+ * under the License.\n+ */\n+package io.netty.channel.uring;\n+\n+import io.netty.buffer.AbstractReferenceCountedByteBuf;\n+import io.netty.buffer.ByteBuf;\n+import io.netty.buffer.ByteBufAllocator;\n+import io.netty.util.internal.PlatformDependent;\n+\n+import java.io.IOException;\n+import java.io.InputStream;\n+import java.io.OutputStream;\n+import java.nio.ByteBuffer;\n+import java.nio.ByteOrder;\n+import java.nio.channels.FileChannel;\n+import java.nio.channels.GatheringByteChannel;\n+import java.nio.channels.ScatteringByteChannel;\n+\n+public final class IoUringBufferRing {\n+\n+    private final long ioUringBufRingAddr;\n+\n+    private final short entries;\n+\n+    private final short bufferGroupId;\n+\n+    private final int ringFd;\n+\n+    private final ByteBuf[] userspaceBufferHolder;\n+    private final int chunkSize;\n+    private short nextIndex;\n+    private boolean hasSpareBuffer;\n+    private IoUringIoHandler source;\n+\n+    IoUringBufferRing(int ringFd, long ioUringBufRingAddr,\n+                      short entries, short bufferGroupId,\n+                      int chunkSize, IoUringIoHandler ioUringIoHandler\n+    ) {\n+        this.ioUringBufRingAddr = ioUringBufRingAddr;\n+        this.entries = entries;\n+        this.bufferGroupId = bufferGroupId;\n+        this.ringFd = ringFd;\n+        this.userspaceBufferHolder = new ByteBuf[entries];\n+        this.nextIndex = 0;\n+        this.chunkSize = chunkSize;\n+        this.hasSpareBuffer = false;\n+        this.source = ioUringIoHandler;\n+    }\n+\n+    public void markReadFail() {\n+        hasSpareBuffer = false;\n+    }\n+\n+    public boolean hasSpareBuffer() {\n+        return hasSpareBuffer;\n+    }\n+\n+    void recycleBuffer(short bid) {\n+        source.submitBeforeIO(new Runnable() {\n+            @Override\n+            public void run() {\n+                addToRing(bid, true);\n+            }\n+        });\n+    }\n+\n+    void addToRing(short bid, boolean needAdvance) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        int mask = entries - 1;\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        int ringIndex = oldTail & mask;\n+        long ioUringBufAddress = ioUringBufRingAddr + (long) Native.SIZEOF_IOURING_BUF * ringIndex;\n+        PlatformDependent.putLong(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_ADDR, byteBuf.memoryAddress());\n+        PlatformDependent.putInt(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_LEN, (short) byteBuf.capacity());\n+        PlatformDependent.putShort(ioUringBufAddress + Native.IOURING_BUFFER_OFFSETOF_BID, bid);\n+        if (needAdvance) {\n+            advanceTail(1);\n+        }\n+    }\n+\n+    void appendBuffer(ByteBufAllocator byteBufAllocator, int count) {\n+        int expectedIndex = nextIndex + count;\n+        if (expectedIndex > entries) {\n+            throw new IllegalStateException(\"Buffer ring is full\");\n+        }\n+\n+        for (int i = 0; i < count; i++) {\n+            ByteBuf buffer = byteBufAllocator.ioBuffer(chunkSize);\n+            userspaceBufferHolder[nextIndex] = buffer;\n+            addToRing(nextIndex, false);\n+            nextIndex++;\n+        }\n+        advanceTail(count);\n+    }\n+\n+    ByteBuf borrowBuffer(int bid, int maxCap) {\n+        ByteBuf byteBuf = userspaceBufferHolder[bid];\n+        ByteBuf slice = byteBuf.slice(0, maxCap);\n+        return new UserspaceIoUringBuffer(maxCap, (short) bid, slice);\n+    }\n+\n+    private void advanceTail(int count) {\n+        long tailFieldAddress = ioUringBufRingAddr + Native.IO_URING_BUFFER_RING_TAIL;\n+        short oldTail = PlatformDependent.getShort(tailFieldAddress);\n+        short newTail = (short) (oldTail + count);\n+        PlatformDependent.putShortVolatile(tailFieldAddress, newTail);",
+        "comment_created_at": "2025-01-20T13:56:36+00:00",
+        "comment_author": "franz1981",
+        "comment_body": "you gotta change the order, when you \"release store\" you have:\r\n```\r\n// whatever is stored or loaded here won't \"move\" past the fence!\r\nStoreStore; LoadStore (i.e. storeFence)\r\n// the store here cannot happen before the fence and the prev load/stores\r\nstore value\r\n\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "392274316",
+    "pr_number": 9935,
+    "pr_file": "transport/src/main/java/io/netty/channel/embedded/EmbeddedChannel.java",
+    "created_at": "2020-03-13T14:48:39+00:00",
+    "commented_code": "@Override\n     protected void doClose() throws Exception {\n+        if (isNotEmpty(tempInboundMessages)) {\n+            ClosedChannelException exception = null;\n+            for (;;) {\n+                AbstractMap.SimpleEntry<Object, ChannelPromise> entry = tempInboundMessages.poll();\n+                if (entry == null) {\n+                    break;\n+                }\n+                Object value = entry.getKey();\n+                if (value != null) {\n+                    ReferenceCountUtil.release(value);\n+                }\n+                ChannelPromise promise = entry.getValue();\n+                if (promise != null) {\n+                    if (exception == null) {\n+                        exception = new ClosedChannelException();\n+                    }\n+                    promise.tryFailure(exception);\n+                }\n+            }\n+        }\n         state = State.CLOSED;",
+    "repo_full_name": "netty/netty",
+    "discussion_comments": [
+      {
+        "comment_id": "392274316",
+        "repo_full_name": "netty/netty",
+        "pr_number": 9935,
+        "pr_file": "transport/src/main/java/io/netty/channel/embedded/EmbeddedChannel.java",
+        "discussion_id": "392274316",
+        "commented_code": "@@ -718,12 +749,53 @@ protected void doDisconnect() throws Exception {\n \n     @Override\n     protected void doClose() throws Exception {\n+        if (isNotEmpty(tempInboundMessages)) {\n+            ClosedChannelException exception = null;\n+            for (;;) {\n+                AbstractMap.SimpleEntry<Object, ChannelPromise> entry = tempInboundMessages.poll();\n+                if (entry == null) {\n+                    break;\n+                }\n+                Object value = entry.getKey();\n+                if (value != null) {\n+                    ReferenceCountUtil.release(value);\n+                }\n+                ChannelPromise promise = entry.getValue();\n+                if (promise != null) {\n+                    if (exception == null) {\n+                        exception = new ClosedChannelException();\n+                    }\n+                    promise.tryFailure(exception);\n+                }\n+            }\n+        }\n         state = State.CLOSED;",
+        "comment_created_at": "2020-03-13T14:48:39+00:00",
+        "comment_author": "normanmaurer",
+        "comment_body": "better update state before promises are notified to ensure we see the correct state in the futures.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "392564423",
+        "repo_full_name": "netty/netty",
+        "pr_number": 9935,
+        "pr_file": "transport/src/main/java/io/netty/channel/embedded/EmbeddedChannel.java",
+        "discussion_id": "392274316",
+        "commented_code": "@@ -718,12 +749,53 @@ protected void doDisconnect() throws Exception {\n \n     @Override\n     protected void doClose() throws Exception {\n+        if (isNotEmpty(tempInboundMessages)) {\n+            ClosedChannelException exception = null;\n+            for (;;) {\n+                AbstractMap.SimpleEntry<Object, ChannelPromise> entry = tempInboundMessages.poll();\n+                if (entry == null) {\n+                    break;\n+                }\n+                Object value = entry.getKey();\n+                if (value != null) {\n+                    ReferenceCountUtil.release(value);\n+                }\n+                ChannelPromise promise = entry.getValue();\n+                if (promise != null) {\n+                    if (exception == null) {\n+                        exception = new ClosedChannelException();\n+                    }\n+                    promise.tryFailure(exception);\n+                }\n+            }\n+        }\n         state = State.CLOSED;",
+        "comment_created_at": "2020-03-14T07:17:47+00:00",
+        "comment_author": "carryxyh",
+        "comment_body": "Fixed.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1940708985",
+    "pr_number": 14772,
+    "pr_file": "transport-classes-io_uring/src/main/java/io/netty/channel/uring/IoUringMetric.java",
+    "created_at": "2025-02-04T08:23:20+00:00",
+    "commented_code": "+/*\n+ * Copyright 2025 The Netty Project\n+ *\n+ * The Netty Project licenses this file to you under the Apache License,\n+ * version 2.0 (the \"License\"); you may not use this file except in compliance\n+ * with the License. You may obtain a copy of the License at:\n+ *\n+ *   https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT\n+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the\n+ * License for the specific language governing permissions and limitations\n+ * under the License.\n+ */\n+package io.netty.channel.uring;\n+\n+import io.netty.util.internal.LongCounter;\n+import io.netty.util.internal.PlatformDependent;\n+import io.netty.util.internal.SystemPropertyUtil;\n+\n+import java.util.Map;\n+\n+/**\n+ * Metric for {@link IoUring}.\n+ */\n+public final class IoUringMetric {\n+\n+    private static final boolean ENABLE_METRIC = SystemPropertyUtil.getBoolean(\"io.netty.iouring.enableMetric\", true);\n+\n+    private static final LongCounter SQE_HANDLE_COUNTER = PlatformDependent.newLongCounter();\n+\n+    private static final LongCounter CQE_HANDLE_COUNT = PlatformDependent.newLongCounter();\n+\n+    private static final LongCounter PROVIDER_BUFFER_READ_FAIL_COUNT = PlatformDependent.newLongCounter();\n+\n+    /**\n+     * Use map instead of directly using CompletionQueue to prevent illegal access after ioUring is closed\n+     */\n+    private static final Map<CompletionQueue, Integer> OVERFLOW_RECORD = PlatformDependent.newConcurrentHashMap();\n+\n+    private static final LongCounter OVERFLOW_FROM_CLOSED_CQE = PlatformDependent.newLongCounter();",
+    "repo_full_name": "netty/netty",
+    "discussion_comments": [
+      {
+        "comment_id": "1940708985",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14772,
+        "pr_file": "transport-classes-io_uring/src/main/java/io/netty/channel/uring/IoUringMetric.java",
+        "discussion_id": "1940708985",
+        "commented_code": "@@ -0,0 +1,122 @@\n+/*\n+ * Copyright 2025 The Netty Project\n+ *\n+ * The Netty Project licenses this file to you under the Apache License,\n+ * version 2.0 (the \"License\"); you may not use this file except in compliance\n+ * with the License. You may obtain a copy of the License at:\n+ *\n+ *   https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT\n+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the\n+ * License for the specific language governing permissions and limitations\n+ * under the License.\n+ */\n+package io.netty.channel.uring;\n+\n+import io.netty.util.internal.LongCounter;\n+import io.netty.util.internal.PlatformDependent;\n+import io.netty.util.internal.SystemPropertyUtil;\n+\n+import java.util.Map;\n+\n+/**\n+ * Metric for {@link IoUring}.\n+ */\n+public final class IoUringMetric {\n+\n+    private static final boolean ENABLE_METRIC = SystemPropertyUtil.getBoolean(\"io.netty.iouring.enableMetric\", true);\n+\n+    private static final LongCounter SQE_HANDLE_COUNTER = PlatformDependent.newLongCounter();\n+\n+    private static final LongCounter CQE_HANDLE_COUNT = PlatformDependent.newLongCounter();\n+\n+    private static final LongCounter PROVIDER_BUFFER_READ_FAIL_COUNT = PlatformDependent.newLongCounter();\n+\n+    /**\n+     * Use map instead of directly using CompletionQueue to prevent illegal access after ioUring is closed\n+     */\n+    private static final Map<CompletionQueue, Integer> OVERFLOW_RECORD = PlatformDependent.newConcurrentHashMap();\n+\n+    private static final LongCounter OVERFLOW_FROM_CLOSED_CQE = PlatformDependent.newLongCounter();",
+        "comment_created_at": "2025-02-04T08:23:20+00:00",
+        "comment_author": "franz1981",
+        "comment_body": "Most (all, probably!) of the interactions with the ring are single threaded so you can just use AtomicLong counters which use the pattern: `counter.lazySet(counter.get() + 1)`\r\n\r\nit will still be atomic, but without any strong mem barrier on increment",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1940720146",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14772,
+        "pr_file": "transport-classes-io_uring/src/main/java/io/netty/channel/uring/IoUringMetric.java",
+        "discussion_id": "1940708985",
+        "commented_code": "@@ -0,0 +1,122 @@\n+/*\n+ * Copyright 2025 The Netty Project\n+ *\n+ * The Netty Project licenses this file to you under the Apache License,\n+ * version 2.0 (the \"License\"); you may not use this file except in compliance\n+ * with the License. You may obtain a copy of the License at:\n+ *\n+ *   https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS, WITHOUT\n+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the\n+ * License for the specific language governing permissions and limitations\n+ * under the License.\n+ */\n+package io.netty.channel.uring;\n+\n+import io.netty.util.internal.LongCounter;\n+import io.netty.util.internal.PlatformDependent;\n+import io.netty.util.internal.SystemPropertyUtil;\n+\n+import java.util.Map;\n+\n+/**\n+ * Metric for {@link IoUring}.\n+ */\n+public final class IoUringMetric {\n+\n+    private static final boolean ENABLE_METRIC = SystemPropertyUtil.getBoolean(\"io.netty.iouring.enableMetric\", true);\n+\n+    private static final LongCounter SQE_HANDLE_COUNTER = PlatformDependent.newLongCounter();\n+\n+    private static final LongCounter CQE_HANDLE_COUNT = PlatformDependent.newLongCounter();\n+\n+    private static final LongCounter PROVIDER_BUFFER_READ_FAIL_COUNT = PlatformDependent.newLongCounter();\n+\n+    /**\n+     * Use map instead of directly using CompletionQueue to prevent illegal access after ioUring is closed\n+     */\n+    private static final Map<CompletionQueue, Integer> OVERFLOW_RECORD = PlatformDependent.newConcurrentHashMap();\n+\n+    private static final LongCounter OVERFLOW_FROM_CLOSED_CQE = PlatformDependent.newLongCounter();",
+        "comment_created_at": "2025-02-04T08:31:27+00:00",
+        "comment_author": "dreamlike-ocean",
+        "comment_body": "Okay, I will switch the io.netty.util.internal.LongCounter here to AtomicLong.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1977288271",
+    "pr_number": 14882,
+    "pr_file": "buffer/src/main/java/io/netty/buffer/PoolArena.java",
+    "created_at": "2025-03-03T10:44:01+00:00",
+    "commented_code": "static final class HeapArena extends PoolArena<byte[]> {\n         private final AtomicReference<PoolChunk<byte[]>> lastDestroyedChunk;\n+        private final Queue<PooledByteBuf<byte[]>> bufferQueue;\n+        private final ObjectPool.Handle<PooledHeapByteBuf> handle;\n \n         HeapArena(PooledByteBufAllocator parent, SizeClasses sizeClass) {\n             super(parent, sizeClass);\n             lastDestroyedChunk = new AtomicReference<PoolChunk<byte[]>>();\n+            bufferQueue = PlatformDependent.newFixedMpmcQueue(ARENA_BUFFER_QUEUE_CAPACITY);",
+    "repo_full_name": "netty/netty",
+    "discussion_comments": [
+      {
+        "comment_id": "1977288271",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14882,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/PoolArena.java",
+        "discussion_id": "1977288271",
+        "commented_code": "@@ -618,10 +626,19 @@ private void destroyPoolChunkLists(PoolChunkList<T>... chunkLists) {\n \n     static final class HeapArena extends PoolArena<byte[]> {\n         private final AtomicReference<PoolChunk<byte[]>> lastDestroyedChunk;\n+        private final Queue<PooledByteBuf<byte[]>> bufferQueue;\n+        private final ObjectPool.Handle<PooledHeapByteBuf> handle;\n \n         HeapArena(PooledByteBufAllocator parent, SizeClasses sizeClass) {\n             super(parent, sizeClass);\n             lastDestroyedChunk = new AtomicReference<PoolChunk<byte[]>>();\n+            bufferQueue = PlatformDependent.newFixedMpmcQueue(ARENA_BUFFER_QUEUE_CAPACITY);",
+        "comment_created_at": "2025-03-03T10:44:01+00:00",
+        "comment_author": "franz1981",
+        "comment_body": "The mpmc queues are not really \"free\" (they have lot of padding). So, few comments:\r\n- try to allocate them lazily or this will cost (on the heap) a lot even when not used\r\n- try using the unpadded variants (which I have implemented in JCTools - so should be somewhere available..)\r\n- no need of mpmc but mpsc should be enough - and check if we expect `newByteBuf` to be somehow protected by some lock (it should AFAIK!)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1977331786",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14882,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/PoolArena.java",
+        "discussion_id": "1977288271",
+        "commented_code": "@@ -618,10 +626,19 @@ private void destroyPoolChunkLists(PoolChunkList<T>... chunkLists) {\n \n     static final class HeapArena extends PoolArena<byte[]> {\n         private final AtomicReference<PoolChunk<byte[]>> lastDestroyedChunk;\n+        private final Queue<PooledByteBuf<byte[]>> bufferQueue;\n+        private final ObjectPool.Handle<PooledHeapByteBuf> handle;\n \n         HeapArena(PooledByteBufAllocator parent, SizeClasses sizeClass) {\n             super(parent, sizeClass);\n             lastDestroyedChunk = new AtomicReference<PoolChunk<byte[]>>();\n+            bufferQueue = PlatformDependent.newFixedMpmcQueue(ARENA_BUFFER_QUEUE_CAPACITY);",
+        "comment_created_at": "2025-03-03T11:15:46+00:00",
+        "comment_author": "laosijikaichele",
+        "comment_body": "> no need of mpmc but mpsc should be enough - and check if we expect newByteBuf to be somehow protected by some lock (it should AFAIK!)\r\n\r\nThe 4.1-branch use `RECYCLER.get()` to create `ByteBuf` in `newByteBuf()`, so should not need a lock, no?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1977419301",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14882,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/PoolArena.java",
+        "discussion_id": "1977288271",
+        "commented_code": "@@ -618,10 +626,19 @@ private void destroyPoolChunkLists(PoolChunkList<T>... chunkLists) {\n \n     static final class HeapArena extends PoolArena<byte[]> {\n         private final AtomicReference<PoolChunk<byte[]>> lastDestroyedChunk;\n+        private final Queue<PooledByteBuf<byte[]>> bufferQueue;\n+        private final ObjectPool.Handle<PooledHeapByteBuf> handle;\n \n         HeapArena(PooledByteBufAllocator parent, SizeClasses sizeClass) {\n             super(parent, sizeClass);\n             lastDestroyedChunk = new AtomicReference<PoolChunk<byte[]>>();\n+            bufferQueue = PlatformDependent.newFixedMpmcQueue(ARENA_BUFFER_QUEUE_CAPACITY);",
+        "comment_created_at": "2025-03-03T12:15:40+00:00",
+        "comment_author": "franz1981",
+        "comment_body": ">  The 4.1-branch use RECYCLER.get() to create ByteBuf in newByteBuf(), so should not need a lock, no\r\n\r\nI mean in the Arena's constructor: you still create a queue + handle which won't be used if no virtual threads are employed, if I read this right",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1977427343",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14882,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/PoolArena.java",
+        "discussion_id": "1977288271",
+        "commented_code": "@@ -618,10 +626,19 @@ private void destroyPoolChunkLists(PoolChunkList<T>... chunkLists) {\n \n     static final class HeapArena extends PoolArena<byte[]> {\n         private final AtomicReference<PoolChunk<byte[]>> lastDestroyedChunk;\n+        private final Queue<PooledByteBuf<byte[]>> bufferQueue;\n+        private final ObjectPool.Handle<PooledHeapByteBuf> handle;\n \n         HeapArena(PooledByteBufAllocator parent, SizeClasses sizeClass) {\n             super(parent, sizeClass);\n             lastDestroyedChunk = new AtomicReference<PoolChunk<byte[]>>();\n+            bufferQueue = PlatformDependent.newFixedMpmcQueue(ARENA_BUFFER_QUEUE_CAPACITY);",
+        "comment_created_at": "2025-03-03T12:21:33+00:00",
+        "comment_author": "laosijikaichele",
+        "comment_body": "> I mean in the Arena's constructor: you still create a queue + handle which won't be used if no virtual threads are employed, if I read this right\r\n\r\nBecause this PR is checking the thread type(whether virtual or not) at runtime, did you mean when the first virtual thread be detected to call `newByteBuf()`, then create the `queue` and `handle`? But there can be add  a 'JAVA_VERSION' check in the constructor: `if (version < 19)` then `queue = null`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1977490478",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14882,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/PoolArena.java",
+        "discussion_id": "1977288271",
+        "commented_code": "@@ -618,10 +626,19 @@ private void destroyPoolChunkLists(PoolChunkList<T>... chunkLists) {\n \n     static final class HeapArena extends PoolArena<byte[]> {\n         private final AtomicReference<PoolChunk<byte[]>> lastDestroyedChunk;\n+        private final Queue<PooledByteBuf<byte[]>> bufferQueue;\n+        private final ObjectPool.Handle<PooledHeapByteBuf> handle;\n \n         HeapArena(PooledByteBufAllocator parent, SizeClasses sizeClass) {\n             super(parent, sizeClass);\n             lastDestroyedChunk = new AtomicReference<PoolChunk<byte[]>>();\n+            bufferQueue = PlatformDependent.newFixedMpmcQueue(ARENA_BUFFER_QUEUE_CAPACITY);",
+        "comment_created_at": "2025-03-03T13:06:58+00:00",
+        "comment_author": "franz1981",
+        "comment_body": ">But there can be add a 'JAVA_VERSION' check in the constructor\r\n\r\nIt's not enough because is not fair to assume that every user with JDK 19 is going to use virtual threads either.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1977500327",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14882,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/PoolArena.java",
+        "discussion_id": "1977288271",
+        "commented_code": "@@ -618,10 +626,19 @@ private void destroyPoolChunkLists(PoolChunkList<T>... chunkLists) {\n \n     static final class HeapArena extends PoolArena<byte[]> {\n         private final AtomicReference<PoolChunk<byte[]>> lastDestroyedChunk;\n+        private final Queue<PooledByteBuf<byte[]>> bufferQueue;\n+        private final ObjectPool.Handle<PooledHeapByteBuf> handle;\n \n         HeapArena(PooledByteBufAllocator parent, SizeClasses sizeClass) {\n             super(parent, sizeClass);\n             lastDestroyedChunk = new AtomicReference<PoolChunk<byte[]>>();\n+            bufferQueue = PlatformDependent.newFixedMpmcQueue(ARENA_BUFFER_QUEUE_CAPACITY);",
+        "comment_created_at": "2025-03-03T13:14:42+00:00",
+        "comment_author": "laosijikaichele",
+        "comment_body": "> > But there can be add a 'JAVA_VERSION' check in the constructor\r\n> \r\n> It's not enough because is not fair to assume that every user with JDK 19 is going to use virtual threads either.\r\n\r\nYep, maybe we can check the `isVirtualMethod == null `? \r\n\r\nOr we can let user specify a param or config to tell whether they gonna use virtual thread or not.\r\n\r\nIf JDK < 19, then we can be sure the virtual threads is un-available.\r\nBut if JDK >= 19, we can not be 100% sure the virtual thread is available/un-available. right?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1979243457",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14882,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/PoolArena.java",
+        "discussion_id": "1977288271",
+        "commented_code": "@@ -618,10 +626,19 @@ private void destroyPoolChunkLists(PoolChunkList<T>... chunkLists) {\n \n     static final class HeapArena extends PoolArena<byte[]> {\n         private final AtomicReference<PoolChunk<byte[]>> lastDestroyedChunk;\n+        private final Queue<PooledByteBuf<byte[]>> bufferQueue;\n+        private final ObjectPool.Handle<PooledHeapByteBuf> handle;\n \n         HeapArena(PooledByteBufAllocator parent, SizeClasses sizeClass) {\n             super(parent, sizeClass);\n             lastDestroyedChunk = new AtomicReference<PoolChunk<byte[]>>();\n+            bufferQueue = PlatformDependent.newFixedMpmcQueue(ARENA_BUFFER_QUEUE_CAPACITY);",
+        "comment_created_at": "2025-03-04T11:32:09+00:00",
+        "comment_author": "franz1981",
+        "comment_body": "yep - we need, for JDK >=19 be able to allocate the queue/handle at runtime, since arenas are not \"owned\" by virtual threads but shared - unless we use a single \"always\" the same mechanism as efficient as thread local",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1979293996",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14882,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/PoolArena.java",
+        "discussion_id": "1977288271",
+        "commented_code": "@@ -618,10 +626,19 @@ private void destroyPoolChunkLists(PoolChunkList<T>... chunkLists) {\n \n     static final class HeapArena extends PoolArena<byte[]> {\n         private final AtomicReference<PoolChunk<byte[]>> lastDestroyedChunk;\n+        private final Queue<PooledByteBuf<byte[]>> bufferQueue;\n+        private final ObjectPool.Handle<PooledHeapByteBuf> handle;\n \n         HeapArena(PooledByteBufAllocator parent, SizeClasses sizeClass) {\n             super(parent, sizeClass);\n             lastDestroyedChunk = new AtomicReference<PoolChunk<byte[]>>();\n+            bufferQueue = PlatformDependent.newFixedMpmcQueue(ARENA_BUFFER_QUEUE_CAPACITY);",
+        "comment_created_at": "2025-03-04T12:05:08+00:00",
+        "comment_author": "laosijikaichele",
+        "comment_body": "For 4.1-branch: 1 arena could bound to multiple platform threads.\r\nFor this PR: 1 arena could bound to multiple virtual threads too.\r\nI think there is no big difference. @franz1981 ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1979316178",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14882,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/PoolArena.java",
+        "discussion_id": "1977288271",
+        "commented_code": "@@ -618,10 +626,19 @@ private void destroyPoolChunkLists(PoolChunkList<T>... chunkLists) {\n \n     static final class HeapArena extends PoolArena<byte[]> {\n         private final AtomicReference<PoolChunk<byte[]>> lastDestroyedChunk;\n+        private final Queue<PooledByteBuf<byte[]>> bufferQueue;\n+        private final ObjectPool.Handle<PooledHeapByteBuf> handle;\n \n         HeapArena(PooledByteBufAllocator parent, SizeClasses sizeClass) {\n             super(parent, sizeClass);\n             lastDestroyedChunk = new AtomicReference<PoolChunk<byte[]>>();\n+            bufferQueue = PlatformDependent.newFixedMpmcQueue(ARENA_BUFFER_QUEUE_CAPACITY);",
+        "comment_created_at": "2025-03-04T12:18:53+00:00",
+        "comment_author": "franz1981",
+        "comment_body": "Arenas could be bound to v threads: but not necessarly that's why always allocating the queue could be wastefull - since it depends if users, despite been able to use virtual threads, maybe they won't use them",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1979333831",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14882,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/PoolArena.java",
+        "discussion_id": "1977288271",
+        "commented_code": "@@ -618,10 +626,19 @@ private void destroyPoolChunkLists(PoolChunkList<T>... chunkLists) {\n \n     static final class HeapArena extends PoolArena<byte[]> {\n         private final AtomicReference<PoolChunk<byte[]>> lastDestroyedChunk;\n+        private final Queue<PooledByteBuf<byte[]>> bufferQueue;\n+        private final ObjectPool.Handle<PooledHeapByteBuf> handle;\n \n         HeapArena(PooledByteBufAllocator parent, SizeClasses sizeClass) {\n             super(parent, sizeClass);\n             lastDestroyedChunk = new AtomicReference<PoolChunk<byte[]>>();\n+            bufferQueue = PlatformDependent.newFixedMpmcQueue(ARENA_BUFFER_QUEUE_CAPACITY);",
+        "comment_created_at": "2025-03-04T12:31:51+00:00",
+        "comment_author": "laosijikaichele",
+        "comment_body": "Got it, then we may add a system property to let the user decide whether enable virtual thread support? e.g. \"io.netty.allocator.supportVirtualThread\" ?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1860660222",
+    "pr_number": 14516,
+    "pr_file": "buffer/src/main/java/io/netty/buffer/AdaptivePoolingAllocator.java",
+    "created_at": "2024-11-27T13:25:18+00:00",
+    "commented_code": "if (buf != null) {\n             Chunk chunk = buf.chunk;\n             magazine = chunk != null && chunk != Magazine.MAGAZINE_FREED?\n-                    chunk.magazine : getFallbackMagazine(currentThread);\n+                    chunk.currentMagazine() : getFallbackMagazine(currentThread);",
+    "repo_full_name": "netty/netty",
+    "discussion_comments": [
+      {
+        "comment_id": "1860660222",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14516,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/AdaptivePoolingAllocator.java",
+        "discussion_id": "1860660222",
+        "commented_code": "@@ -259,7 +259,7 @@ private AdaptiveByteBuf allocateFallback(int size, int maxCapacity, Thread curre\n         if (buf != null) {\n             Chunk chunk = buf.chunk;\n             magazine = chunk != null && chunk != Magazine.MAGAZINE_FREED?\n-                    chunk.magazine : getFallbackMagazine(currentThread);\n+                    chunk.currentMagazine() : getFallbackMagazine(currentThread);",
+        "comment_created_at": "2024-11-27T13:25:18+00:00",
+        "comment_author": "laosijikaichele",
+        "comment_body": "Is `chunk.currentMagazine()` possible be null here? As the chunk may haven been transfered to `centralQueue`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1860669969",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14516,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/AdaptivePoolingAllocator.java",
+        "discussion_id": "1860660222",
+        "commented_code": "@@ -259,7 +259,7 @@ private AdaptiveByteBuf allocateFallback(int size, int maxCapacity, Thread curre\n         if (buf != null) {\n             Chunk chunk = buf.chunk;\n             magazine = chunk != null && chunk != Magazine.MAGAZINE_FREED?\n-                    chunk.magazine : getFallbackMagazine(currentThread);\n+                    chunk.currentMagazine() : getFallbackMagazine(currentThread);",
+        "comment_created_at": "2024-11-27T13:31:39+00:00",
+        "comment_author": "normanmaurer",
+        "comment_body": "I think this can not happen",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1860672434",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14516,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/AdaptivePoolingAllocator.java",
+        "discussion_id": "1860660222",
+        "commented_code": "@@ -259,7 +259,7 @@ private AdaptiveByteBuf allocateFallback(int size, int maxCapacity, Thread curre\n         if (buf != null) {\n             Chunk chunk = buf.chunk;\n             magazine = chunk != null && chunk != Magazine.MAGAZINE_FREED?\n-                    chunk.magazine : getFallbackMagazine(currentThread);\n+                    chunk.currentMagazine() : getFallbackMagazine(currentThread);",
+        "comment_created_at": "2024-11-27T13:33:05+00:00",
+        "comment_author": "laosijikaichele",
+        "comment_body": "Another point: Here the `chunk` is not polled from the `centralQueue`, so there might be a visibility issue on `chunk.currentMagazine()`. Should we change the `Chunk.magazine` field to `volatile`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1860680145",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14516,
+        "pr_file": "buffer/src/main/java/io/netty/buffer/AdaptivePoolingAllocator.java",
+        "discussion_id": "1860660222",
+        "commented_code": "@@ -259,7 +259,7 @@ private AdaptiveByteBuf allocateFallback(int size, int maxCapacity, Thread curre\n         if (buf != null) {\n             Chunk chunk = buf.chunk;\n             magazine = chunk != null && chunk != Magazine.MAGAZINE_FREED?\n-                    chunk.magazine : getFallbackMagazine(currentThread);\n+                    chunk.currentMagazine() : getFallbackMagazine(currentThread);",
+        "comment_created_at": "2024-11-27T13:37:56+00:00",
+        "comment_author": "normanmaurer",
+        "comment_body": "As far as I can see there should be no issues",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2021054266",
+    "pr_number": 14976,
+    "pr_file": "transport/src/main/java/io/netty/channel/ManualIoEventLoop.java",
+    "created_at": "2025-03-31T13:31:29+00:00",
+    "commented_code": "return this.owningThread == thread;\n     }\n \n+    /**\n+     * Set the owning thread that will call {@link #run}. May only be called once, and only if the owning thread was\n+     * not set in the constructor already.\n+     *\n+     * @param owningThread The owning thread\n+     */\n+    public void setOwningThread(Thread owningThread) {\n+        if (this.owningThread != null) {",
+    "repo_full_name": "netty/netty",
+    "discussion_comments": [
+      {
+        "comment_id": "2021054266",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14976,
+        "pr_file": "transport/src/main/java/io/netty/channel/ManualIoEventLoop.java",
+        "discussion_id": "2021054266",
+        "commented_code": "@@ -298,6 +302,19 @@ public boolean inEventLoop(Thread thread) {\n         return this.owningThread == thread;\n     }\n \n+    /**\n+     * Set the owning thread that will call {@link #run}. May only be called once, and only if the owning thread was\n+     * not set in the constructor already.\n+     *\n+     * @param owningThread The owning thread\n+     */\n+    public void setOwningThread(Thread owningThread) {\n+        if (this.owningThread != null) {",
+        "comment_created_at": "2025-03-31T13:31:29+00:00",
+        "comment_author": "franz1981",
+        "comment_body": "Since the event loop check can still read it racily - we want to make sure that once set will be observed as set by everyone in the right order (i.e. first `null` than `non null` for everything) so I would make it a CAS.\r\nI'm not a big fan of using concurrency if is not needed, but since external threads can call `ManualIoEventLoop::execute` before/after the value is set, we could make sure `Thread` is correctly published in few ways:\r\n- `AtomicReferenceFieldUpdate::lazySet` on `setOwningThread` assuming single writer and multiple readers\r\n- CAS assuming many writers (with one winning) and multiple readers\r\n- plain set/get with some uncknown (which doesn't look scary at first look, TBH) consequences, unless an external thread is keep on calling execute in a loop and the null value is hoisted out - but that would die for OOM before, likely XD",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2022250440",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14976,
+        "pr_file": "transport/src/main/java/io/netty/channel/ManualIoEventLoop.java",
+        "discussion_id": "2021054266",
+        "commented_code": "@@ -298,6 +302,19 @@ public boolean inEventLoop(Thread thread) {\n         return this.owningThread == thread;\n     }\n \n+    /**\n+     * Set the owning thread that will call {@link #run}. May only be called once, and only if the owning thread was\n+     * not set in the constructor already.\n+     *\n+     * @param owningThread The owning thread\n+     */\n+    public void setOwningThread(Thread owningThread) {\n+        if (this.owningThread != null) {",
+        "comment_created_at": "2025-04-01T06:49:38+00:00",
+        "comment_author": "normanmaurer",
+        "comment_body": "I agree with @franz1981 here.  Let's make it volatile ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2022342746",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14976,
+        "pr_file": "transport/src/main/java/io/netty/channel/ManualIoEventLoop.java",
+        "discussion_id": "2021054266",
+        "commented_code": "@@ -298,6 +302,19 @@ public boolean inEventLoop(Thread thread) {\n         return this.owningThread == thread;\n     }\n \n+    /**\n+     * Set the owning thread that will call {@link #run}. May only be called once, and only if the owning thread was\n+     * not set in the constructor already.\n+     *\n+     * @param owningThread The owning thread\n+     */\n+    public void setOwningThread(Thread owningThread) {\n+        if (this.owningThread != null) {",
+        "comment_created_at": "2025-04-01T07:54:34+00:00",
+        "comment_author": "normanmaurer",
+        "comment_body": "Actually let's use an AtomicReference.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2022498800",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14976,
+        "pr_file": "transport/src/main/java/io/netty/channel/ManualIoEventLoop.java",
+        "discussion_id": "2021054266",
+        "commented_code": "@@ -298,6 +302,19 @@ public boolean inEventLoop(Thread thread) {\n         return this.owningThread == thread;\n     }\n \n+    /**\n+     * Set the owning thread that will call {@link #run}. May only be called once, and only if the owning thread was\n+     * not set in the constructor already.\n+     *\n+     * @param owningThread The owning thread\n+     */\n+    public void setOwningThread(Thread owningThread) {\n+        if (this.owningThread != null) {",
+        "comment_created_at": "2025-04-01T09:29:31+00:00",
+        "comment_author": "yawkat",
+        "comment_body": "imo neither the CAS or the volatile or atomic are really necessary. Since `owningThread` is only used by inEventLoop, we actually only care what the `owningThread` itself sees for that field. For any other thread, it doesn't matter if it sees `null` for a bit longer, `inEventLoop` will behave the same way.\r\n\r\nThe only scenario where this matters is if a thread that isn't the owning thread uses `setOwningThread`. In that case, there needs to be external synchronization anyway though, to avoid race conditions.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2022502421",
+        "repo_full_name": "netty/netty",
+        "pr_number": 14976,
+        "pr_file": "transport/src/main/java/io/netty/channel/ManualIoEventLoop.java",
+        "discussion_id": "2021054266",
+        "commented_code": "@@ -298,6 +302,19 @@ public boolean inEventLoop(Thread thread) {\n         return this.owningThread == thread;\n     }\n \n+    /**\n+     * Set the owning thread that will call {@link #run}. May only be called once, and only if the owning thread was\n+     * not set in the constructor already.\n+     *\n+     * @param owningThread The owning thread\n+     */\n+    public void setOwningThread(Thread owningThread) {\n+        if (this.owningThread != null) {",
+        "comment_created_at": "2025-04-01T09:31:47+00:00",
+        "comment_author": "normanmaurer",
+        "comment_body": "I still think that AtomicReference is the safe bet. That said if we find out that it produce too much overhead we can re-evulate. I think for now we should just use i.t",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

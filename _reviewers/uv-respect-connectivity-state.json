@@ -1,0 +1,138 @@
+[
+  {
+    "discussion_id": "2098880148",
+    "pr_number": 13033,
+    "pr_file": "crates/uv/tests/it/edit.rs",
+    "created_at": "2025-05-20T21:09:22+00:00",
+    "commented_code": "Ok(())\n }\n \n+#[tokio::test]\n+#[cfg(feature = \"git\")]\n+async fn add_git_private_rate_limited_by_github_rest_api() -> Result<()> {\n+    use uv_client::DEFAULT_RETRIES;\n+\n+    let context = TestContext::new(\"3.12\");\n+    let token = decode_token(READ_ONLY_GITHUB_TOKEN);\n+\n+    let server = MockServer::start().await;\n+    Mock::given(method(\"GET\"))\n+        .respond_with(ResponseTemplate::new(429))\n+        .expect(1 + u64::from(DEFAULT_RETRIES))",
+    "repo_full_name": "astral-sh/uv",
+    "discussion_comments": [
+      {
+        "comment_id": "2098880148",
+        "repo_full_name": "astral-sh/uv",
+        "pr_number": 13033,
+        "pr_file": "crates/uv/tests/it/edit.rs",
+        "discussion_id": "2098880148",
+        "commented_code": "@@ -496,6 +496,48 @@ fn add_git_private_raw() -> Result<()> {\n     Ok(())\n }\n \n+#[tokio::test]\n+#[cfg(feature = \"git\")]\n+async fn add_git_private_rate_limited_by_github_rest_api() -> Result<()> {\n+    use uv_client::DEFAULT_RETRIES;\n+\n+    let context = TestContext::new(\"3.12\");\n+    let token = decode_token(READ_ONLY_GITHUB_TOKEN);\n+\n+    let server = MockServer::start().await;\n+    Mock::given(method(\"GET\"))\n+        .respond_with(ResponseTemplate::new(429))\n+        .expect(1 + u64::from(DEFAULT_RETRIES))",
+        "comment_created_at": "2025-05-20T21:09:22+00:00",
+        "comment_author": "christeefy",
+        "comment_body": "`uv` makes 4 attempts (first try + 3 retries) because a HTTP 429 is considered transient in `uv-client`. \r\n\r\nIf there are other concurrent fast paths attempt before the first rate-limited request finishes retrying, the skip functionality won't kick in yet. I'm testing the implications of changing the retry semantics for HTTP 429 to `Retryable::Fatal`. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2098893135",
+        "repo_full_name": "astral-sh/uv",
+        "pr_number": 13033,
+        "pr_file": "crates/uv/tests/it/edit.rs",
+        "discussion_id": "2098880148",
+        "commented_code": "@@ -496,6 +496,48 @@ fn add_git_private_raw() -> Result<()> {\n     Ok(())\n }\n \n+#[tokio::test]\n+#[cfg(feature = \"git\")]\n+async fn add_git_private_rate_limited_by_github_rest_api() -> Result<()> {\n+    use uv_client::DEFAULT_RETRIES;\n+\n+    let context = TestContext::new(\"3.12\");\n+    let token = decode_token(READ_ONLY_GITHUB_TOKEN);\n+\n+    let server = MockServer::start().await;\n+    Mock::given(method(\"GET\"))\n+        .respond_with(ResponseTemplate::new(429))\n+        .expect(1 + u64::from(DEFAULT_RETRIES))",
+        "comment_created_at": "2025-05-20T21:18:09+00:00",
+        "comment_author": "christeefy",
+        "comment_body": "Local test suite is passing, so I can update these tests to expect _zero_ retries.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2099162214",
+        "repo_full_name": "astral-sh/uv",
+        "pr_number": 13033,
+        "pr_file": "crates/uv/tests/it/edit.rs",
+        "discussion_id": "2098880148",
+        "commented_code": "@@ -496,6 +496,48 @@ fn add_git_private_raw() -> Result<()> {\n     Ok(())\n }\n \n+#[tokio::test]\n+#[cfg(feature = \"git\")]\n+async fn add_git_private_rate_limited_by_github_rest_api() -> Result<()> {\n+    use uv_client::DEFAULT_RETRIES;\n+\n+    let context = TestContext::new(\"3.12\");\n+    let token = decode_token(READ_ONLY_GITHUB_TOKEN);\n+\n+    let server = MockServer::start().await;\n+    Mock::given(method(\"GET\"))\n+        .respond_with(ResponseTemplate::new(429))\n+        .expect(1 + u64::from(DEFAULT_RETRIES))",
+        "comment_created_at": "2025-05-21T02:12:00+00:00",
+        "comment_author": "christeefy",
+        "comment_body": "Full test suite fails, so not going through with that. See comment below as well.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2121656451",
+    "pr_number": 13748,
+    "pr_file": "crates/uv-git/src/source.rs",
+    "created_at": "2025-06-02T16:34:42+00:00",
+    "commented_code": "Cow::Borrowed(self.git.repository())\n         };\n \n-        let remote = GitRemote::new(&remote);\n-        let (db, actual_rev, task) = match (self.git.precise(), remote.db_at(&db_path).ok()) {\n-            // If we have a locked revision, and we have a preexisting database\n-            // which has that revision, then no update needs to happen.\n-            (Some(rev), Some(db)) if db.contains(rev) => {\n-                debug!(\"Using existing Git source `{}`\", self.git.repository());\n-                (db, rev, None)\n+        // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes\n+        // it easier to short-circuit this in the cases where we do have the commit.\n+        let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {\n+            let git_remote = GitRemote::new(&remote);\n+            let maybe_db = git_remote.db_at(&db_path).ok();\n+\n+            // If we have a locked revision, and we have a preexisting database which has that\n+            // revision, then no update needs to happen.\n+            if let (Some(rev), Some(db)) = (self.git.precise(), &maybe_db) {\n+                if db.contains(rev) {\n+                    debug!(\"Using existing Git source `{}`\", self.git.repository());\n+                    return Ok((maybe_db.unwrap(), rev, None));\n+                }\n             }\n \n-            // ... otherwise we use this state to update the git database. Note\n-            // that we still check for being offline here, for example in the\n-            // situation that we have a locked revision but the database\n-            // doesn't have it.\n-            (locked_rev, db) => {\n-                debug!(\"Updating Git source `{}`\", self.git.repository());\n-\n-                // Report the checkout operation to the reporter.\n-                let task = self.reporter.as_ref().map(|reporter| {\n-                    reporter.on_checkout_start(remote.url(), self.git.reference().as_rev())\n-                });\n-\n-                let (db, actual_rev) = remote.checkout(\n-                    &db_path,\n-                    db,\n-                    self.git.reference(),\n-                    locked_rev,\n-                    &self.client,\n-                    self.disable_ssl,\n-                    self.offline,\n-                )?;\n-\n-                (db, actual_rev, task)\n+            // If the revision isn't locked, but it looks like it might be an exact commit hash,\n+            // and we do have a preexisting database, then check whether it is in fact a commit\n+            // hash. If so, treat it like it's locked.\n+            if let Some(db) = &maybe_db {\n+                if let GitReference::BranchOrTagOrCommit(maybe_commit) = self.git.reference() {\n+                    if maybe_commit.len() == 40\n+                        && maybe_commit.chars().all(|ch| ch.is_ascii_hexdigit())\n+                    {\n+                        if let Ok(oid) = maybe_commit.parse::<GitOid>() {\n+                            if db.contains(oid) {",
+    "repo_full_name": "astral-sh/uv",
+    "discussion_comments": [
+      {
+        "comment_id": "2121656451",
+        "repo_full_name": "astral-sh/uv",
+        "pr_number": 13748,
+        "pr_file": "crates/uv-git/src/source.rs",
+        "discussion_id": "2121656451",
+        "commented_code": "@@ -86,40 +86,63 @@ impl GitSource {\n             Cow::Borrowed(self.git.repository())\n         };\n \n-        let remote = GitRemote::new(&remote);\n-        let (db, actual_rev, task) = match (self.git.precise(), remote.db_at(&db_path).ok()) {\n-            // If we have a locked revision, and we have a preexisting database\n-            // which has that revision, then no update needs to happen.\n-            (Some(rev), Some(db)) if db.contains(rev) => {\n-                debug!(\"Using existing Git source `{}`\", self.git.repository());\n-                (db, rev, None)\n+        // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes\n+        // it easier to short-circuit this in the cases where we do have the commit.\n+        let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {\n+            let git_remote = GitRemote::new(&remote);\n+            let maybe_db = git_remote.db_at(&db_path).ok();\n+\n+            // If we have a locked revision, and we have a preexisting database which has that\n+            // revision, then no update needs to happen.\n+            if let (Some(rev), Some(db)) = (self.git.precise(), &maybe_db) {\n+                if db.contains(rev) {\n+                    debug!(\"Using existing Git source `{}`\", self.git.repository());\n+                    return Ok((maybe_db.unwrap(), rev, None));\n+                }\n             }\n \n-            // ... otherwise we use this state to update the git database. Note\n-            // that we still check for being offline here, for example in the\n-            // situation that we have a locked revision but the database\n-            // doesn't have it.\n-            (locked_rev, db) => {\n-                debug!(\"Updating Git source `{}`\", self.git.repository());\n-\n-                // Report the checkout operation to the reporter.\n-                let task = self.reporter.as_ref().map(|reporter| {\n-                    reporter.on_checkout_start(remote.url(), self.git.reference().as_rev())\n-                });\n-\n-                let (db, actual_rev) = remote.checkout(\n-                    &db_path,\n-                    db,\n-                    self.git.reference(),\n-                    locked_rev,\n-                    &self.client,\n-                    self.disable_ssl,\n-                    self.offline,\n-                )?;\n-\n-                (db, actual_rev, task)\n+            // If the revision isn't locked, but it looks like it might be an exact commit hash,\n+            // and we do have a preexisting database, then check whether it is in fact a commit\n+            // hash. If so, treat it like it's locked.\n+            if let Some(db) = &maybe_db {\n+                if let GitReference::BranchOrTagOrCommit(maybe_commit) = self.git.reference() {\n+                    if maybe_commit.len() == 40\n+                        && maybe_commit.chars().all(|ch| ch.is_ascii_hexdigit())\n+                    {\n+                        if let Ok(oid) = maybe_commit.parse::<GitOid>() {\n+                            if db.contains(oid) {",
+        "comment_created_at": "2025-06-02T16:34:42+00:00",
+        "comment_author": "ibraheemdev",
+        "comment_body": "I don't think `contains` is enough because `rev-parse` will peel references by default. You can use `git rev-parse --symbolic-full-name` to check if the reference is a direct commit or not.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2121689462",
+        "repo_full_name": "astral-sh/uv",
+        "pr_number": 13748,
+        "pr_file": "crates/uv-git/src/source.rs",
+        "discussion_id": "2121656451",
+        "commented_code": "@@ -86,40 +86,63 @@ impl GitSource {\n             Cow::Borrowed(self.git.repository())\n         };\n \n-        let remote = GitRemote::new(&remote);\n-        let (db, actual_rev, task) = match (self.git.precise(), remote.db_at(&db_path).ok()) {\n-            // If we have a locked revision, and we have a preexisting database\n-            // which has that revision, then no update needs to happen.\n-            (Some(rev), Some(db)) if db.contains(rev) => {\n-                debug!(\"Using existing Git source `{}`\", self.git.repository());\n-                (db, rev, None)\n+        // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes\n+        // it easier to short-circuit this in the cases where we do have the commit.\n+        let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {\n+            let git_remote = GitRemote::new(&remote);\n+            let maybe_db = git_remote.db_at(&db_path).ok();\n+\n+            // If we have a locked revision, and we have a preexisting database which has that\n+            // revision, then no update needs to happen.\n+            if let (Some(rev), Some(db)) = (self.git.precise(), &maybe_db) {\n+                if db.contains(rev) {\n+                    debug!(\"Using existing Git source `{}`\", self.git.repository());\n+                    return Ok((maybe_db.unwrap(), rev, None));\n+                }\n             }\n \n-            // ... otherwise we use this state to update the git database. Note\n-            // that we still check for being offline here, for example in the\n-            // situation that we have a locked revision but the database\n-            // doesn't have it.\n-            (locked_rev, db) => {\n-                debug!(\"Updating Git source `{}`\", self.git.repository());\n-\n-                // Report the checkout operation to the reporter.\n-                let task = self.reporter.as_ref().map(|reporter| {\n-                    reporter.on_checkout_start(remote.url(), self.git.reference().as_rev())\n-                });\n-\n-                let (db, actual_rev) = remote.checkout(\n-                    &db_path,\n-                    db,\n-                    self.git.reference(),\n-                    locked_rev,\n-                    &self.client,\n-                    self.disable_ssl,\n-                    self.offline,\n-                )?;\n-\n-                (db, actual_rev, task)\n+            // If the revision isn't locked, but it looks like it might be an exact commit hash,\n+            // and we do have a preexisting database, then check whether it is in fact a commit\n+            // hash. If so, treat it like it's locked.\n+            if let Some(db) = &maybe_db {\n+                if let GitReference::BranchOrTagOrCommit(maybe_commit) = self.git.reference() {\n+                    if maybe_commit.len() == 40\n+                        && maybe_commit.chars().all(|ch| ch.is_ascii_hexdigit())\n+                    {\n+                        if let Ok(oid) = maybe_commit.parse::<GitOid>() {\n+                            if db.contains(oid) {",
+        "comment_created_at": "2025-06-02T16:50:37+00:00",
+        "comment_author": "oconnor663",
+        "comment_body": "I played with this by hand and convinced myself it was correct:\r\n\r\nhttps://github.com/astral-sh/uv/blob/d65c146b2179abcbef62ff81ee24c24468800cad/crates/uv-git/src/git.rs#L342-L345\r\n\r\nWhen I try to make something that looks like a commit, that `^0` suffix makes it fail (I think that's why you added it :smile:):\r\n\r\n```\r\n$ cd `mktemp -d`\r\n$ git init\r\nInitialized empty Git repository in /tmp/tmp.fXWCZPpOwN/.git/\r\n$ echo hi > file.txt\r\n$ git add -A\r\n$ git commit -am \"first commit\"\r\n[main (root-commit) b1ea66a] first commit\r\n 1 file changed, 1 insertion(+)\r\n create mode 100644 file.txt\r\n$ git checkout -b aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\nSwitched to a new branch 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\r\n$ git rev-parse aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2>/dev/null && echo success || echo fail\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\nsuccess\r\n$ git rev-parse 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^0' 2>/dev/null && echo success || echo fail\r\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa^0\r\nfail\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2121806655",
+        "repo_full_name": "astral-sh/uv",
+        "pr_number": 13748,
+        "pr_file": "crates/uv-git/src/source.rs",
+        "discussion_id": "2121656451",
+        "commented_code": "@@ -86,40 +86,63 @@ impl GitSource {\n             Cow::Borrowed(self.git.repository())\n         };\n \n-        let remote = GitRemote::new(&remote);\n-        let (db, actual_rev, task) = match (self.git.precise(), remote.db_at(&db_path).ok()) {\n-            // If we have a locked revision, and we have a preexisting database\n-            // which has that revision, then no update needs to happen.\n-            (Some(rev), Some(db)) if db.contains(rev) => {\n-                debug!(\"Using existing Git source `{}`\", self.git.repository());\n-                (db, rev, None)\n+        // Fetch the commit, if we don't already have it. Wrapping this section in a closure makes\n+        // it easier to short-circuit this in the cases where we do have the commit.\n+        let (db, actual_rev, maybe_task) = || -> Result<(GitDatabase, GitOid, Option<usize>)> {\n+            let git_remote = GitRemote::new(&remote);\n+            let maybe_db = git_remote.db_at(&db_path).ok();\n+\n+            // If we have a locked revision, and we have a preexisting database which has that\n+            // revision, then no update needs to happen.\n+            if let (Some(rev), Some(db)) = (self.git.precise(), &maybe_db) {\n+                if db.contains(rev) {\n+                    debug!(\"Using existing Git source `{}`\", self.git.repository());\n+                    return Ok((maybe_db.unwrap(), rev, None));\n+                }\n             }\n \n-            // ... otherwise we use this state to update the git database. Note\n-            // that we still check for being offline here, for example in the\n-            // situation that we have a locked revision but the database\n-            // doesn't have it.\n-            (locked_rev, db) => {\n-                debug!(\"Updating Git source `{}`\", self.git.repository());\n-\n-                // Report the checkout operation to the reporter.\n-                let task = self.reporter.as_ref().map(|reporter| {\n-                    reporter.on_checkout_start(remote.url(), self.git.reference().as_rev())\n-                });\n-\n-                let (db, actual_rev) = remote.checkout(\n-                    &db_path,\n-                    db,\n-                    self.git.reference(),\n-                    locked_rev,\n-                    &self.client,\n-                    self.disable_ssl,\n-                    self.offline,\n-                )?;\n-\n-                (db, actual_rev, task)\n+            // If the revision isn't locked, but it looks like it might be an exact commit hash,\n+            // and we do have a preexisting database, then check whether it is in fact a commit\n+            // hash. If so, treat it like it's locked.\n+            if let Some(db) = &maybe_db {\n+                if let GitReference::BranchOrTagOrCommit(maybe_commit) = self.git.reference() {\n+                    if maybe_commit.len() == 40\n+                        && maybe_commit.chars().all(|ch| ch.is_ascii_hexdigit())\n+                    {\n+                        if let Ok(oid) = maybe_commit.parse::<GitOid>() {\n+                            if db.contains(oid) {",
+        "comment_created_at": "2025-06-02T17:50:57+00:00",
+        "comment_author": "ibraheemdev",
+        "comment_body": "Ah right, `^0` works as well.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2107824117",
+    "pr_number": 13663,
+    "pr_file": "crates/uv/src/commands/self_update.rs",
+    "created_at": "2025-05-26T20:21:14+00:00",
+    "commented_code": "use crate::commands::ExitStatus;\n use crate::printer::Printer;\n+use crate::settings::NetworkSettings;\n \n /// Attempt to update the uv binary.\n pub(crate) async fn self_update(\n     version: Option<String>,\n     token: Option<String>,\n     dry_run: bool,\n     printer: Printer,\n+    network_settings: NetworkSettings,\n ) -> Result<ExitStatus> {\n+    if network_settings.connectivity.is_offline() {\n+        writeln!(\n+            printer.stderr(),\n+            \"{}\",\n+            format_args!(\n+                concat!(\n+                    \"{}{} Self-update exited because network is disabled.\",",
+    "repo_full_name": "astral-sh/uv",
+    "discussion_comments": [
+      {
+        "comment_id": "2107824117",
+        "repo_full_name": "astral-sh/uv",
+        "pr_number": 13663,
+        "pr_file": "crates/uv/src/commands/self_update.rs",
+        "discussion_id": "2107824117",
+        "commented_code": "@@ -10,14 +10,34 @@ use uv_fs::Simplified;\n \n use crate::commands::ExitStatus;\n use crate::printer::Printer;\n+use crate::settings::NetworkSettings;\n \n /// Attempt to update the uv binary.\n pub(crate) async fn self_update(\n     version: Option<String>,\n     token: Option<String>,\n     dry_run: bool,\n     printer: Printer,\n+    network_settings: NetworkSettings,\n ) -> Result<ExitStatus> {\n+    if network_settings.connectivity.is_offline() {\n+        writeln!(\n+            printer.stderr(),\n+            \"{}\",\n+            format_args!(\n+                concat!(\n+                    \"{}{} Self-update exited because network is disabled.\",",
+        "comment_created_at": "2025-05-26T20:21:14+00:00",
+        "comment_author": "konstin",
+        "comment_body": "To match the Remote Git fetches:\r\n\r\n```suggestion\r\n                    \"{}{} Self-update is not possible because network connectivity is disabled (i.e., with `--offline`)\"\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2066853869",
+    "pr_number": 12805,
+    "pr_file": "crates/uv-client/src/registry_client.rs",
+    "created_at": "2025-04-29T15:41:21+00:00",
+    "commented_code": "};\n \n         match result {\n-            Ok(metadata) => Ok(Some(metadata)),\n+            Ok(metadata) => Ok(SimpleMetadataSearchOutcome::Found(metadata)),\n             Err(err) => match err.into_kind() {\n                 // The package could not be found in the remote index.\n-                ErrorKind::WrappedReqwestError(url, err) => match err.status() {\n-                    Some(StatusCode::NOT_FOUND) => Ok(None),\n-                    Some(StatusCode::UNAUTHORIZED) => {\n-                        capabilities.set_unauthorized(index.clone());\n-                        Ok(None)\n-                    }\n-                    Some(StatusCode::FORBIDDEN) => {\n-                        capabilities.set_forbidden(index.clone());\n-                        Ok(None)\n+                ErrorKind::WrappedReqwestError(url, err) => {\n+                    let Some(status_code) = err.status() else {\n+                        return Err(ErrorKind::WrappedReqwestError(url, err).into());\n+                    };\n+                    let decision =\n+                        status_code_strategy.handle_status_code(status_code, index, capabilities);\n+                    if let IndexStatusCodeDecision::Fail(status_code) = decision {\n+                        if !matches!(\n+                            status_code,\n+                            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN",
+    "repo_full_name": "astral-sh/uv",
+    "discussion_comments": [
+      {
+        "comment_id": "2066853869",
+        "repo_full_name": "astral-sh/uv",
+        "pr_number": 12805,
+        "pr_file": "crates/uv-client/src/registry_client.rs",
+        "discussion_id": "2066853869",
+        "commented_code": "@@ -487,27 +515,31 @@ impl RegistryClient {\n         };\n \n         match result {\n-            Ok(metadata) => Ok(Some(metadata)),\n+            Ok(metadata) => Ok(SimpleMetadataSearchOutcome::Found(metadata)),\n             Err(err) => match err.into_kind() {\n                 // The package could not be found in the remote index.\n-                ErrorKind::WrappedReqwestError(url, err) => match err.status() {\n-                    Some(StatusCode::NOT_FOUND) => Ok(None),\n-                    Some(StatusCode::UNAUTHORIZED) => {\n-                        capabilities.set_unauthorized(index.clone());\n-                        Ok(None)\n-                    }\n-                    Some(StatusCode::FORBIDDEN) => {\n-                        capabilities.set_forbidden(index.clone());\n-                        Ok(None)\n+                ErrorKind::WrappedReqwestError(url, err) => {\n+                    let Some(status_code) = err.status() else {\n+                        return Err(ErrorKind::WrappedReqwestError(url, err).into());\n+                    };\n+                    let decision =\n+                        status_code_strategy.handle_status_code(status_code, index, capabilities);\n+                    if let IndexStatusCodeDecision::Fail(status_code) = decision {\n+                        if !matches!(\n+                            status_code,\n+                            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN",
+        "comment_created_at": "2025-04-29T15:41:21+00:00",
+        "comment_author": "charliermarsh",
+        "comment_body": "I think this should mention that these specific codes are tracked via `IndexCapabilities` and surfaced via hints; otherwise, it's not really clear why these _specific_ codes are ignored.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

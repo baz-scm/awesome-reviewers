@@ -1,0 +1,170 @@
+[
+  {
+    "discussion_id": "2177807207",
+    "pr_number": 12028,
+    "pr_file": "pydantic/_internal/_generate_schema.py",
+    "created_at": "2025-07-01T14:46:54+00:00",
+    "commented_code": "update_core_metadata(core_metadata, pydantic_js_annotation_functions=pydantic_js_annotation_functions)\n         return _add_custom_serialization_from_json_encoders(self._config_wrapper.json_encoders, source_type, schema)\n \n-    def _apply_single_annotation(self, schema: core_schema.CoreSchema, metadata: Any) -> core_schema.CoreSchema:\n+    def _apply_single_annotation(\n+        self,\n+        schema: core_schema.CoreSchema,\n+        metadata: Any,\n+        check_unsupported_field_info_attributes: bool = True,\n+    ) -> core_schema.CoreSchema:\n         FieldInfo = import_cached_field_info()\n \n         if isinstance(metadata, FieldInfo):\n+            if check_unsupported_field_info_attributes and (\n+                unsupported_attributes := self._get_unsupported_field_info_attributes(metadata)\n+            ):\n+                for unsupported_attr in unsupported_attributes:",
+    "repo_full_name": "pydantic/pydantic",
+    "discussion_comments": [
+      {
+        "comment_id": "2177807207",
+        "repo_full_name": "pydantic/pydantic",
+        "pr_number": 12028,
+        "pr_file": "pydantic/_internal/_generate_schema.py",
+        "discussion_id": "2177807207",
+        "commented_code": "@@ -2158,10 +2202,27 @@ def inner_handler(obj: Any) -> CoreSchema:\n             update_core_metadata(core_metadata, pydantic_js_annotation_functions=pydantic_js_annotation_functions)\n         return _add_custom_serialization_from_json_encoders(self._config_wrapper.json_encoders, source_type, schema)\n \n-    def _apply_single_annotation(self, schema: core_schema.CoreSchema, metadata: Any) -> core_schema.CoreSchema:\n+    def _apply_single_annotation(\n+        self,\n+        schema: core_schema.CoreSchema,\n+        metadata: Any,\n+        check_unsupported_field_info_attributes: bool = True,\n+    ) -> core_schema.CoreSchema:\n         FieldInfo = import_cached_field_info()\n \n         if isinstance(metadata, FieldInfo):\n+            if check_unsupported_field_info_attributes and (\n+                unsupported_attributes := self._get_unsupported_field_info_attributes(metadata)\n+            ):\n+                for unsupported_attr in unsupported_attributes:",
+        "comment_created_at": "2025-07-01T14:46:54+00:00",
+        "comment_author": "DouweM",
+        "comment_body": "Can we do `for (attr, value) in unsupported_attributes` so we don't need `[0]` and `[1]`?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2143396716",
+    "pr_number": 11898,
+    "pr_file": "pydantic/fields.py",
+    "created_at": "2025-06-12T18:41:38+00:00",
+    "commented_code": "final = 'final' in inspected_ann.qualifiers\n         metadata = inspected_ann.metadata\n \n-        if isinstance(default, FieldInfo):\n-            # e.g. `field: int = Field(...)`\n-            default.annotation = type_expr\n-            default.metadata += metadata\n-            merged_default = FieldInfo.merge_field_infos(\n-                *[x for x in metadata if isinstance(x, FieldInfo)],\n-                default,\n-                annotation=default.annotation,\n-            )\n-            merged_default.frozen = final or merged_default.frozen\n-            merged_default._qualifiers = inspected_ann.qualifiers\n-            return merged_default\n-\n-        if isinstance(default, dataclasses.Field):\n-            # `collect_dataclass_fields()` passes the dataclass Field as a default.\n-            pydantic_field = FieldInfo._from_dataclass_field(default)\n-            pydantic_field.annotation = type_expr\n-            pydantic_field.metadata += metadata\n-            pydantic_field = FieldInfo.merge_field_infos(\n-                *[x for x in metadata if isinstance(x, FieldInfo)],\n-                pydantic_field,\n-                annotation=pydantic_field.annotation,\n-            )\n-            pydantic_field.frozen = final or pydantic_field.frozen\n-            pydantic_field.init_var = 'init_var' in inspected_ann.qualifiers\n-            pydantic_field.init = getattr(default, 'init', None)\n-            pydantic_field.kw_only = getattr(default, 'kw_only', None)\n-            pydantic_field._qualifiers = inspected_ann.qualifiers\n-            return pydantic_field\n-\n-        if not metadata:\n-            # No metadata, e.g. `field: int = ...`, or `field: Final[str] = ...`:\n-            field_info = FieldInfo(annotation=type_expr, default=default, frozen=final or None)\n-            field_info._qualifiers = inspected_ann.qualifiers\n+        # HACK 1: the order in which the metadata is merged is inconsistent; we need to prepend\n+        # metadata from the assignment at the beginning of the metadata. Changing this is only\n+        # possible in v3 (at least). See https://github.com/pydantic/pydantic/issues/10507\n+        prepend_metadata: list[Any] | None = None\n+        attr_overrides = {'annotation': type_expr}\n+        if final:\n+            attr_overrides['frozen'] = True\n+\n+        # HACK 2: FastAPI is subclassing `FieldInfo` and historically expected the actual\n+        # instance's type to be preserved when constructing new models with its subclasses as assignments.\n+        # This code is never reached by Pydantic itself, and in an ideal world this shouldn't be necessary.\n+        if not metadata and isinstance(default, FieldInfo) and type(default) is not FieldInfo:\n+            field_info = default._copy()\n+            field_info._attributes_set.update(attr_overrides)\n+            for k, v in attr_overrides.items():\n+                setattr(field_info, k, v)\n             return field_info\n \n-        # With metadata, e.g. `field: Annotated[int, Field(...), Gt(1)] = ...`:\n-        field_infos = [a for a in metadata if isinstance(a, FieldInfo)]\n-        field_info = FieldInfo.merge_field_infos(*field_infos, annotation=type_expr, default=default)\n-        field_metadata: list[Any] = []\n-        for a in metadata:\n-            if typing_objects.is_deprecated(a):\n-                field_info.deprecated = a.message\n-            elif not isinstance(a, FieldInfo):\n-                field_metadata.append(a)\n-            else:\n-                field_metadata.extend(a.metadata)\n-        field_info.metadata = field_metadata\n+        if isinstance(default, FieldInfo):\n+            default_copy = default._copy()  # Copy unnecessary when we remove HACK 1.\n+            prepend_metadata = default_copy.metadata\n+            default_copy.metadata = []\n+            metadata = metadata + [default_copy]\n+        elif isinstance(default, dataclasses.Field):\n+            from_field = FieldInfo._from_dataclass_field(default)\n+            prepend_metadata = from_field.metadata  # Unnecessary when we remove HACK 1.\n+            from_field.metadata = []\n+            metadata = metadata + [from_field]\n+            if 'init_var' in inspected_ann.qualifiers:\n+                attr_overrides['init_var'] = True\n+            if (init := getattr(default, 'init', None)) is not None:\n+                attr_overrides['init'] = init\n+            if (kw_only := getattr(default, 'kw_only', None)) is not None:\n+                attr_overrides['kw_only'] = kw_only\n+        else:\n+            # `default` is the actual default value\n+            attr_overrides['default'] = default\n+\n+        field_info = FieldInfo._construct(metadata, **attr_overrides)\n         field_info._qualifiers = inspected_ann.qualifiers\n+        if prepend_metadata is not None:\n+            field_info.metadata = prepend_metadata + field_info.metadata",
+    "repo_full_name": "pydantic/pydantic",
+    "discussion_comments": [
+      {
+        "comment_id": "2143396716",
+        "repo_full_name": "pydantic/pydantic",
+        "pr_number": 11898,
+        "pr_file": "pydantic/fields.py",
+        "discussion_id": "2143396716",
+        "commented_code": "@@ -417,58 +400,130 @@ class MyModel(pydantic.BaseModel):\n         final = 'final' in inspected_ann.qualifiers\n         metadata = inspected_ann.metadata\n \n-        if isinstance(default, FieldInfo):\n-            # e.g. `field: int = Field(...)`\n-            default.annotation = type_expr\n-            default.metadata += metadata\n-            merged_default = FieldInfo.merge_field_infos(\n-                *[x for x in metadata if isinstance(x, FieldInfo)],\n-                default,\n-                annotation=default.annotation,\n-            )\n-            merged_default.frozen = final or merged_default.frozen\n-            merged_default._qualifiers = inspected_ann.qualifiers\n-            return merged_default\n-\n-        if isinstance(default, dataclasses.Field):\n-            # `collect_dataclass_fields()` passes the dataclass Field as a default.\n-            pydantic_field = FieldInfo._from_dataclass_field(default)\n-            pydantic_field.annotation = type_expr\n-            pydantic_field.metadata += metadata\n-            pydantic_field = FieldInfo.merge_field_infos(\n-                *[x for x in metadata if isinstance(x, FieldInfo)],\n-                pydantic_field,\n-                annotation=pydantic_field.annotation,\n-            )\n-            pydantic_field.frozen = final or pydantic_field.frozen\n-            pydantic_field.init_var = 'init_var' in inspected_ann.qualifiers\n-            pydantic_field.init = getattr(default, 'init', None)\n-            pydantic_field.kw_only = getattr(default, 'kw_only', None)\n-            pydantic_field._qualifiers = inspected_ann.qualifiers\n-            return pydantic_field\n-\n-        if not metadata:\n-            # No metadata, e.g. `field: int = ...`, or `field: Final[str] = ...`:\n-            field_info = FieldInfo(annotation=type_expr, default=default, frozen=final or None)\n-            field_info._qualifiers = inspected_ann.qualifiers\n+        # HACK 1: the order in which the metadata is merged is inconsistent; we need to prepend\n+        # metadata from the assignment at the beginning of the metadata. Changing this is only\n+        # possible in v3 (at least). See https://github.com/pydantic/pydantic/issues/10507\n+        prepend_metadata: list[Any] | None = None\n+        attr_overrides = {'annotation': type_expr}\n+        if final:\n+            attr_overrides['frozen'] = True\n+\n+        # HACK 2: FastAPI is subclassing `FieldInfo` and historically expected the actual\n+        # instance's type to be preserved when constructing new models with its subclasses as assignments.\n+        # This code is never reached by Pydantic itself, and in an ideal world this shouldn't be necessary.\n+        if not metadata and isinstance(default, FieldInfo) and type(default) is not FieldInfo:\n+            field_info = default._copy()\n+            field_info._attributes_set.update(attr_overrides)\n+            for k, v in attr_overrides.items():\n+                setattr(field_info, k, v)\n             return field_info\n \n-        # With metadata, e.g. `field: Annotated[int, Field(...), Gt(1)] = ...`:\n-        field_infos = [a for a in metadata if isinstance(a, FieldInfo)]\n-        field_info = FieldInfo.merge_field_infos(*field_infos, annotation=type_expr, default=default)\n-        field_metadata: list[Any] = []\n-        for a in metadata:\n-            if typing_objects.is_deprecated(a):\n-                field_info.deprecated = a.message\n-            elif not isinstance(a, FieldInfo):\n-                field_metadata.append(a)\n-            else:\n-                field_metadata.extend(a.metadata)\n-        field_info.metadata = field_metadata\n+        if isinstance(default, FieldInfo):\n+            default_copy = default._copy()  # Copy unnecessary when we remove HACK 1.\n+            prepend_metadata = default_copy.metadata\n+            default_copy.metadata = []\n+            metadata = metadata + [default_copy]\n+        elif isinstance(default, dataclasses.Field):\n+            from_field = FieldInfo._from_dataclass_field(default)\n+            prepend_metadata = from_field.metadata  # Unnecessary when we remove HACK 1.\n+            from_field.metadata = []\n+            metadata = metadata + [from_field]\n+            if 'init_var' in inspected_ann.qualifiers:\n+                attr_overrides['init_var'] = True\n+            if (init := getattr(default, 'init', None)) is not None:\n+                attr_overrides['init'] = init\n+            if (kw_only := getattr(default, 'kw_only', None)) is not None:\n+                attr_overrides['kw_only'] = kw_only\n+        else:\n+            # `default` is the actual default value\n+            attr_overrides['default'] = default\n+\n+        field_info = FieldInfo._construct(metadata, **attr_overrides)\n         field_info._qualifiers = inspected_ann.qualifiers\n+        if prepend_metadata is not None:\n+            field_info.metadata = prepend_metadata + field_info.metadata",
+        "comment_created_at": "2025-06-12T18:41:38+00:00",
+        "comment_author": "DouweM",
+        "comment_body": "Why are we assigning this after `_construct` instead of passing it `prepend_metadata + metadata`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2144563306",
+        "repo_full_name": "pydantic/pydantic",
+        "pr_number": 11898,
+        "pr_file": "pydantic/fields.py",
+        "discussion_id": "2143396716",
+        "commented_code": "@@ -417,58 +400,130 @@ class MyModel(pydantic.BaseModel):\n         final = 'final' in inspected_ann.qualifiers\n         metadata = inspected_ann.metadata\n \n-        if isinstance(default, FieldInfo):\n-            # e.g. `field: int = Field(...)`\n-            default.annotation = type_expr\n-            default.metadata += metadata\n-            merged_default = FieldInfo.merge_field_infos(\n-                *[x for x in metadata if isinstance(x, FieldInfo)],\n-                default,\n-                annotation=default.annotation,\n-            )\n-            merged_default.frozen = final or merged_default.frozen\n-            merged_default._qualifiers = inspected_ann.qualifiers\n-            return merged_default\n-\n-        if isinstance(default, dataclasses.Field):\n-            # `collect_dataclass_fields()` passes the dataclass Field as a default.\n-            pydantic_field = FieldInfo._from_dataclass_field(default)\n-            pydantic_field.annotation = type_expr\n-            pydantic_field.metadata += metadata\n-            pydantic_field = FieldInfo.merge_field_infos(\n-                *[x for x in metadata if isinstance(x, FieldInfo)],\n-                pydantic_field,\n-                annotation=pydantic_field.annotation,\n-            )\n-            pydantic_field.frozen = final or pydantic_field.frozen\n-            pydantic_field.init_var = 'init_var' in inspected_ann.qualifiers\n-            pydantic_field.init = getattr(default, 'init', None)\n-            pydantic_field.kw_only = getattr(default, 'kw_only', None)\n-            pydantic_field._qualifiers = inspected_ann.qualifiers\n-            return pydantic_field\n-\n-        if not metadata:\n-            # No metadata, e.g. `field: int = ...`, or `field: Final[str] = ...`:\n-            field_info = FieldInfo(annotation=type_expr, default=default, frozen=final or None)\n-            field_info._qualifiers = inspected_ann.qualifiers\n+        # HACK 1: the order in which the metadata is merged is inconsistent; we need to prepend\n+        # metadata from the assignment at the beginning of the metadata. Changing this is only\n+        # possible in v3 (at least). See https://github.com/pydantic/pydantic/issues/10507\n+        prepend_metadata: list[Any] | None = None\n+        attr_overrides = {'annotation': type_expr}\n+        if final:\n+            attr_overrides['frozen'] = True\n+\n+        # HACK 2: FastAPI is subclassing `FieldInfo` and historically expected the actual\n+        # instance's type to be preserved when constructing new models with its subclasses as assignments.\n+        # This code is never reached by Pydantic itself, and in an ideal world this shouldn't be necessary.\n+        if not metadata and isinstance(default, FieldInfo) and type(default) is not FieldInfo:\n+            field_info = default._copy()\n+            field_info._attributes_set.update(attr_overrides)\n+            for k, v in attr_overrides.items():\n+                setattr(field_info, k, v)\n             return field_info\n \n-        # With metadata, e.g. `field: Annotated[int, Field(...), Gt(1)] = ...`:\n-        field_infos = [a for a in metadata if isinstance(a, FieldInfo)]\n-        field_info = FieldInfo.merge_field_infos(*field_infos, annotation=type_expr, default=default)\n-        field_metadata: list[Any] = []\n-        for a in metadata:\n-            if typing_objects.is_deprecated(a):\n-                field_info.deprecated = a.message\n-            elif not isinstance(a, FieldInfo):\n-                field_metadata.append(a)\n-            else:\n-                field_metadata.extend(a.metadata)\n-        field_info.metadata = field_metadata\n+        if isinstance(default, FieldInfo):\n+            default_copy = default._copy()  # Copy unnecessary when we remove HACK 1.\n+            prepend_metadata = default_copy.metadata\n+            default_copy.metadata = []\n+            metadata = metadata + [default_copy]\n+        elif isinstance(default, dataclasses.Field):\n+            from_field = FieldInfo._from_dataclass_field(default)\n+            prepend_metadata = from_field.metadata  # Unnecessary when we remove HACK 1.\n+            from_field.metadata = []\n+            metadata = metadata + [from_field]\n+            if 'init_var' in inspected_ann.qualifiers:\n+                attr_overrides['init_var'] = True\n+            if (init := getattr(default, 'init', None)) is not None:\n+                attr_overrides['init'] = init\n+            if (kw_only := getattr(default, 'kw_only', None)) is not None:\n+                attr_overrides['kw_only'] = kw_only\n+        else:\n+            # `default` is the actual default value\n+            attr_overrides['default'] = default\n+\n+        field_info = FieldInfo._construct(metadata, **attr_overrides)\n         field_info._qualifiers = inspected_ann.qualifiers\n+        if prepend_metadata is not None:\n+            field_info.metadata = prepend_metadata + field_info.metadata",
+        "comment_created_at": "2025-06-13T09:12:19+00:00",
+        "comment_author": "Viicos",
+        "comment_body": "Both are equivalent, but indeed passing all the metadata directly to `_construct()` is cleaner. Applied.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1745823050",
+    "pr_number": 10303,
+    "pr_file": "pydantic/_internal/_generate_schema.py",
+    "created_at": "2024-09-05T16:09:28+00:00",
+    "commented_code": "types_namespace: dict[str, Any] | None,\n         typevars_map: dict[Any, Any] | None = None,\n     ) -> None:\n-        # we need a stack for recursing into child models\n+        # we need a stack for recursing into nested models\n         self._config_wrapper_stack = ConfigWrapperStack(config_wrapper)\n         self._types_namespace_stack = TypesNamespaceStack(types_namespace)\n         self._typevars_map = typevars_map\n         self.field_name_stack = _FieldNameStack()\n         self.model_type_stack = _ModelTypeStack()\n         self.defs = _Definitions()\n \n-    @classmethod\n-    def __from_parent(\n-        cls,\n-        config_wrapper_stack: ConfigWrapperStack,\n-        types_namespace_stack: TypesNamespaceStack,\n-        model_type_stack: _ModelTypeStack,\n-        typevars_map: dict[Any, Any] | None,\n-        defs: _Definitions,\n-    ) -> GenerateSchema:\n-        obj = cls.__new__(cls)\n-        obj._config_wrapper_stack = config_wrapper_stack\n-        obj._types_namespace_stack = types_namespace_stack\n-        obj.model_type_stack = model_type_stack\n-        obj._typevars_map = typevars_map\n-        obj.field_name_stack = _FieldNameStack()\n-        obj.defs = defs\n-        return obj\n+    def __init_subclass__(cls, **kwargs) -> None:",
+    "repo_full_name": "pydantic/pydantic",
+    "discussion_comments": [
+      {
+        "comment_id": "1745823050",
+        "repo_full_name": "pydantic/pydantic",
+        "pr_number": 10303,
+        "pr_file": "pydantic/_internal/_generate_schema.py",
+        "discussion_id": "1745823050",
+        "commented_code": "@@ -372,31 +372,20 @@ def __init__(\n         types_namespace: dict[str, Any] | None,\n         typevars_map: dict[Any, Any] | None = None,\n     ) -> None:\n-        # we need a stack for recursing into child models\n+        # we need a stack for recursing into nested models\n         self._config_wrapper_stack = ConfigWrapperStack(config_wrapper)\n         self._types_namespace_stack = TypesNamespaceStack(types_namespace)\n         self._typevars_map = typevars_map\n         self.field_name_stack = _FieldNameStack()\n         self.model_type_stack = _ModelTypeStack()\n         self.defs = _Definitions()\n \n-    @classmethod\n-    def __from_parent(\n-        cls,\n-        config_wrapper_stack: ConfigWrapperStack,\n-        types_namespace_stack: TypesNamespaceStack,\n-        model_type_stack: _ModelTypeStack,\n-        typevars_map: dict[Any, Any] | None,\n-        defs: _Definitions,\n-    ) -> GenerateSchema:\n-        obj = cls.__new__(cls)\n-        obj._config_wrapper_stack = config_wrapper_stack\n-        obj._types_namespace_stack = types_namespace_stack\n-        obj.model_type_stack = model_type_stack\n-        obj._typevars_map = typevars_map\n-        obj.field_name_stack = _FieldNameStack()\n-        obj.defs = defs\n-        return obj\n+    def __init_subclass__(cls, **kwargs) -> None:",
+        "comment_created_at": "2024-09-05T16:09:28+00:00",
+        "comment_author": "Viicos",
+        "comment_body": "```suggestion\r\n    def __init_subclass__(cls) -> None:\r\n```\r\nWe can safely omit the kwargs here",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1952489773",
+    "pr_number": 11432,
+    "pr_file": "pydantic/main.py",
+    "created_at": "2025-02-12T11:41:09+00:00",
+    "commented_code": "_object_setattr(self, name, value)\n                     return None  # Can not return memoized handler with possibly freeform attr names\n \n-            cls._check_frozen(name, value)\n-\n             attr = getattr(cls, name, None)\n             # NOTE: We currently special case properties and `cached_property`, but we might need\n             # to generalize this to all data/non-data descriptors at some point. For non-data descriptors\n             # (such as `cached_property`), it isn't obvious though. `cached_property` caches the value\n             # to the instance's `__dict__`, but other non-data descriptors might do things differently.\n+            if isinstance(attr, cached_property):\n+                return _SIMPLE_SETATTR_HANDLERS['cached_property']\n+\n+            model_frozen = cls.model_config.get('frozen')",
+    "repo_full_name": "pydantic/pydantic",
+    "discussion_comments": [
+      {
+        "comment_id": "1952489773",
+        "repo_full_name": "pydantic/pydantic",
+        "pr_number": 11432,
+        "pr_file": "pydantic/main.py",
+        "discussion_id": "1952489773",
+        "commented_code": "@@ -938,17 +943,32 @@ def _setattr_handler(self, name: str, value: Any) -> Callable[[BaseModel, str, A\n                     _object_setattr(self, name, value)\n                     return None  # Can not return memoized handler with possibly freeform attr names\n \n-            cls._check_frozen(name, value)\n-\n             attr = getattr(cls, name, None)\n             # NOTE: We currently special case properties and `cached_property`, but we might need\n             # to generalize this to all data/non-data descriptors at some point. For non-data descriptors\n             # (such as `cached_property`), it isn't obvious though. `cached_property` caches the value\n             # to the instance's `__dict__`, but other non-data descriptors might do things differently.\n+            if isinstance(attr, cached_property):\n+                return _SIMPLE_SETATTR_HANDLERS['cached_property']\n+\n+            model_frozen = cls.model_config.get('frozen')",
+        "comment_created_at": "2025-02-12T11:41:09+00:00",
+        "comment_author": "Viicos",
+        "comment_body": "I inlined the logic as I couldn't find a good way to keep it in a single method as I need to raise it differently in `__delattr__`. A bit unfortunate, but at least this removes the `_check_frozen` method on the `BaseModel` class, so it avoids polluting the namespace.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1952857182",
+    "pr_number": 11432,
+    "pr_file": "pydantic/main.py",
+    "created_at": "2025-02-12T15:14:13+00:00",
+    "commented_code": "del self.__pydantic_private__[item]  # type: ignore\n                     return\n                 except KeyError as exc:\n-                    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}') from exc\n-\n-            self._check_frozen(item, None)\n-\n-            if item in self.__pydantic_fields__:\n+                    raise AttributeError(f'{cls.__name__!r} object has no attribute {item!r}') from exc\n+\n+            model_frozen = cls.model_config.get('frozen', False)\n+\n+            field_info = self.__pydantic_fields__.get(item)\n+            if field_info is not None:\n+                if model_frozen or field_info.frozen:",
+    "repo_full_name": "pydantic/pydantic",
+    "discussion_comments": [
+      {
+        "comment_id": "1952857182",
+        "repo_full_name": "pydantic/pydantic",
+        "pr_number": 11432,
+        "pr_file": "pydantic/main.py",
+        "discussion_id": "1952857182",
+        "commented_code": "@@ -977,13 +999,36 @@ def __delattr__(self, item: str) -> Any:\n                     del self.__pydantic_private__[item]  # type: ignore\n                     return\n                 except KeyError as exc:\n-                    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}') from exc\n-\n-            self._check_frozen(item, None)\n-\n-            if item in self.__pydantic_fields__:\n+                    raise AttributeError(f'{cls.__name__!r} object has no attribute {item!r}') from exc\n+\n+            model_frozen = cls.model_config.get('frozen', False)\n+\n+            field_info = self.__pydantic_fields__.get(item)\n+            if field_info is not None:\n+                if model_frozen or field_info.frozen:",
+        "comment_created_at": "2025-02-12T15:14:13+00:00",
+        "comment_author": "sydney-runkle",
+        "comment_body": "```suggestion\r\n            model_frozen = cls.model_config.get('frozen')\r\n            field_frozen = getattr(cls.__pydantic_fields__.get(name), 'frozen', False)\r\n            if model_frozen or field_frozen:\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1952864207",
+        "repo_full_name": "pydantic/pydantic",
+        "pr_number": 11432,
+        "pr_file": "pydantic/main.py",
+        "discussion_id": "1952857182",
+        "commented_code": "@@ -977,13 +999,36 @@ def __delattr__(self, item: str) -> Any:\n                     del self.__pydantic_private__[item]  # type: ignore\n                     return\n                 except KeyError as exc:\n-                    raise AttributeError(f'{type(self).__name__!r} object has no attribute {item!r}') from exc\n-\n-            self._check_frozen(item, None)\n-\n-            if item in self.__pydantic_fields__:\n+                    raise AttributeError(f'{cls.__name__!r} object has no attribute {item!r}') from exc\n+\n+            model_frozen = cls.model_config.get('frozen', False)\n+\n+            field_info = self.__pydantic_fields__.get(item)\n+            if field_info is not None:\n+                if model_frozen or field_info.frozen:",
+        "comment_created_at": "2025-02-12T15:17:34+00:00",
+        "comment_author": "sydney-runkle",
+        "comment_body": "We should make this consistent with the above pattern.\r\n\r\nIt's hard - we're not at the 3 repetition rule here that necessitates abstraction. I'm ok with keeping this duplicated code as long as it's as consistent as possible.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1804466376",
+    "pr_number": 10643,
+    "pr_file": "pydantic/_internal/_generate_schema.py",
+    "created_at": "2024-10-17T09:52:12+00:00",
+    "commented_code": "if from_property is not None:\n             return from_property\n \n-        if _typing_extra.origin_is_union(origin):\n+        if isinstance(origin, TypeAliasType):\n+            return self._type_alias_type_schema(obj)",
+    "repo_full_name": "pydantic/pydantic",
+    "discussion_comments": [
+      {
+        "comment_id": "1804466376",
+        "repo_full_name": "pydantic/pydantic",
+        "pr_number": 10643,
+        "pr_file": "pydantic/_internal/_generate_schema.py",
+        "discussion_id": "1804466376",
+        "commented_code": "@@ -1039,7 +1038,9 @@ def _match_generic_type(self, obj: Any, origin: Any) -> CoreSchema:  # noqa: C90\n         if from_property is not None:\n             return from_property\n \n-        if _typing_extra.origin_is_union(origin):\n+        if isinstance(origin, TypeAliasType):\n+            return self._type_alias_type_schema(obj)",
+        "comment_created_at": "2024-10-17T09:52:12+00:00",
+        "comment_author": "Viicos",
+        "comment_body": "Why was it moved?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1804489910",
+        "repo_full_name": "pydantic/pydantic",
+        "pr_number": 10643,
+        "pr_file": "pydantic/_internal/_generate_schema.py",
+        "discussion_id": "1804466376",
+        "commented_code": "@@ -1039,7 +1038,9 @@ def _match_generic_type(self, obj: Any, origin: Any) -> CoreSchema:  # noqa: C90\n         if from_property is not None:\n             return from_property\n \n-        if _typing_extra.origin_is_union(origin):\n+        if isinstance(origin, TypeAliasType):\n+            return self._type_alias_type_schema(obj)",
+        "comment_created_at": "2024-10-17T10:09:22+00:00",
+        "comment_author": "kc0506",
+        "comment_body": "I think without a special reason (e.g. `dataclass` above), these matching clauses should better be put together to make things clearer. Looks like when `origin` is of type `TypeAliasType`, `from_property` is always `None` (at least in the current tests), so moving it does not have any actual effect.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

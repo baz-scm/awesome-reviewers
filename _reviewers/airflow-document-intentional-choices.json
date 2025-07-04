@@ -1,0 +1,92 @@
+[
+  {
+    "discussion_id": "2176638912",
+    "pr_number": 52581,
+    "pr_file": "airflow-core/src/airflow/utils/serve_logs.py",
+    "created_at": "2025-07-01T07:27:00+00:00",
+    "commented_code": "logger = logging.getLogger(__name__)\n \n \n-def create_app():\n-    flask_app = Flask(__name__, static_folder=None)\n-    leeway = conf.getint(\"webserver\", \"log_request_clock_grace\", fallback=30)\n-    log_directory = os.path.expanduser(conf.get(\"logging\", \"BASE_LOG_FOLDER\"))\n-    log_config_class = conf.get(\"logging\", \"logging_config_class\")\n-    if log_config_class:\n-        logger.info(\"Detected user-defined logging config. Attempting to load %s\", log_config_class)\n-        try:\n-            logging_config = import_string(log_config_class)\n-            try:\n-                base_log_folder = logging_config[\"handlers\"][\"task\"][\"base_log_folder\"]\n-            except KeyError:\n-                base_log_folder = None\n-            if base_log_folder is not None:\n-                log_directory = base_log_folder\n-                logger.info(\n-                    \"Successfully imported user-defined logging config. Flask App will serve log from %s\",\n-                    log_directory,\n-                )\n-            else:\n-                logger.warning(\n-                    \"User-defined logging config does not specify 'base_log_folder'. \"\n-                    \"Flask App will use default log directory %s\",\n-                    base_log_folder,\n-                )\n-        except Exception as e:\n-            raise ImportError(f\"Unable to load {log_config_class} due to error: {e}\")\n-    signer = JWTValidator(\n-        issuer=None,\n-        secret_key=get_signing_key(\"api\", \"secret_key\"),\n-        algorithm=\"HS512\",\n-        leeway=leeway,\n-        audience=\"task-instance-logs\",\n-    )\n+class JWTAuthStaticFiles(StaticFiles):\n+    \"\"\"StaticFiles with JWT authentication.\"\"\"\n \n-    # Prevent direct access to the logs port\n-    @flask_app.before_request\n-    def validate_pre_signed_url():\n+    # reference from https://github.com/fastapi/fastapi/issues/858#issuecomment-876564020\n+\n+    def __init__(self, *args, **kwargs) -> None:\n+        super().__init__(*args, **kwargs)\n+\n+    async def __call__(self, scope, receive, send) -> None:\n+        request = Request(scope, receive)\n+        await self.validate_jwt_token(request)\n+        await super().__call__(scope, receive, send)\n+\n+    async def validate_jwt_token(self, request: Request):\n+        # we get the signer from the app state instead of creating a new instance for each request\n+        signer = cast(\"JWTValidator\", request.app.state.signer)\n         try:\n             auth = request.headers.get(\"Authorization\")\n             if auth is None:\n                 logger.warning(\"The Authorization header is missing: %s.\", request.headers)\n-                abort(403)\n-            payload = signer.validated_claims(auth)\n+                raise HTTPException(\n+                    status_code=status.HTTP_403_FORBIDDEN, detail=\"Authorization header missing\"\n+                )\n+            payload = await signer.avalidated_claims(auth)\n             token_filename = payload.get(\"filename\")\n-            request_filename = request.view_args[\"filename\"]\n+            # Extract filename from url path\n+            request_filename = request.url.path.lstrip(\"/log/\")\n             if token_filename is None:\n                 logger.warning(\"The payload does not contain 'filename' key: %s.\", payload)\n-                abort(403)\n+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=\"Invalid token payload\")\n             if token_filename != request_filename:\n                 logger.warning(\n                     \"The payload log_relative_path key is different than the one in token:\"\n                     \"Request path: %s. Token path: %s.\",\n                     request_filename,\n                     token_filename,\n                 )\n-                abort(403)\n+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=\"Token filename mismatch\")\n         except HTTPException:\n             raise\n         except InvalidAudienceError:\n             logger.warning(\"Invalid audience for the request\", exc_info=True)\n-            abort(403)\n+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=\"Invalid audience\")",
+    "repo_full_name": "apache/airflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2176638912",
+        "repo_full_name": "apache/airflow",
+        "pr_number": 52581,
+        "pr_file": "airflow-core/src/airflow/utils/serve_logs.py",
+        "discussion_id": "2176638912",
+        "commented_code": "@@ -43,74 +44,55 @@\n logger = logging.getLogger(__name__)\n \n \n-def create_app():\n-    flask_app = Flask(__name__, static_folder=None)\n-    leeway = conf.getint(\"webserver\", \"log_request_clock_grace\", fallback=30)\n-    log_directory = os.path.expanduser(conf.get(\"logging\", \"BASE_LOG_FOLDER\"))\n-    log_config_class = conf.get(\"logging\", \"logging_config_class\")\n-    if log_config_class:\n-        logger.info(\"Detected user-defined logging config. Attempting to load %s\", log_config_class)\n-        try:\n-            logging_config = import_string(log_config_class)\n-            try:\n-                base_log_folder = logging_config[\"handlers\"][\"task\"][\"base_log_folder\"]\n-            except KeyError:\n-                base_log_folder = None\n-            if base_log_folder is not None:\n-                log_directory = base_log_folder\n-                logger.info(\n-                    \"Successfully imported user-defined logging config. Flask App will serve log from %s\",\n-                    log_directory,\n-                )\n-            else:\n-                logger.warning(\n-                    \"User-defined logging config does not specify 'base_log_folder'. \"\n-                    \"Flask App will use default log directory %s\",\n-                    base_log_folder,\n-                )\n-        except Exception as e:\n-            raise ImportError(f\"Unable to load {log_config_class} due to error: {e}\")\n-    signer = JWTValidator(\n-        issuer=None,\n-        secret_key=get_signing_key(\"api\", \"secret_key\"),\n-        algorithm=\"HS512\",\n-        leeway=leeway,\n-        audience=\"task-instance-logs\",\n-    )\n+class JWTAuthStaticFiles(StaticFiles):\n+    \"\"\"StaticFiles with JWT authentication.\"\"\"\n \n-    # Prevent direct access to the logs port\n-    @flask_app.before_request\n-    def validate_pre_signed_url():\n+    # reference from https://github.com/fastapi/fastapi/issues/858#issuecomment-876564020\n+\n+    def __init__(self, *args, **kwargs) -> None:\n+        super().__init__(*args, **kwargs)\n+\n+    async def __call__(self, scope, receive, send) -> None:\n+        request = Request(scope, receive)\n+        await self.validate_jwt_token(request)\n+        await super().__call__(scope, receive, send)\n+\n+    async def validate_jwt_token(self, request: Request):\n+        # we get the signer from the app state instead of creating a new instance for each request\n+        signer = cast(\"JWTValidator\", request.app.state.signer)\n         try:\n             auth = request.headers.get(\"Authorization\")\n             if auth is None:\n                 logger.warning(\"The Authorization header is missing: %s.\", request.headers)\n-                abort(403)\n-            payload = signer.validated_claims(auth)\n+                raise HTTPException(\n+                    status_code=status.HTTP_403_FORBIDDEN, detail=\"Authorization header missing\"\n+                )\n+            payload = await signer.avalidated_claims(auth)\n             token_filename = payload.get(\"filename\")\n-            request_filename = request.view_args[\"filename\"]\n+            # Extract filename from url path\n+            request_filename = request.url.path.lstrip(\"/log/\")\n             if token_filename is None:\n                 logger.warning(\"The payload does not contain 'filename' key: %s.\", payload)\n-                abort(403)\n+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=\"Invalid token payload\")\n             if token_filename != request_filename:\n                 logger.warning(\n                     \"The payload log_relative_path key is different than the one in token:\"\n                     \"Request path: %s. Token path: %s.\",\n                     request_filename,\n                     token_filename,\n                 )\n-                abort(403)\n+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=\"Token filename mismatch\")\n         except HTTPException:\n             raise\n         except InvalidAudienceError:\n             logger.warning(\"Invalid audience for the request\", exc_info=True)\n-            abort(403)\n+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=\"Invalid audience\")",
+        "comment_created_at": "2025-07-01T07:27:00+00:00",
+        "comment_author": "potiuk",
+        "comment_body": "Same here and all other cases. It was pretty deliberate to just return 403 here. \r\n\r\nWe could actually make a comment here to metion that it's deliberate - otherwise future contributors might try to \"fix\" it in the same way.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2150180232",
+    "pr_number": 51699,
+    "pr_file": "airflow-core/src/airflow/dag_processing/processor.py",
+    "created_at": "2025-06-16T14:39:19+00:00",
+    "commented_code": "def _parse_file_entrypoint():\n     import structlog\n \n-    from airflow.sdk.execution_time import task_runner\n+    from airflow.sdk.execution_time import comms, task_runner\n \n     # Parse DAG file, send JSON back up!\n-    comms_decoder = task_runner.CommsDecoder[ToDagProcessor, ToManager](\n-        input=sys.stdin,\n-        decoder=TypeAdapter[ToDagProcessor](ToDagProcessor),\n+    comms_decoder = comms.CommsDecoder[ToDagProcessor, ToManager](\n+        body_decoder=TypeAdapter[ToDagProcessor](ToDagProcessor),\n     )\n \n-    msg = comms_decoder.get_message()\n+    msg = comms_decoder._get_response()",
+    "repo_full_name": "apache/airflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2150180232",
+        "repo_full_name": "apache/airflow",
+        "pr_number": 51699,
+        "pr_file": "airflow-core/src/airflow/dag_processing/processor.py",
+        "discussion_id": "2150180232",
+        "commented_code": "@@ -102,18 +101,16 @@ class DagFileParsingResult(BaseModel):\n def _parse_file_entrypoint():\n     import structlog\n \n-    from airflow.sdk.execution_time import task_runner\n+    from airflow.sdk.execution_time import comms, task_runner\n \n     # Parse DAG file, send JSON back up!\n-    comms_decoder = task_runner.CommsDecoder[ToDagProcessor, ToManager](\n-        input=sys.stdin,\n-        decoder=TypeAdapter[ToDagProcessor](ToDagProcessor),\n+    comms_decoder = comms.CommsDecoder[ToDagProcessor, ToManager](\n+        body_decoder=TypeAdapter[ToDagProcessor](ToDagProcessor),\n     )\n \n-    msg = comms_decoder.get_message()\n+    msg = comms_decoder._get_response()",
+        "comment_created_at": "2025-06-16T14:39:19+00:00",
+        "comment_author": "kaxil",
+        "comment_body": "Why not  `msg = comms_decoder.send()`\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2150419376",
+        "repo_full_name": "apache/airflow",
+        "pr_number": 51699,
+        "pr_file": "airflow-core/src/airflow/dag_processing/processor.py",
+        "discussion_id": "2150180232",
+        "commented_code": "@@ -102,18 +101,16 @@ class DagFileParsingResult(BaseModel):\n def _parse_file_entrypoint():\n     import structlog\n \n-    from airflow.sdk.execution_time import task_runner\n+    from airflow.sdk.execution_time import comms, task_runner\n \n     # Parse DAG file, send JSON back up!\n-    comms_decoder = task_runner.CommsDecoder[ToDagProcessor, ToManager](\n-        input=sys.stdin,\n-        decoder=TypeAdapter[ToDagProcessor](ToDagProcessor),\n+    comms_decoder = comms.CommsDecoder[ToDagProcessor, ToManager](\n+        body_decoder=TypeAdapter[ToDagProcessor](ToDagProcessor),\n     )\n \n-    msg = comms_decoder.get_message()\n+    msg = comms_decoder._get_response()",
+        "comment_created_at": "2025-06-16T16:33:28+00:00",
+        "comment_author": "ashb",
+        "comment_body": "Because for this very first message (and only in this case) the parent/supervisor sends this information unsolicited ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2150572111",
+        "repo_full_name": "apache/airflow",
+        "pr_number": 51699,
+        "pr_file": "airflow-core/src/airflow/dag_processing/processor.py",
+        "discussion_id": "2150180232",
+        "commented_code": "@@ -102,18 +101,16 @@ class DagFileParsingResult(BaseModel):\n def _parse_file_entrypoint():\n     import structlog\n \n-    from airflow.sdk.execution_time import task_runner\n+    from airflow.sdk.execution_time import comms, task_runner\n \n     # Parse DAG file, send JSON back up!\n-    comms_decoder = task_runner.CommsDecoder[ToDagProcessor, ToManager](\n-        input=sys.stdin,\n-        decoder=TypeAdapter[ToDagProcessor](ToDagProcessor),\n+    comms_decoder = comms.CommsDecoder[ToDagProcessor, ToManager](\n+        body_decoder=TypeAdapter[ToDagProcessor](ToDagProcessor),\n     )\n \n-    msg = comms_decoder.get_message()\n+    msg = comms_decoder._get_response()",
+        "comment_created_at": "2025-06-16T18:09:59+00:00",
+        "comment_author": "kaxil",
+        "comment_body": "Worth adding a code comment, so it doesn't look weird here on why we access an internal method",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2162023038",
+    "pr_number": 51952,
+    "pr_file": "airflow-core/src/airflow/utils/db_cleanup.py",
+    "created_at": "2025-06-23T16:31:25+00:00",
+    "commented_code": "keep_last: bool = False\n     keep_last_filters: Any | None = None\n     keep_last_group_by: Any | None = None\n+    dependent_tables: list[str] | None = None",
+    "repo_full_name": "apache/airflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2162023038",
+        "repo_full_name": "apache/airflow",
+        "pr_number": 51952,
+        "pr_file": "airflow-core/src/airflow/utils/db_cleanup.py",
+        "discussion_id": "2162023038",
+        "commented_code": "@@ -81,6 +82,7 @@ class _TableConfig:\n     keep_last: bool = False\n     keep_last_filters: Any | None = None\n     keep_last_group_by: Any | None = None\n+    dependent_tables: list[str] | None = None",
+        "comment_created_at": "2025-06-23T16:31:25+00:00",
+        "comment_author": "ashb",
+        "comment_body": "We should add a code comment saying why we made this explicit, otherwise I can easily see someone coming and \"fixing\" it by making the detection automatic.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

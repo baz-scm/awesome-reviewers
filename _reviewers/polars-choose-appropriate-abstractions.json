@@ -1,0 +1,126 @@
+[
+  {
+    "discussion_id": "2125700131",
+    "pr_number": 23062,
+    "pr_file": "crates/polars-utils/src/address.rs",
+    "created_at": "2025-06-04T05:46:29+00:00",
+    "commented_code": "+use core::fmt;\n+use std::borrow::Cow;\n+use std::ffi::{OsStr, OsString};\n+use std::path::Path;\n+use std::str::FromStr;\n+\n+/// A Path or URI\n+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]\n+#[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]\n+#[cfg_attr(feature = \"dsl-schema\", derive(schemars::JsonSchema))]\n+pub enum Address {\n+    Local(Box<Path>),\n+    Cloud(CloudAddress),\n+}\n+\n+/// A reference to a Path or URI\n+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]\n+pub enum AddressRef<'a> {\n+    Local(&'a Path),\n+    Cloud(CloudAddressRef<'a>),\n+}\n+\n+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]\n+#[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]\n+#[cfg_attr(feature = \"dsl-schema\", derive(schemars::JsonSchema))]\n+pub struct CloudAddress {\n+    /// The scheme used in cloud e.g. `s3://` or `file://`.\n+    scheme: CloudScheme,\n+\n+    /// The path to the specific file or directory. If the scheme is `None`, this is a `Path`\n+    /// otherwise this is a `/` delimited string.\n+    path: Box<OsStr>,",
+    "repo_full_name": "pola-rs/polars",
+    "discussion_comments": [
+      {
+        "comment_id": "2125700131",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 23062,
+        "pr_file": "crates/polars-utils/src/address.rs",
+        "discussion_id": "2125700131",
+        "commented_code": "@@ -0,0 +1,354 @@\n+use core::fmt;\n+use std::borrow::Cow;\n+use std::ffi::{OsStr, OsString};\n+use std::path::Path;\n+use std::str::FromStr;\n+\n+/// A Path or URI\n+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]\n+#[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]\n+#[cfg_attr(feature = \"dsl-schema\", derive(schemars::JsonSchema))]\n+pub enum Address {\n+    Local(Box<Path>),\n+    Cloud(CloudAddress),\n+}\n+\n+/// A reference to a Path or URI\n+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]\n+pub enum AddressRef<'a> {\n+    Local(&'a Path),\n+    Cloud(CloudAddressRef<'a>),\n+}\n+\n+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]\n+#[cfg_attr(feature = \"serde\", derive(serde::Serialize, serde::Deserialize))]\n+#[cfg_attr(feature = \"dsl-schema\", derive(schemars::JsonSchema))]\n+pub struct CloudAddress {\n+    /// The scheme used in cloud e.g. `s3://` or `file://`.\n+    scheme: CloudScheme,\n+\n+    /// The path to the specific file or directory. If the scheme is `None`, this is a `Path`\n+    /// otherwise this is a `/` delimited string.\n+    path: Box<OsStr>,",
+        "comment_created_at": "2025-06-04T05:46:29+00:00",
+        "comment_author": "nameexhaustion",
+        "comment_body": "Why `OsStr`? I think cloud paths should always use `String` / `Box<str>`, all of the APIs we call into also expect an `&str` so it would be good to have this validation happen once at construction.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2013917554",
+    "pr_number": 20940,
+    "pr_file": "crates/polars-python/src/lazyframe/visitor/nodes.rs",
+    "created_at": "2025-03-26T11:13:48+00:00",
+    "commented_code": "contexts: contexts.iter().map(|n| n.0).collect(),\n         }\n         .into_py_any(py),\n+        // Reference get_sink on how to deconstruct the payload\n         IR::Sink {\n             input: _,\n             payload: _,\n-        } => Err(PyNotImplementedError::new_err(\n-            \"Not expecting to see a Sink node\",\n-        )),\n+        } => Sink {\n+            input: input.0,\n+            payload: match payload {\n+                #[allow(unused_variables)]\n+                SinkTypeIR::File(FileSinkType {\n+                    path,\n+                    file_type,\n+                    sink_options: _,\n+                    cloud_options,\n+                }) => {\n+                    let path = path.as_ref().as_path();\n+                    match &file_type {\n+                        #[cfg(feature = \"parquet\")]\n+                        FileType::Parquet(options) => Box::new(ParquetSink::new(\n+                            path,\n+                            *options,\n+                            input_schema.as_ref(),\n+                            cloud_options.as_ref(),\n+                        )?)\n+                            as Box<dyn SinkTrait>,\n+                        #[cfg(feature = \"ipc\")]\n+                        FileType::Ipc(options) => Box::new(IpcSink::new(\n+                            path,\n+                            *options,\n+                            input_schema.as_ref(),\n+                            cloud_options.as_ref(),\n+                        )?) as Box<dyn SinkTrait>,\n+                        #[cfg(feature = \"csv\")]\n+                        FileType::Csv(options) => Box::new(CsvSink::new(\n+                            path,\n+                            options.clone(),\n+                            input_schema.as_ref(),\n+                            cloud_options.as_ref(),\n+                        )?) as Box<dyn SinkTrait>,\n+                        #[cfg(feature = \"json\")]\n+                        FileType::Json(options) => Box::new(JsonSink::new(\n+                            path,\n+                            *options,\n+                            input_schema.as_ref(),\n+                            cloud_options.as_ref(),\n+                        )?)\n+                            as Box<dyn SinkTrait>,\n+                        #[allow(unreachable_patterns)]\n+                        _ => unreachable!(),",
+    "repo_full_name": "pola-rs/polars",
+    "discussion_comments": [
+      {
+        "comment_id": "2013917554",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 20940,
+        "pr_file": "crates/polars-python/src/lazyframe/visitor/nodes.rs",
+        "discussion_id": "2013917554",
+        "commented_code": "@@ -641,12 +641,59 @@ pub(crate) fn into_py(py: Python<'_>, plan: &IR) -> PyResult<PyObject> {\n             contexts: contexts.iter().map(|n| n.0).collect(),\n         }\n         .into_py_any(py),\n+        // Reference get_sink on how to deconstruct the payload\n         IR::Sink {\n             input: _,\n             payload: _,\n-        } => Err(PyNotImplementedError::new_err(\n-            \"Not expecting to see a Sink node\",\n-        )),\n+        } => Sink {\n+            input: input.0,\n+            payload: match payload {\n+                #[allow(unused_variables)]\n+                SinkTypeIR::File(FileSinkType {\n+                    path,\n+                    file_type,\n+                    sink_options: _,\n+                    cloud_options,\n+                }) => {\n+                    let path = path.as_ref().as_path();\n+                    match &file_type {\n+                        #[cfg(feature = \"parquet\")]\n+                        FileType::Parquet(options) => Box::new(ParquetSink::new(\n+                            path,\n+                            *options,\n+                            input_schema.as_ref(),\n+                            cloud_options.as_ref(),\n+                        )?)\n+                            as Box<dyn SinkTrait>,\n+                        #[cfg(feature = \"ipc\")]\n+                        FileType::Ipc(options) => Box::new(IpcSink::new(\n+                            path,\n+                            *options,\n+                            input_schema.as_ref(),\n+                            cloud_options.as_ref(),\n+                        )?) as Box<dyn SinkTrait>,\n+                        #[cfg(feature = \"csv\")]\n+                        FileType::Csv(options) => Box::new(CsvSink::new(\n+                            path,\n+                            options.clone(),\n+                            input_schema.as_ref(),\n+                            cloud_options.as_ref(),\n+                        )?) as Box<dyn SinkTrait>,\n+                        #[cfg(feature = \"json\")]\n+                        FileType::Json(options) => Box::new(JsonSink::new(\n+                            path,\n+                            *options,\n+                            input_schema.as_ref(),\n+                            cloud_options.as_ref(),\n+                        )?)\n+                            as Box<dyn SinkTrait>,\n+                        #[allow(unreachable_patterns)]\n+                        _ => unreachable!(),",
+        "comment_created_at": "2025-03-26T11:13:48+00:00",
+        "comment_author": "wence-",
+        "comment_body": "Perhaps we can just do the following to get all the relevant info, serialised as json (which means that if bits change we don't have to make too many matching updates here):\r\n\r\n```\r\n        IR::Sink { input, payload } => Sink {\r\n            input: input.0,\r\n            payload: serde_json::to_string(payload)\r\n                .map_err(|err| PyValueError::new_err(format!(\"{err:?}\")))?,\r\n        }\r\n        .into_py_any(py),\r\n```\r\nWDYT?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2036280388",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 20940,
+        "pr_file": "crates/polars-python/src/lazyframe/visitor/nodes.rs",
+        "discussion_id": "2013917554",
+        "commented_code": "@@ -641,12 +641,59 @@ pub(crate) fn into_py(py: Python<'_>, plan: &IR) -> PyResult<PyObject> {\n             contexts: contexts.iter().map(|n| n.0).collect(),\n         }\n         .into_py_any(py),\n+        // Reference get_sink on how to deconstruct the payload\n         IR::Sink {\n             input: _,\n             payload: _,\n-        } => Err(PyNotImplementedError::new_err(\n-            \"Not expecting to see a Sink node\",\n-        )),\n+        } => Sink {\n+            input: input.0,\n+            payload: match payload {\n+                #[allow(unused_variables)]\n+                SinkTypeIR::File(FileSinkType {\n+                    path,\n+                    file_type,\n+                    sink_options: _,\n+                    cloud_options,\n+                }) => {\n+                    let path = path.as_ref().as_path();\n+                    match &file_type {\n+                        #[cfg(feature = \"parquet\")]\n+                        FileType::Parquet(options) => Box::new(ParquetSink::new(\n+                            path,\n+                            *options,\n+                            input_schema.as_ref(),\n+                            cloud_options.as_ref(),\n+                        )?)\n+                            as Box<dyn SinkTrait>,\n+                        #[cfg(feature = \"ipc\")]\n+                        FileType::Ipc(options) => Box::new(IpcSink::new(\n+                            path,\n+                            *options,\n+                            input_schema.as_ref(),\n+                            cloud_options.as_ref(),\n+                        )?) as Box<dyn SinkTrait>,\n+                        #[cfg(feature = \"csv\")]\n+                        FileType::Csv(options) => Box::new(CsvSink::new(\n+                            path,\n+                            options.clone(),\n+                            input_schema.as_ref(),\n+                            cloud_options.as_ref(),\n+                        )?) as Box<dyn SinkTrait>,\n+                        #[cfg(feature = \"json\")]\n+                        FileType::Json(options) => Box::new(JsonSink::new(\n+                            path,\n+                            *options,\n+                            input_schema.as_ref(),\n+                            cloud_options.as_ref(),\n+                        )?)\n+                            as Box<dyn SinkTrait>,\n+                        #[allow(unreachable_patterns)]\n+                        _ => unreachable!(),",
+        "comment_created_at": "2025-04-09T23:39:49+00:00",
+        "comment_author": "mroeschke",
+        "comment_body": "Ah thanks! This works well - I see that is done for the IO readers as well.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2002929300",
+    "pr_number": 21839,
+    "pr_file": "crates/polars-stream/src/nodes/io_sources/multi_file_reader/reader_interface/builder.rs",
+    "created_at": "2025-03-19T09:57:24+00:00",
+    "commented_code": "+//! Interface for single-file readers\n+\n+use std::fmt::Debug;\n+use std::sync::Arc;\n+\n+use polars_io::cloud::CloudOptions;\n+use polars_plan::dsl::ScanSource;\n+\n+use super::FileReader;\n+\n+/// `FileReaderType` to avoid confusion with a `FileType` enum from polars-plan.\n+#[derive(Debug, Clone, PartialEq)]\n+pub enum FileReaderType {",
+    "repo_full_name": "pola-rs/polars",
+    "discussion_comments": [
+      {
+        "comment_id": "2002929300",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 21839,
+        "pr_file": "crates/polars-stream/src/nodes/io_sources/multi_file_reader/reader_interface/builder.rs",
+        "discussion_id": "2002929300",
+        "commented_code": "@@ -0,0 +1,37 @@\n+//! Interface for single-file readers\n+\n+use std::fmt::Debug;\n+use std::sync::Arc;\n+\n+use polars_io::cloud::CloudOptions;\n+use polars_plan::dsl::ScanSource;\n+\n+use super::FileReader;\n+\n+/// `FileReaderType` to avoid confusion with a `FileType` enum from polars-plan.\n+#[derive(Debug, Clone, PartialEq)]\n+pub enum FileReaderType {",
+        "comment_created_at": "2025-03-19T09:57:24+00:00",
+        "comment_author": "coastalwhite",
+        "comment_body": "This makes me a bit uncomfortable. Why do we need to know the exact File type? \r\nIf it is for the printing, it is fine, but it is maybe better to pass a string for unknown then.\r\n\r\nAny functionality that you might need to know the reader functionality for, (I believe) should be done via flags so that IO plugins or anonymous scans can also use those capabilities.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2002956442",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 21839,
+        "pr_file": "crates/polars-stream/src/nodes/io_sources/multi_file_reader/reader_interface/builder.rs",
+        "discussion_id": "2002929300",
+        "commented_code": "@@ -0,0 +1,37 @@\n+//! Interface for single-file readers\n+\n+use std::fmt::Debug;\n+use std::sync::Arc;\n+\n+use polars_io::cloud::CloudOptions;\n+use polars_plan::dsl::ScanSource;\n+\n+use super::FileReader;\n+\n+/// `FileReaderType` to avoid confusion with a `FileType` enum from polars-plan.\n+#[derive(Debug, Clone, PartialEq)]\n+pub enum FileReaderType {",
+        "comment_created_at": "2025-03-19T10:12:08+00:00",
+        "comment_author": "nameexhaustion",
+        "comment_body": "Ah\r\n\r\nI am currently having the caller decide which operations to push into the reader based on this. But I can maybe change it to make it so that the reader gets to decide what it takes. But probably in a follow-up PR.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2002959813",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 21839,
+        "pr_file": "crates/polars-stream/src/nodes/io_sources/multi_file_reader/reader_interface/builder.rs",
+        "discussion_id": "2002929300",
+        "commented_code": "@@ -0,0 +1,37 @@\n+//! Interface for single-file readers\n+\n+use std::fmt::Debug;\n+use std::sync::Arc;\n+\n+use polars_io::cloud::CloudOptions;\n+use polars_plan::dsl::ScanSource;\n+\n+use super::FileReader;\n+\n+/// `FileReaderType` to avoid confusion with a `FileType` enum from polars-plan.\n+#[derive(Debug, Clone, PartialEq)]\n+pub enum FileReaderType {",
+        "comment_created_at": "2025-03-19T10:14:14+00:00",
+        "comment_author": "coastalwhite",
+        "comment_body": "I think this is necessity, otherwise we cannot properly support IO plugins or anonymous scans.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1417858928",
+    "pr_number": 12750,
+    "pr_file": "crates/polars/src/docs/lazy.rs",
+    "created_at": "2023-12-06T19:04:06+00:00",
+    "commented_code": "//! use polars::prelude::*;\n //! # fn example() -> PolarsResult<()> {\n //!\n-//!  let df = LazyCsvReader::new(\"reddit.csv\")\n+//!  let df = LazyCsvReader::new()",
+    "repo_full_name": "pola-rs/polars",
+    "discussion_comments": [
+      {
+        "comment_id": "1417858928",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 12750,
+        "pr_file": "crates/polars/src/docs/lazy.rs",
+        "discussion_id": "1417858928",
+        "commented_code": "@@ -112,10 +112,10 @@\n //! use polars::prelude::*;\n //! # fn example() -> PolarsResult<()> {\n //!\n-//!  let df = LazyCsvReader::new(\"reddit.csv\")\n+//!  let df = LazyCsvReader::new()",
+        "comment_created_at": "2023-12-06T19:04:06+00:00",
+        "comment_author": "itamarst",
+        "comment_body": "This diff shows how the public API differs. By moving the path/paths/glob/etc to be loaded to the `load_*` methods (which consume the factory and finish the `LazyFrame` construction), there is no longer a requirement for weird internal state tracking as there was previously with path/paths.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,236 @@
+[
+  {
+    "discussion_id": "1757666188",
+    "pr_number": 25312,
+    "pr_file": "tsdb/store.go",
+    "created_at": "2024-09-12T22:28:36+00:00",
+    "commented_code": "})\n }\n \n-// filterShards returns a slice of shards where fn returns true\n+// filterShards takes in a list of functions and\n+// returns a slice of shards where fn returns true\n // for the shard. If the provided predicate is nil then all shards are returned.\n // filterShards should be called under a lock.\n-func (s *Store) filterShards(fn func(sh *Shard) bool) []*Shard {\n+func (s *Store) filterShards(fns []func(sh *Shard) bool) []*Shard {\n \tvar shards []*Shard\n-\tif fn == nil {\n+\n+\t// Early return if nil or 0 len\n+\tif len(fns) == 0 || fns == nil {\n \t\tshards = make([]*Shard, 0, len(s.shards))\n-\t\tfn = func(*Shard) bool { return true }\n-\t} else {\n-\t\tshards = make([]*Shard, 0)\n+\t\tfn := func(*Shard) bool { return true }\n+\n+\t\tfor _, sh := range s.shards {\n+\t\t\tif fn(sh) {\n+\t\t\t\tshards = append(shards, sh)\n+\t\t\t}\n+\t\t}\n+\n+\t\treturn shards\n \t}\n \n-\tfor _, sh := range s.shards {\n-\t\tif fn(sh) {\n-\t\t\tshards = append(shards, sh)\n+\tfor _, fn := range fns {",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1757666188",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1757666188",
+        "commented_code": "@@ -1124,23 +1124,42 @@ func (s *Store) DeleteMeasurement(database, name string) error {\n \t})\n }\n \n-// filterShards returns a slice of shards where fn returns true\n+// filterShards takes in a list of functions and\n+// returns a slice of shards where fn returns true\n // for the shard. If the provided predicate is nil then all shards are returned.\n // filterShards should be called under a lock.\n-func (s *Store) filterShards(fn func(sh *Shard) bool) []*Shard {\n+func (s *Store) filterShards(fns []func(sh *Shard) bool) []*Shard {\n \tvar shards []*Shard\n-\tif fn == nil {\n+\n+\t// Early return if nil or 0 len\n+\tif len(fns) == 0 || fns == nil {\n \t\tshards = make([]*Shard, 0, len(s.shards))\n-\t\tfn = func(*Shard) bool { return true }\n-\t} else {\n-\t\tshards = make([]*Shard, 0)\n+\t\tfn := func(*Shard) bool { return true }\n+\n+\t\tfor _, sh := range s.shards {\n+\t\t\tif fn(sh) {\n+\t\t\t\tshards = append(shards, sh)\n+\t\t\t}\n+\t\t}\n+\n+\t\treturn shards\n \t}\n \n-\tfor _, sh := range s.shards {\n-\t\tif fn(sh) {\n-\t\t\tshards = append(shards, sh)\n+\tfor _, fn := range fns {",
+        "comment_created_at": "2024-09-12T22:28:36+00:00",
+        "comment_author": "davidby-influx",
+        "comment_body": "This seems wrong. Is the goal to only return shards that every function returns true for, and to only return each shard once?\r\n\r\nYou are allocating the `shards` slice once per function. That means that you are only getting the shards which pass the last function in the function slice, correct?\r\n\r\nDo you want to instead, walk the shards in the outer loop, and the functions in the inner loop, and append a shard only if all functions return true for that shard?\r\n\r\nI'm thinking of something like this.  Am I misunderstanding your algorithm?\r\n\r\n```\r\nfor _, sh := range s.shards {\r\n        votes := 0\r\n\tfor _, fn := range fns {\r\n                if fn == nil || fn(sh) {\r\n                        votes++\r\n                }                      \r\n        }\r\n        if votes == len(fns) {\r\n                   shards = append(shards, sh)\r\n        }\r\n}\r\n```\r\n\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1759308837",
+    "pr_number": 25312,
+    "pr_file": "tsdb/store.go",
+    "created_at": "2024-09-13T18:32:07+00:00",
+    "commented_code": "// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1759308837",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T18:32:07+00:00",
+        "comment_author": "davidby-influx",
+        "comment_body": "I think it would be cleaner here to actually make a composed function that calls the first shardFilter function. That way we can change `byDatabase` to do more or less or different things.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759314112",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T18:38:08+00:00",
+        "comment_author": "davidby-influx",
+        "comment_body": "Something like this:\r\n\r\n```\r\nfunc ComposeFilter(original func(i int) bool, addition func(i int) bool) func(i int) bool {\r\n\r\n\treturn func(i int) bool { return original(i) && addition(i) }\r\n}\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759337389",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T18:58:41+00:00",
+        "comment_author": "devanbenz",
+        "comment_body": "I do like that suggestion, I think it looks really clean.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759346475",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T19:05:10+00:00",
+        "comment_author": "gwossum",
+        "comment_body": "`ComposeFilter` seems needlessly complicated, especially since it would get used one place.\r\n\r\nYou could just make use `byDatabase` in the new `shardFilter` definition:\r\n```go\r\nshardFilter := func(sh *Shard) bool { return byDatabase(sh) && sh.retentionPolicy == measurement.RetentionPolicy }\r\n```\r\n\r\nYou could then pull `sh.retentionPolicy == measurement.RetentionPolicy` into a `byRetentionPolicy` function if you wanted.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759347470",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T19:06:24+00:00",
+        "comment_author": "gwossum",
+        "comment_body": "I would probably change the name of `shardFilter` to something else because it is too similar to `filterShards`. My brain crossed them together the first time I read the code. Maybe change to `shardFilter` to `sf` or `filter`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759349623",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T19:08:49+00:00",
+        "comment_author": "gwossum",
+        "comment_body": "Question: What if `len(sources) >= 2`? Is this illegal and something we should return an error on? Or should be handle this properly?\r\n\r\nMy intuition is that this is illegal and should return an error.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759351432",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T19:10:43+00:00",
+        "comment_author": "davidby-influx",
+        "comment_body": "Do we allow wildcards in DELETEs?  That might produce lots of sources. I don't remember.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759387914",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T19:27:57+00:00",
+        "comment_author": "devanbenz",
+        "comment_body": "Let me check that out and see if I can make it so multiple sources get passed --- afaik in the influxQL pr I pass some regex operators `*` specifically for wildcard handling and that fails for the parser. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759395154",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T19:34:59+00:00",
+        "comment_author": "devanbenz",
+        "comment_body": "Okay so with a wildcard the query parser fails:\r\n```\r\n> delete from test*.\"average_temperature\" where time > '2019-08-16T00:06:00Z'\r\nERR: error parsing query: found *, expected ; at line 1, char 17\r\n```\r\n\r\nAnd if you wrap it in quotes it just treats it like a string so \"test*\" == test*",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759410659",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T19:47:22+00:00",
+        "comment_author": "devanbenz",
+        "comment_body": "Also I removed the compose filter fn.\r\n\r\n@gwossum unfortunately when attempting to do something like: \r\n\r\n```\r\n\t\t\t\tshardFilterFn = func(sh *Shard) bool {\r\n\t\t\t\t\treturn byDatabase(database) && byRetentionPolicy(measurement.RetentionPolicy)\r\n\t\t\t\t}\r\n```\r\n\r\nI'm getting and error that `Invalid operation: byDatabase(database) && byRetentionPolicy(measurement. RetentionPolicy) (the operator && is not defined on func(sh *Shard) bool)` \r\n\r\nI think I will leave it as is so that its relatively simple to read. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759416335",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T19:53:01+00:00",
+        "comment_author": "davidby-influx",
+        "comment_body": "We do support wildcards for measurements in DELETE.  Please verify the syntax to use, and add tests including them.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759416954",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T19:53:54+00:00",
+        "comment_author": "devanbenz",
+        "comment_body": "> We do support wildcards for measurements in DELETE. Please verify the syntax to use, and add tests including them.\r\n\r\nSounds good \ud83e\udee1 ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759437987",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T20:11:33+00:00",
+        "comment_author": "gwossum",
+        "comment_body": "@devanbenz You could do `byDatabase(database)(sh) && byRetentionPolicy(retention)(sh)`, but it's probably better to call `byDatabase()` and `byRetentionPolicy()` outside the lambda and assign them to variables, then use them inside the lambda. Or use @davidby-influx's `ComposeFilter` idea. Another way to do the compose filter would be something like:\r\n\r\n```go\r\nfunc ComposeFilters(fns ...func(sh *Shard) bool) func(sh *Shard) bool {\r\n   return func(sh *Shard) bool {\r\n        for _, f := range fns {\r\n            if !f(sh) {\r\n                return false\r\n            }\r\n        }\r\n        return true\r\n    }\r\n}\r\n\r\n....\r\n\r\n    shards := s.filterShards(ComposeFilters(byDatabase(db), byRetentionPolicy(rp)))\r\n````\r\n\r\nI find that way more readable, but that's personal preference.\r\n\r\nI'd also be tempted to add a `type ShardPredicate func(sh *Shard) bool` :grin: ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759468910",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T20:33:07+00:00",
+        "comment_author": "devanbenz",
+        "comment_body": "Ah yes! @gwossum this is similar to what I was *attempting* to go for with my earlier design of passing in multiple functions but much much more elegant \ud83d\ude4f ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1759480956",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25312,
+        "pr_file": "tsdb/store.go",
+        "discussion_id": "1759308837",
+        "commented_code": "@@ -1496,7 +1496,21 @@ func (s *Store) DeleteSeries(database string, sources []influxql.Source, conditi\n \t\t// No series file means nothing has been written to this DB and thus nothing to delete.\n \t\treturn nil\n \t}\n-\tshards := s.filterShards(byDatabase(database))\n+\n+\tshardFilter := byDatabase(database)\n+\tif len(sources) != 0 {\n+\t\tif measurement, ok := sources[0].(*influxql.Measurement); ok {\n+\t\t\tif measurement.RetentionPolicy != \"\" {\n+\t\t\t\tshardFilter = func(sh *Shard) bool {",
+        "comment_created_at": "2024-09-13T20:41:12+00:00",
+        "comment_author": "devanbenz",
+        "comment_body": "Okay modifications have been made -- testing of wildcards as well as adding the composable function for shard filtering + I refactored other areas that is calling the function to include the composition fn",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1689165588",
+    "pr_number": 25047,
+    "pr_file": "cmd/influx_inspect/export/parquet/table/table.go",
+    "created_at": "2024-07-24T05:38:46+00:00",
+    "commented_code": "+package table\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"math\"\n+\t\"slices\"\n+\t\"sort\"\n+\t\"strings\"\n+\t\"sync/atomic\"\n+\n+\t\"github.com/apache/arrow/go/v16/arrow\"\n+\t\"github.com/apache/arrow/go/v16/arrow/array\"\n+\t\"github.com/apache/arrow/go/v16/arrow/memory\"\n+\t\"github.com/influxdata/influxdb/cmd/influx_inspect/export/parquet/index\"\n+\t\"github.com/influxdata/influxdb/cmd/influx_inspect/export/parquet/models\"\n+\t\"github.com/influxdata/influxdb/cmd/influx_inspect/export/parquet/resultset\"\n+\t\"go.uber.org/multierr\"\n+\t\"golang.org/x/exp/maps\"\n+)\n+\n+// ReadStatistics tracks statistics after each call to Table.Next.\n+type ReadStatistics struct {\n+\t// RowCount is the total number of rows read.\n+\tRowCount int64\n+\t// SeriesCount is the total number of series read.\n+\tSeriesCount int64\n+}\n+\n+type Table struct {\n+\tmem *trackedAllocator\n+\trs  resultset.ResultSet\n+\terr error\n+\t// columns is the list of Columns defined by the schema.\n+\tcolumns []Column\n+\t// lastGroupKey\n+\tlastGroupKey models.Escaped\n+\t// timestamps is the builder for the timestamp columns\n+\ttimestamps timestampColumn\n+\t// tags are the builders for the tag columns. The slice is sorted by tagColumn.name.\n+\ttags []tagColumn\n+\t// fields are the builders for the fields. The slice is sorted by FieldBuilder.Name.\n+\tfields []FieldBuilder\n+\t// cursor holds the cursor for the next group key\n+\tcursor resultset.SeriesCursor\n+\t// limit controls the amount of data read for each call to Next.\n+\tlimit ResourceLimit\n+\t// buf contains various scratch buffers\n+\tbuf struct {\n+\t\ttags         models.Tags\n+\t\tarrays       []arrow.Array\n+\t\tfieldCursors []fieldCursor\n+\t}\n+\tstats ReadStatistics\n+\t// loadNextGroupKey is true if the last group key has been fully read.\n+\tloadNextGroupKey bool\n+\t// done is true when the result set has been fully read or an error has occurred.\n+\tdone bool\n+}\n+\n+type options struct {\n+\tlimit       ResourceLimit\n+\tconcurrency int\n+}\n+\n+// OptionFn defines the function signature for options to configure a new Table.\n+type OptionFn func(*options)\n+\n+// WithResourceLimit sets the resource limit for the Table when calling Table.Next.\n+func WithResourceLimit(limit ResourceLimit) OptionFn {\n+\treturn func(o *options) {\n+\t\to.limit = limit\n+\t}\n+}\n+\n+// WithConcurrency sets the number of goroutines to use when reading the result set.\n+func WithConcurrency(concurrency int) OptionFn {\n+\treturn func(o *options) {\n+\t\to.concurrency = concurrency\n+\t}\n+}\n+\n+// New returns a new Table for the specified resultset.ResultSet.\n+func New(rs resultset.ResultSet, schema *index.MeasurementSchema, opts ...OptionFn) (*Table, error) {\n+\to := options{limit: ResourceLimitGroups(1)}\n+\tfor _, opt := range opts {\n+\t\topt(&o)\n+\t}\n+\tmem := &trackedAllocator{mem: memory.GoAllocator{}}\n+\n+\ttagNames := maps.Keys(schema.TagSet)\n+\tslices.Sort(tagNames)\n+\n+\tvar tags []tagColumn\n+\tfor _, name := range tagNames {\n+\t\ttags = append(tags, tagColumn{name: name, b: array.NewStringBuilder(mem)})\n+\t}\n+\n+\tfieldTypes := maps.Keys(schema.FieldSet)\n+\n+\t// check for fields conflicts\n+\tseenFields := map[string]struct{}{}\n+\tfor i := range fieldTypes {\n+\t\tf := &fieldTypes[i]\n+\t\tif _, ok := seenFields[f.Name]; ok {\n+\t\t\treturn nil, fmt.Errorf(\"field conflict: field %s has multiple data types\", f.Name)\n+\t\t}\n+\t}\n+\n+\t// fields are sorted in lexicographically ascending order\n+\tslices.SortFunc(fieldTypes, func(a, b index.MeasurementField) int { return strings.Compare(a.Name, b.Name) })\n+\n+\tvar fields []FieldBuilder\n+\tfor i := range fieldTypes {\n+\t\tf := &fieldTypes[i]\n+\t\tfields = append(fields, newField(mem, f.Name, f.Type))\n+\t}\n+\n+\tcolumnCount := 1 + // timestamp column\n+\t\tlen(tags) + len(fields)\n+\n+\tres := &Table{\n+\t\tmem:        mem,\n+\t\trs:         rs,\n+\t\tcolumns:    make([]Column, 0, columnCount),\n+\t\ttimestamps: timestampColumn{b: array.NewTimestampBuilder(mem, &arrow.TimestampType{Unit: arrow.Nanosecond})},\n+\t\ttags:       tags,\n+\t\tfields:     fields,\n+\t\tlimit:      o.limit,\n+\t\tbuf: struct {\n+\t\t\ttags         models.Tags\n+\t\t\tarrays       []arrow.Array\n+\t\t\tfieldCursors []fieldCursor\n+\t\t}{\n+\t\t\tarrays:       make([]arrow.Array, columnCount),\n+\t\t\tfieldCursors: make([]fieldCursor, len(fields)),\n+\t\t},\n+\t\tloadNextGroupKey: true,\n+\t}\n+\n+\tres.columns = append(res.columns, &res.timestamps)\n+\tfor i := range tags {\n+\t\tres.columns = append(res.columns, &tags[i])\n+\t}\n+\tfor _, f := range fields {\n+\t\tres.columns = append(res.columns, f)\n+\t}\n+\n+\treturn res, nil\n+}\n+\n+// Columns returns the list of columns for the table.\n+// Inspecting the Column.SemanticType will indicate the semantic types.\n+//\n+// The first element is always the SemanticTypeTimestamp column.\n+// The next 0-n are SemanticTypeTag, and the remaining are SemanticTypeField.\n+func (t *Table) Columns() []Column { return t.columns }\n+\n+// Err returns the last recorded error for the receiver.\n+func (t *Table) Err() error { return t.err }\n+\n+func (t *Table) findField(name []byte) (field FieldBuilder) {\n+\tslices.BinarySearchFunc(t.fields, name, func(c FieldBuilder, bytes []byte) int {\n+\t\tif c.Name() < string(bytes) {\n+\t\t\treturn -1\n+\t\t} else if c.Name() > string(bytes) {\n+\t\t\treturn 1\n+\t\t} else {\n+\t\t\tfield = c\n+\t\t\treturn 0\n+\t\t}\n+\t})\n+\n+\treturn\n+}\n+\n+func (t *Table) loadNextKey(ctx context.Context) models.Escaped {\n+\tvar next resultset.SeriesCursor\n+\tif t.cursor != nil {\n+\t\tnext = t.cursor\n+\t\tt.cursor = nil\n+\t} else {\n+\t\tnext = t.rs.Next(ctx)\n+\t}\n+\n+\tif next == nil {\n+\t\tt.rs.Close()\n+\t\tt.err = t.rs.Err()\n+\t\tt.done = true\n+\t\treturn models.Escaped{}\n+\t}\n+\n+\tgroupKey, fieldEsc, _ := models.SeriesAndField(next.SeriesKey())\n+\tfield := models.UnescapeToken(fieldEsc)\n+\tfieldCursors := t.buf.fieldCursors[:0]\n+\tif f := t.findField(field); f != nil {\n+\t\tfieldCursors = append(fieldCursors, fieldCursor{\n+\t\t\tfield:  f,\n+\t\t\tcursor: next,\n+\t\t})\n+\t}\n+\n+\t// find remaining fields for the current group key,\n+\tfor {\n+\t\tcur := t.rs.Next(ctx)\n+\t\tif cur == nil {\n+\t\t\tbreak\n+\t\t}\n+\n+\t\tnextGroup, fieldEsc, _ := models.SeriesAndField(cur.SeriesKey())\n+\t\tif string(groupKey.B) != string(nextGroup.B) {\n+\t\t\t// save this cursor, which is the next group key\n+\t\t\tt.cursor = cur\n+\t\t\tbreak\n+\t\t}\n+\n+\t\tfield := models.UnescapeToken(fieldEsc)\n+\t\tif f := t.findField(field); f != nil {\n+\t\t\tfieldCursors = append(fieldCursors, fieldCursor{\n+\t\t\t\tfield:  f,\n+\t\t\t\tcursor: cur,\n+\t\t\t})\n+\t\t}\n+\t}\n+\n+\tfor i := 0; i < len(fieldCursors); i++ {\n+\t\t// copy the fieldCursor\n+\t\tfc := fieldCursors[i]\n+\t\t// and ensure the fields of the struct are set to nil, so they can be garbage collected\n+\t\tfieldCursors[i] = fieldCursor{}\n+\t\tif err := fc.field.SetCursor(fc.cursor); err != nil {\n+\t\t\tt.err = err\n+\t\t\treturn models.Escaped{}\n+\t\t}\n+\t}\n+\n+\treturn groupKey\n+}\n+\n+// Stats returns the read statistics for the table, accumulated after\n+// each call to Next.\n+// It is safe to call Stats concurrently.\n+func (t *Table) Stats() ReadStatistics {\n+\tvar stats ReadStatistics\n+\tstats.RowCount = atomic.LoadInt64(&t.stats.RowCount)\n+\tstats.SeriesCount = atomic.LoadInt64(&t.stats.SeriesCount)\n+\treturn stats\n+}\n+\n+// ReadInfo contains additional information about the batch of data returned by Table.Next.\n+type ReadInfo struct {\n+\t// FirstGroupKey is the first group key read by the batch.\n+\tFirstGroupKey models.Escaped\n+\t// LastGroupKey is the last group key read by the batch.\n+\tLastGroupKey models.Escaped\n+}\n+\n+// Next returns the next batch of data and information about the batch.\n+func (t *Table) Next(ctx context.Context) (columns []arrow.Array, readInfo ReadInfo) {\n+\tif t.done {\n+\t\treturn\n+\t}\n+\n+\tbaseAllocated := t.mem.CurrentAlloc()\n+\n+\tvar s resourceUsage\n+\tdefer func() {\n+\t\tatomic.AddInt64(&t.stats.RowCount, int64(s.rowCount))\n+\t\treadInfo.LastGroupKey = t.lastGroupKey\n+\t}()\n+\n+\tfor t.limit.isBelow(&s) {\n+\t\tvar groupKey models.Escaped\n+\t\tif t.loadNextGroupKey {\n+\t\t\tgroupKey = t.loadNextKey(ctx)\n+\t\t\tif len(groupKey.B) == 0 {\n+\t\t\t\t// signals the end of the result set\n+\t\t\t\tif s.rowCount > 0 {\n+\t\t\t\t\t// return the remaining buffered data\n+\t\t\t\t\tbreak\n+\t\t\t\t}\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tatomic.AddInt64(&t.stats.SeriesCount, 1)\n+\t\t\tt.lastGroupKey = groupKey\n+\t\t\tt.loadNextGroupKey = false\n+\t\t} else {\n+\t\t\t// continue reading current group key\n+\t\t\tgroupKey = t.lastGroupKey\n+\t\t}\n+\n+\t\tif len(readInfo.FirstGroupKey.B) == 0 {\n+\t\t\treadInfo.FirstGroupKey = groupKey\n+\t\t}\n+\n+\t\tbaseRowCount := s.rowCount\n+\t\t// this loop reads the data for the current group key.\n+\t\tfor t.limit.isBelow(&s) {\n+\t\t\t// find the next minimum timestamp from all the fields\n+\t\t\tvar minTs int64 = math.MaxInt64\n+\t\t\tfor _, col := range t.fields {\n+\t\t\t\tif v, ok := col.PeekTimestamp(); ok && v < minTs {\n+\t\t\t\t\tminTs = v\n+\t\t\t\t}\n+\t\t\t}\n+\n+\t\t\tif minTs == math.MaxInt64 {\n+\t\t\t\tt.loadNextGroupKey = true\n+\t\t\t\tbreak\n+\t\t\t}\n+\n+\t\t\tt.timestamps.b.Append(arrow.Timestamp(minTs))\n+\n+\t\t\tfor _, col := range t.fields {\n+\t\t\t\tcol.Append(minTs)\n+\t\t\t}\n+\t\t\ts.rowCount++\n+\t\t\ts.allocated = uint(t.mem.CurrentAlloc() - baseAllocated)\n+\t\t}\n+\n+\t\ts.groupCount++\n+\n+\t\tif t.loadNextGroupKey {\n+\t\t\t// Reset the fields for the next group key\n+\t\t\tfor _, col := range t.fields {\n+\t\t\t\tcol.Reset()\n+\t\t\t\tt.err = multierr.Append(t.err, col.Err())\n+\t\t\t}\n+\t\t\tif t.err != nil {\n+\t\t\t\tt.done = true\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t}\n+\n+\t\tgroupRowCount := int(s.rowCount - baseRowCount)\n+\n+\t\t_, t.buf.tags = models.ParseKeyBytesWithTags(groupKey, t.buf.tags)\n+\t\ttagSet := t.buf.tags[1:] // skip measurement, which is always the first tag key (\\x00)",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1689165588",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25047,
+        "pr_file": "cmd/influx_inspect/export/parquet/table/table.go",
+        "discussion_id": "1689165588",
+        "commented_code": "@@ -0,0 +1,379 @@\n+package table\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"math\"\n+\t\"slices\"\n+\t\"sort\"\n+\t\"strings\"\n+\t\"sync/atomic\"\n+\n+\t\"github.com/apache/arrow/go/v16/arrow\"\n+\t\"github.com/apache/arrow/go/v16/arrow/array\"\n+\t\"github.com/apache/arrow/go/v16/arrow/memory\"\n+\t\"github.com/influxdata/influxdb/cmd/influx_inspect/export/parquet/index\"\n+\t\"github.com/influxdata/influxdb/cmd/influx_inspect/export/parquet/models\"\n+\t\"github.com/influxdata/influxdb/cmd/influx_inspect/export/parquet/resultset\"\n+\t\"go.uber.org/multierr\"\n+\t\"golang.org/x/exp/maps\"\n+)\n+\n+// ReadStatistics tracks statistics after each call to Table.Next.\n+type ReadStatistics struct {\n+\t// RowCount is the total number of rows read.\n+\tRowCount int64\n+\t// SeriesCount is the total number of series read.\n+\tSeriesCount int64\n+}\n+\n+type Table struct {\n+\tmem *trackedAllocator\n+\trs  resultset.ResultSet\n+\terr error\n+\t// columns is the list of Columns defined by the schema.\n+\tcolumns []Column\n+\t// lastGroupKey\n+\tlastGroupKey models.Escaped\n+\t// timestamps is the builder for the timestamp columns\n+\ttimestamps timestampColumn\n+\t// tags are the builders for the tag columns. The slice is sorted by tagColumn.name.\n+\ttags []tagColumn\n+\t// fields are the builders for the fields. The slice is sorted by FieldBuilder.Name.\n+\tfields []FieldBuilder\n+\t// cursor holds the cursor for the next group key\n+\tcursor resultset.SeriesCursor\n+\t// limit controls the amount of data read for each call to Next.\n+\tlimit ResourceLimit\n+\t// buf contains various scratch buffers\n+\tbuf struct {\n+\t\ttags         models.Tags\n+\t\tarrays       []arrow.Array\n+\t\tfieldCursors []fieldCursor\n+\t}\n+\tstats ReadStatistics\n+\t// loadNextGroupKey is true if the last group key has been fully read.\n+\tloadNextGroupKey bool\n+\t// done is true when the result set has been fully read or an error has occurred.\n+\tdone bool\n+}\n+\n+type options struct {\n+\tlimit       ResourceLimit\n+\tconcurrency int\n+}\n+\n+// OptionFn defines the function signature for options to configure a new Table.\n+type OptionFn func(*options)\n+\n+// WithResourceLimit sets the resource limit for the Table when calling Table.Next.\n+func WithResourceLimit(limit ResourceLimit) OptionFn {\n+\treturn func(o *options) {\n+\t\to.limit = limit\n+\t}\n+}\n+\n+// WithConcurrency sets the number of goroutines to use when reading the result set.\n+func WithConcurrency(concurrency int) OptionFn {\n+\treturn func(o *options) {\n+\t\to.concurrency = concurrency\n+\t}\n+}\n+\n+// New returns a new Table for the specified resultset.ResultSet.\n+func New(rs resultset.ResultSet, schema *index.MeasurementSchema, opts ...OptionFn) (*Table, error) {\n+\to := options{limit: ResourceLimitGroups(1)}\n+\tfor _, opt := range opts {\n+\t\topt(&o)\n+\t}\n+\tmem := &trackedAllocator{mem: memory.GoAllocator{}}\n+\n+\ttagNames := maps.Keys(schema.TagSet)\n+\tslices.Sort(tagNames)\n+\n+\tvar tags []tagColumn\n+\tfor _, name := range tagNames {\n+\t\ttags = append(tags, tagColumn{name: name, b: array.NewStringBuilder(mem)})\n+\t}\n+\n+\tfieldTypes := maps.Keys(schema.FieldSet)\n+\n+\t// check for fields conflicts\n+\tseenFields := map[string]struct{}{}\n+\tfor i := range fieldTypes {\n+\t\tf := &fieldTypes[i]\n+\t\tif _, ok := seenFields[f.Name]; ok {\n+\t\t\treturn nil, fmt.Errorf(\"field conflict: field %s has multiple data types\", f.Name)\n+\t\t}\n+\t}\n+\n+\t// fields are sorted in lexicographically ascending order\n+\tslices.SortFunc(fieldTypes, func(a, b index.MeasurementField) int { return strings.Compare(a.Name, b.Name) })\n+\n+\tvar fields []FieldBuilder\n+\tfor i := range fieldTypes {\n+\t\tf := &fieldTypes[i]\n+\t\tfields = append(fields, newField(mem, f.Name, f.Type))\n+\t}\n+\n+\tcolumnCount := 1 + // timestamp column\n+\t\tlen(tags) + len(fields)\n+\n+\tres := &Table{\n+\t\tmem:        mem,\n+\t\trs:         rs,\n+\t\tcolumns:    make([]Column, 0, columnCount),\n+\t\ttimestamps: timestampColumn{b: array.NewTimestampBuilder(mem, &arrow.TimestampType{Unit: arrow.Nanosecond})},\n+\t\ttags:       tags,\n+\t\tfields:     fields,\n+\t\tlimit:      o.limit,\n+\t\tbuf: struct {\n+\t\t\ttags         models.Tags\n+\t\t\tarrays       []arrow.Array\n+\t\t\tfieldCursors []fieldCursor\n+\t\t}{\n+\t\t\tarrays:       make([]arrow.Array, columnCount),\n+\t\t\tfieldCursors: make([]fieldCursor, len(fields)),\n+\t\t},\n+\t\tloadNextGroupKey: true,\n+\t}\n+\n+\tres.columns = append(res.columns, &res.timestamps)\n+\tfor i := range tags {\n+\t\tres.columns = append(res.columns, &tags[i])\n+\t}\n+\tfor _, f := range fields {\n+\t\tres.columns = append(res.columns, f)\n+\t}\n+\n+\treturn res, nil\n+}\n+\n+// Columns returns the list of columns for the table.\n+// Inspecting the Column.SemanticType will indicate the semantic types.\n+//\n+// The first element is always the SemanticTypeTimestamp column.\n+// The next 0-n are SemanticTypeTag, and the remaining are SemanticTypeField.\n+func (t *Table) Columns() []Column { return t.columns }\n+\n+// Err returns the last recorded error for the receiver.\n+func (t *Table) Err() error { return t.err }\n+\n+func (t *Table) findField(name []byte) (field FieldBuilder) {\n+\tslices.BinarySearchFunc(t.fields, name, func(c FieldBuilder, bytes []byte) int {\n+\t\tif c.Name() < string(bytes) {\n+\t\t\treturn -1\n+\t\t} else if c.Name() > string(bytes) {\n+\t\t\treturn 1\n+\t\t} else {\n+\t\t\tfield = c\n+\t\t\treturn 0\n+\t\t}\n+\t})\n+\n+\treturn\n+}\n+\n+func (t *Table) loadNextKey(ctx context.Context) models.Escaped {\n+\tvar next resultset.SeriesCursor\n+\tif t.cursor != nil {\n+\t\tnext = t.cursor\n+\t\tt.cursor = nil\n+\t} else {\n+\t\tnext = t.rs.Next(ctx)\n+\t}\n+\n+\tif next == nil {\n+\t\tt.rs.Close()\n+\t\tt.err = t.rs.Err()\n+\t\tt.done = true\n+\t\treturn models.Escaped{}\n+\t}\n+\n+\tgroupKey, fieldEsc, _ := models.SeriesAndField(next.SeriesKey())\n+\tfield := models.UnescapeToken(fieldEsc)\n+\tfieldCursors := t.buf.fieldCursors[:0]\n+\tif f := t.findField(field); f != nil {\n+\t\tfieldCursors = append(fieldCursors, fieldCursor{\n+\t\t\tfield:  f,\n+\t\t\tcursor: next,\n+\t\t})\n+\t}\n+\n+\t// find remaining fields for the current group key,\n+\tfor {\n+\t\tcur := t.rs.Next(ctx)\n+\t\tif cur == nil {\n+\t\t\tbreak\n+\t\t}\n+\n+\t\tnextGroup, fieldEsc, _ := models.SeriesAndField(cur.SeriesKey())\n+\t\tif string(groupKey.B) != string(nextGroup.B) {\n+\t\t\t// save this cursor, which is the next group key\n+\t\t\tt.cursor = cur\n+\t\t\tbreak\n+\t\t}\n+\n+\t\tfield := models.UnescapeToken(fieldEsc)\n+\t\tif f := t.findField(field); f != nil {\n+\t\t\tfieldCursors = append(fieldCursors, fieldCursor{\n+\t\t\t\tfield:  f,\n+\t\t\t\tcursor: cur,\n+\t\t\t})\n+\t\t}\n+\t}\n+\n+\tfor i := 0; i < len(fieldCursors); i++ {\n+\t\t// copy the fieldCursor\n+\t\tfc := fieldCursors[i]\n+\t\t// and ensure the fields of the struct are set to nil, so they can be garbage collected\n+\t\tfieldCursors[i] = fieldCursor{}\n+\t\tif err := fc.field.SetCursor(fc.cursor); err != nil {\n+\t\t\tt.err = err\n+\t\t\treturn models.Escaped{}\n+\t\t}\n+\t}\n+\n+\treturn groupKey\n+}\n+\n+// Stats returns the read statistics for the table, accumulated after\n+// each call to Next.\n+// It is safe to call Stats concurrently.\n+func (t *Table) Stats() ReadStatistics {\n+\tvar stats ReadStatistics\n+\tstats.RowCount = atomic.LoadInt64(&t.stats.RowCount)\n+\tstats.SeriesCount = atomic.LoadInt64(&t.stats.SeriesCount)\n+\treturn stats\n+}\n+\n+// ReadInfo contains additional information about the batch of data returned by Table.Next.\n+type ReadInfo struct {\n+\t// FirstGroupKey is the first group key read by the batch.\n+\tFirstGroupKey models.Escaped\n+\t// LastGroupKey is the last group key read by the batch.\n+\tLastGroupKey models.Escaped\n+}\n+\n+// Next returns the next batch of data and information about the batch.\n+func (t *Table) Next(ctx context.Context) (columns []arrow.Array, readInfo ReadInfo) {\n+\tif t.done {\n+\t\treturn\n+\t}\n+\n+\tbaseAllocated := t.mem.CurrentAlloc()\n+\n+\tvar s resourceUsage\n+\tdefer func() {\n+\t\tatomic.AddInt64(&t.stats.RowCount, int64(s.rowCount))\n+\t\treadInfo.LastGroupKey = t.lastGroupKey\n+\t}()\n+\n+\tfor t.limit.isBelow(&s) {\n+\t\tvar groupKey models.Escaped\n+\t\tif t.loadNextGroupKey {\n+\t\t\tgroupKey = t.loadNextKey(ctx)\n+\t\t\tif len(groupKey.B) == 0 {\n+\t\t\t\t// signals the end of the result set\n+\t\t\t\tif s.rowCount > 0 {\n+\t\t\t\t\t// return the remaining buffered data\n+\t\t\t\t\tbreak\n+\t\t\t\t}\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tatomic.AddInt64(&t.stats.SeriesCount, 1)\n+\t\t\tt.lastGroupKey = groupKey\n+\t\t\tt.loadNextGroupKey = false\n+\t\t} else {\n+\t\t\t// continue reading current group key\n+\t\t\tgroupKey = t.lastGroupKey\n+\t\t}\n+\n+\t\tif len(readInfo.FirstGroupKey.B) == 0 {\n+\t\t\treadInfo.FirstGroupKey = groupKey\n+\t\t}\n+\n+\t\tbaseRowCount := s.rowCount\n+\t\t// this loop reads the data for the current group key.\n+\t\tfor t.limit.isBelow(&s) {\n+\t\t\t// find the next minimum timestamp from all the fields\n+\t\t\tvar minTs int64 = math.MaxInt64\n+\t\t\tfor _, col := range t.fields {\n+\t\t\t\tif v, ok := col.PeekTimestamp(); ok && v < minTs {\n+\t\t\t\t\tminTs = v\n+\t\t\t\t}\n+\t\t\t}\n+\n+\t\t\tif minTs == math.MaxInt64 {\n+\t\t\t\tt.loadNextGroupKey = true\n+\t\t\t\tbreak\n+\t\t\t}\n+\n+\t\t\tt.timestamps.b.Append(arrow.Timestamp(minTs))\n+\n+\t\t\tfor _, col := range t.fields {\n+\t\t\t\tcol.Append(minTs)\n+\t\t\t}\n+\t\t\ts.rowCount++\n+\t\t\ts.allocated = uint(t.mem.CurrentAlloc() - baseAllocated)\n+\t\t}\n+\n+\t\ts.groupCount++\n+\n+\t\tif t.loadNextGroupKey {\n+\t\t\t// Reset the fields for the next group key\n+\t\t\tfor _, col := range t.fields {\n+\t\t\t\tcol.Reset()\n+\t\t\t\tt.err = multierr.Append(t.err, col.Err())\n+\t\t\t}\n+\t\t\tif t.err != nil {\n+\t\t\t\tt.done = true\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t}\n+\n+\t\tgroupRowCount := int(s.rowCount - baseRowCount)\n+\n+\t\t_, t.buf.tags = models.ParseKeyBytesWithTags(groupKey, t.buf.tags)\n+\t\ttagSet := t.buf.tags[1:] // skip measurement, which is always the first tag key (\\x00)",
+        "comment_created_at": "2024-07-24T05:38:46+00:00",
+        "comment_author": "stuartcarnie",
+        "comment_body": "This results in the first tag key column dropping all its data, as this code assumes a V2 series key, which it is not.\r\n\r\nFor example, using the following data:\r\n\r\n```\r\n> drop measurement cols\r\n> insert cols,tag0=tag0_0,tag1=tag1_0 fieldF=3.2\r\n> insert cols,tag0=tag0_0,tag1=tag1_1 fieldF=1.2\r\n> insert cols,tag0=tag0_1,tag1=tag1_0 fieldF=1.3\r\n> insert cols,tag0=tag0_2,tag1=tag1_1 fieldF=1.3\r\n> insert cols,tag0=tag0_2,tag1=tag1_2 fieldF=4.3\r\n```\r\n\r\nThe exported parquet is missing all data for column `tag0`:\r\n\r\n```sh\r\nduckdb -column -s \"from 'parquet/*.parquet' select *\"\r\n```\r\n```\r\ntime                        tag0  tag1    fieldF\r\n--------------------------  ----  ------  ------\r\n2024-07-24 06:04:38.273453        tag1_2  4.3\r\n2024-07-24 06:04:07.819015        tag1_0  3.2\r\n2024-07-24 06:04:13.952354        tag1_1  1.2\r\n2024-07-24 06:04:21.444498        tag1_0  1.3\r\n2024-07-24 06:04:34.224291        tag1_1  1.3\r\n```\r\n\r\n----\r\n\r\nAs noted earlier, given this code comes from V2, it assumes it was parsed from a V2 TSM series keys. Structurally, the series keys are the same, taking the form:\r\n\r\n```\r\n<measurement>[,tag0=val,...]#!~#fieldkey\r\n```\r\n\r\nSemantically, they are different, as V2 series keys are always:\r\n\r\n```\r\norgid+bucketid,\\x00=<measurement>[,tag0=val,...]\\xff=<fieldkey>#!~#fieldkey\r\n```\r\n\r\n> [!NOTE]\r\n>\r\n> Both are ordered the same when stored in a TSM file.\r\n\r\n----\r\n\r\nOne approach for situations like this, is to introduce new types to encapsulate what type of TSM series key is represented by the `[]byte`. For example the following struct:\r\n\r\n```go\r\ntype SeriesKeyV1 struct {\r\n    B []byte\r\n}\r\n```\r\n\r\nis a series key read from disk in InfluxDB v1.x, and may look like the following:\r\n\r\n```\r\nmy_measurement,mytag=val#!~#field_key\r\n```\r\n\r\nWhereas:\r\n\r\n```go\r\ntype SeriesKeyV2 struct {\r\n    B []byte\r\n}\r\n```\r\n\r\nis a V2 style series key. Given there is no org / bucket ID in InfluxDB 1.x, a default measurement name could be assigned, such as `NULL`:\r\n\r\n```\r\nNULL,\\x00=my_measurement,mytag=val\\xff=field_key#!~#field_key\r\n```\r\n\r\nWhen these keys are passed around, they should never be passed as a raw `[]byte`, but rather in their container `struct`.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

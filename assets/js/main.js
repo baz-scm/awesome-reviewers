@@ -36,7 +36,7 @@ form && form.addEventListener('submit', async e => {
     let res;
     try {
       res = await fetch(
-        `https://awesome.baz.ninja/request?repo_name=${repo}`,
+        `https://awesome.baz.co/request?repo_name=${repo}`,
         {
           method: 'POST',
           headers: {

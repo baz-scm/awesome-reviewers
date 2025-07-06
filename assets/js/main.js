@@ -48,7 +48,7 @@ form && form.addEventListener('submit', async e => {
       if (!res.ok && res.status !== 409) throw new Error(res.statusText);
     } catch (postErr) {
       res = await fetch(
-        `https://awesome.baz.ninja/request?repo_name=${repo}`
+        `https://awesome.baz.co/request?repo_name=${repo}`
       );
       if (!res.ok && res.status !== 409) throw new Error(res.statusText);
     }

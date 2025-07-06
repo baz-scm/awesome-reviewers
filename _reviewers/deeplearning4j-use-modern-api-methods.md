@@ -14,6 +14,7 @@ When implementing algorithms with numerical libraries like ND4J, always prefer t
 
 Key practices:
 1. Use `createFromArray` instead of `create` for array initialization, as it has clear overloads for all primitive types:
+{% raw %}
 ```java
 // Preferred:
 double arr_2d[][] = {{1.0,2.0,3.0},{4.0,5.0,6.0}};
@@ -24,6 +25,7 @@ double[] flat = ArrayUtil.flattenDoubleArray(myDoubleArray);
 int[] shape = {rows, cols};
 INDArray myArr = Nd4j.create(flat, shape, 'c');
 ```
+{% endraw %}
 
 2. Prefer direct parameter methods over shape arrays for common operations:
 ```java

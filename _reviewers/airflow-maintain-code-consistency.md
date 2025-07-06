@@ -17,6 +17,7 @@ Ensure consistency throughout the codebase by following established patterns for
 
 1. Use semantic color names and variables rather than hardcoded values to maintain theme consistency and facilitate future changes:
 
+{% raw %}
 ```tsx
 // Bad
 <Button _hover={{ bg: "gray.800" }} bg="black" color="white" />
@@ -24,6 +25,7 @@ Ensure consistency throughout the codebase by following established patterns for
 // Good
 <Button _hover={{ bg: "bg.emphasized" }} bg="bg.panel" color="fg.default" />
 ```
+{% endraw %}
 
 2. Reuse existing UI components and patterns when introducing similar functionality. For example, use the same icon sets across related features to provide visual consistency:
 

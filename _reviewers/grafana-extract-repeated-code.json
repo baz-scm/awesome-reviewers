@@ -1,0 +1,224 @@
+[
+  {
+    "discussion_id": "2177573716",
+    "pr_number": 107305,
+    "pr_file": "pkg/storage/unified/resource/storage_backend_test.go",
+    "created_at": "2025-07-01T13:13:20+00:00",
+    "commented_code": "+package resource\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"io\"\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+\t\"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured\"\n+\n+\t\"github.com/grafana/grafana/pkg/apimachinery/utils\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/resourcepb\"\n+)\n+\n+func setupTestStorageBackend(t *testing.T) *kvStorageBackend {\n+\tkv := setupTestKV(t)\n+\treturn NewkvStorageBackend(kv)\n+}\n+\n+func TestNewkvStorageBackend(t *testing.T) {\n+\tbackend := setupTestStorageBackend(t)\n+\n+\tassert.NotNil(t, backend)\n+\tassert.NotNil(t, backend.kv)\n+\tassert.NotNil(t, backend.dataStore)\n+\tassert.NotNil(t, backend.metaStore)\n+\tassert.NotNil(t, backend.eventStore)\n+\tassert.NotNil(t, backend.notifier)\n+\tassert.NotNil(t, backend.snowflake)\n+}\n+\n+func TestKvStorageBackend_WriteEvent_Success(t *testing.T) {\n+\tbackend := setupTestStorageBackend(t)\n+\tctx := context.Background()\n+\n+\ttests := []struct {\n+\t\tname      string\n+\t\teventType resourcepb.WatchEvent_Type\n+\t}{\n+\t\t{\n+\t\t\tname:      \"write ADDED event\",\n+\t\t\teventType: resourcepb.WatchEvent_ADDED,\n+\t\t},\n+\t\t{\n+\t\t\tname:      \"write MODIFIED event\",\n+\t\t\teventType: resourcepb.WatchEvent_MODIFIED,\n+\t\t},\n+\t\t{\n+\t\t\tname:      \"write DELETED event\",\n+\t\t\teventType: resourcepb.WatchEvent_DELETED,\n+\t\t},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\ttestObj, err := createTestObject()\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tmetaAccessor, err := utils.MetaAccessor(testObj)\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\twriteEvent := WriteEvent{\n+\t\t\t\tType: tt.eventType,\n+\t\t\t\tKey: &resourcepb.ResourceKey{\n+\t\t\t\t\tNamespace: \"default\",\n+\t\t\t\t\tGroup:     \"apps\",\n+\t\t\t\t\tResource:  \"resource\",\n+\t\t\t\t\tName:      \"test-resource\",\n+\t\t\t\t},\n+\t\t\t\tValue:      objectToJSONBytes(t, testObj),\n+\t\t\t\tObject:     metaAccessor,\n+\t\t\t\tPreviousRV: 100,\n+\t\t\t}\n+\n+\t\t\trv, err := backend.WriteEvent(ctx, writeEvent)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tassert.Greater(t, rv, int64(0), \"resource version should be positive\")\n+\n+\t\t\t// Verify data was written to dataStore\n+\t\t\tvar expectedAction DataAction\n+\t\t\tswitch tt.eventType {\n+\t\t\tcase resourcepb.WatchEvent_ADDED:\n+\t\t\t\texpectedAction = DataActionCreated\n+\t\t\tcase resourcepb.WatchEvent_MODIFIED:\n+\t\t\t\texpectedAction = DataActionUpdated\n+\t\t\tcase resourcepb.WatchEvent_DELETED:\n+\t\t\t\texpectedAction = DataActionDeleted\n+\t\t\tdefault:\n+\t\t\t\tt.Fatalf(\"unexpected event type: %v\", tt.eventType)\n+\t\t\t}\n+\n+\t\t\tdataKey := DataKey{\n+\t\t\t\tNamespace:       \"default\",\n+\t\t\t\tGroup:           \"apps\",\n+\t\t\t\tResource:        \"resource\",\n+\t\t\t\tName:            \"test-resource\",\n+\t\t\t\tResourceVersion: rv,\n+\t\t\t\tAction:          expectedAction,\n+\t\t\t}\n+\n+\t\t\tdataReader, err := backend.dataStore.Get(ctx, dataKey)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tdataValue, err := io.ReadAll(dataReader)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tassert.Equal(t, objectToJSONBytes(t, testObj), dataValue)\n+\n+\t\t\t// Verify metadata was written to metaStore\n+\t\t\tmetaKey := MetaDataKey{\n+\t\t\t\tNamespace:       \"default\",\n+\t\t\t\tGroup:           \"apps\",\n+\t\t\t\tResource:        \"resource\",\n+\t\t\t\tName:            \"test-resource\",\n+\t\t\t\tResourceVersion: rv,\n+\t\t\t\tAction:          expectedAction,\n+\t\t\t\tFolder:          \"\",\n+\t\t\t}\n+\n+\t\t\tm, err := backend.metaStore.Get(ctx, metaKey)\n+\t\t\trequire.NoError(t, err)\n+\t\t\trequire.NotNil(t, m)\n+\t\t\trequire.Equal(t, \"test-resource\", m.Key.Name)\n+\t\t\trequire.Equal(t, \"default\", m.Key.Namespace)\n+\t\t\trequire.Equal(t, \"apps\", m.Key.Group)\n+\t\t\trequire.Equal(t, \"resource\", m.Key.Resource)\n+\n+\t\t\t// Verify event was written to eventStore\n+\t\t\teventKey := EventKey{\n+\t\t\t\tNamespace:       \"default\",\n+\t\t\t\tGroup:           \"apps\",\n+\t\t\t\tResource:        \"resource\",\n+\t\t\t\tName:            \"test-resource\",\n+\t\t\t\tResourceVersion: rv,\n+\t\t\t}\n+\n+\t\t\t_, err = backend.eventStore.Get(ctx, eventKey)\n+\t\t\trequire.NoError(t, err)\n+\t\t})\n+\t}\n+}\n+\n+func TestKvStorageBackend_WriteEvent_ResourceAlreadyExists(t *testing.T) {\n+\tbackend := setupTestStorageBackend(t)\n+\tctx := context.Background()\n+\n+\t// Create a test resource first\n+\ttestObj, err := createTestObject()\n+\trequire.NoError(t, err)\n+\n+\tmetaAccessor, err := utils.MetaAccessor(testObj)\n+\trequire.NoError(t, err)\n+\n+\twriteEvent := WriteEvent{\n+\t\tType: resourcepb.WatchEvent_ADDED,\n+\t\tKey: &resourcepb.ResourceKey{\n+\t\t\tNamespace: \"default\",\n+\t\t\tGroup:     \"apps\",\n+\t\t\tResource:  \"deployments\",\n+\t\t\tName:      \"test-deployment\",\n+\t\t},\n+\t\tValue:      objectToJSONBytes(t, testObj),\n+\t\tObject:     metaAccessor,\n+\t\tPreviousRV: 0,\n+\t}\n+\n+\t// First create should succeed\n+\trv1, err := backend.WriteEvent(ctx, writeEvent)\n+\trequire.NoError(t, err)\n+\trequire.Greater(t, rv1, int64(0))\n+\n+\t// Try to create the same resource again - should fail with ErrResourceAlreadyExists\n+\twriteEvent.PreviousRV = 0 // Reset previous RV to simulate a fresh create attempt\n+\trv2, err := backend.WriteEvent(ctx, writeEvent)\n+\trequire.Error(t, err)\n+\trequire.Equal(t, int64(0), rv2)\n+\trequire.ErrorIs(t, err, ErrResourceAlreadyExists)\n+\n+\t// Verify the error is the correct type\n+\trequire.Contains(t, err.Error(), \"the resource already exists\")\n+}\n+\n+func TestKvStorageBackend_ReadResource_Success(t *testing.T) {\n+\tbackend := setupTestStorageBackend(t)\n+\tctx := context.Background()\n+\n+\t// First, write a resource to read\n+\ttestObj, err := createTestObject()",
+    "repo_full_name": "grafana/grafana",
+    "discussion_comments": [
+      {
+        "comment_id": "2177573716",
+        "repo_full_name": "grafana/grafana",
+        "pr_number": 107305,
+        "pr_file": "pkg/storage/unified/resource/storage_backend_test.go",
+        "discussion_id": "2177573716",
+        "commented_code": "@@ -0,0 +1,1030 @@\n+package resource\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"io\"\n+\t\"testing\"\n+\n+\t\"github.com/stretchr/testify/assert\"\n+\t\"github.com/stretchr/testify/require\"\n+\t\"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured\"\n+\n+\t\"github.com/grafana/grafana/pkg/apimachinery/utils\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/resourcepb\"\n+)\n+\n+func setupTestStorageBackend(t *testing.T) *kvStorageBackend {\n+\tkv := setupTestKV(t)\n+\treturn NewkvStorageBackend(kv)\n+}\n+\n+func TestNewkvStorageBackend(t *testing.T) {\n+\tbackend := setupTestStorageBackend(t)\n+\n+\tassert.NotNil(t, backend)\n+\tassert.NotNil(t, backend.kv)\n+\tassert.NotNil(t, backend.dataStore)\n+\tassert.NotNil(t, backend.metaStore)\n+\tassert.NotNil(t, backend.eventStore)\n+\tassert.NotNil(t, backend.notifier)\n+\tassert.NotNil(t, backend.snowflake)\n+}\n+\n+func TestKvStorageBackend_WriteEvent_Success(t *testing.T) {\n+\tbackend := setupTestStorageBackend(t)\n+\tctx := context.Background()\n+\n+\ttests := []struct {\n+\t\tname      string\n+\t\teventType resourcepb.WatchEvent_Type\n+\t}{\n+\t\t{\n+\t\t\tname:      \"write ADDED event\",\n+\t\t\teventType: resourcepb.WatchEvent_ADDED,\n+\t\t},\n+\t\t{\n+\t\t\tname:      \"write MODIFIED event\",\n+\t\t\teventType: resourcepb.WatchEvent_MODIFIED,\n+\t\t},\n+\t\t{\n+\t\t\tname:      \"write DELETED event\",\n+\t\t\teventType: resourcepb.WatchEvent_DELETED,\n+\t\t},\n+\t}\n+\n+\tfor _, tt := range tests {\n+\t\tt.Run(tt.name, func(t *testing.T) {\n+\t\t\ttestObj, err := createTestObject()\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\tmetaAccessor, err := utils.MetaAccessor(testObj)\n+\t\t\trequire.NoError(t, err)\n+\n+\t\t\twriteEvent := WriteEvent{\n+\t\t\t\tType: tt.eventType,\n+\t\t\t\tKey: &resourcepb.ResourceKey{\n+\t\t\t\t\tNamespace: \"default\",\n+\t\t\t\t\tGroup:     \"apps\",\n+\t\t\t\t\tResource:  \"resource\",\n+\t\t\t\t\tName:      \"test-resource\",\n+\t\t\t\t},\n+\t\t\t\tValue:      objectToJSONBytes(t, testObj),\n+\t\t\t\tObject:     metaAccessor,\n+\t\t\t\tPreviousRV: 100,\n+\t\t\t}\n+\n+\t\t\trv, err := backend.WriteEvent(ctx, writeEvent)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tassert.Greater(t, rv, int64(0), \"resource version should be positive\")\n+\n+\t\t\t// Verify data was written to dataStore\n+\t\t\tvar expectedAction DataAction\n+\t\t\tswitch tt.eventType {\n+\t\t\tcase resourcepb.WatchEvent_ADDED:\n+\t\t\t\texpectedAction = DataActionCreated\n+\t\t\tcase resourcepb.WatchEvent_MODIFIED:\n+\t\t\t\texpectedAction = DataActionUpdated\n+\t\t\tcase resourcepb.WatchEvent_DELETED:\n+\t\t\t\texpectedAction = DataActionDeleted\n+\t\t\tdefault:\n+\t\t\t\tt.Fatalf(\"unexpected event type: %v\", tt.eventType)\n+\t\t\t}\n+\n+\t\t\tdataKey := DataKey{\n+\t\t\t\tNamespace:       \"default\",\n+\t\t\t\tGroup:           \"apps\",\n+\t\t\t\tResource:        \"resource\",\n+\t\t\t\tName:            \"test-resource\",\n+\t\t\t\tResourceVersion: rv,\n+\t\t\t\tAction:          expectedAction,\n+\t\t\t}\n+\n+\t\t\tdataReader, err := backend.dataStore.Get(ctx, dataKey)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tdataValue, err := io.ReadAll(dataReader)\n+\t\t\trequire.NoError(t, err)\n+\t\t\tassert.Equal(t, objectToJSONBytes(t, testObj), dataValue)\n+\n+\t\t\t// Verify metadata was written to metaStore\n+\t\t\tmetaKey := MetaDataKey{\n+\t\t\t\tNamespace:       \"default\",\n+\t\t\t\tGroup:           \"apps\",\n+\t\t\t\tResource:        \"resource\",\n+\t\t\t\tName:            \"test-resource\",\n+\t\t\t\tResourceVersion: rv,\n+\t\t\t\tAction:          expectedAction,\n+\t\t\t\tFolder:          \"\",\n+\t\t\t}\n+\n+\t\t\tm, err := backend.metaStore.Get(ctx, metaKey)\n+\t\t\trequire.NoError(t, err)\n+\t\t\trequire.NotNil(t, m)\n+\t\t\trequire.Equal(t, \"test-resource\", m.Key.Name)\n+\t\t\trequire.Equal(t, \"default\", m.Key.Namespace)\n+\t\t\trequire.Equal(t, \"apps\", m.Key.Group)\n+\t\t\trequire.Equal(t, \"resource\", m.Key.Resource)\n+\n+\t\t\t// Verify event was written to eventStore\n+\t\t\teventKey := EventKey{\n+\t\t\t\tNamespace:       \"default\",\n+\t\t\t\tGroup:           \"apps\",\n+\t\t\t\tResource:        \"resource\",\n+\t\t\t\tName:            \"test-resource\",\n+\t\t\t\tResourceVersion: rv,\n+\t\t\t}\n+\n+\t\t\t_, err = backend.eventStore.Get(ctx, eventKey)\n+\t\t\trequire.NoError(t, err)\n+\t\t})\n+\t}\n+}\n+\n+func TestKvStorageBackend_WriteEvent_ResourceAlreadyExists(t *testing.T) {\n+\tbackend := setupTestStorageBackend(t)\n+\tctx := context.Background()\n+\n+\t// Create a test resource first\n+\ttestObj, err := createTestObject()\n+\trequire.NoError(t, err)\n+\n+\tmetaAccessor, err := utils.MetaAccessor(testObj)\n+\trequire.NoError(t, err)\n+\n+\twriteEvent := WriteEvent{\n+\t\tType: resourcepb.WatchEvent_ADDED,\n+\t\tKey: &resourcepb.ResourceKey{\n+\t\t\tNamespace: \"default\",\n+\t\t\tGroup:     \"apps\",\n+\t\t\tResource:  \"deployments\",\n+\t\t\tName:      \"test-deployment\",\n+\t\t},\n+\t\tValue:      objectToJSONBytes(t, testObj),\n+\t\tObject:     metaAccessor,\n+\t\tPreviousRV: 0,\n+\t}\n+\n+\t// First create should succeed\n+\trv1, err := backend.WriteEvent(ctx, writeEvent)\n+\trequire.NoError(t, err)\n+\trequire.Greater(t, rv1, int64(0))\n+\n+\t// Try to create the same resource again - should fail with ErrResourceAlreadyExists\n+\twriteEvent.PreviousRV = 0 // Reset previous RV to simulate a fresh create attempt\n+\trv2, err := backend.WriteEvent(ctx, writeEvent)\n+\trequire.Error(t, err)\n+\trequire.Equal(t, int64(0), rv2)\n+\trequire.ErrorIs(t, err, ErrResourceAlreadyExists)\n+\n+\t// Verify the error is the correct type\n+\trequire.Contains(t, err.Error(), \"the resource already exists\")\n+}\n+\n+func TestKvStorageBackend_ReadResource_Success(t *testing.T) {\n+\tbackend := setupTestStorageBackend(t)\n+\tctx := context.Background()\n+\n+\t// First, write a resource to read\n+\ttestObj, err := createTestObject()",
+        "comment_created_at": "2025-07-01T13:13:20+00:00",
+        "comment_author": "pstibrany",
+        "comment_body": "Can we have `createAndWriteTestObject(t, backend)` to avoid duplicating this code in tests?\n\nOr perhaps `writeObject(t, backend, testObj)`, that will fill `WriteEvent` based on the `testObj`?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2175133901",
+    "pr_number": 106997,
+    "pr_file": "pkg/services/libraryelements/database.go",
+    "created_at": "2025-06-30T13:50:57+00:00",
+    "commented_code": "if folderFilter.parseError != nil {\n \t\treturn model.LibraryElementSearchResult{}, folderFilter.parseError\n \t}\n+\n+\tvar foldersWithMatchingTitles []string",
+    "repo_full_name": "grafana/grafana",
+    "discussion_comments": [
+      {
+        "comment_id": "2175133901",
+        "repo_full_name": "grafana/grafana",
+        "pr_number": 106997,
+        "pr_file": "pkg/services/libraryelements/database.go",
+        "discussion_id": "2175133901",
+        "commented_code": "@@ -441,6 +441,42 @@ func (l *LibraryElementService) getAllLibraryElements(c context.Context, signedI\n \tif folderFilter.parseError != nil {\n \t\treturn model.LibraryElementSearchResult{}, folderFilter.parseError\n \t}\n+\n+\tvar foldersWithMatchingTitles []string",
+        "comment_created_at": "2025-06-30T13:50:57+00:00",
+        "comment_author": "evictorero",
+        "comment_body": "We could extract all the following code to a function that returns these `foldersWithMatchingTitles` and keep the main function cleaner for better readability.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2171571805",
+    "pr_number": 105771,
+    "pr_file": "pkg/server/distributor_test.go",
+    "created_at": "2025-06-27T10:30:48+00:00",
+    "commented_code": "+package server\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"fmt\"\n+\t\"math/rand\"\n+\t\"net\"\n+\t\"net/http\"\n+\t\"strconv\"\n+\t\"sync\"\n+\t\"testing\"\n+\t\"time\"\n+\n+\tclaims \"github.com/grafana/authlib/types\"\n+\t\"github.com/grafana/grafana/pkg/api\"\n+\t\"github.com/grafana/grafana/pkg/apimachinery/identity\"\n+\t\"github.com/grafana/grafana/pkg/modules\"\n+\t\"github.com/grafana/grafana/pkg/services/featuremgmt\"\n+\t\"github.com/grafana/grafana/pkg/services/sqlstore/sqlutil\"\n+\t\"github.com/grafana/grafana/pkg/setting\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/resource\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/resourcepb\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/search\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/sql\"\n+\t\"github.com/prometheus/client_golang/prometheus\"\n+\t\"github.com/stretchr/testify/require\"\n+\t\"go.opentelemetry.io/otel/trace/noop\"\n+\t\"google.golang.org/grpc\"\n+\t\"google.golang.org/grpc/credentials/insecure\"\n+\t\"google.golang.org/grpc/health/grpc_health_v1\"\n+\t\"google.golang.org/grpc/metadata\"\n+\t\"k8s.io/component-base/metrics/legacyregistry\"\n+)\n+\n+var (\n+\ttestIndexFileThreshold  = 200 // just needs to be bigger than max playlist number, so the indexer don't use the filesystem\n+\tnamespaceCount          = 250 // how many stacks we're simulating\n+\tmaxPlaylistPerNamespace = 50  // upper bound on how many playlists we will seed to each stack.\n+)\n+\n+//nolint:gocyclo\n+func TestIntegrationDistributor(t *testing.T) {\n+\tif testing.Short() {\n+\t\tt.Skip(\"skipping integration test\")\n+\t}\n+\n+\tdbType := sqlutil.GetTestDBType()\n+\tif dbType != \"mysql\" {\n+\t\tt.Skip()\n+\t}\n+\n+\t// this next line is to avoid double registration when registering sprinkles metrics\n+\tlegacyregistry.Registerer = func() prometheus.Registerer { return prometheus.NewRegistry() }\n+\n+\tdb, err := sqlutil.GetTestDB(dbType)\n+\trequire.NoError(t, err)\n+\n+\ttestNamespaces := make([]string, 0, namespaceCount)\n+\tfor i := range namespaceCount {\n+\t\ttestNamespaces = append(testNamespaces, \"stacks-\"+strconv.Itoa(i))\n+\t}\n+\n+\tbaselineServer := createBaselineServer(t, dbType, db.ConnStr, testNamespaces)\n+\n+\trunErrs := make(map[string]error)\n+\ttestServers := make([]testModuleServer, 0, 2)\n+\tdistributorServer := initDistributorServerForTest(t)\n+\ttestServers = append(testServers, createStorageServerApi(t, 1, dbType, db.ConnStr))\n+\ttestServers = append(testServers, createStorageServerApi(t, 2, dbType, db.ConnStr))\n+\n+\tstartAndWaitHealthy(t, distributorServer, runErrs)\n+\n+\tfor _, testServer := range testServers {\n+\t\tstartAndWaitHealthy(t, testServer, runErrs)\n+\t}\n+\n+\tt.Run(\"should expose ring endpoint\", func(t *testing.T) {\n+\t\tclient := http.Client{}\n+\t\tres, err := client.Get(\"http://localhost:13000/ring\")\n+\t\trequire.NoError(t, err)\n+\n+\t\trequire.Equal(t, res.StatusCode, http.StatusOK)\n+\t\t_ = res.Body.Close()\n+\t})\n+\n+\tt.Run(\"should expose memberlist endpoint\", func(t *testing.T) {\n+\t\tclient := http.Client{}\n+\t\tres, err := client.Get(\"http://localhost:13000/memberlist\")\n+\t\trequire.NoError(t, err)\n+\n+\t\trequire.Equal(t, res.StatusCode, http.StatusOK)\n+\t\t_ = res.Body.Close()\n+\t})\n+\n+\tt.Run(\"GetStats\", func(t *testing.T) {",
+    "repo_full_name": "grafana/grafana",
+    "discussion_comments": [
+      {
+        "comment_id": "2171571805",
+        "repo_full_name": "grafana/grafana",
+        "pr_number": 105771,
+        "pr_file": "pkg/server/distributor_test.go",
+        "discussion_id": "2171571805",
+        "commented_code": "@@ -0,0 +1,475 @@\n+package server\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"fmt\"\n+\t\"math/rand\"\n+\t\"net\"\n+\t\"net/http\"\n+\t\"strconv\"\n+\t\"sync\"\n+\t\"testing\"\n+\t\"time\"\n+\n+\tclaims \"github.com/grafana/authlib/types\"\n+\t\"github.com/grafana/grafana/pkg/api\"\n+\t\"github.com/grafana/grafana/pkg/apimachinery/identity\"\n+\t\"github.com/grafana/grafana/pkg/modules\"\n+\t\"github.com/grafana/grafana/pkg/services/featuremgmt\"\n+\t\"github.com/grafana/grafana/pkg/services/sqlstore/sqlutil\"\n+\t\"github.com/grafana/grafana/pkg/setting\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/resource\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/resourcepb\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/search\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/sql\"\n+\t\"github.com/prometheus/client_golang/prometheus\"\n+\t\"github.com/stretchr/testify/require\"\n+\t\"go.opentelemetry.io/otel/trace/noop\"\n+\t\"google.golang.org/grpc\"\n+\t\"google.golang.org/grpc/credentials/insecure\"\n+\t\"google.golang.org/grpc/health/grpc_health_v1\"\n+\t\"google.golang.org/grpc/metadata\"\n+\t\"k8s.io/component-base/metrics/legacyregistry\"\n+)\n+\n+var (\n+\ttestIndexFileThreshold  = 200 // just needs to be bigger than max playlist number, so the indexer don't use the filesystem\n+\tnamespaceCount          = 250 // how many stacks we're simulating\n+\tmaxPlaylistPerNamespace = 50  // upper bound on how many playlists we will seed to each stack.\n+)\n+\n+//nolint:gocyclo\n+func TestIntegrationDistributor(t *testing.T) {\n+\tif testing.Short() {\n+\t\tt.Skip(\"skipping integration test\")\n+\t}\n+\n+\tdbType := sqlutil.GetTestDBType()\n+\tif dbType != \"mysql\" {\n+\t\tt.Skip()\n+\t}\n+\n+\t// this next line is to avoid double registration when registering sprinkles metrics\n+\tlegacyregistry.Registerer = func() prometheus.Registerer { return prometheus.NewRegistry() }\n+\n+\tdb, err := sqlutil.GetTestDB(dbType)\n+\trequire.NoError(t, err)\n+\n+\ttestNamespaces := make([]string, 0, namespaceCount)\n+\tfor i := range namespaceCount {\n+\t\ttestNamespaces = append(testNamespaces, \"stacks-\"+strconv.Itoa(i))\n+\t}\n+\n+\tbaselineServer := createBaselineServer(t, dbType, db.ConnStr, testNamespaces)\n+\n+\trunErrs := make(map[string]error)\n+\ttestServers := make([]testModuleServer, 0, 2)\n+\tdistributorServer := initDistributorServerForTest(t)\n+\ttestServers = append(testServers, createStorageServerApi(t, 1, dbType, db.ConnStr))\n+\ttestServers = append(testServers, createStorageServerApi(t, 2, dbType, db.ConnStr))\n+\n+\tstartAndWaitHealthy(t, distributorServer, runErrs)\n+\n+\tfor _, testServer := range testServers {\n+\t\tstartAndWaitHealthy(t, testServer, runErrs)\n+\t}\n+\n+\tt.Run(\"should expose ring endpoint\", func(t *testing.T) {\n+\t\tclient := http.Client{}\n+\t\tres, err := client.Get(\"http://localhost:13000/ring\")\n+\t\trequire.NoError(t, err)\n+\n+\t\trequire.Equal(t, res.StatusCode, http.StatusOK)\n+\t\t_ = res.Body.Close()\n+\t})\n+\n+\tt.Run(\"should expose memberlist endpoint\", func(t *testing.T) {\n+\t\tclient := http.Client{}\n+\t\tres, err := client.Get(\"http://localhost:13000/memberlist\")\n+\t\trequire.NoError(t, err)\n+\n+\t\trequire.Equal(t, res.StatusCode, http.StatusOK)\n+\t\t_ = res.Body.Close()\n+\t})\n+\n+\tt.Run(\"GetStats\", func(t *testing.T) {",
+        "comment_created_at": "2025-06-27T10:30:48+00:00",
+        "comment_author": "pstibrany",
+        "comment_body": "These tests have the same structure, over and over. Can we remove some duplicate code here by introducing some helper functions. For example having two top-level functions\n\n```golang\nfunc getBaselineResponse[Req any, Resp any](t *testing.T, req *Req, fn func(ctx context.Context, req *Req) (*Resp, error)) *Resp {\n\tctx := context.Background()\n\tbaselineRes, err := fn(ctx, req)\n\trequire.NoError(t, err)\n\treturn baselineRes\n}\n\nfunc getDistributorResponse[Req any, Resp any](t *testing.T, req *Req, fn func(ctx context.Context, req *Req, opts ...grpc.CallOption) (*Resp, error), instanceResponseCount map[string]int) *Resp {\n\tctx := identity.WithServiceIdentityContext(context.Background(), 1)\n\tvar header metadata.MD\n\tres, err := fn(ctx, req, grpc.Header(&header))\n\trequire.NoError(t, err)\n\n\tinstance := header.Get(\"proxied-instance-id\")\n\tif len(instance) != 1 {\n\t\tt.Fatal(\"received invalid proxied-instance-id header\", instance)\n\t}\n\n\tinstanceResponseCount[instance[0]] += 1\n\treturn res\n}\n```\n\nand then per-namespace test is just:\n\n```golang\n\t\tfor _, ns := range testNamespaces {\n\t\t\treq := &resourcepb.ResourceStatsRequest{\n\t\t\t\tNamespace: ns,\n\t\t\t}\n\n\t\t\tbaselineRes := getBaselineResponse(t, req, baselineServer.GetStats)\n\t\t\tdistribRes := getDistributorResponse(t, req, distributorServer.resourceClient.GetStats, instanceResponseCount)\n\t\t\trequire.Equal(t, baselineRes.String(), distribRes.String())\n        }\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2172401108",
+        "repo_full_name": "grafana/grafana",
+        "pr_number": 105771,
+        "pr_file": "pkg/server/distributor_test.go",
+        "discussion_id": "2171571805",
+        "commented_code": "@@ -0,0 +1,475 @@\n+package server\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"fmt\"\n+\t\"math/rand\"\n+\t\"net\"\n+\t\"net/http\"\n+\t\"strconv\"\n+\t\"sync\"\n+\t\"testing\"\n+\t\"time\"\n+\n+\tclaims \"github.com/grafana/authlib/types\"\n+\t\"github.com/grafana/grafana/pkg/api\"\n+\t\"github.com/grafana/grafana/pkg/apimachinery/identity\"\n+\t\"github.com/grafana/grafana/pkg/modules\"\n+\t\"github.com/grafana/grafana/pkg/services/featuremgmt\"\n+\t\"github.com/grafana/grafana/pkg/services/sqlstore/sqlutil\"\n+\t\"github.com/grafana/grafana/pkg/setting\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/resource\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/resourcepb\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/search\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/sql\"\n+\t\"github.com/prometheus/client_golang/prometheus\"\n+\t\"github.com/stretchr/testify/require\"\n+\t\"go.opentelemetry.io/otel/trace/noop\"\n+\t\"google.golang.org/grpc\"\n+\t\"google.golang.org/grpc/credentials/insecure\"\n+\t\"google.golang.org/grpc/health/grpc_health_v1\"\n+\t\"google.golang.org/grpc/metadata\"\n+\t\"k8s.io/component-base/metrics/legacyregistry\"\n+)\n+\n+var (\n+\ttestIndexFileThreshold  = 200 // just needs to be bigger than max playlist number, so the indexer don't use the filesystem\n+\tnamespaceCount          = 250 // how many stacks we're simulating\n+\tmaxPlaylistPerNamespace = 50  // upper bound on how many playlists we will seed to each stack.\n+)\n+\n+//nolint:gocyclo\n+func TestIntegrationDistributor(t *testing.T) {\n+\tif testing.Short() {\n+\t\tt.Skip(\"skipping integration test\")\n+\t}\n+\n+\tdbType := sqlutil.GetTestDBType()\n+\tif dbType != \"mysql\" {\n+\t\tt.Skip()\n+\t}\n+\n+\t// this next line is to avoid double registration when registering sprinkles metrics\n+\tlegacyregistry.Registerer = func() prometheus.Registerer { return prometheus.NewRegistry() }\n+\n+\tdb, err := sqlutil.GetTestDB(dbType)\n+\trequire.NoError(t, err)\n+\n+\ttestNamespaces := make([]string, 0, namespaceCount)\n+\tfor i := range namespaceCount {\n+\t\ttestNamespaces = append(testNamespaces, \"stacks-\"+strconv.Itoa(i))\n+\t}\n+\n+\tbaselineServer := createBaselineServer(t, dbType, db.ConnStr, testNamespaces)\n+\n+\trunErrs := make(map[string]error)\n+\ttestServers := make([]testModuleServer, 0, 2)\n+\tdistributorServer := initDistributorServerForTest(t)\n+\ttestServers = append(testServers, createStorageServerApi(t, 1, dbType, db.ConnStr))\n+\ttestServers = append(testServers, createStorageServerApi(t, 2, dbType, db.ConnStr))\n+\n+\tstartAndWaitHealthy(t, distributorServer, runErrs)\n+\n+\tfor _, testServer := range testServers {\n+\t\tstartAndWaitHealthy(t, testServer, runErrs)\n+\t}\n+\n+\tt.Run(\"should expose ring endpoint\", func(t *testing.T) {\n+\t\tclient := http.Client{}\n+\t\tres, err := client.Get(\"http://localhost:13000/ring\")\n+\t\trequire.NoError(t, err)\n+\n+\t\trequire.Equal(t, res.StatusCode, http.StatusOK)\n+\t\t_ = res.Body.Close()\n+\t})\n+\n+\tt.Run(\"should expose memberlist endpoint\", func(t *testing.T) {\n+\t\tclient := http.Client{}\n+\t\tres, err := client.Get(\"http://localhost:13000/memberlist\")\n+\t\trequire.NoError(t, err)\n+\n+\t\trequire.Equal(t, res.StatusCode, http.StatusOK)\n+\t\t_ = res.Body.Close()\n+\t})\n+\n+\tt.Run(\"GetStats\", func(t *testing.T) {",
+        "comment_created_at": "2025-06-27T16:27:51+00:00",
+        "comment_author": "gassiss",
+        "comment_body": "aha thanks! i knew there was something with generics I could do to remove all this repetition but couldn't figure out how to do it \ud83d\ude04 ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2166960977",
+    "pr_number": 106062,
+    "pr_file": "pkg/storage/unified/resource/client.go",
+    "created_at": "2025-06-25T15:04:14+00:00",
+    "commented_code": "})\n }\n \n+func NewAuthlessResourceClient(cc grpc.ClientConnInterface) ResourceClient {\n+\treturn &resourceClient{",
+    "repo_full_name": "grafana/grafana",
+    "discussion_comments": [
+      {
+        "comment_id": "2166960977",
+        "repo_full_name": "grafana/grafana",
+        "pr_number": 106062,
+        "pr_file": "pkg/storage/unified/resource/client.go",
+        "discussion_id": "2166960977",
+        "commented_code": "@@ -64,6 +64,17 @@ func NewResourceClient(conn grpc.ClientConnInterface, cfg *setting.Cfg, features\n \t})\n }\n \n+func NewAuthlessResourceClient(cc grpc.ClientConnInterface) ResourceClient {\n+\treturn &resourceClient{",
+        "comment_created_at": "2025-06-25T15:04:14+00:00",
+        "comment_author": "pstibrany",
+        "comment_body": "Shall we introduce `newResourceClient(grpc.ClientConnInterface)` method to avoid repeating same `&resourceClient{...}` block in `NewAuthlessResourceClient` and `NewLegacyResourceClient`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2167143357",
+        "repo_full_name": "grafana/grafana",
+        "pr_number": 106062,
+        "pr_file": "pkg/storage/unified/resource/client.go",
+        "discussion_id": "2166960977",
+        "commented_code": "@@ -64,6 +64,17 @@ func NewResourceClient(conn grpc.ClientConnInterface, cfg *setting.Cfg, features\n \t})\n }\n \n+func NewAuthlessResourceClient(cc grpc.ClientConnInterface) ResourceClient {\n+\treturn &resourceClient{",
+        "comment_created_at": "2025-06-25T16:30:19+00:00",
+        "comment_author": "gassiss",
+        "comment_body": "yes that's a good idea. I'll tweak it",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2155389342",
+    "pr_number": 106739,
+    "pr_file": "pkg/storage/secret/metadata/secure_value_store.go",
+    "created_at": "2025-06-18T19:55:26+00:00",
+    "commented_code": "type secureValueMetadataStorage struct {\n \tdb      contracts.Database\n \tdialect sqltemplate.Dialect\n+\tmetrics *metrics.StorageMetrics\n \ttracer  trace.Tracer\n }\n \n func (s *secureValueMetadataStorage) Create(ctx context.Context, sv *secretv0alpha1.SecureValue, actorUID string) (*secretv0alpha1.SecureValue, error) {\n-\tctx, span := s.tracer.Start(ctx, \"SecureValueMetadataStorage.Create\", trace.WithAttributes(\n-\t\tattribute.String(\"name\", sv.GetName()),\n-\t\tattribute.String(\"namespace\", sv.GetNamespace()),\n-\t\tattribute.String(\"actorUID\", actorUID),\n-\t))\n-\tdefer span.End()\n-\n+\tstart := time.Now()",
+    "repo_full_name": "grafana/grafana",
+    "discussion_comments": [
+      {
+        "comment_id": "2155389342",
+        "repo_full_name": "grafana/grafana",
+        "pr_number": 106739,
+        "pr_file": "pkg/storage/secret/metadata/secure_value_store.go",
+        "discussion_id": "2155389342",
+        "commented_code": "@@ -33,17 +42,12 @@ func ProvideSecureValueMetadataStorage(db contracts.Database, tracer trace.Trace\n type secureValueMetadataStorage struct {\n \tdb      contracts.Database\n \tdialect sqltemplate.Dialect\n+\tmetrics *metrics.StorageMetrics\n \ttracer  trace.Tracer\n }\n \n func (s *secureValueMetadataStorage) Create(ctx context.Context, sv *secretv0alpha1.SecureValue, actorUID string) (*secretv0alpha1.SecureValue, error) {\n-\tctx, span := s.tracer.Start(ctx, \"SecureValueMetadataStorage.Create\", trace.WithAttributes(\n-\t\tattribute.String(\"name\", sv.GetName()),\n-\t\tattribute.String(\"namespace\", sv.GetNamespace()),\n-\t\tattribute.String(\"actorUID\", actorUID),\n-\t))\n-\tdefer span.End()\n-\n+\tstart := time.Now()",
+        "comment_created_at": "2025-06-18T19:55:26+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Multiple CRUD methods repetitively initialize timing and update metrics. Consider refactoring this pattern into a helper function to reduce code duplication.\n```suggestion\n\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2155389350",
+    "pr_number": 106739,
+    "pr_file": "pkg/storage/secret/metadata/outbox_store.go",
+    "created_at": "2025-06-18T19:55:26+00:00",
+    "commented_code": "assert.True(messageID != \"\", \"outboxStore.Delete: messageID is required\")\n \n+\tstart := time.Now()",
+    "repo_full_name": "grafana/grafana",
+    "discussion_comments": [
+      {
+        "comment_id": "2155389350",
+        "repo_full_name": "grafana/grafana",
+        "pr_number": 106739,
+        "pr_file": "pkg/storage/secret/metadata/outbox_store.go",
+        "discussion_id": "2155389350",
+        "commented_code": "@@ -228,10 +244,14 @@ func (s *outboxStore) Delete(ctx context.Context, messageID string) (err error)\n \n \tassert.True(messageID != \"\", \"outboxStore.Delete: messageID is required\")\n \n+\tstart := time.Now()",
+        "comment_created_at": "2025-06-18T19:55:26+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "Similar timing and metrics update logic is repeated in several outbox operations; extracting a common helper could improve maintainability and reduce potential inconsistencies.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1473520884",
+    "pr_number": 79156,
+    "pr_file": "pkg/services/ngalert/notifier/alertmanager_config.go",
+    "created_at": "2024-01-31T22:01:58+00:00",
+    "commented_code": "return result, nil\n }\n \n-func (moa *MultiOrgAlertmanager) ApplyAlertmanagerConfiguration(ctx context.Context, org int64, config definitions.PostableUserConfig) error {\n+func (moa *MultiOrgAlertmanager) ApplyAlertmanagerConfiguration(ctx context.Context, orgId int64, config definitions.PostableUserConfig) error {\n \t// Get the last known working configuration\n-\t_, err := moa.configStore.GetLatestAlertmanagerConfiguration(ctx, org)\n+\t_, err := moa.configStore.GetLatestAlertmanagerConfiguration(ctx, orgId)\n \tif err != nil {\n \t\t// If we don't have a configuration there's nothing for us to know and we should just continue saving the new one\n \t\tif !errors.Is(err, store.ErrNoAlertmanagerConfiguration) {\n \t\t\treturn fmt.Errorf(\"failed to get latest configuration %w\", err)\n \t\t}\n \t}\n \n-\tif err := moa.Crypto.ProcessSecureSettings(ctx, org, config.AlertmanagerConfig.Receivers); err != nil {\n+\tif err := moa.Crypto.ProcessSecureSettings(ctx, orgId, config.AlertmanagerConfig.Receivers); err != nil {\n \t\treturn fmt.Errorf(\"failed to post process Alertmanager configuration: %w\", err)\n \t}\n \n \tif err := assignReceiverConfigsUIDs(config.AlertmanagerConfig.Receivers); err != nil {\n \t\treturn fmt.Errorf(\"failed to assign missing uids: %w\", err)\n \t}\n \n-\tam, err := moa.AlertmanagerFor(org)\n+\tam, err := moa.AlertmanagerFor(orgId)\n \tif err != nil {\n \t\t// It's okay if the alertmanager isn't ready yet, we're changing its config anyway.\n \t\tif !errors.Is(err, ErrAlertmanagerNotReady) {\n \t\t\treturn err\n \t\t}\n \t}\n \n-\tif err := am.SaveAndApplyConfig(ctx, &config); err != nil {\n+\tif err := moa.SaveAndApplyConfig(ctx, orgId, am, &config); err != nil {\n \t\tmoa.logger.Error(\"Unable to save and apply alertmanager configuration\", \"error\", err)\n \t\treturn AlertmanagerConfigRejectedError{err}\n \t}\n \n \treturn nil\n }\n \n+// SaveAndApplyConfig saves the given configuration to the database and applies it to the given alertmanager in a single transaction.\n+func (moa *MultiOrgAlertmanager) SaveAndApplyConfig(ctx context.Context, orgID int64, am Alertmanager, cfg *definitions.PostableUserConfig) error {\n+\trawConfig, err := json.Marshal(cfg)\n+\tif err != nil {\n+\t\treturn fmt.Errorf(\"failed to serialize to the Alertmanager configuration: %w\", err)\n+\t}\n+\n+\tcmd, err := createSaveAlertmanagerConfigurationCmd(orgID, string(rawConfig), false)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\n+\treturn moa.configStore.InTransaction(ctx, func(ctx context.Context) error {\n+\t\treturn moa.configStore.SaveAlertmanagerConfigurationWithCallback(ctx, cmd, func(dbCfg models.AlertConfiguration) error {\n+\t\t\treturn am.ApplyConfig(ctx, &dbCfg)\n+\t\t})\n+\t})\n+}\n+\n+// SaveAndApplyDefaultConfig saves the default configuration to the database and applies it to the given alertmanager in a single transaction.\n+func (moa *MultiOrgAlertmanager) SaveAndApplyDefaultConfig(ctx context.Context, orgID int64, am Alertmanager) error {\n+\tcmd, err := createSaveAlertmanagerConfigurationCmd(orgID, moa.settings.UnifiedAlerting.DefaultConfiguration, true)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\n+\treturn moa.configStore.InTransaction(ctx, func(ctx context.Context) error {\n+\t\treturn moa.configStore.SaveAlertmanagerConfigurationWithCallback(ctx, cmd, func(dbCfg models.AlertConfiguration) error {\n+\t\t\treturn am.ApplyConfig(ctx, &dbCfg)\n+\t\t})\n+\t})\n+}",
+    "repo_full_name": "grafana/grafana",
+    "discussion_comments": [
+      {
+        "comment_id": "1473520884",
+        "repo_full_name": "grafana/grafana",
+        "pr_number": 79156,
+        "pr_file": "pkg/services/ngalert/notifier/alertmanager_config.go",
+        "discussion_id": "1473520884",
+        "commented_code": "@@ -155,40 +156,86 @@ func (moa *MultiOrgAlertmanager) gettableUserConfigFromAMConfigString(ctx contex\n \treturn result, nil\n }\n \n-func (moa *MultiOrgAlertmanager) ApplyAlertmanagerConfiguration(ctx context.Context, org int64, config definitions.PostableUserConfig) error {\n+func (moa *MultiOrgAlertmanager) ApplyAlertmanagerConfiguration(ctx context.Context, orgId int64, config definitions.PostableUserConfig) error {\n \t// Get the last known working configuration\n-\t_, err := moa.configStore.GetLatestAlertmanagerConfiguration(ctx, org)\n+\t_, err := moa.configStore.GetLatestAlertmanagerConfiguration(ctx, orgId)\n \tif err != nil {\n \t\t// If we don't have a configuration there's nothing for us to know and we should just continue saving the new one\n \t\tif !errors.Is(err, store.ErrNoAlertmanagerConfiguration) {\n \t\t\treturn fmt.Errorf(\"failed to get latest configuration %w\", err)\n \t\t}\n \t}\n \n-\tif err := moa.Crypto.ProcessSecureSettings(ctx, org, config.AlertmanagerConfig.Receivers); err != nil {\n+\tif err := moa.Crypto.ProcessSecureSettings(ctx, orgId, config.AlertmanagerConfig.Receivers); err != nil {\n \t\treturn fmt.Errorf(\"failed to post process Alertmanager configuration: %w\", err)\n \t}\n \n \tif err := assignReceiverConfigsUIDs(config.AlertmanagerConfig.Receivers); err != nil {\n \t\treturn fmt.Errorf(\"failed to assign missing uids: %w\", err)\n \t}\n \n-\tam, err := moa.AlertmanagerFor(org)\n+\tam, err := moa.AlertmanagerFor(orgId)\n \tif err != nil {\n \t\t// It's okay if the alertmanager isn't ready yet, we're changing its config anyway.\n \t\tif !errors.Is(err, ErrAlertmanagerNotReady) {\n \t\t\treturn err\n \t\t}\n \t}\n \n-\tif err := am.SaveAndApplyConfig(ctx, &config); err != nil {\n+\tif err := moa.SaveAndApplyConfig(ctx, orgId, am, &config); err != nil {\n \t\tmoa.logger.Error(\"Unable to save and apply alertmanager configuration\", \"error\", err)\n \t\treturn AlertmanagerConfigRejectedError{err}\n \t}\n \n \treturn nil\n }\n \n+// SaveAndApplyConfig saves the given configuration to the database and applies it to the given alertmanager in a single transaction.\n+func (moa *MultiOrgAlertmanager) SaveAndApplyConfig(ctx context.Context, orgID int64, am Alertmanager, cfg *definitions.PostableUserConfig) error {\n+\trawConfig, err := json.Marshal(cfg)\n+\tif err != nil {\n+\t\treturn fmt.Errorf(\"failed to serialize to the Alertmanager configuration: %w\", err)\n+\t}\n+\n+\tcmd, err := createSaveAlertmanagerConfigurationCmd(orgID, string(rawConfig), false)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\n+\treturn moa.configStore.InTransaction(ctx, func(ctx context.Context) error {\n+\t\treturn moa.configStore.SaveAlertmanagerConfigurationWithCallback(ctx, cmd, func(dbCfg models.AlertConfiguration) error {\n+\t\t\treturn am.ApplyConfig(ctx, &dbCfg)\n+\t\t})\n+\t})\n+}\n+\n+// SaveAndApplyDefaultConfig saves the default configuration to the database and applies it to the given alertmanager in a single transaction.\n+func (moa *MultiOrgAlertmanager) SaveAndApplyDefaultConfig(ctx context.Context, orgID int64, am Alertmanager) error {\n+\tcmd, err := createSaveAlertmanagerConfigurationCmd(orgID, moa.settings.UnifiedAlerting.DefaultConfiguration, true)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\n+\treturn moa.configStore.InTransaction(ctx, func(ctx context.Context) error {\n+\t\treturn moa.configStore.SaveAlertmanagerConfigurationWithCallback(ctx, cmd, func(dbCfg models.AlertConfiguration) error {\n+\t\t\treturn am.ApplyConfig(ctx, &dbCfg)\n+\t\t})\n+\t})\n+}",
+        "comment_created_at": "2024-01-31T22:01:58+00:00",
+        "comment_author": "yuri-tceretian",
+        "comment_body": "Can we extract common parts from these methods into a new private method and make these call it?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1461950329",
+    "pr_number": 78599,
+    "pr_file": "pkg/services/dashboards/database/database.go",
+    "created_at": "2024-01-22T14:33:24+00:00",
+    "commented_code": "sql, params := sb.ToSQL(limit, page)\n \n+\t// Only use modified search for non-empty search queries, otherwise it's just listing and new query can't help there yet.",
+    "repo_full_name": "grafana/grafana",
+    "discussion_comments": [
+      {
+        "comment_id": "1461950329",
+        "repo_full_name": "grafana/grafana",
+        "pr_number": 78599,
+        "pr_file": "pkg/services/dashboards/database/database.go",
+        "discussion_id": "1461950329",
+        "commented_code": "@@ -962,17 +965,236 @@ func (d *dashboardStore) FindDashboards(ctx context.Context, query *dashboards.F\n \n \tsql, params := sb.ToSQL(limit, page)\n \n+\t// Only use modified search for non-empty search queries, otherwise it's just listing and new query can't help there yet.",
+        "comment_created_at": "2024-01-22T14:33:24+00:00",
+        "comment_author": "suntala",
+        "comment_body": "It would be great if we could put as much of this into a separate function as possible. One of the goals of panel title search was to reduce the number of search offerings and therefore simplify our codebase. We will not be able to do that (yet) by introducing alt search. However, isolating it as much as possible should help.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1467637924",
+    "pr_number": 78599,
+    "pr_file": "pkg/services/dashboards/database/database.go",
+    "created_at": "2024-01-26T13:14:46+00:00",
+    "commented_code": "sql, params := sb.ToSQL(limit, page)\n \n+\t// Only use modified search for non-empty search queries, otherwise it's just listing and new query can't help there yet.\n+\tresc := make(chan []dashboards.DashboardSearchProjection, 1)\n+\tdurc := make(chan time.Duration, 1)\n+\tif d.features.IsEnabled(ctx, featuremgmt.FlagSearchAlt) && d.features.IsEnabled(ctx, featuremgmt.FlagSplitScopes) &&\n+\t\tquery.Title != \"\" && len(query.FolderUIDs) == 0 && len(query.FolderIds) == 0 { //nolint:staticcheck\n+\t\tderivedCtx := context.WithoutCancel(ctx)\n+\t\tgo func() {",
+    "repo_full_name": "grafana/grafana",
+    "discussion_comments": [
+      {
+        "comment_id": "1467637924",
+        "repo_full_name": "grafana/grafana",
+        "pr_number": 78599,
+        "pr_file": "pkg/services/dashboards/database/database.go",
+        "discussion_id": "1467637924",
+        "commented_code": "@@ -964,17 +964,77 @@ func (d *dashboardStore) FindDashboards(ctx context.Context, query *dashboards.F\n \n \tsql, params := sb.ToSQL(limit, page)\n \n+\t// Only use modified search for non-empty search queries, otherwise it's just listing and new query can't help there yet.\n+\tresc := make(chan []dashboards.DashboardSearchProjection, 1)\n+\tdurc := make(chan time.Duration, 1)\n+\tif d.features.IsEnabled(ctx, featuremgmt.FlagSearchAlt) && d.features.IsEnabled(ctx, featuremgmt.FlagSplitScopes) &&\n+\t\tquery.Title != \"\" && len(query.FolderUIDs) == 0 && len(query.FolderIds) == 0 { //nolint:staticcheck\n+\t\tderivedCtx := context.WithoutCancel(ctx)\n+\t\tgo func() {",
+        "comment_created_at": "2024-01-26T13:14:46+00:00",
+        "comment_author": "diegommm",
+        "comment_body": "[suggestion] Following @suntala's line of recommendations, I would suggest creating a separate method in `altsearch.go` that receives the derived context and all the necessary args and be called like this in this line:\r\n```suggestion\r\n\t\tgo d.doTheAltSearchMethodName(/* args... */)\r\n```\r\nThat way the current implementation would be very straightforward to follow while reviewing code.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

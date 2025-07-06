@@ -3,7 +3,7 @@ title: "Consistent JSDoc standards"
 description: "Document all public APIs and significant internal functions with comprehensive JSDoc comments that include accurate descriptions, parameter and return types, and any notable side effects. Follow standard JSDoc format conventions consistently across the codebase."
 repository: "fastify/fastify"
 label: "Documentation"
-language: "JavaScript"
+language: "Javascript"
 comments_count: 5
 repository_stars: 34000
 ---

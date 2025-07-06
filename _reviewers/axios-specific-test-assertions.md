@@ -3,7 +3,7 @@ title: "Specific test assertions"
 description: "When writing tests, explicitly assert specific conditions and expected values rather than relying on general success/failure checks. This prevents tests from silently passing when they should fail and ensures tests verify exactly what they're intended to verify."
 repository: "axios/axios"
 label: "Testing"
-language: "JavaScript"
+language: "Javascript"
 comments_count: 5
 repository_stars: 107000
 ---

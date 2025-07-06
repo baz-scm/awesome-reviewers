@@ -3,7 +3,7 @@ title: "Proper Usage of React Hooks"
 description: "When using the React library in Typescript, ensure that you are correctly implementing the recommended React hooks based on the version of ESLint being used in your project."
 repository: "facebook/react"
 label: "React"
-language: "TypeScript"
+language: "Typescript"
 comments_count: 2
 repository_stars: 237000
 ---

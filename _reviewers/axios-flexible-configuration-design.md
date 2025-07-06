@@ -3,7 +3,7 @@ title: "Flexible configuration design"
 description: "Design configuration interfaces to be flexible and extensible rather than overly specific. When creating configuration objects, make configuration parameters optional when possible with sensible defaults and allow for arbitrary additional properties rather than creating specific fields for custom configurations."
 repository: "axios/axios"
 label: "Configurations"
-language: "TypeScript"
+language: "Typescript"
 comments_count: 2
 repository_stars: 107000
 ---

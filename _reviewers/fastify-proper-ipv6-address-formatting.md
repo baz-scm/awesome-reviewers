@@ -3,7 +3,7 @@ title: "Proper IPv6 address formatting"
 description: "When constructing URLs with IP addresses, ensure IPv6 addresses are properly formatted according to RFC standards by wrapping them in square brackets. This applies to all IPv6 addresses, not just specific cases like localhost. Additionally, use appropriate event handlers for network events that should only be handled once per connection."
 repository: "fastify/fastify"
 label: "Networking"
-language: "JavaScript"
+language: "Javascript"
 comments_count: 2
 repository_stars: 34000
 ---

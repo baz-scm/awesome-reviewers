@@ -3,7 +3,7 @@ title: "Ensure Proper Null Handling When Using Fastify Decorators"
 description: "When working with Fastify decorators, always perform explicit null checks before accessing potentially undefined properties. Relying on implicit null handling can lead to subtle bugs and unexpected behavior."
 repository: "fastify/fastify"
 label: "Fastify"
-language: "TypeScript"
+language: "Typescript"
 comments_count: 2
 repository_stars: 34000
 ---

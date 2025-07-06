@@ -3,7 +3,7 @@ title: "Consistent method behaviors"
 description: "Design API methods with predictable behavior patterns that follow common conventions. Methods that modify objects directly should not return values unless supporting method chaining. Methods that retrieve or transform data should return new objects without modifying inputs."
 repository: "axios/axios"
 label: "API"
-language: "JavaScript"
+language: "Javascript"
 comments_count: 5
 repository_stars: 107000
 ---

@@ -3,7 +3,7 @@ title: "Consistent Fastify Package Naming and References"
 description: "When implementing code using the Fastify package in Typescript, it is important to use consistent and accurate naming conventions for Fastify-related references: always use the actual Fastify package name, use correct Fastify terminology and casing, and organize Fastify-related imports and references alphabetically."
 repository: "fastify/fastify"
 label: "Fastify"
-language: "TypeScript"
+language: "Typescript"
 comments_count: 2
 repository_stars: 34000
 ---

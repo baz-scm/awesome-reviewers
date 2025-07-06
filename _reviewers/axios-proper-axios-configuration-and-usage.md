@@ -3,7 +3,7 @@ title: "Proper Axios Configuration and Usage"
 description: "When implementing code that uses the Axios library in TypeScript, it is important to follow best practices for configuring and accessing Axios instances and settings. Ensure that Axios instances are properly configured with appropriate defaults, configuration properties are accessed correctly, and request-specific configuration overrides instance-level defaults in a predictable manner."
 repository: "axios/axios"
 label: "Axios"
-language: "TypeScript"
+language: "Typescript"
 comments_count: 3
 repository_stars: 107000
 ---

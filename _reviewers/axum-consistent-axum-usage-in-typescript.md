@@ -3,7 +3,7 @@ title: "Consistent axum Usage in Typescript"
 description: "When implementing Typescript code that uses the axum package, maintain consistent and idiomatic usage: always use lowercase 'axum', leverage axum's built-in types correctly, follow best practices for state and dependencies, ensure proper error handling, and use routing and middleware features effectively."
 repository: "tokio-rs/axum"
 label: "Axum"
-language: "TypeScript"
+language: "Typescript"
 comments_count: 5
 repository_stars: 22100
 ---

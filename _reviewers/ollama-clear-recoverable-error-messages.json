@@ -1,0 +1,184 @@
+[
+  {
+    "discussion_id": "2089777183",
+    "pr_number": 10415,
+    "pr_file": "tools/tools.go",
+    "created_at": "2025-05-14T21:24:02+00:00",
+    "commented_code": "+package tools\n+\n+import (\n+\t\"errors\"\n+\t\"io\"\n+\t\"log/slog\"\n+\t\"strings\"\n+\tgotmpl \"text/template\"\n+\n+\tjsonv2 \"github.com/go-json-experiment/json\"\n+\tjsontext \"github.com/go-json-experiment/json/jsontext\"\n+\n+\t\"github.com/ollama/ollama/api\"\n+\t\"github.com/ollama/ollama/template\"\n+)\n+\n+type Parser struct {\n+\tgreedyParse   bool\n+\tprefixFound   bool\n+\tprefixPartial bool\n+\ttmpl          *gotmpl.Template\n+\tsb            *strings.Builder\n+\tprefix        string\n+\tindex         int\n+\tname          string\n+\targuments     string\n+\tDone          bool\n+}\n+\n+// parseJSONToolCalls attempts to parse a JSON string into a slice of ToolCalls.\n+// It first tries to incrementally decode the JSON to handle partial inputs.\n+// Returns:\n+//   - []api.ToolCall: The parsed tool calls if successful\n+//   - bool: True if JSON is incomplete and needs more input\n+func (p *Parser) parseJSONToolCalls(s string) ([]api.ToolCall, bool) {\n+\t// First try incremental decoding to handle partial JSON\n+\tdec := jsontext.NewDecoder(strings.NewReader(s))\n+\tif got, err := dec.ReadValue(); err == nil {\n+\t\ts = got.String()\n+\t}\n+\n+\t// Attempt full unmarshal of the JSON\n+\tvar resp any\n+\terr := jsonv2.Unmarshal([]byte(s), &resp)\n+\tif err != nil {\n+\t\t// Handle incomplete JSON cases\n+\t\tif errors.Is(err, io.ErrUnexpectedEOF) || err.Error() == \"unexpected end of JSON input\" {\n+\t\t\tslog.Debug(\"incomplete JSON detected\", \"input\", s)\n+\t\t\treturn nil, true\n+\t\t}\n+\t\tslog.Debug(\"failed to unmarshal response\", \"error\", err)\n+\t\treturn nil, false\n+\t}\n+\n+\t// Collect all nested objects that could contain tool calls\n+\tvar objs []map[string]any\n+\tobjs = append(objs, collect(resp)...)\n+\tif len(objs) == 0 {\n+\t\treturn nil, false\n+\t}\n+\n+\tvar toolCalls []api.ToolCall\n+\tfor _, kv := range objs {\n+\t\tn, nok := kv[p.name].(string)\n+\t\ta, aok := kv[p.arguments].(map[string]any)\n+\t\tif nok && aok {\n+\t\t\ttoolCalls = append(toolCalls, api.ToolCall{\n+\t\t\t\tFunction: api.ToolCallFunction{\n+\t\t\t\t\tName:      n,\n+\t\t\t\t\tArguments: a,\n+\t\t\t\t},\n+\t\t\t})\n+\t\t}\n+\t}\n+\n+\t// Valid JSON, no tool calls found\n+\tif len(toolCalls) == 0 {\n+\t\treturn nil, false\n+\t}\n+\n+\treturn toolCalls, false\n+}\n+\n+// checkPrefix processes a string to find and handle a prefix pattern.\n+//\n+// Returns:\n+//   - The processed string with prefix removed if found\n+//   - Whether the prefix was found at the start of the string\n+//   - Whether to continue parsing\n+func (p *Parser) checkPrefix(s string) (string, bool, bool) {\n+\t// Keep original for overlap checks\n+\toriginal := s\n+\ts = strings.TrimSpace(s)\n+\tif s == \"\" {\n+\t\treturn \"\", false, true\n+\t}\n+\n+\t// If no prefix defined, just return trimmed string\n+\tif p.prefix == \"\" {\n+\t\treturn s, false, true\n+\t}\n+\n+\t// Check for prefix at start of string\n+\tif processedStr, hasPrefix := strings.CutPrefix(s, p.prefix); hasPrefix {\n+\t\t// Found prefix at start - accumulate for potential tool\n+\t\treturn processedStr, true, true\n+\t}\n+\n+\t// Check if prefix overlaps end of string\n+\tif overlap := suffixOverlap(original, p.prefix); overlap > 0 {\n+\t\tp.prefixPartial = true\n+\t\t// Return everything except overlapping portion\n+\t\tp.sb.Reset()\n+\t\tp.sb.WriteString(original[len(original)-overlap:])\n+\t\treturn original[0 : len(original)-overlap], false, false\n+\t}\n+\n+\t// Check if prefix appears in middle of string\n+\tif idx := strings.Index(original, p.prefix); idx != -1 {\n+\t\tp.prefixPartial = true\n+\t\t// Save remainder starting at prefix for next pass\n+\t\tp.sb.Reset()\n+\t\tp.sb.WriteString(strings.TrimSpace(original[idx:]))\n+\t\t// Return everything before prefix\n+\t\treturn original[:idx], false, false\n+\t}\n+\n+\t// No prefix found\n+\tp.prefixPartial = false\n+\treturn s, false, true\n+}\n+\n+// Add processes a string input to parse tool calls and content.\n+// It handles prefix detection and JSON parsing to extract tool calls.\n+//\n+// Returns:\n+//   - tools: Any parsed tool calls\n+//   - content: Non-tool call content\n+//   - err: Error if parsing failed\n+func (p *Parser) Add(s string) (tools []api.ToolCall, content string, err error) {\n+\tp.sb.WriteString(s)\n+\ts = p.sb.String()\n+\tif len(s) == 0 {\n+\t\treturn nil, \"\", nil\n+\t}\n+\n+\t// Check for prefix pattern in input\n+\ts, prefixFound, shouldContinue := p.checkPrefix(s)\n+\tif !shouldContinue {\n+\t\tif s != \"\" {\n+\t\t\t// Return content before prefix\n+\t\t\treturn nil, s, nil\n+\t\t}\n+\t\t// Need more input to complete prefix\n+\t\treturn nil, \"\", nil\n+\t}\n+\n+\t// Update prefix found state\n+\tif prefixFound {\n+\t\tp.prefixFound = true\n+\t}\n+\n+\t// Exit if prefix exists in template, greedy parsing is off, and prefix not found\n+\tif !p.greedyParse && !p.prefixFound {\n+\t\tp.sb.Reset()\n+\t\treturn nil, \"\", errors.New(\"prefix not found\")\n+\t}\n+\n+\ttoolCalls, isPartial := p.parseJSONToolCalls(s)\n+\tif isPartial {\n+\t\t// Need more input to complete JSON\n+\t\treturn nil, \"\", nil",
+    "repo_full_name": "ollama/ollama",
+    "discussion_comments": [
+      {
+        "comment_id": "2089777183",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 10415,
+        "pr_file": "tools/tools.go",
+        "discussion_id": "2089777183",
+        "commented_code": "@@ -0,0 +1,242 @@\n+package tools\n+\n+import (\n+\t\"errors\"\n+\t\"io\"\n+\t\"log/slog\"\n+\t\"strings\"\n+\tgotmpl \"text/template\"\n+\n+\tjsonv2 \"github.com/go-json-experiment/json\"\n+\tjsontext \"github.com/go-json-experiment/json/jsontext\"\n+\n+\t\"github.com/ollama/ollama/api\"\n+\t\"github.com/ollama/ollama/template\"\n+)\n+\n+type Parser struct {\n+\tgreedyParse   bool\n+\tprefixFound   bool\n+\tprefixPartial bool\n+\ttmpl          *gotmpl.Template\n+\tsb            *strings.Builder\n+\tprefix        string\n+\tindex         int\n+\tname          string\n+\targuments     string\n+\tDone          bool\n+}\n+\n+// parseJSONToolCalls attempts to parse a JSON string into a slice of ToolCalls.\n+// It first tries to incrementally decode the JSON to handle partial inputs.\n+// Returns:\n+//   - []api.ToolCall: The parsed tool calls if successful\n+//   - bool: True if JSON is incomplete and needs more input\n+func (p *Parser) parseJSONToolCalls(s string) ([]api.ToolCall, bool) {\n+\t// First try incremental decoding to handle partial JSON\n+\tdec := jsontext.NewDecoder(strings.NewReader(s))\n+\tif got, err := dec.ReadValue(); err == nil {\n+\t\ts = got.String()\n+\t}\n+\n+\t// Attempt full unmarshal of the JSON\n+\tvar resp any\n+\terr := jsonv2.Unmarshal([]byte(s), &resp)\n+\tif err != nil {\n+\t\t// Handle incomplete JSON cases\n+\t\tif errors.Is(err, io.ErrUnexpectedEOF) || err.Error() == \"unexpected end of JSON input\" {\n+\t\t\tslog.Debug(\"incomplete JSON detected\", \"input\", s)\n+\t\t\treturn nil, true\n+\t\t}\n+\t\tslog.Debug(\"failed to unmarshal response\", \"error\", err)\n+\t\treturn nil, false\n+\t}\n+\n+\t// Collect all nested objects that could contain tool calls\n+\tvar objs []map[string]any\n+\tobjs = append(objs, collect(resp)...)\n+\tif len(objs) == 0 {\n+\t\treturn nil, false\n+\t}\n+\n+\tvar toolCalls []api.ToolCall\n+\tfor _, kv := range objs {\n+\t\tn, nok := kv[p.name].(string)\n+\t\ta, aok := kv[p.arguments].(map[string]any)\n+\t\tif nok && aok {\n+\t\t\ttoolCalls = append(toolCalls, api.ToolCall{\n+\t\t\t\tFunction: api.ToolCallFunction{\n+\t\t\t\t\tName:      n,\n+\t\t\t\t\tArguments: a,\n+\t\t\t\t},\n+\t\t\t})\n+\t\t}\n+\t}\n+\n+\t// Valid JSON, no tool calls found\n+\tif len(toolCalls) == 0 {\n+\t\treturn nil, false\n+\t}\n+\n+\treturn toolCalls, false\n+}\n+\n+// checkPrefix processes a string to find and handle a prefix pattern.\n+//\n+// Returns:\n+//   - The processed string with prefix removed if found\n+//   - Whether the prefix was found at the start of the string\n+//   - Whether to continue parsing\n+func (p *Parser) checkPrefix(s string) (string, bool, bool) {\n+\t// Keep original for overlap checks\n+\toriginal := s\n+\ts = strings.TrimSpace(s)\n+\tif s == \"\" {\n+\t\treturn \"\", false, true\n+\t}\n+\n+\t// If no prefix defined, just return trimmed string\n+\tif p.prefix == \"\" {\n+\t\treturn s, false, true\n+\t}\n+\n+\t// Check for prefix at start of string\n+\tif processedStr, hasPrefix := strings.CutPrefix(s, p.prefix); hasPrefix {\n+\t\t// Found prefix at start - accumulate for potential tool\n+\t\treturn processedStr, true, true\n+\t}\n+\n+\t// Check if prefix overlaps end of string\n+\tif overlap := suffixOverlap(original, p.prefix); overlap > 0 {\n+\t\tp.prefixPartial = true\n+\t\t// Return everything except overlapping portion\n+\t\tp.sb.Reset()\n+\t\tp.sb.WriteString(original[len(original)-overlap:])\n+\t\treturn original[0 : len(original)-overlap], false, false\n+\t}\n+\n+\t// Check if prefix appears in middle of string\n+\tif idx := strings.Index(original, p.prefix); idx != -1 {\n+\t\tp.prefixPartial = true\n+\t\t// Save remainder starting at prefix for next pass\n+\t\tp.sb.Reset()\n+\t\tp.sb.WriteString(strings.TrimSpace(original[idx:]))\n+\t\t// Return everything before prefix\n+\t\treturn original[:idx], false, false\n+\t}\n+\n+\t// No prefix found\n+\tp.prefixPartial = false\n+\treturn s, false, true\n+}\n+\n+// Add processes a string input to parse tool calls and content.\n+// It handles prefix detection and JSON parsing to extract tool calls.\n+//\n+// Returns:\n+//   - tools: Any parsed tool calls\n+//   - content: Non-tool call content\n+//   - err: Error if parsing failed\n+func (p *Parser) Add(s string) (tools []api.ToolCall, content string, err error) {\n+\tp.sb.WriteString(s)\n+\ts = p.sb.String()\n+\tif len(s) == 0 {\n+\t\treturn nil, \"\", nil\n+\t}\n+\n+\t// Check for prefix pattern in input\n+\ts, prefixFound, shouldContinue := p.checkPrefix(s)\n+\tif !shouldContinue {\n+\t\tif s != \"\" {\n+\t\t\t// Return content before prefix\n+\t\t\treturn nil, s, nil\n+\t\t}\n+\t\t// Need more input to complete prefix\n+\t\treturn nil, \"\", nil\n+\t}\n+\n+\t// Update prefix found state\n+\tif prefixFound {\n+\t\tp.prefixFound = true\n+\t}\n+\n+\t// Exit if prefix exists in template, greedy parsing is off, and prefix not found\n+\tif !p.greedyParse && !p.prefixFound {\n+\t\tp.sb.Reset()\n+\t\treturn nil, \"\", errors.New(\"prefix not found\")\n+\t}\n+\n+\ttoolCalls, isPartial := p.parseJSONToolCalls(s)\n+\tif isPartial {\n+\t\t// Need more input to complete JSON\n+\t\treturn nil, \"\", nil",
+        "comment_created_at": "2025-05-14T21:24:02+00:00",
+        "comment_author": "mxyng",
+        "comment_body": "This should return something like `ErrNeedMore` to signal it needs more data. Returning `nil, \"\", nil` is very confusing",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2089944244",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 10415,
+        "pr_file": "tools/tools.go",
+        "discussion_id": "2089777183",
+        "commented_code": "@@ -0,0 +1,242 @@\n+package tools\n+\n+import (\n+\t\"errors\"\n+\t\"io\"\n+\t\"log/slog\"\n+\t\"strings\"\n+\tgotmpl \"text/template\"\n+\n+\tjsonv2 \"github.com/go-json-experiment/json\"\n+\tjsontext \"github.com/go-json-experiment/json/jsontext\"\n+\n+\t\"github.com/ollama/ollama/api\"\n+\t\"github.com/ollama/ollama/template\"\n+)\n+\n+type Parser struct {\n+\tgreedyParse   bool\n+\tprefixFound   bool\n+\tprefixPartial bool\n+\ttmpl          *gotmpl.Template\n+\tsb            *strings.Builder\n+\tprefix        string\n+\tindex         int\n+\tname          string\n+\targuments     string\n+\tDone          bool\n+}\n+\n+// parseJSONToolCalls attempts to parse a JSON string into a slice of ToolCalls.\n+// It first tries to incrementally decode the JSON to handle partial inputs.\n+// Returns:\n+//   - []api.ToolCall: The parsed tool calls if successful\n+//   - bool: True if JSON is incomplete and needs more input\n+func (p *Parser) parseJSONToolCalls(s string) ([]api.ToolCall, bool) {\n+\t// First try incremental decoding to handle partial JSON\n+\tdec := jsontext.NewDecoder(strings.NewReader(s))\n+\tif got, err := dec.ReadValue(); err == nil {\n+\t\ts = got.String()\n+\t}\n+\n+\t// Attempt full unmarshal of the JSON\n+\tvar resp any\n+\terr := jsonv2.Unmarshal([]byte(s), &resp)\n+\tif err != nil {\n+\t\t// Handle incomplete JSON cases\n+\t\tif errors.Is(err, io.ErrUnexpectedEOF) || err.Error() == \"unexpected end of JSON input\" {\n+\t\t\tslog.Debug(\"incomplete JSON detected\", \"input\", s)\n+\t\t\treturn nil, true\n+\t\t}\n+\t\tslog.Debug(\"failed to unmarshal response\", \"error\", err)\n+\t\treturn nil, false\n+\t}\n+\n+\t// Collect all nested objects that could contain tool calls\n+\tvar objs []map[string]any\n+\tobjs = append(objs, collect(resp)...)\n+\tif len(objs) == 0 {\n+\t\treturn nil, false\n+\t}\n+\n+\tvar toolCalls []api.ToolCall\n+\tfor _, kv := range objs {\n+\t\tn, nok := kv[p.name].(string)\n+\t\ta, aok := kv[p.arguments].(map[string]any)\n+\t\tif nok && aok {\n+\t\t\ttoolCalls = append(toolCalls, api.ToolCall{\n+\t\t\t\tFunction: api.ToolCallFunction{\n+\t\t\t\t\tName:      n,\n+\t\t\t\t\tArguments: a,\n+\t\t\t\t},\n+\t\t\t})\n+\t\t}\n+\t}\n+\n+\t// Valid JSON, no tool calls found\n+\tif len(toolCalls) == 0 {\n+\t\treturn nil, false\n+\t}\n+\n+\treturn toolCalls, false\n+}\n+\n+// checkPrefix processes a string to find and handle a prefix pattern.\n+//\n+// Returns:\n+//   - The processed string with prefix removed if found\n+//   - Whether the prefix was found at the start of the string\n+//   - Whether to continue parsing\n+func (p *Parser) checkPrefix(s string) (string, bool, bool) {\n+\t// Keep original for overlap checks\n+\toriginal := s\n+\ts = strings.TrimSpace(s)\n+\tif s == \"\" {\n+\t\treturn \"\", false, true\n+\t}\n+\n+\t// If no prefix defined, just return trimmed string\n+\tif p.prefix == \"\" {\n+\t\treturn s, false, true\n+\t}\n+\n+\t// Check for prefix at start of string\n+\tif processedStr, hasPrefix := strings.CutPrefix(s, p.prefix); hasPrefix {\n+\t\t// Found prefix at start - accumulate for potential tool\n+\t\treturn processedStr, true, true\n+\t}\n+\n+\t// Check if prefix overlaps end of string\n+\tif overlap := suffixOverlap(original, p.prefix); overlap > 0 {\n+\t\tp.prefixPartial = true\n+\t\t// Return everything except overlapping portion\n+\t\tp.sb.Reset()\n+\t\tp.sb.WriteString(original[len(original)-overlap:])\n+\t\treturn original[0 : len(original)-overlap], false, false\n+\t}\n+\n+\t// Check if prefix appears in middle of string\n+\tif idx := strings.Index(original, p.prefix); idx != -1 {\n+\t\tp.prefixPartial = true\n+\t\t// Save remainder starting at prefix for next pass\n+\t\tp.sb.Reset()\n+\t\tp.sb.WriteString(strings.TrimSpace(original[idx:]))\n+\t\t// Return everything before prefix\n+\t\treturn original[:idx], false, false\n+\t}\n+\n+\t// No prefix found\n+\tp.prefixPartial = false\n+\treturn s, false, true\n+}\n+\n+// Add processes a string input to parse tool calls and content.\n+// It handles prefix detection and JSON parsing to extract tool calls.\n+//\n+// Returns:\n+//   - tools: Any parsed tool calls\n+//   - content: Non-tool call content\n+//   - err: Error if parsing failed\n+func (p *Parser) Add(s string) (tools []api.ToolCall, content string, err error) {\n+\tp.sb.WriteString(s)\n+\ts = p.sb.String()\n+\tif len(s) == 0 {\n+\t\treturn nil, \"\", nil\n+\t}\n+\n+\t// Check for prefix pattern in input\n+\ts, prefixFound, shouldContinue := p.checkPrefix(s)\n+\tif !shouldContinue {\n+\t\tif s != \"\" {\n+\t\t\t// Return content before prefix\n+\t\t\treturn nil, s, nil\n+\t\t}\n+\t\t// Need more input to complete prefix\n+\t\treturn nil, \"\", nil\n+\t}\n+\n+\t// Update prefix found state\n+\tif prefixFound {\n+\t\tp.prefixFound = true\n+\t}\n+\n+\t// Exit if prefix exists in template, greedy parsing is off, and prefix not found\n+\tif !p.greedyParse && !p.prefixFound {\n+\t\tp.sb.Reset()\n+\t\treturn nil, \"\", errors.New(\"prefix not found\")\n+\t}\n+\n+\ttoolCalls, isPartial := p.parseJSONToolCalls(s)\n+\tif isPartial {\n+\t\t// Need more input to complete JSON\n+\t\treturn nil, \"\", nil",
+        "comment_created_at": "2025-05-15T00:31:49+00:00",
+        "comment_author": "ParthSareen",
+        "comment_body": "Yeah that's a good idea. Having sentinel errors makes more sense.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1996435433",
+    "pr_number": 9433,
+    "pr_file": "runner/ollamarunner/cache.go",
+    "created_at": "2025-03-14T23:45:28+00:00",
+    "commented_code": "slog.Debug(\"context limit hit - shifting\", \"id\", slot.Id, \"limit\", c.numCtx, \"input\", len(slot.Inputs),\n \t\t\"keep\", numKeep, \"discard\", discard)\n \n-\t// TODO (jessegross): KV cache removal can fail for certain types of models\n \tif c.cache != nil {\n \t\terr := c.cache.Remove(slot.Id, numKeep, numKeep+discard)\n \t\tif err != nil {\n-\t\t\treturn fmt.Errorf(\"unable to remove old kv cache entries (id: %v, keep: %v discard: %v): %w\", slot.Id, numKeep, discard, err)\n+\t\t\tslog.Debug(\"kv cache removal failed, clearing cache and returning inputs for reprocessing\",",
+    "repo_full_name": "ollama/ollama",
+    "discussion_comments": [
+      {
+        "comment_id": "1996435433",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9433,
+        "pr_file": "runner/ollamarunner/cache.go",
+        "discussion_id": "1996435433",
+        "commented_code": "@@ -260,11 +268,25 @@ func (c *InputCache) ShiftCacheSlot(slot *InputCacheSlot, numKeep int32) error {\n \tslog.Debug(\"context limit hit - shifting\", \"id\", slot.Id, \"limit\", c.numCtx, \"input\", len(slot.Inputs),\n \t\t\"keep\", numKeep, \"discard\", discard)\n \n-\t// TODO (jessegross): KV cache removal can fail for certain types of models\n \tif c.cache != nil {\n \t\terr := c.cache.Remove(slot.Id, numKeep, numKeep+discard)\n \t\tif err != nil {\n-\t\t\treturn fmt.Errorf(\"unable to remove old kv cache entries (id: %v, keep: %v discard: %v): %w\", slot.Id, numKeep, discard, err)\n+\t\t\tslog.Debug(\"kv cache removal failed, clearing cache and returning inputs for reprocessing\",",
+        "comment_created_at": "2025-03-14T23:45:28+00:00",
+        "comment_author": "jessegross",
+        "comment_body": "In most cases, this simply means the model doesn't support the operation, so we might want to soften the error message to indicate that it isn't necessarily unexpected. If you want to be sure this is the case, you can check for `kvcache.ErrNotSupported` on the Ollama engine.\r\n\r\nThe old engine doesn't exactly give this information but I believe that model not supporting the operation is the only reason why it fails. That is true for both cases of `shiftFailed` - they pretty much mean the same thing, just for different root causes.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2008216461",
+    "pr_number": 9923,
+    "pr_file": "server/internal/client/ollama/registry.go",
+    "created_at": "2025-03-21T19:34:31+00:00",
+    "commented_code": "if err := g.Wait(); err != nil {\n \t\treturn err\n \t}\n+\tif total.Load() != expected {",
+    "repo_full_name": "ollama/ollama",
+    "discussion_comments": [
+      {
+        "comment_id": "2008216461",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9923,
+        "pr_file": "server/internal/client/ollama/registry.go",
+        "discussion_id": "2008216461",
+        "commented_code": "@@ -531,6 +556,9 @@ func (r *Registry) Pull(ctx context.Context, name string) error {\n \tif err := g.Wait(); err != nil {\n \t\treturn err\n \t}\n+\tif total.Load() != expected {",
+        "comment_created_at": "2025-03-21T19:34:31+00:00",
+        "comment_author": "BruceMacD",
+        "comment_body": "It looks like this wait to the end to report the error that the download is incomplete, rather than retrying. Is that accurate? I'd rather just retry the chunk, since the download is not resumable either as far as I can tell.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2008238969",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9923,
+        "pr_file": "server/internal/client/ollama/registry.go",
+        "discussion_id": "2008216461",
+        "commented_code": "@@ -531,6 +556,9 @@ func (r *Registry) Pull(ctx context.Context, name string) error {\n \tif err := g.Wait(); err != nil {\n \t\treturn err\n \t}\n+\tif total.Load() != expected {",
+        "comment_created_at": "2025-03-21T19:50:39+00:00",
+        "comment_author": "bmizerany",
+        "comment_body": "The download will be resumable. The clients should be able to retry safely. That is by design. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2008239564",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9923,
+        "pr_file": "server/internal/client/ollama/registry.go",
+        "discussion_id": "2008216461",
+        "commented_code": "@@ -531,6 +556,9 @@ func (r *Registry) Pull(ctx context.Context, name string) error {\n \tif err := g.Wait(); err != nil {\n \t\treturn err\n \t}\n+\tif total.Load() != expected {",
+        "comment_created_at": "2025-03-21T19:51:15+00:00",
+        "comment_author": "bmizerany",
+        "comment_body": "If that turns out to be a regret, I'll add retry back. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1996188254",
+    "pr_number": 9324,
+    "pr_file": "runner/ollamarunner/runner.go",
+    "created_at": "2025-03-14T19:51:30+00:00",
+    "commented_code": "return nil\n }\n \n-// TODO (jmorganca): use structs from the api package to avoid duplication\n-// this way the api acts as a proxy instead of using a different api for the\n-// runner\n-type Options struct {\n-\tapi.Runner\n-\n-\tNumKeep          int      `json:\"n_keep\"`\n-\tSeed             int      `json:\"seed\"`\n-\tNumPredict       int      `json:\"n_predict\"`\n-\tTopK             int      `json:\"top_k\"`\n-\tTopP             float32  `json:\"top_p\"`\n-\tMinP             float32  `json:\"min_p\"`\n-\tTypicalP         float32  `json:\"typical_p\"`\n-\tRepeatLastN      int      `json:\"repeat_last_n\"`\n-\tTemperature      float32  `json:\"temperature\"`\n-\tRepeatPenalty    float32  `json:\"repeat_penalty\"`\n-\tPresencePenalty  float32  `json:\"presence_penalty\"`\n-\tFrequencyPenalty float32  `json:\"frequency_penalty\"`\n-\tMirostat         int      `json:\"mirostat\"`\n-\tMirostatTau      float32  `json:\"mirostat_tau\"`\n-\tMirostatEta      float32  `json:\"mirostat_eta\"`\n-\tStop             []string `json:\"stop\"`\n-}\n-\n-type ImageData struct {\n-\tData          []byte `json:\"data\"`\n-\tID            int    `json:\"id\"`\n-\tAspectRatioID int    `json:\"aspect_ratio_id\"`\n-}\n-\n-type CompletionRequest struct {\n-\tPrompt      string      `json:\"prompt\"`\n-\tImages      []ImageData `json:\"image_data\"`\n-\tGrammar     string      `json:\"grammar\"`\n-\tCachePrompt bool        `json:\"cache_prompt\"`\n-\n-\tOptions\n-}\n-\n-type Timings struct {\n-\tPredictedN  int     `json:\"predicted_n\"`\n-\tPredictedMS float64 `json:\"predicted_ms\"`\n-\tPromptN     int     `json:\"prompt_n\"`\n-\tPromptMS    float64 `json:\"prompt_ms\"`\n-}\n-\n-type CompletionResponse struct {\n-\tContent string `json:\"content\"`\n-\tStop    bool   `json:\"stop\"`\n-\n-\tModel        string  `json:\"model,omitempty\"`\n-\tPrompt       string  `json:\"prompt,omitempty\"`\n-\tStoppedLimit bool    `json:\"stopped_limit,omitempty\"`\n-\tPredictedN   int     `json:\"predicted_n,omitempty\"`\n-\tPredictedMS  float64 `json:\"predicted_ms,omitempty\"`\n-\tPromptN      int     `json:\"prompt_n,omitempty\"`\n-\tPromptMS     float64 `json:\"prompt_ms,omitempty\"`\n-\n-\tTimings Timings `json:\"timings\"`\n-}\n-\n func (s *Server) completion(w http.ResponseWriter, r *http.Request) {\n-\tvar req CompletionRequest\n-\treq.Options = Options(api.DefaultOptions())\n+\tvar req llm.CompletionRequest\n \tif err := json.NewDecoder(r.Body).Decode(&req); err != nil {\n \t\thttp.Error(w, \"Bad request\", http.StatusBadRequest)\n \t\treturn\n \t}\n \n+\tif req.Options == nil {\n+\t\thttp.Error(w, \"Options not provided\", http.StatusBadRequest)",
+    "repo_full_name": "ollama/ollama",
+    "discussion_comments": [
+      {
+        "comment_id": "1996188254",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9324,
+        "pr_file": "runner/ollamarunner/runner.go",
+        "discussion_id": "1996188254",
+        "commented_code": "@@ -501,75 +501,18 @@ func (s *Server) processBatch() error {\n \treturn nil\n }\n \n-// TODO (jmorganca): use structs from the api package to avoid duplication\n-// this way the api acts as a proxy instead of using a different api for the\n-// runner\n-type Options struct {\n-\tapi.Runner\n-\n-\tNumKeep          int      `json:\"n_keep\"`\n-\tSeed             int      `json:\"seed\"`\n-\tNumPredict       int      `json:\"n_predict\"`\n-\tTopK             int      `json:\"top_k\"`\n-\tTopP             float32  `json:\"top_p\"`\n-\tMinP             float32  `json:\"min_p\"`\n-\tTypicalP         float32  `json:\"typical_p\"`\n-\tRepeatLastN      int      `json:\"repeat_last_n\"`\n-\tTemperature      float32  `json:\"temperature\"`\n-\tRepeatPenalty    float32  `json:\"repeat_penalty\"`\n-\tPresencePenalty  float32  `json:\"presence_penalty\"`\n-\tFrequencyPenalty float32  `json:\"frequency_penalty\"`\n-\tMirostat         int      `json:\"mirostat\"`\n-\tMirostatTau      float32  `json:\"mirostat_tau\"`\n-\tMirostatEta      float32  `json:\"mirostat_eta\"`\n-\tStop             []string `json:\"stop\"`\n-}\n-\n-type ImageData struct {\n-\tData          []byte `json:\"data\"`\n-\tID            int    `json:\"id\"`\n-\tAspectRatioID int    `json:\"aspect_ratio_id\"`\n-}\n-\n-type CompletionRequest struct {\n-\tPrompt      string      `json:\"prompt\"`\n-\tImages      []ImageData `json:\"image_data\"`\n-\tGrammar     string      `json:\"grammar\"`\n-\tCachePrompt bool        `json:\"cache_prompt\"`\n-\n-\tOptions\n-}\n-\n-type Timings struct {\n-\tPredictedN  int     `json:\"predicted_n\"`\n-\tPredictedMS float64 `json:\"predicted_ms\"`\n-\tPromptN     int     `json:\"prompt_n\"`\n-\tPromptMS    float64 `json:\"prompt_ms\"`\n-}\n-\n-type CompletionResponse struct {\n-\tContent string `json:\"content\"`\n-\tStop    bool   `json:\"stop\"`\n-\n-\tModel        string  `json:\"model,omitempty\"`\n-\tPrompt       string  `json:\"prompt,omitempty\"`\n-\tStoppedLimit bool    `json:\"stopped_limit,omitempty\"`\n-\tPredictedN   int     `json:\"predicted_n,omitempty\"`\n-\tPredictedMS  float64 `json:\"predicted_ms,omitempty\"`\n-\tPromptN      int     `json:\"prompt_n,omitempty\"`\n-\tPromptMS     float64 `json:\"prompt_ms,omitempty\"`\n-\n-\tTimings Timings `json:\"timings\"`\n-}\n-\n func (s *Server) completion(w http.ResponseWriter, r *http.Request) {\n-\tvar req CompletionRequest\n-\treq.Options = Options(api.DefaultOptions())\n+\tvar req llm.CompletionRequest\n \tif err := json.NewDecoder(r.Body).Decode(&req); err != nil {\n \t\thttp.Error(w, \"Bad request\", http.StatusBadRequest)\n \t\treturn\n \t}\n \n+\tif req.Options == nil {\n+\t\thttp.Error(w, \"Options not provided\", http.StatusBadRequest)",
+        "comment_created_at": "2025-03-14T19:51:30+00:00",
+        "comment_author": "ParthSareen",
+        "comment_body": "I'm not sure if we should error here or just load default config as a fallback \ud83e\udd14 ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1996298610",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9324,
+        "pr_file": "runner/ollamarunner/runner.go",
+        "discussion_id": "1996188254",
+        "commented_code": "@@ -501,75 +501,18 @@ func (s *Server) processBatch() error {\n \treturn nil\n }\n \n-// TODO (jmorganca): use structs from the api package to avoid duplication\n-// this way the api acts as a proxy instead of using a different api for the\n-// runner\n-type Options struct {\n-\tapi.Runner\n-\n-\tNumKeep          int      `json:\"n_keep\"`\n-\tSeed             int      `json:\"seed\"`\n-\tNumPredict       int      `json:\"n_predict\"`\n-\tTopK             int      `json:\"top_k\"`\n-\tTopP             float32  `json:\"top_p\"`\n-\tMinP             float32  `json:\"min_p\"`\n-\tTypicalP         float32  `json:\"typical_p\"`\n-\tRepeatLastN      int      `json:\"repeat_last_n\"`\n-\tTemperature      float32  `json:\"temperature\"`\n-\tRepeatPenalty    float32  `json:\"repeat_penalty\"`\n-\tPresencePenalty  float32  `json:\"presence_penalty\"`\n-\tFrequencyPenalty float32  `json:\"frequency_penalty\"`\n-\tMirostat         int      `json:\"mirostat\"`\n-\tMirostatTau      float32  `json:\"mirostat_tau\"`\n-\tMirostatEta      float32  `json:\"mirostat_eta\"`\n-\tStop             []string `json:\"stop\"`\n-}\n-\n-type ImageData struct {\n-\tData          []byte `json:\"data\"`\n-\tID            int    `json:\"id\"`\n-\tAspectRatioID int    `json:\"aspect_ratio_id\"`\n-}\n-\n-type CompletionRequest struct {\n-\tPrompt      string      `json:\"prompt\"`\n-\tImages      []ImageData `json:\"image_data\"`\n-\tGrammar     string      `json:\"grammar\"`\n-\tCachePrompt bool        `json:\"cache_prompt\"`\n-\n-\tOptions\n-}\n-\n-type Timings struct {\n-\tPredictedN  int     `json:\"predicted_n\"`\n-\tPredictedMS float64 `json:\"predicted_ms\"`\n-\tPromptN     int     `json:\"prompt_n\"`\n-\tPromptMS    float64 `json:\"prompt_ms\"`\n-}\n-\n-type CompletionResponse struct {\n-\tContent string `json:\"content\"`\n-\tStop    bool   `json:\"stop\"`\n-\n-\tModel        string  `json:\"model,omitempty\"`\n-\tPrompt       string  `json:\"prompt,omitempty\"`\n-\tStoppedLimit bool    `json:\"stopped_limit,omitempty\"`\n-\tPredictedN   int     `json:\"predicted_n,omitempty\"`\n-\tPredictedMS  float64 `json:\"predicted_ms,omitempty\"`\n-\tPromptN      int     `json:\"prompt_n,omitempty\"`\n-\tPromptMS     float64 `json:\"prompt_ms,omitempty\"`\n-\n-\tTimings Timings `json:\"timings\"`\n-}\n-\n func (s *Server) completion(w http.ResponseWriter, r *http.Request) {\n-\tvar req CompletionRequest\n-\treq.Options = Options(api.DefaultOptions())\n+\tvar req llm.CompletionRequest\n \tif err := json.NewDecoder(r.Body).Decode(&req); err != nil {\n \t\thttp.Error(w, \"Bad request\", http.StatusBadRequest)\n \t\treturn\n \t}\n \n+\tif req.Options == nil {\n+\t\thttp.Error(w, \"Options not provided\", http.StatusBadRequest)",
+        "comment_created_at": "2025-03-14T21:18:23+00:00",
+        "comment_author": "BruceMacD",
+        "comment_body": "Added the default fallback back in, defence in depth is good",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1994169745",
+    "pr_number": 9741,
+    "pr_file": "model/model.go",
+    "created_at": "2025-03-13T19:17:42+00:00",
+    "commented_code": "\"github.com/ollama/ollama/model/input\"\n )\n \n+var ErrNoVisionModel = errors.New(\"vision model not found\")",
+    "repo_full_name": "ollama/ollama",
+    "discussion_comments": [
+      {
+        "comment_id": "1994169745",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9741,
+        "pr_file": "model/model.go",
+        "discussion_id": "1994169745",
+        "commented_code": "@@ -22,6 +22,8 @@ import (\n \t\"github.com/ollama/ollama/model/input\"\n )\n \n+var ErrNoVisionModel = errors.New(\"vision model not found\")",
+        "comment_created_at": "2025-03-13T19:17:42+00:00",
+        "comment_author": "jmorganca",
+        "comment_body": "```suggestion\r\nvar ErrNoVisionModel = errors.New(\"this model is missing data required for image input\")\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1994175896",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9741,
+        "pr_file": "model/model.go",
+        "discussion_id": "1994169745",
+        "commented_code": "@@ -22,6 +22,8 @@ import (\n \t\"github.com/ollama/ollama/model/input\"\n )\n \n+var ErrNoVisionModel = errors.New(\"vision model not found\")",
+        "comment_created_at": "2025-03-13T19:22:36+00:00",
+        "comment_author": "jmorganca",
+        "comment_body": "Actually, this message is more of edge case vs a capability, it's great as is",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1994177154",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9741,
+        "pr_file": "model/model.go",
+        "discussion_id": "1994169745",
+        "commented_code": "@@ -22,6 +22,8 @@ import (\n \t\"github.com/ollama/ollama/model/input\"\n )\n \n+var ErrNoVisionModel = errors.New(\"vision model not found\")",
+        "comment_created_at": "2025-03-13T19:23:28+00:00",
+        "comment_author": "jmorganca",
+        "comment_body": "We may want to hint at missing data or similar. E.g. `this model is missing data required for image input`",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

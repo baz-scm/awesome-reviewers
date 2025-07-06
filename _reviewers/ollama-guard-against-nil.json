@@ -1,0 +1,160 @@
+[
+  {
+    "discussion_id": "2085607307",
+    "pr_number": 10674,
+    "pr_file": "model/models/llama4/model.go",
+    "created_at": "2025-05-12T22:10:15+00:00",
+    "commented_code": "visionOutputs := m.VisionModel.Forward(ctx, pixelValues)\n \tvisionOutputs = visionOutputs.Reshape(ctx, visionOutputs.Dim(0), visionOutputs.Dim(1)*visionOutputs.Dim(2)*visionOutputs.Dim(3))\n \tprojectedOutputs := m.Projector.Forward(ctx, visionOutputs)\n-\treturn &chunks{Model: m, Tensor: projectedOutputs, aspectRatio: image.Point{ratioW, ratioH}}, nil\n-}\n \n-type chunks struct {\n-\t*Model\n-\tml.Tensor\n-\taspectRatio image.Point\n+\tvar multimodal []input.Multimodal\n+\taspectRatio := image.Point{ratioW, ratioH}\n+\n+\tvar offset int\n+\tpatchesPerChunk := projectedOutputs.Dim(1)\n+\tif aspectRatio.Y*aspectRatio.X > 1 {\n+\t\tpatchesPerChunk = projectedOutputs.Dim(1) / (aspectRatio.X*aspectRatio.Y + 1)\n+\n+\t\tfor range aspectRatio.Y {\n+\t\t\tfor x := range aspectRatio.X {\n+\t\t\t\tview := projectedOutputs.View(ctx, projectedOutputs.Stride(1)*offset,\n+\t\t\t\t\tprojectedOutputs.Dim(0), projectedOutputs.Stride(1),\n+\t\t\t\t\tpatchesPerChunk)\n+\t\t\t\tvar separator separator\n+\t\t\t\tif x < aspectRatio.X-1 {\n+\t\t\t\t\tseparator.x = true // <|tile_x_separator|>\n+\t\t\t\t} else {\n+\t\t\t\t\tseparator.y = true // <|tile_y_separator|>\n+\t\t\t\t}\n+\t\t\t\tmultimodal = append(multimodal, input.Multimodal{Tensor: view, Data: &separator})\n+\t\t\t\toffset += patchesPerChunk\n+\t\t\t}\n+\t\t}\n+\t}\n \n-\tdataOnce sync.Once\n-\tdata     []float32\n-}\n+\tview := projectedOutputs.View(ctx, projectedOutputs.Stride(1)*offset,\n+\t\tprojectedOutputs.Dim(0), projectedOutputs.Stride(1),\n+\t\tpatchesPerChunk)\n+\tmultimodal = append(multimodal, input.Multimodal{Tensor: view, Data: &separator{}})\n \n-type chunk struct {\n-\t*chunks\n-\ts, n int\n+\treturn multimodal, nil\n }\n \n-func (r *chunk) floats() []float32 {\n-\tr.dataOnce.Do(func() {\n-\t\ttemp := r.Backend().NewContext()\n-\t\tdefer temp.Close()\n-\t\ttemp.Forward(r.Tensor).Compute(r.Tensor)\n-\t\tr.data = r.Floats()\n-\t})\n-\n-\treturn r.data[r.s*r.Dim(0) : (r.s+r.n)*r.Dim(0)]\n+type separator struct {\n+\tx bool\n+\ty bool\n }\n \n func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {\n \tvar result []input.Input\n \tfor _, inp := range inputs {\n-\t\tif inp.Multimodal == nil {\n+\t\tif len(inp.Multimodal) == 0 {\n \t\t\tresult = append(result, inp)\n \t\t\tcontinue\n \t\t}\n \n-\t\tt := inp.Multimodal.(*chunks)\n \t\tvar imageInputs []input.Input\n \t\timageInputs = append(imageInputs, input.Input{Token: 200080}) // <|image_start|>\n \n-\t\tvar offset int\n-\t\tpatchesPerChunk := t.Dim(1)\n-\t\tif t.aspectRatio.Y*t.aspectRatio.X > 1 {\n-\t\t\tpatchesPerChunk = t.Dim(1) / (t.aspectRatio.X*t.aspectRatio.Y + 1)\n-\n-\t\t\tfor range t.aspectRatio.Y {\n-\t\t\t\tfor x := range t.aspectRatio.X {\n-\t\t\t\t\timageInputs = append(imageInputs, input.Input{Token: 200092, Multimodal: &chunk{t, offset, patchesPerChunk}, MultimodalHash: inp.MultimodalHash, SameBatch: patchesPerChunk}) // <|patch|>\n-\t\t\t\t\timageInputs = append(imageInputs, slices.Repeat([]input.Input{{Token: 200092}}, patchesPerChunk-1)...)\n-\t\t\t\t\tif x < t.aspectRatio.X-1 {\n-\t\t\t\t\t\timageInputs = append(imageInputs, input.Input{Token: 200084}) // <|tile_x_separator|>\n-\t\t\t\t\t}\n-\t\t\t\t\toffset += patchesPerChunk\n-\t\t\t\t}\n+\t\tfor i, mm := range inp.Multimodal {\n+\t\t\tpatchesPerChunk := mm.Tensor.Dim(1)\n+\n+\t\t\tif i < len(inp.Multimodal)-1 {\n+\t\t\t\tseparator := mm.Data.(*separator)",
+    "repo_full_name": "ollama/ollama",
+    "discussion_comments": [
+      {
+        "comment_id": "2085607307",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 10674,
+        "pr_file": "model/models/llama4/model.go",
+        "discussion_id": "2085607307",
+        "commented_code": "@@ -100,70 +99,79 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er\n \tvisionOutputs := m.VisionModel.Forward(ctx, pixelValues)\n \tvisionOutputs = visionOutputs.Reshape(ctx, visionOutputs.Dim(0), visionOutputs.Dim(1)*visionOutputs.Dim(2)*visionOutputs.Dim(3))\n \tprojectedOutputs := m.Projector.Forward(ctx, visionOutputs)\n-\treturn &chunks{Model: m, Tensor: projectedOutputs, aspectRatio: image.Point{ratioW, ratioH}}, nil\n-}\n \n-type chunks struct {\n-\t*Model\n-\tml.Tensor\n-\taspectRatio image.Point\n+\tvar multimodal []input.Multimodal\n+\taspectRatio := image.Point{ratioW, ratioH}\n+\n+\tvar offset int\n+\tpatchesPerChunk := projectedOutputs.Dim(1)\n+\tif aspectRatio.Y*aspectRatio.X > 1 {\n+\t\tpatchesPerChunk = projectedOutputs.Dim(1) / (aspectRatio.X*aspectRatio.Y + 1)\n+\n+\t\tfor range aspectRatio.Y {\n+\t\t\tfor x := range aspectRatio.X {\n+\t\t\t\tview := projectedOutputs.View(ctx, projectedOutputs.Stride(1)*offset,\n+\t\t\t\t\tprojectedOutputs.Dim(0), projectedOutputs.Stride(1),\n+\t\t\t\t\tpatchesPerChunk)\n+\t\t\t\tvar separator separator\n+\t\t\t\tif x < aspectRatio.X-1 {\n+\t\t\t\t\tseparator.x = true // <|tile_x_separator|>\n+\t\t\t\t} else {\n+\t\t\t\t\tseparator.y = true // <|tile_y_separator|>\n+\t\t\t\t}\n+\t\t\t\tmultimodal = append(multimodal, input.Multimodal{Tensor: view, Data: &separator})\n+\t\t\t\toffset += patchesPerChunk\n+\t\t\t}\n+\t\t}\n+\t}\n \n-\tdataOnce sync.Once\n-\tdata     []float32\n-}\n+\tview := projectedOutputs.View(ctx, projectedOutputs.Stride(1)*offset,\n+\t\tprojectedOutputs.Dim(0), projectedOutputs.Stride(1),\n+\t\tpatchesPerChunk)\n+\tmultimodal = append(multimodal, input.Multimodal{Tensor: view, Data: &separator{}})\n \n-type chunk struct {\n-\t*chunks\n-\ts, n int\n+\treturn multimodal, nil\n }\n \n-func (r *chunk) floats() []float32 {\n-\tr.dataOnce.Do(func() {\n-\t\ttemp := r.Backend().NewContext()\n-\t\tdefer temp.Close()\n-\t\ttemp.Forward(r.Tensor).Compute(r.Tensor)\n-\t\tr.data = r.Floats()\n-\t})\n-\n-\treturn r.data[r.s*r.Dim(0) : (r.s+r.n)*r.Dim(0)]\n+type separator struct {\n+\tx bool\n+\ty bool\n }\n \n func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {\n \tvar result []input.Input\n \tfor _, inp := range inputs {\n-\t\tif inp.Multimodal == nil {\n+\t\tif len(inp.Multimodal) == 0 {\n \t\t\tresult = append(result, inp)\n \t\t\tcontinue\n \t\t}\n \n-\t\tt := inp.Multimodal.(*chunks)\n \t\tvar imageInputs []input.Input\n \t\timageInputs = append(imageInputs, input.Input{Token: 200080}) // <|image_start|>\n \n-\t\tvar offset int\n-\t\tpatchesPerChunk := t.Dim(1)\n-\t\tif t.aspectRatio.Y*t.aspectRatio.X > 1 {\n-\t\t\tpatchesPerChunk = t.Dim(1) / (t.aspectRatio.X*t.aspectRatio.Y + 1)\n-\n-\t\t\tfor range t.aspectRatio.Y {\n-\t\t\t\tfor x := range t.aspectRatio.X {\n-\t\t\t\t\timageInputs = append(imageInputs, input.Input{Token: 200092, Multimodal: &chunk{t, offset, patchesPerChunk}, MultimodalHash: inp.MultimodalHash, SameBatch: patchesPerChunk}) // <|patch|>\n-\t\t\t\t\timageInputs = append(imageInputs, slices.Repeat([]input.Input{{Token: 200092}}, patchesPerChunk-1)...)\n-\t\t\t\t\tif x < t.aspectRatio.X-1 {\n-\t\t\t\t\t\timageInputs = append(imageInputs, input.Input{Token: 200084}) // <|tile_x_separator|>\n-\t\t\t\t\t}\n-\t\t\t\t\toffset += patchesPerChunk\n-\t\t\t\t}\n+\t\tfor i, mm := range inp.Multimodal {\n+\t\t\tpatchesPerChunk := mm.Tensor.Dim(1)\n+\n+\t\t\tif i < len(inp.Multimodal)-1 {\n+\t\t\t\tseparator := mm.Data.(*separator)",
+        "comment_created_at": "2025-05-12T22:10:15+00:00",
+        "comment_author": "jmorganca",
+        "comment_body": "Should we `ok` check this?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2085607526",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 10674,
+        "pr_file": "model/models/llama4/model.go",
+        "discussion_id": "2085607307",
+        "commented_code": "@@ -100,70 +99,79 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er\n \tvisionOutputs := m.VisionModel.Forward(ctx, pixelValues)\n \tvisionOutputs = visionOutputs.Reshape(ctx, visionOutputs.Dim(0), visionOutputs.Dim(1)*visionOutputs.Dim(2)*visionOutputs.Dim(3))\n \tprojectedOutputs := m.Projector.Forward(ctx, visionOutputs)\n-\treturn &chunks{Model: m, Tensor: projectedOutputs, aspectRatio: image.Point{ratioW, ratioH}}, nil\n-}\n \n-type chunks struct {\n-\t*Model\n-\tml.Tensor\n-\taspectRatio image.Point\n+\tvar multimodal []input.Multimodal\n+\taspectRatio := image.Point{ratioW, ratioH}\n+\n+\tvar offset int\n+\tpatchesPerChunk := projectedOutputs.Dim(1)\n+\tif aspectRatio.Y*aspectRatio.X > 1 {\n+\t\tpatchesPerChunk = projectedOutputs.Dim(1) / (aspectRatio.X*aspectRatio.Y + 1)\n+\n+\t\tfor range aspectRatio.Y {\n+\t\t\tfor x := range aspectRatio.X {\n+\t\t\t\tview := projectedOutputs.View(ctx, projectedOutputs.Stride(1)*offset,\n+\t\t\t\t\tprojectedOutputs.Dim(0), projectedOutputs.Stride(1),\n+\t\t\t\t\tpatchesPerChunk)\n+\t\t\t\tvar separator separator\n+\t\t\t\tif x < aspectRatio.X-1 {\n+\t\t\t\t\tseparator.x = true // <|tile_x_separator|>\n+\t\t\t\t} else {\n+\t\t\t\t\tseparator.y = true // <|tile_y_separator|>\n+\t\t\t\t}\n+\t\t\t\tmultimodal = append(multimodal, input.Multimodal{Tensor: view, Data: &separator})\n+\t\t\t\toffset += patchesPerChunk\n+\t\t\t}\n+\t\t}\n+\t}\n \n-\tdataOnce sync.Once\n-\tdata     []float32\n-}\n+\tview := projectedOutputs.View(ctx, projectedOutputs.Stride(1)*offset,\n+\t\tprojectedOutputs.Dim(0), projectedOutputs.Stride(1),\n+\t\tpatchesPerChunk)\n+\tmultimodal = append(multimodal, input.Multimodal{Tensor: view, Data: &separator{}})\n \n-type chunk struct {\n-\t*chunks\n-\ts, n int\n+\treturn multimodal, nil\n }\n \n-func (r *chunk) floats() []float32 {\n-\tr.dataOnce.Do(func() {\n-\t\ttemp := r.Backend().NewContext()\n-\t\tdefer temp.Close()\n-\t\ttemp.Forward(r.Tensor).Compute(r.Tensor)\n-\t\tr.data = r.Floats()\n-\t})\n-\n-\treturn r.data[r.s*r.Dim(0) : (r.s+r.n)*r.Dim(0)]\n+type separator struct {\n+\tx bool\n+\ty bool\n }\n \n func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {\n \tvar result []input.Input\n \tfor _, inp := range inputs {\n-\t\tif inp.Multimodal == nil {\n+\t\tif len(inp.Multimodal) == 0 {\n \t\t\tresult = append(result, inp)\n \t\t\tcontinue\n \t\t}\n \n-\t\tt := inp.Multimodal.(*chunks)\n \t\tvar imageInputs []input.Input\n \t\timageInputs = append(imageInputs, input.Input{Token: 200080}) // <|image_start|>\n \n-\t\tvar offset int\n-\t\tpatchesPerChunk := t.Dim(1)\n-\t\tif t.aspectRatio.Y*t.aspectRatio.X > 1 {\n-\t\t\tpatchesPerChunk = t.Dim(1) / (t.aspectRatio.X*t.aspectRatio.Y + 1)\n-\n-\t\t\tfor range t.aspectRatio.Y {\n-\t\t\t\tfor x := range t.aspectRatio.X {\n-\t\t\t\t\timageInputs = append(imageInputs, input.Input{Token: 200092, Multimodal: &chunk{t, offset, patchesPerChunk}, MultimodalHash: inp.MultimodalHash, SameBatch: patchesPerChunk}) // <|patch|>\n-\t\t\t\t\timageInputs = append(imageInputs, slices.Repeat([]input.Input{{Token: 200092}}, patchesPerChunk-1)...)\n-\t\t\t\t\tif x < t.aspectRatio.X-1 {\n-\t\t\t\t\t\timageInputs = append(imageInputs, input.Input{Token: 200084}) // <|tile_x_separator|>\n-\t\t\t\t\t}\n-\t\t\t\t\toffset += patchesPerChunk\n-\t\t\t\t}\n+\t\tfor i, mm := range inp.Multimodal {\n+\t\t\tpatchesPerChunk := mm.Tensor.Dim(1)\n+\n+\t\t\tif i < len(inp.Multimodal)-1 {\n+\t\t\t\tseparator := mm.Data.(*separator)",
+        "comment_created_at": "2025-05-12T22:10:31+00:00",
+        "comment_author": "jmorganca",
+        "comment_body": "As-is is ok if it can't happen",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2085641714",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 10674,
+        "pr_file": "model/models/llama4/model.go",
+        "discussion_id": "2085607307",
+        "commented_code": "@@ -100,70 +99,79 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er\n \tvisionOutputs := m.VisionModel.Forward(ctx, pixelValues)\n \tvisionOutputs = visionOutputs.Reshape(ctx, visionOutputs.Dim(0), visionOutputs.Dim(1)*visionOutputs.Dim(2)*visionOutputs.Dim(3))\n \tprojectedOutputs := m.Projector.Forward(ctx, visionOutputs)\n-\treturn &chunks{Model: m, Tensor: projectedOutputs, aspectRatio: image.Point{ratioW, ratioH}}, nil\n-}\n \n-type chunks struct {\n-\t*Model\n-\tml.Tensor\n-\taspectRatio image.Point\n+\tvar multimodal []input.Multimodal\n+\taspectRatio := image.Point{ratioW, ratioH}\n+\n+\tvar offset int\n+\tpatchesPerChunk := projectedOutputs.Dim(1)\n+\tif aspectRatio.Y*aspectRatio.X > 1 {\n+\t\tpatchesPerChunk = projectedOutputs.Dim(1) / (aspectRatio.X*aspectRatio.Y + 1)\n+\n+\t\tfor range aspectRatio.Y {\n+\t\t\tfor x := range aspectRatio.X {\n+\t\t\t\tview := projectedOutputs.View(ctx, projectedOutputs.Stride(1)*offset,\n+\t\t\t\t\tprojectedOutputs.Dim(0), projectedOutputs.Stride(1),\n+\t\t\t\t\tpatchesPerChunk)\n+\t\t\t\tvar separator separator\n+\t\t\t\tif x < aspectRatio.X-1 {\n+\t\t\t\t\tseparator.x = true // <|tile_x_separator|>\n+\t\t\t\t} else {\n+\t\t\t\t\tseparator.y = true // <|tile_y_separator|>\n+\t\t\t\t}\n+\t\t\t\tmultimodal = append(multimodal, input.Multimodal{Tensor: view, Data: &separator})\n+\t\t\t\toffset += patchesPerChunk\n+\t\t\t}\n+\t\t}\n+\t}\n \n-\tdataOnce sync.Once\n-\tdata     []float32\n-}\n+\tview := projectedOutputs.View(ctx, projectedOutputs.Stride(1)*offset,\n+\t\tprojectedOutputs.Dim(0), projectedOutputs.Stride(1),\n+\t\tpatchesPerChunk)\n+\tmultimodal = append(multimodal, input.Multimodal{Tensor: view, Data: &separator{}})\n \n-type chunk struct {\n-\t*chunks\n-\ts, n int\n+\treturn multimodal, nil\n }\n \n-func (r *chunk) floats() []float32 {\n-\tr.dataOnce.Do(func() {\n-\t\ttemp := r.Backend().NewContext()\n-\t\tdefer temp.Close()\n-\t\ttemp.Forward(r.Tensor).Compute(r.Tensor)\n-\t\tr.data = r.Floats()\n-\t})\n-\n-\treturn r.data[r.s*r.Dim(0) : (r.s+r.n)*r.Dim(0)]\n+type separator struct {\n+\tx bool\n+\ty bool\n }\n \n func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {\n \tvar result []input.Input\n \tfor _, inp := range inputs {\n-\t\tif inp.Multimodal == nil {\n+\t\tif len(inp.Multimodal) == 0 {\n \t\t\tresult = append(result, inp)\n \t\t\tcontinue\n \t\t}\n \n-\t\tt := inp.Multimodal.(*chunks)\n \t\tvar imageInputs []input.Input\n \t\timageInputs = append(imageInputs, input.Input{Token: 200080}) // <|image_start|>\n \n-\t\tvar offset int\n-\t\tpatchesPerChunk := t.Dim(1)\n-\t\tif t.aspectRatio.Y*t.aspectRatio.X > 1 {\n-\t\t\tpatchesPerChunk = t.Dim(1) / (t.aspectRatio.X*t.aspectRatio.Y + 1)\n-\n-\t\t\tfor range t.aspectRatio.Y {\n-\t\t\t\tfor x := range t.aspectRatio.X {\n-\t\t\t\t\timageInputs = append(imageInputs, input.Input{Token: 200092, Multimodal: &chunk{t, offset, patchesPerChunk}, MultimodalHash: inp.MultimodalHash, SameBatch: patchesPerChunk}) // <|patch|>\n-\t\t\t\t\timageInputs = append(imageInputs, slices.Repeat([]input.Input{{Token: 200092}}, patchesPerChunk-1)...)\n-\t\t\t\t\tif x < t.aspectRatio.X-1 {\n-\t\t\t\t\t\timageInputs = append(imageInputs, input.Input{Token: 200084}) // <|tile_x_separator|>\n-\t\t\t\t\t}\n-\t\t\t\t\toffset += patchesPerChunk\n-\t\t\t\t}\n+\t\tfor i, mm := range inp.Multimodal {\n+\t\t\tpatchesPerChunk := mm.Tensor.Dim(1)\n+\n+\t\t\tif i < len(inp.Multimodal)-1 {\n+\t\t\t\tseparator := mm.Data.(*separator)",
+        "comment_created_at": "2025-05-12T22:53:02+00:00",
+        "comment_author": "jessegross",
+        "comment_body": "This is model-specific data being passed through generic runner code as an `any`, so it would indicate a model implementation error if it were to not match. In that case, right thing to do is probably panic, so basically the same result as not checking it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2025778522",
+    "pr_number": 10096,
+    "pr_file": "sample/samplers.go",
+    "created_at": "2025-04-02T23:53:16+00:00",
+    "commented_code": "}\n \n type Grammar struct {\n-\tvocab   *Vocab\n-\tgrammar string\n-\tsampler *llama.Sampler\n+\tvocab   *model.Vocabulary\n+\tgrammar *llama.Grammar\n }\n \n-func NewGrammar(vocab *Vocab, grammar string) (*Grammar, error) {\n-\tv, err := vocab.Load()\n-\tif err != nil {\n-\t\treturn nil, err\n+func NewGrammar(vocab *model.Vocabulary, grammarStr string) (*Grammar, error) {\n+\tgrammar := llama.InitGrammarChain(grammarStr)\n+\tfor _, s := range vocab.Values {\n+\t\tid := vocab.Encode(s)\n+\t\tgrammar.AddSymbol(s, uint32(id))\n+\t\tgrammar.AddTokenPiece(uint32(id), s)\n \t}\n-\n-\treturn &Grammar{\n-\t\tvocab:   vocab,\n-\t\tgrammar: grammar,\n-\t\tsampler: llama.NewGrammarSampler(v, grammar),\n-\t}, nil\n+\tgrammar.SetEOGToken(uint32(vocab.EOS))",
+    "repo_full_name": "ollama/ollama",
+    "discussion_comments": [
+      {
+        "comment_id": "2025778522",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 10096,
+        "pr_file": "sample/samplers.go",
+        "discussion_id": "2025778522",
+        "commented_code": "@@ -165,22 +165,19 @@ func NewSampler(temperature float32, topK int, topP float32, minP float32, seed\n }\n \n type Grammar struct {\n-\tvocab   *Vocab\n-\tgrammar string\n-\tsampler *llama.Sampler\n+\tvocab   *model.Vocabulary\n+\tgrammar *llama.Grammar\n }\n \n-func NewGrammar(vocab *Vocab, grammar string) (*Grammar, error) {\n-\tv, err := vocab.Load()\n-\tif err != nil {\n-\t\treturn nil, err\n+func NewGrammar(vocab *model.Vocabulary, grammarStr string) (*Grammar, error) {\n+\tgrammar := llama.InitGrammarChain(grammarStr)\n+\tfor _, s := range vocab.Values {\n+\t\tid := vocab.Encode(s)\n+\t\tgrammar.AddSymbol(s, uint32(id))\n+\t\tgrammar.AddTokenPiece(uint32(id), s)\n \t}\n-\n-\treturn &Grammar{\n-\t\tvocab:   vocab,\n-\t\tgrammar: grammar,\n-\t\tsampler: llama.NewGrammarSampler(v, grammar),\n-\t}, nil\n+\tgrammar.SetEOGToken(uint32(vocab.EOS))",
+        "comment_created_at": "2025-04-02T23:53:16+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "The grammar instance returned from llama.InitGrammarChain is not checked for nil, which could lead to a nil dereference. Consider adding a nil check after initialization to handle potential errors gracefully.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2029493986",
+    "pr_number": 10096,
+    "pr_file": "runner/ollamarunner/runner.go",
+    "created_at": "2025-04-04T22:15:35+00:00",
+    "commented_code": "var grammar *sample.Grammar\n \tvar err error\n \tif req.Grammar != \"\" {\n-\t\tgrammar, err = sample.NewGrammar(s.vocab, req.Grammar)\n+\t\tgrammar, err = sample.NewGrammar(s.model.(model.TextProcessor).Vocabulary(), req.Grammar)",
+    "repo_full_name": "ollama/ollama",
+    "discussion_comments": [
+      {
+        "comment_id": "2029493986",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 10096,
+        "pr_file": "runner/ollamarunner/runner.go",
+        "discussion_id": "2029493986",
+        "commented_code": "@@ -609,7 +603,7 @@ func (s *Server) completion(w http.ResponseWriter, r *http.Request) {\n \tvar grammar *sample.Grammar\n \tvar err error\n \tif req.Grammar != \"\" {\n-\t\tgrammar, err = sample.NewGrammar(s.vocab, req.Grammar)\n+\t\tgrammar, err = sample.NewGrammar(s.model.(model.TextProcessor).Vocabulary(), req.Grammar)",
+        "comment_created_at": "2025-04-04T22:15:35+00:00",
+        "comment_author": "jmorganca",
+        "comment_body": "Let's avoid the case where this is nil\r\n\r\n```\r\nvar vocab *model.Vocabulary\r\nif tp, ok := s.model.(model.TextProcessor); ok {\r\n  vocab = tp.Vocab()\r\n}\r\n\r\nif req.Grammar != \"\" && vocab != nil {\r\n\r\n}\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1986486177",
+    "pr_number": 9586,
+    "pr_file": "runner/ollamarunner/runner.go",
+    "created_at": "2025-03-10T01:20:25+00:00",
+    "commented_code": "numPredict int\n \tstop       []string\n \tnumKeep    int32\n-\tsampler    sample.Sampler\n+\tsampler    *sample.Sampler",
+    "repo_full_name": "ollama/ollama",
+    "discussion_comments": [
+      {
+        "comment_id": "1986486177",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9586,
+        "pr_file": "runner/ollamarunner/runner.go",
+        "discussion_id": "1986486177",
+        "commented_code": "@@ -89,7 +89,7 @@ type NewSequenceParams struct {\n \tnumPredict int\n \tstop       []string\n \tnumKeep    int32\n-\tsampler    sample.Sampler\n+\tsampler    *sample.Sampler",
+        "comment_created_at": "2025-03-10T01:20:25+00:00",
+        "comment_author": "ParthSareen",
+        "comment_body": "Is there a reason for making this a pointer? Avoiding copy? If so we should have a sanity check so we dont cause a panic on `seq.sampler.Sample(...` just in case something changes and it dies ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1986509594",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9586,
+        "pr_file": "runner/ollamarunner/runner.go",
+        "discussion_id": "1986486177",
+        "commented_code": "@@ -89,7 +89,7 @@ type NewSequenceParams struct {\n \tnumPredict int\n \tstop       []string\n \tnumKeep    int32\n-\tsampler    sample.Sampler\n+\tsampler    *sample.Sampler",
+        "comment_created_at": "2025-03-10T02:09:23+00:00",
+        "comment_author": "jmorganca",
+        "comment_body": "Good catch. I'll remove the pointer.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1976514779",
+    "pr_number": 9383,
+    "pr_file": "kvcache/encoder.go",
+    "created_at": "2025-03-02T00:32:57+00:00",
+    "commented_code": "}\n \n func (c *EncoderCache) Init(backend ml.Backend, dtype ml.DType, capacity int32) {\n+\tif c.config == nil {\n+\t\tvar config ml.CacheConfig\n+\t\tif cc, ok := backend.(ml.BackendCacheConfig); ok {",
+    "repo_full_name": "ollama/ollama",
+    "discussion_comments": [
+      {
+        "comment_id": "1976514779",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9383,
+        "pr_file": "kvcache/encoder.go",
+        "discussion_id": "1976514779",
+        "commented_code": "@@ -40,9 +43,25 @@ func NewEncoderCache() *EncoderCache {\n }\n \n func (c *EncoderCache) Init(backend ml.Backend, dtype ml.DType, capacity int32) {\n+\tif c.config == nil {\n+\t\tvar config ml.CacheConfig\n+\t\tif cc, ok := backend.(ml.BackendCacheConfig); ok {",
+        "comment_created_at": "2025-03-02T00:32:57+00:00",
+        "comment_author": "jmorganca",
+        "comment_body": "I wonder if there's a way we could get around the type assertion here via some other interface/struct design (maybe in a later PR as this all takes shape). Similar idea with `model.TextProcessor`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1976524239",
+        "repo_full_name": "ollama/ollama",
+        "pr_number": 9383,
+        "pr_file": "kvcache/encoder.go",
+        "discussion_id": "1976514779",
+        "commented_code": "@@ -40,9 +43,25 @@ func NewEncoderCache() *EncoderCache {\n }\n \n func (c *EncoderCache) Init(backend ml.Backend, dtype ml.DType, capacity int32) {\n+\tif c.config == nil {\n+\t\tvar config ml.CacheConfig\n+\t\tif cc, ok := backend.(ml.BackendCacheConfig); ok {",
+        "comment_created_at": "2025-03-02T02:07:01+00:00",
+        "comment_author": "jessegross",
+        "comment_body": "Currently this is an optional method of a backend so the most obvious way to avoid the type assertion is simply to make it a required part of the `Backend` interface. I was trying to reduce the number of things that backends need to do to get a minimal implementation up and running so I made it optional since it is mostly used for optimizations. However, a basic implementation is very simple, so it could go either way.\r\n\r\n`BackendCacheConfig` is primarily used in conjunction with `ScaledDotProductAttention`, which is a separate, optional interface. So it might be nice to combine them into a single interface, however, `BackendCacheConfig` makes the most sense on a `Backend` whereas `ScaledDotProductAttention` goes on a `Tensor` so that doesn't look good. Plus they may not always be strictly linked.\r\n\r\nI think this is a slightly different situation than `model.TextProcessor`, since that one is a required interface that needs a type assertion due to the struct design whereas `BackendCacheConfig` has a type assertion because it is optional.\r\n\r\nI expect that the interactions between model, cache and backends will evolve over time as we have more of them and also more complex optimizations. I tried to keep the interface somewhat flexible but also not go too crazy trying to predict what we will need.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

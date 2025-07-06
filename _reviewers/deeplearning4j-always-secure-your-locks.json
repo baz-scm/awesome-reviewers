@@ -1,0 +1,92 @@
+[
+  {
+    "discussion_id": "304197543",
+    "pr_number": 8011,
+    "pr_file": "deeplearning4j/deeplearning4j-scaleout/deeplearning4j-scaleout-parallelwrapper/src/main/java/org/deeplearning4j/parallelism/inference/observers/BasicInferenceObserver.java",
+    "created_at": "2019-07-17T02:30:11+00:00",
+    "commented_code": "*/\n @Slf4j\n public class BasicInferenceObserver implements Observer {\n-    private AtomicBoolean finished;\n-\n-    public BasicInferenceObserver() {\n-        finished = new AtomicBoolean(false);\n-    }\n+    private Semaphore semaphore = new Semaphore(0);\n+    volatile private boolean finished = false;\n \n     @Override\n-    public void update(Observable o, Object arg) {\n-        finished.set(true);\n+    synchronized public void update(Observable o, Object arg) {\n+        if (!finished) {\n+            finished = true;\n+            semaphore.release(Integer.MAX_VALUE);",
+    "repo_full_name": "deeplearning4j/deeplearning4j",
+    "discussion_comments": [
+      {
+        "comment_id": "304197543",
+        "repo_full_name": "deeplearning4j/deeplearning4j",
+        "pr_number": 8011,
+        "pr_file": "deeplearning4j/deeplearning4j-scaleout/deeplearning4j-scaleout-parallelwrapper/src/main/java/org/deeplearning4j/parallelism/inference/observers/BasicInferenceObserver.java",
+        "discussion_id": "304197543",
+        "commented_code": "@@ -31,23 +30,24 @@\n  */\n @Slf4j\n public class BasicInferenceObserver implements Observer {\n-    private AtomicBoolean finished;\n-\n-    public BasicInferenceObserver() {\n-        finished = new AtomicBoolean(false);\n-    }\n+    private Semaphore semaphore = new Semaphore(0);\n+    volatile private boolean finished = false;\n \n     @Override\n-    public void update(Observable o, Object arg) {\n-        finished.set(true);\n+    synchronized public void update(Observable o, Object arg) {\n+        if (!finished) {\n+            finished = true;\n+            semaphore.release(Integer.MAX_VALUE);",
+        "comment_created_at": "2019-07-17T02:30:11+00:00",
+        "comment_author": "AlexDBlack",
+        "comment_body": "This doesn't look safe to me.\r\nIf the semaphore available permits is anything other than 0, this will overflow.\r\n\r\nSemaphore.release:\r\n```\r\n    public void release(int permits) {\r\n        if (permits < 0) throw new IllegalArgumentException();\r\n        sync.releaseShared(permits);\r\n    }\r\n```\r\n\r\nThis ultimately ends up calling this method, on Semaphore.Sync:\r\n```\r\n        protected final boolean tryReleaseShared(int releases) {\r\n            for (;;) {\r\n                int current = getState();\r\n                int next = current + releases;\r\n                if (next < current) // overflow\r\n                    throw new Error(\"Maximum permit count exceeded\");\r\n                if (compareAndSetState(current, next))\r\n                    return true;\r\n            }\r\n        }\r\n```\r\n\r\nUnless we can guarantee that the semaphore only ever has 0 permits at this point (unlikely), this is a bug.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "304201479",
+        "repo_full_name": "deeplearning4j/deeplearning4j",
+        "pr_number": 8011,
+        "pr_file": "deeplearning4j/deeplearning4j-scaleout/deeplearning4j-scaleout-parallelwrapper/src/main/java/org/deeplearning4j/parallelism/inference/observers/BasicInferenceObserver.java",
+        "discussion_id": "304197543",
+        "commented_code": "@@ -31,23 +30,24 @@\n  */\n @Slf4j\n public class BasicInferenceObserver implements Observer {\n-    private AtomicBoolean finished;\n-\n-    public BasicInferenceObserver() {\n-        finished = new AtomicBoolean(false);\n-    }\n+    private Semaphore semaphore = new Semaphore(0);\n+    volatile private boolean finished = false;\n \n     @Override\n-    public void update(Observable o, Object arg) {\n-        finished.set(true);\n+    synchronized public void update(Observable o, Object arg) {\n+        if (!finished) {\n+            finished = true;\n+            semaphore.release(Integer.MAX_VALUE);",
+        "comment_created_at": "2019-07-17T02:54:16+00:00",
+        "comment_author": "jxtps",
+        "comment_body": "You're right, did some reading and this use-case actually calls for a [`CountDownLatch`](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/CountDownLatch.html), _A synchronization aid that allows one or more threads to wait until a set of operations being performed in other threads completes_.\r\n\r\n```java\r\npublic class BasicInferenceObserver implements Observer {\r\n    private CountDownLatch latch = new CountDownLatch(1);\r\n\r\n    @Override\r\n    public void update(Observable o, Object arg) {\r\n        latch.countDown();\r\n    }\r\n\r\n    public void waitTillDone() {\r\n        latch.await();\r\n    }\r\n}\r\n```\r\n\r\nOnly caveat is that `latch.await()` can throw an `InterruptedException`, which arguably `waitTillDone()` should also do - wrapping it in a `RuntimeException` is poor form ;) ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "354652575",
+        "repo_full_name": "deeplearning4j/deeplearning4j",
+        "pr_number": 8011,
+        "pr_file": "deeplearning4j/deeplearning4j-scaleout/deeplearning4j-scaleout-parallelwrapper/src/main/java/org/deeplearning4j/parallelism/inference/observers/BasicInferenceObserver.java",
+        "discussion_id": "304197543",
+        "commented_code": "@@ -31,23 +30,24 @@\n  */\n @Slf4j\n public class BasicInferenceObserver implements Observer {\n-    private AtomicBoolean finished;\n-\n-    public BasicInferenceObserver() {\n-        finished = new AtomicBoolean(false);\n-    }\n+    private Semaphore semaphore = new Semaphore(0);\n+    volatile private boolean finished = false;\n \n     @Override\n-    public void update(Observable o, Object arg) {\n-        finished.set(true);\n+    synchronized public void update(Observable o, Object arg) {\n+        if (!finished) {\n+            finished = true;\n+            semaphore.release(Integer.MAX_VALUE);",
+        "comment_created_at": "2019-12-06T03:31:25+00:00",
+        "comment_author": "agibsonccc",
+        "comment_body": "Updates here?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "214574119",
+    "pr_number": 6115,
+    "pr_file": "deeplearning4j/deeplearning4j-scaleout/deeplearning4j-scaleout-parallelwrapper/src/main/java/org/deeplearning4j/parallelism/trainer/DefaultTrainer.java",
+    "created_at": "2018-09-03T04:33:49+00:00",
+    "commented_code": "}\n \n         Nd4j.getExecutioner().commit();\n+\n+        modelLock.writeLock().unlock();",
+    "repo_full_name": "deeplearning4j/deeplearning4j",
+    "discussion_comments": [
+      {
+        "comment_id": "214574119",
+        "repo_full_name": "deeplearning4j/deeplearning4j",
+        "pr_number": 6115,
+        "pr_file": "deeplearning4j/deeplearning4j-scaleout/deeplearning4j-scaleout-parallelwrapper/src/main/java/org/deeplearning4j/parallelism/trainer/DefaultTrainer.java",
+        "discussion_id": "214574119",
+        "commented_code": "@@ -175,6 +180,8 @@ public void updateModel(@NonNull Model model) {\n         }\n \n         Nd4j.getExecutioner().commit();\n+\n+        modelLock.writeLock().unlock();",
+        "comment_created_at": "2018-09-03T04:33:49+00:00",
+        "comment_author": "AlexDBlack",
+        "comment_body": "Unlock should be in finally block?\r\nOtherwise if there's any sort of an exception, any other threads waiting on that lock could be waiting forever.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "214574196",
+    "pr_number": 6115,
+    "pr_file": "deeplearning4j/deeplearning4j-scaleout/deeplearning4j-scaleout-parallelwrapper/src/main/java/org/deeplearning4j/parallelism/trainer/DefaultTrainer.java",
+    "created_at": "2018-09-03T04:35:00+00:00",
+    "commented_code": "lastEtlTime = new AtomicLong(0);\n \n             ((MultiLayerNetwork) replicatedModel).setLastEtlTime(lastEtlTime.get());\n-            ((MultiLayerNetwork) replicatedModel).fit(dataSet);\n+\n+            // we want this model locked out for possible updates\n+            modelLock.readLock().lock();\n+                ((MultiLayerNetwork) replicatedModel).fit(dataSet);\n+            modelLock.readLock().unlock();",
+    "repo_full_name": "deeplearning4j/deeplearning4j",
+    "discussion_comments": [
+      {
+        "comment_id": "214574196",
+        "repo_full_name": "deeplearning4j/deeplearning4j",
+        "pr_number": 6115,
+        "pr_file": "deeplearning4j/deeplearning4j-scaleout/deeplearning4j-scaleout-parallelwrapper/src/main/java/org/deeplearning4j/parallelism/trainer/DefaultTrainer.java",
+        "discussion_id": "214574196",
+        "commented_code": "@@ -221,13 +228,21 @@ protected void fit(DataSet dataSet) {\n                 lastEtlTime = new AtomicLong(0);\n \n             ((MultiLayerNetwork) replicatedModel).setLastEtlTime(lastEtlTime.get());\n-            ((MultiLayerNetwork) replicatedModel).fit(dataSet);\n+\n+            // we want this model locked out for possible updates\n+            modelLock.readLock().lock();\n+                ((MultiLayerNetwork) replicatedModel).fit(dataSet);\n+            modelLock.readLock().unlock();",
+        "comment_created_at": "2018-09-03T04:35:00+00:00",
+        "comment_author": "AlexDBlack",
+        "comment_body": "Same thing - unlock in finally block in case of exception.\r\nAlso un-indent line above.\r\nSame thing for other lock uses in this class.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

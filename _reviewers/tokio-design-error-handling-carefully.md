@@ -7,7 +7,7 @@ repository: tokio-rs/tokio
 label: Error Handling
 language: Rust
 comments_count: 6
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 When implementing error handling, balance between propagation and recovery. Design error types to preserve context while providing users with meaningful ways to handle failure.

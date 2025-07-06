@@ -7,7 +7,7 @@ repository: tokio-rs/tokio
 label: Null Handling
 language: Rust
 comments_count: 6
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 When dealing with Optional values, prefer Rust's built-in Option methods over manual null checks. This makes code more concise, self-documenting, and less error-prone by leveraging Rust's type system to enforce null safety at compile time.

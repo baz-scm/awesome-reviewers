@@ -7,7 +7,7 @@ repository: tokio-rs/tokio
 label: Algorithms
 language: Rust
 comments_count: 8
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 Always consider the time and space complexity implications of your code. Choose data structures and algorithms that minimize computational overhead and memory usage for your specific use cases.

@@ -7,7 +7,7 @@ repository: tokio-rs/tokio
 label: Configurations
 language: Yaml
 comments_count: 2
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 Keep configuration flags, feature toggles, and build settings concise and well-organized. Use simpler names where appropriate and consolidate related flags when possible to improve readability and maintainability.

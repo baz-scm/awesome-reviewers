@@ -8,7 +8,7 @@ repository: tokio-rs/tokio
 label: Configurations
 language: Rust
 comments_count: 6
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 When working with feature flags and conditional compilation, prefer structural approaches over scattered configuration attributes throughout your code. This creates more maintainable code and reduces the chance of bugs when features are added or removed.

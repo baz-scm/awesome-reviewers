@@ -7,7 +7,7 @@ repository: tokio-rs/tokio
 label: Configurations
 language: Toml
 comments_count: 5
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 Design feature flags to minimize dependency bloat while maximizing flexibility for users. Each optional dependency should be tied to a specific feature flag, allowing users to enable only the functionality they need.

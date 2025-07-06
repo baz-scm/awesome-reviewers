@@ -10,7 +10,7 @@ repository: tokio-rs/tokio
 label: Documentation
 language: Rust
 comments_count: 5
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 Each public API documentation block should follow a consistent structure:

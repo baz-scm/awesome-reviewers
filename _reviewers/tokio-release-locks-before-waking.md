@@ -8,7 +8,7 @@ repository: tokio-rs/tokio
 label: Concurrency
 language: Rust
 comments_count: 9
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 In concurrent systems, it's critical to release locks before performing operations that might trigger reentrancy or block the current thread, such as waking waiters. Holding locks while waking tasks can lead to deadlocks if the awakened code attempts to acquire the same lock.

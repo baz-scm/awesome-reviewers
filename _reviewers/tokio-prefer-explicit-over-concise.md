@@ -7,7 +7,7 @@ repository: tokio-rs/tokio
 label: Naming Conventions
 language: Rust
 comments_count: 6
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 Choose explicit and unambiguous names over concise but unclear ones. When a method, type, or variable has a specific behavior or purpose, the name should clearly communicate that, even if it results in longer names.

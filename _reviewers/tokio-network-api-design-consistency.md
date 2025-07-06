@@ -6,7 +6,7 @@ repository: tokio-rs/tokio
 label: Networking
 language: Rust
 comments_count: 6
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 When designing networking APIs, maintain consistency with existing interfaces while ensuring proper cross-platform compatibility. Follow these key principles:

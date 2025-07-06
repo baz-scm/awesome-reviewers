@@ -7,7 +7,7 @@ repository: tokio-rs/tokio
 label: Testing
 language: Rust
 comments_count: 5
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 Avoid using real sleeps or delays in tests as they significantly slow down the test suite and can introduce flakiness. Instead, use simulated time with the `start_paused` parameter for time-dependent tests:

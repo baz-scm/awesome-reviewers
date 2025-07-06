@@ -8,7 +8,7 @@ repository: tokio-rs/tokio
 label: Testing
 language: Yaml
 comments_count: 2
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 Configure test suites to run under multiple specialized environments to catch issues that might not appear in standard test runs. This includes testing with different compiler configurations, using specialized testing tools, and properly preserving environment variables when adding test-specific flags.

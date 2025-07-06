@@ -7,7 +7,7 @@ repository: tokio-rs/tokio
 label: CI/CD
 language: Yaml
 comments_count: 3
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 Structure CI jobs for clarity, parallelism, and efficiency. Each job should have a single, well-defined purpose to prevent confusion about which tools and versions are being used.

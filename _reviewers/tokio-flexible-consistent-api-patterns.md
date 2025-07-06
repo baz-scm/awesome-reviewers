@@ -7,7 +7,7 @@ repository: tokio-rs/tokio
 label: API
 language: Rust
 comments_count: 6
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 Design APIs with flexibility and consistency by leveraging established patterns and avoiding unnecessary constraints. Accept generic type bounds instead of concrete types to provide more flexibility to users and simplify usage.

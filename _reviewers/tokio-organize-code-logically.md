@@ -7,7 +7,7 @@ repository: tokio-rs/tokio
 label: Code Style
 language: Rust
 comments_count: 6
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 Group related code elements together with a consistent and logical structure. Place stable fields and functionality first, followed by conditional or unstable features.

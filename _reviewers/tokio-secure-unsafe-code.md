@@ -9,7 +9,7 @@ repository: tokio-rs/tokio
 label: Security
 language: Rust
 comments_count: 4
-repository_stars: 28988
+repository_stars: 28989
 ---
 
 When working with unsafe code, follow these practices to minimize security vulnerabilities:

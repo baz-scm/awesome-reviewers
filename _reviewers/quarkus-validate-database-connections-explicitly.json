@@ -1,0 +1,162 @@
+[
+  {
+    "discussion_id": "2120713535",
+    "pr_number": 48130,
+    "pr_file": "extensions/hibernate-orm/runtime/src/main/java/io/quarkus/hibernate/orm/runtime/HibernateOrmRuntimeConfigPersistenceUnit.java",
+    "created_at": "2025-06-02T10:27:02+00:00",
+    "commented_code": "// TODO change the default to \"always enabled\" when we solve version detection problems\n         //   See https://github.com/quarkusio/quarkus/issues/43703\n         //   See https://github.com/quarkusio/quarkus/issues/42255\n-        // TODO disable the check by default when offline startup is opted in\n-        //   See https://github.com/quarkusio/quarkus/issues/13522\n         @WithName(\"version-check.enabled\")\n-        @ConfigDocDefault(\"`true` if the dialect was set automatically by Quarkus, `false` if it was set explicitly\")\n+        @ConfigDocDefault(\"`true` if the dialect was set automatically by Quarkus, `false` if it was set explicitly, `false` in offlineMode\")\n         Optional<Boolean> versionCheckEnabled();\n+\n+        /**\n+         * This value will avoid connecting to a database to fetch JDBC metadata.",
+    "repo_full_name": "quarkusio/quarkus",
+    "discussion_comments": [
+      {
+        "comment_id": "2120713535",
+        "repo_full_name": "quarkusio/quarkus",
+        "pr_number": 48130,
+        "pr_file": "extensions/hibernate-orm/runtime/src/main/java/io/quarkus/hibernate/orm/runtime/HibernateOrmRuntimeConfigPersistenceUnit.java",
+        "discussion_id": "2120713535",
+        "commented_code": "@@ -115,11 +115,19 @@ interface HibernateOrmConfigPersistenceUnitDatabase {\n         // TODO change the default to \"always enabled\" when we solve version detection problems\n         //   See https://github.com/quarkusio/quarkus/issues/43703\n         //   See https://github.com/quarkusio/quarkus/issues/42255\n-        // TODO disable the check by default when offline startup is opted in\n-        //   See https://github.com/quarkusio/quarkus/issues/13522\n         @WithName(\"version-check.enabled\")\n-        @ConfigDocDefault(\"`true` if the dialect was set automatically by Quarkus, `false` if it was set explicitly\")\n+        @ConfigDocDefault(\"`true` if the dialect was set automatically by Quarkus, `false` if it was set explicitly, `false` in offlineMode\")\n         Optional<Boolean> versionCheckEnabled();\n+\n+        /**\n+         * This value will avoid connecting to a database to fetch JDBC metadata.",
+        "comment_created_at": "2025-06-02T10:27:02+00:00",
+        "comment_author": "yrodiere",
+        "comment_body": "I _think_ at this point it's more about disabling/disallowing these other features? Or at least that will probably be more meaningful to application developers.\r\n\r\n```suggestion\r\n         * Instructs Hibernate ORM to avoid connecting to the database on startup (for schema management, temporary table creation, DB version checking, ...).\r\n         * <p>\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2120792259",
+    "pr_number": 48130,
+    "pr_file": "extensions/hibernate-orm/runtime/src/main/java/io/quarkus/hibernate/orm/runtime/FastBootHibernatePersistenceProvider.java",
+    "created_at": "2025-06-02T10:54:20+00:00",
+    "commented_code": "}\n         }\n \n-        // Allow detection of driver/database capabilities on runtime init (was disabled during static init)\n-        runtimeSettingsBuilder.put(\"hibernate.boot.allow_jdbc_metadata_access\", \"true\");\n+        boolean startsOffline = persistenceUnitConfig.database().startOffline();\n+\n+        // Allow detection of driver/database capabilities on runtime init if required\n+        // (was disabled during static init)\n+        runtimeSettingsBuilder.put(JdbcSettings.ALLOW_METADATA_ON_BOOT, !startsOffline);\n+        runtimeSettingsBuilder.put(GlobalTemporaryTableStrategy.CREATE_ID_TABLES, !startsOffline);",
+    "repo_full_name": "quarkusio/quarkus",
+    "discussion_comments": [
+      {
+        "comment_id": "2120792259",
+        "repo_full_name": "quarkusio/quarkus",
+        "pr_number": 48130,
+        "pr_file": "extensions/hibernate-orm/runtime/src/main/java/io/quarkus/hibernate/orm/runtime/FastBootHibernatePersistenceProvider.java",
+        "discussion_id": "2120792259",
+        "commented_code": "@@ -237,8 +239,12 @@ private RuntimeSettings buildRuntimeSettings(String persistenceUnitName, Recorde\n             }\n         }\n \n-        // Allow detection of driver/database capabilities on runtime init (was disabled during static init)\n-        runtimeSettingsBuilder.put(\"hibernate.boot.allow_jdbc_metadata_access\", \"true\");\n+        boolean startsOffline = persistenceUnitConfig.database().startOffline();\n+\n+        // Allow detection of driver/database capabilities on runtime init if required\n+        // (was disabled during static init)\n+        runtimeSettingsBuilder.put(JdbcSettings.ALLOW_METADATA_ON_BOOT, !startsOffline);\n+        runtimeSettingsBuilder.put(GlobalTemporaryTableStrategy.CREATE_ID_TABLES, !startsOffline);",
+        "comment_created_at": "2025-06-02T10:54:20+00:00",
+        "comment_author": "yrodiere",
+        "comment_body": "This will probably need more thoughts. If we don't create the tables, presumably something will go wrong when those tables are used.\r\n\r\nSo:\r\n\r\n1. When starting offline, should we consider simply overriding the [temporary table kind](https://github.com/hibernate/hibernate-orm/blob/018b8eeda3627e114ec25bd48407ccb9c47564ce/hibernate-core/src/main/java/org/hibernate/dialect/temptable/TemporaryTableKind.java#L14) to `local`? AFAIK H2 supports local temporary tables, and that was even the default before ORM 6.6: https://hibernate.atlassian.net/browse/HHH-18146 .\r\n2. If instead we keep \"persistent\" temporary tables:\r\n    1. Should we document this in Quarkus, and explain how to work around the problem?\r\n    2. Should we set the other setting, another setting, `DROP_ID_TABLES`, to `false` as well? If someone else created the tables, they probably wouldn't want us to drop them...\r\n    3. Should probably report the problem to Hibernate ORM, so that \"temporary\" table creation is integrated into schema management (hbm2ddl)? That makes a lot more sense to me...\r\n\r\nI'd personally go with the first option, which puts the problem away in the short term, and file a ticket about investigating the second option later.. Because regardless, \r\n\r\nNote: Keep in mind the \"temporary tables\" are only used in some specific scenarios, so existing tests may not detect any problems, yet there will be problems.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2177760084",
+        "repo_full_name": "quarkusio/quarkus",
+        "pr_number": 48130,
+        "pr_file": "extensions/hibernate-orm/runtime/src/main/java/io/quarkus/hibernate/orm/runtime/FastBootHibernatePersistenceProvider.java",
+        "discussion_id": "2120792259",
+        "commented_code": "@@ -237,8 +239,12 @@ private RuntimeSettings buildRuntimeSettings(String persistenceUnitName, Recorde\n             }\n         }\n \n-        // Allow detection of driver/database capabilities on runtime init (was disabled during static init)\n-        runtimeSettingsBuilder.put(\"hibernate.boot.allow_jdbc_metadata_access\", \"true\");\n+        boolean startsOffline = persistenceUnitConfig.database().startOffline();\n+\n+        // Allow detection of driver/database capabilities on runtime init if required\n+        // (was disabled during static init)\n+        runtimeSettingsBuilder.put(JdbcSettings.ALLOW_METADATA_ON_BOOT, !startsOffline);\n+        runtimeSettingsBuilder.put(GlobalTemporaryTableStrategy.CREATE_ID_TABLES, !startsOffline);",
+        "comment_created_at": "2025-07-01T14:29:01+00:00",
+        "comment_author": "yrodiere",
+        "comment_body": "For others reading this (looking at you @AB-xdev ;) ), this is a can of worms -- see discussion at https://hibernate.zulipchat.com/#narrow/channel/132094-hibernate-orm-dev/topic/Programmatically.20set.20temporary.20table.20to.20local/with/522154992\r\nLuca has a todo list to work around the problem though.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2010146161",
+    "pr_number": 44473,
+    "pr_file": "extensions/hibernate-reactive/deployment/src/test/java/io/quarkus/hibernate/reactive/compatbility/ORMReactiveCompatbilityDefaultBothUnitTest.java",
+    "created_at": "2025-03-24T13:06:23+00:00",
+    "commented_code": "+package io.quarkus.hibernate.reactive.compatbility;\n+\n+import java.util.List;\n+\n+import org.junit.jupiter.api.Test;\n+import org.junit.jupiter.api.extension.RegisterExtension;\n+\n+import io.quarkus.builder.Version;\n+import io.quarkus.hibernate.reactive.entities.Hero;\n+import io.quarkus.maven.dependency.Dependency;\n+import io.quarkus.test.QuarkusUnitTest;\n+import io.quarkus.test.vertx.RunOnVertxContext;\n+import io.quarkus.test.vertx.UniAsserter;\n+\n+public class ORMReactiveCompatbilityDefaultBothUnitTest extends CompatibilityUnitTestBase {\n+\n+    @RegisterExtension\n+    static final QuarkusUnitTest config = new QuarkusUnitTest()\n+            .withApplicationRoot((jar) -> jar\n+                    .addClasses(Hero.class)\n+                    .addAsResource(\"complexMultilineImports.sql\", \"import.sql\"))\n+            .setForcedDependencies(List.of(\n+                    Dependency.of(\"io.quarkus\", \"quarkus-jdbc-postgresql-deployment\", Version.getVersion()) // this triggers Agroal\n+            ))\n+            .overrideConfigKey(\"quarkus.hibernate-orm.database.generation\", DATABASE_GENERATION)",
+    "repo_full_name": "quarkusio/quarkus",
+    "discussion_comments": [
+      {
+        "comment_id": "2010146161",
+        "repo_full_name": "quarkusio/quarkus",
+        "pr_number": 44473,
+        "pr_file": "extensions/hibernate-reactive/deployment/src/test/java/io/quarkus/hibernate/reactive/compatbility/ORMReactiveCompatbilityDefaultBothUnitTest.java",
+        "discussion_id": "2010146161",
+        "commented_code": "@@ -0,0 +1,43 @@\n+package io.quarkus.hibernate.reactive.compatbility;\n+\n+import java.util.List;\n+\n+import org.junit.jupiter.api.Test;\n+import org.junit.jupiter.api.extension.RegisterExtension;\n+\n+import io.quarkus.builder.Version;\n+import io.quarkus.hibernate.reactive.entities.Hero;\n+import io.quarkus.maven.dependency.Dependency;\n+import io.quarkus.test.QuarkusUnitTest;\n+import io.quarkus.test.vertx.RunOnVertxContext;\n+import io.quarkus.test.vertx.UniAsserter;\n+\n+public class ORMReactiveCompatbilityDefaultBothUnitTest extends CompatibilityUnitTestBase {\n+\n+    @RegisterExtension\n+    static final QuarkusUnitTest config = new QuarkusUnitTest()\n+            .withApplicationRoot((jar) -> jar\n+                    .addClasses(Hero.class)\n+                    .addAsResource(\"complexMultilineImports.sql\", \"import.sql\"))\n+            .setForcedDependencies(List.of(\n+                    Dependency.of(\"io.quarkus\", \"quarkus-jdbc-postgresql-deployment\", Version.getVersion()) // this triggers Agroal\n+            ))\n+            .overrideConfigKey(\"quarkus.hibernate-orm.database.generation\", DATABASE_GENERATION)",
+        "comment_created_at": "2025-03-24T13:06:23+00:00",
+        "comment_author": "yrodiere",
+        "comment_body": "I just realized something... Since you start both Hibernate Reactive and Hibernate ORM, do they _both_ run schema validation/dropping/creation?\r\nIf so, they probably shouldn't, be it only for performance, and possibly due to risks of stepping on each other's toes? (Imagine a concurrent `create-drop`! It may work most of the time, and then one day you get just the wrong timing...)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2018439268",
+        "repo_full_name": "quarkusio/quarkus",
+        "pr_number": 44473,
+        "pr_file": "extensions/hibernate-reactive/deployment/src/test/java/io/quarkus/hibernate/reactive/compatbility/ORMReactiveCompatbilityDefaultBothUnitTest.java",
+        "discussion_id": "2010146161",
+        "commented_code": "@@ -0,0 +1,43 @@\n+package io.quarkus.hibernate.reactive.compatbility;\n+\n+import java.util.List;\n+\n+import org.junit.jupiter.api.Test;\n+import org.junit.jupiter.api.extension.RegisterExtension;\n+\n+import io.quarkus.builder.Version;\n+import io.quarkus.hibernate.reactive.entities.Hero;\n+import io.quarkus.maven.dependency.Dependency;\n+import io.quarkus.test.QuarkusUnitTest;\n+import io.quarkus.test.vertx.RunOnVertxContext;\n+import io.quarkus.test.vertx.UniAsserter;\n+\n+public class ORMReactiveCompatbilityDefaultBothUnitTest extends CompatibilityUnitTestBase {\n+\n+    @RegisterExtension\n+    static final QuarkusUnitTest config = new QuarkusUnitTest()\n+            .withApplicationRoot((jar) -> jar\n+                    .addClasses(Hero.class)\n+                    .addAsResource(\"complexMultilineImports.sql\", \"import.sql\"))\n+            .setForcedDependencies(List.of(\n+                    Dependency.of(\"io.quarkus\", \"quarkus-jdbc-postgresql-deployment\", Version.getVersion()) // this triggers Agroal\n+            ))\n+            .overrideConfigKey(\"quarkus.hibernate-orm.database.generation\", DATABASE_GENERATION)",
+        "comment_created_at": "2025-03-28T11:04:19+00:00",
+        "comment_author": "lucamolteni",
+        "comment_body": "Good catch (again)\r\n\r\nI've fixed it in https://github.com/quarkusio/quarkus/pull/44473/commits/6a6721a0013bd144ecacfe3acafc40a6577328e4 \r\n\r\nbut I didn't have any idea on how to test it (except from checking the sql output), any ideas are welcome",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2020804285",
+        "repo_full_name": "quarkusio/quarkus",
+        "pr_number": 44473,
+        "pr_file": "extensions/hibernate-reactive/deployment/src/test/java/io/quarkus/hibernate/reactive/compatbility/ORMReactiveCompatbilityDefaultBothUnitTest.java",
+        "discussion_id": "2010146161",
+        "commented_code": "@@ -0,0 +1,43 @@\n+package io.quarkus.hibernate.reactive.compatbility;\n+\n+import java.util.List;\n+\n+import org.junit.jupiter.api.Test;\n+import org.junit.jupiter.api.extension.RegisterExtension;\n+\n+import io.quarkus.builder.Version;\n+import io.quarkus.hibernate.reactive.entities.Hero;\n+import io.quarkus.maven.dependency.Dependency;\n+import io.quarkus.test.QuarkusUnitTest;\n+import io.quarkus.test.vertx.RunOnVertxContext;\n+import io.quarkus.test.vertx.UniAsserter;\n+\n+public class ORMReactiveCompatbilityDefaultBothUnitTest extends CompatibilityUnitTestBase {\n+\n+    @RegisterExtension\n+    static final QuarkusUnitTest config = new QuarkusUnitTest()\n+            .withApplicationRoot((jar) -> jar\n+                    .addClasses(Hero.class)\n+                    .addAsResource(\"complexMultilineImports.sql\", \"import.sql\"))\n+            .setForcedDependencies(List.of(\n+                    Dependency.of(\"io.quarkus\", \"quarkus-jdbc-postgresql-deployment\", Version.getVersion()) // this triggers Agroal\n+            ))\n+            .overrideConfigKey(\"quarkus.hibernate-orm.database.generation\", DATABASE_GENERATION)",
+        "comment_created_at": "2025-03-31T10:38:24+00:00",
+        "comment_author": "yrodiere",
+        "comment_body": "Thanks. For tests, you can spy on executed SQL and run assertions on that.\r\nOne way would be to enable SQL logging (and I mean logging, not stdout sql printing! see https://github.com/quarkusio/quarkus/issues/20578#issuecomment-2360627759 ), and from there add assertions on logs. `QuarkusUnitTest` has ways to run assertions on logs;  we generally use it for warnings, but it should work fine for debug/trace as well.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2021257584",
+        "repo_full_name": "quarkusio/quarkus",
+        "pr_number": 44473,
+        "pr_file": "extensions/hibernate-reactive/deployment/src/test/java/io/quarkus/hibernate/reactive/compatbility/ORMReactiveCompatbilityDefaultBothUnitTest.java",
+        "discussion_id": "2010146161",
+        "commented_code": "@@ -0,0 +1,43 @@\n+package io.quarkus.hibernate.reactive.compatbility;\n+\n+import java.util.List;\n+\n+import org.junit.jupiter.api.Test;\n+import org.junit.jupiter.api.extension.RegisterExtension;\n+\n+import io.quarkus.builder.Version;\n+import io.quarkus.hibernate.reactive.entities.Hero;\n+import io.quarkus.maven.dependency.Dependency;\n+import io.quarkus.test.QuarkusUnitTest;\n+import io.quarkus.test.vertx.RunOnVertxContext;\n+import io.quarkus.test.vertx.UniAsserter;\n+\n+public class ORMReactiveCompatbilityDefaultBothUnitTest extends CompatibilityUnitTestBase {\n+\n+    @RegisterExtension\n+    static final QuarkusUnitTest config = new QuarkusUnitTest()\n+            .withApplicationRoot((jar) -> jar\n+                    .addClasses(Hero.class)\n+                    .addAsResource(\"complexMultilineImports.sql\", \"import.sql\"))\n+            .setForcedDependencies(List.of(\n+                    Dependency.of(\"io.quarkus\", \"quarkus-jdbc-postgresql-deployment\", Version.getVersion()) // this triggers Agroal\n+            ))\n+            .overrideConfigKey(\"quarkus.hibernate-orm.database.generation\", DATABASE_GENERATION)",
+        "comment_created_at": "2025-03-31T15:21:15+00:00",
+        "comment_author": "lucamolteni",
+        "comment_body": "See https://github.com/quarkusio/quarkus/pull/44473/files#diff-4a7839f161b40116faab9b0f9047da97430536e8f6c717c44d2c05514c8d6590R33-R41",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2033242248",
+    "pr_number": 47233,
+    "pr_file": "integration-tests/datasource/src/test/java/io/quarkus/it/datasource/ValidationQueryTest.java",
+    "created_at": "2025-04-08T13:50:44+00:00",
+    "commented_code": "+package io.quarkus.it.datasource;\n+\n+import static org.assertj.core.api.Assertions.assertThatCode;\n+import static org.assertj.core.api.Assertions.assertThatThrownBy;\n+\n+import java.sql.Connection;\n+import java.sql.SQLException;\n+\n+import jakarta.inject.Inject;\n+\n+import org.h2.jdbc.JdbcSQLNonTransientConnectionException;\n+import org.h2.tools.Server;\n+import org.junit.jupiter.api.AfterEach;\n+import org.junit.jupiter.api.BeforeEach;\n+import org.junit.jupiter.api.Test;\n+import org.junit.jupiter.api.extension.RegisterExtension;\n+\n+import io.agroal.api.AgroalDataSource;\n+import io.quarkus.test.QuarkusUnitTest;\n+\n+public class ValidationQueryTest {\n+\n+    @BeforeEach\n+    public void setup() throws SQLException {\n+        startH2DB();\n+    }\n+\n+    @AfterEach\n+    public void tearDown() {\n+        stopH2DB();\n+    }\n+\n+    //tag::injection[]\n+    @Inject\n+    AgroalDataSource defaultDataSource;\n+    //end::injection[]\n+\n+    private Server tcpServer;\n+\n+    @RegisterExtension\n+    static final QuarkusUnitTest config = new QuarkusUnitTest()\n+            .withConfigurationResource(\"application-datasource-with-validation.properties\");\n+\n+    @Test\n+    public void testConnectionValidation() throws SQLException {\n+\n+        //Test connection is acquirable\n+        Connection connection = defaultDataSource.getConnection();\n+        connection.close();\n+\n+        //Stop DB server\n+        stopH2DB();\n+\n+        //Test connection is NOT available after DB shutdown\n+        assertThatThrownBy(() -> {\n+            defaultDataSource.getConnection();\n+        }).isInstanceOf(JdbcSQLNonTransientConnectionException.class);\n+\n+        //Start DB server\n+        startH2DB();\n+\n+        //Test connection is acquirable after restart\n+        assertThatCode(() -> {\n+            defaultDataSource.getConnection();\n+        }).doesNotThrowAnyException();",
+    "repo_full_name": "quarkusio/quarkus",
+    "discussion_comments": [
+      {
+        "comment_id": "2033242248",
+        "repo_full_name": "quarkusio/quarkus",
+        "pr_number": 47233,
+        "pr_file": "integration-tests/datasource/src/test/java/io/quarkus/it/datasource/ValidationQueryTest.java",
+        "discussion_id": "2033242248",
+        "commented_code": "@@ -0,0 +1,79 @@\n+package io.quarkus.it.datasource;\n+\n+import static org.assertj.core.api.Assertions.assertThatCode;\n+import static org.assertj.core.api.Assertions.assertThatThrownBy;\n+\n+import java.sql.Connection;\n+import java.sql.SQLException;\n+\n+import jakarta.inject.Inject;\n+\n+import org.h2.jdbc.JdbcSQLNonTransientConnectionException;\n+import org.h2.tools.Server;\n+import org.junit.jupiter.api.AfterEach;\n+import org.junit.jupiter.api.BeforeEach;\n+import org.junit.jupiter.api.Test;\n+import org.junit.jupiter.api.extension.RegisterExtension;\n+\n+import io.agroal.api.AgroalDataSource;\n+import io.quarkus.test.QuarkusUnitTest;\n+\n+public class ValidationQueryTest {\n+\n+    @BeforeEach\n+    public void setup() throws SQLException {\n+        startH2DB();\n+    }\n+\n+    @AfterEach\n+    public void tearDown() {\n+        stopH2DB();\n+    }\n+\n+    //tag::injection[]\n+    @Inject\n+    AgroalDataSource defaultDataSource;\n+    //end::injection[]\n+\n+    private Server tcpServer;\n+\n+    @RegisterExtension\n+    static final QuarkusUnitTest config = new QuarkusUnitTest()\n+            .withConfigurationResource(\"application-datasource-with-validation.properties\");\n+\n+    @Test\n+    public void testConnectionValidation() throws SQLException {\n+\n+        //Test connection is acquirable\n+        Connection connection = defaultDataSource.getConnection();\n+        connection.close();\n+\n+        //Stop DB server\n+        stopH2DB();\n+\n+        //Test connection is NOT available after DB shutdown\n+        assertThatThrownBy(() -> {\n+            defaultDataSource.getConnection();\n+        }).isInstanceOf(JdbcSQLNonTransientConnectionException.class);\n+\n+        //Start DB server\n+        startH2DB();\n+\n+        //Test connection is acquirable after restart\n+        assertThatCode(() -> {\n+            defaultDataSource.getConnection();\n+        }).doesNotThrowAnyException();",
+        "comment_created_at": "2025-04-08T13:50:44+00:00",
+        "comment_author": "yrodiere",
+        "comment_body": "Do I understand correctly that without the timeout, this assertion would fail (an exception would be thrown)?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2033355332",
+        "repo_full_name": "quarkusio/quarkus",
+        "pr_number": 47233,
+        "pr_file": "integration-tests/datasource/src/test/java/io/quarkus/it/datasource/ValidationQueryTest.java",
+        "discussion_id": "2033242248",
+        "commented_code": "@@ -0,0 +1,79 @@\n+package io.quarkus.it.datasource;\n+\n+import static org.assertj.core.api.Assertions.assertThatCode;\n+import static org.assertj.core.api.Assertions.assertThatThrownBy;\n+\n+import java.sql.Connection;\n+import java.sql.SQLException;\n+\n+import jakarta.inject.Inject;\n+\n+import org.h2.jdbc.JdbcSQLNonTransientConnectionException;\n+import org.h2.tools.Server;\n+import org.junit.jupiter.api.AfterEach;\n+import org.junit.jupiter.api.BeforeEach;\n+import org.junit.jupiter.api.Test;\n+import org.junit.jupiter.api.extension.RegisterExtension;\n+\n+import io.agroal.api.AgroalDataSource;\n+import io.quarkus.test.QuarkusUnitTest;\n+\n+public class ValidationQueryTest {\n+\n+    @BeforeEach\n+    public void setup() throws SQLException {\n+        startH2DB();\n+    }\n+\n+    @AfterEach\n+    public void tearDown() {\n+        stopH2DB();\n+    }\n+\n+    //tag::injection[]\n+    @Inject\n+    AgroalDataSource defaultDataSource;\n+    //end::injection[]\n+\n+    private Server tcpServer;\n+\n+    @RegisterExtension\n+    static final QuarkusUnitTest config = new QuarkusUnitTest()\n+            .withConfigurationResource(\"application-datasource-with-validation.properties\");\n+\n+    @Test\n+    public void testConnectionValidation() throws SQLException {\n+\n+        //Test connection is acquirable\n+        Connection connection = defaultDataSource.getConnection();\n+        connection.close();\n+\n+        //Stop DB server\n+        stopH2DB();\n+\n+        //Test connection is NOT available after DB shutdown\n+        assertThatThrownBy(() -> {\n+            defaultDataSource.getConnection();\n+        }).isInstanceOf(JdbcSQLNonTransientConnectionException.class);\n+\n+        //Start DB server\n+        startH2DB();\n+\n+        //Test connection is acquirable after restart\n+        assertThatCode(() -> {\n+            defaultDataSource.getConnection();\n+        }).doesNotThrowAnyException();",
+        "comment_created_at": "2025-04-08T14:39:39+00:00",
+        "comment_author": "ynojima",
+        "comment_body": "Actually, unfortunately, the answer is no.\r\nThis test just checks if a validation query is issued when `validate-on-borrow` is set. \r\nIt does not test the timeout behavior of the `validation-query-timeout` property.\r\nThat\u2019s exactly what I wanted to discuss about\u2014how we can properly test validation query timeout.\r\n\r\nWhen the H2DB is shutdown as in this test, the connection gets closed cleanly at the time of shutdown, so when a validation query is issued, it seems it fails immediately without waiting for a timeout.\r\nWe need to force kill the DB server without leaking TCP RST packet, but it is not easy in the unit test.\r\nTesting whether a query is issued with a timeout to a JDBC driver is an option, but it requires a mocked JDBC driver.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2035568751",
+        "repo_full_name": "quarkusio/quarkus",
+        "pr_number": 47233,
+        "pr_file": "integration-tests/datasource/src/test/java/io/quarkus/it/datasource/ValidationQueryTest.java",
+        "discussion_id": "2033242248",
+        "commented_code": "@@ -0,0 +1,79 @@\n+package io.quarkus.it.datasource;\n+\n+import static org.assertj.core.api.Assertions.assertThatCode;\n+import static org.assertj.core.api.Assertions.assertThatThrownBy;\n+\n+import java.sql.Connection;\n+import java.sql.SQLException;\n+\n+import jakarta.inject.Inject;\n+\n+import org.h2.jdbc.JdbcSQLNonTransientConnectionException;\n+import org.h2.tools.Server;\n+import org.junit.jupiter.api.AfterEach;\n+import org.junit.jupiter.api.BeforeEach;\n+import org.junit.jupiter.api.Test;\n+import org.junit.jupiter.api.extension.RegisterExtension;\n+\n+import io.agroal.api.AgroalDataSource;\n+import io.quarkus.test.QuarkusUnitTest;\n+\n+public class ValidationQueryTest {\n+\n+    @BeforeEach\n+    public void setup() throws SQLException {\n+        startH2DB();\n+    }\n+\n+    @AfterEach\n+    public void tearDown() {\n+        stopH2DB();\n+    }\n+\n+    //tag::injection[]\n+    @Inject\n+    AgroalDataSource defaultDataSource;\n+    //end::injection[]\n+\n+    private Server tcpServer;\n+\n+    @RegisterExtension\n+    static final QuarkusUnitTest config = new QuarkusUnitTest()\n+            .withConfigurationResource(\"application-datasource-with-validation.properties\");\n+\n+    @Test\n+    public void testConnectionValidation() throws SQLException {\n+\n+        //Test connection is acquirable\n+        Connection connection = defaultDataSource.getConnection();\n+        connection.close();\n+\n+        //Stop DB server\n+        stopH2DB();\n+\n+        //Test connection is NOT available after DB shutdown\n+        assertThatThrownBy(() -> {\n+            defaultDataSource.getConnection();\n+        }).isInstanceOf(JdbcSQLNonTransientConnectionException.class);\n+\n+        //Start DB server\n+        startH2DB();\n+\n+        //Test connection is acquirable after restart\n+        assertThatCode(() -> {\n+            defaultDataSource.getConnection();\n+        }).doesNotThrowAnyException();",
+        "comment_created_at": "2025-04-09T14:59:31+00:00",
+        "comment_author": "yrodiere",
+        "comment_body": ">  Testing whether a query is issued with a timeout to a JDBC driver is an option, but it requires a mocked JDBC driver.\r\n\r\nThat's your best bet I think... I see H2 has lots of event listeners, so maybe you can take advantage of that? https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/EventListener.html\r\n\r\nThough other PRs I've seen would simply retrieve the Agroal config at runtime and check that it matches what we set up in Quarkus. It's not perfect, but it's reasonable if the alternative is really complex. See for example https://github.com/quarkusio/quarkus/pull/47118/files#diff-b55a3cac0ebfa408f52fff084b639bf946ebcffff8b8b327b7d13373df67c44dR22-R45",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

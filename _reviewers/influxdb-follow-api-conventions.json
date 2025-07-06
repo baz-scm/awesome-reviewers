@@ -1,0 +1,254 @@
+[
+  {
+    "discussion_id": "2122371924",
+    "pr_number": 26479,
+    "pr_file": "influxdb3_catalog/src/catalog.rs",
+    "created_at": "2025-06-03T00:21:53+00:00",
+    "commented_code": "// send in subsequent requests\n         Ok((token_info, token))\n     }\n+\n+    // Return the oldest allowable timestamp for the given table according to the\n+    // currently-available set of retention policies. This is returned as a number of nanoseconds\n+    // since the Unix Epoch.\n+    pub fn get_retention_period_cutoff_ts_nanos(&self, db_id: &DbId, _: &TableId) -> Option<i64> {\n+        let db = self.db_schema_by_id(db_id)?;\n+        let retention_period = match db.retention_period {\n+            RetentionPeriod::Duration(d) => Some(d.as_nanos() as u64),\n+            RetentionPeriod::Indefinite => None,\n+        }?;\n+\n+        let now = self.time_provider.now().timestamp_nanos();\n+        Some(now - retention_period as i64)",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "2122371924",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26479,
+        "pr_file": "influxdb3_catalog/src/catalog.rs",
+        "discussion_id": "2122371924",
+        "commented_code": "@@ -595,6 +595,20 @@ impl Catalog {\n         // send in subsequent requests\n         Ok((token_info, token))\n     }\n+\n+    // Return the oldest allowable timestamp for the given table according to the\n+    // currently-available set of retention policies. This is returned as a number of nanoseconds\n+    // since the Unix Epoch.\n+    pub fn get_retention_period_cutoff_ts_nanos(&self, db_id: &DbId, _: &TableId) -> Option<i64> {\n+        let db = self.db_schema_by_id(db_id)?;\n+        let retention_period = match db.retention_period {\n+            RetentionPeriod::Duration(d) => Some(d.as_nanos() as u64),\n+            RetentionPeriod::Indefinite => None,\n+        }?;\n+\n+        let now = self.time_provider.now().timestamp_nanos();\n+        Some(now - retention_period as i64)",
+        "comment_created_at": "2025-06-03T00:21:53+00:00",
+        "comment_author": "hiltontj",
+        "comment_body": "FWIW there is a [`Time::checked_sub` API](https://github.com/influxdata/influxdb3_core/blob/fd0e474a6c0af5ba867399d753f5df18f59907cb/iox_time/src/lib.rs#L149-L155) that you could use here to directly subtract the retention period `Duration` from `self.time_provider.now()`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2079718110",
+    "pr_number": 26363,
+    "pr_file": "influxdb3_server/src/http.rs",
+    "created_at": "2025-05-08T13:26:49+00:00",
+    "commented_code": "return Err(AuthenticationError::MalformedRequest);\n     }\n \n-    Ok(token.as_bytes().to_vec())\n+    let token = if auth_scheme == \"Basic\" {\n+        token_part_as_bytes(token)?\n+    } else {\n+        token.as_bytes().to_vec()\n+    };\n+\n+    Ok(token)\n+}\n+\n+fn token_part_as_bytes(token: &str) -> Result<Vec<u8>, AuthenticationError> {\n+    let decoded = B64_STANDARD.decode(token).map_err(|err| {\n+        error!(?err, \"cannot decode basic auth token\");\n+        AuthenticationError::MalformedRequest\n+    })?;\n+\n+    let token_parts = String::from_utf8(decoded)\n+        .map_err(|err| {\n+            error!(?err, \"cannot decode basic auth token to string\");\n+            AuthenticationError::MalformedRequest\n+        })?\n+        .split(\":\")\n+        .map(|part| part.to_owned())\n+        .collect::<Vec<String>>();\n+\n+    let token_part = token_parts.get(1).ok_or_else(|| {",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "2079718110",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26363,
+        "pr_file": "influxdb3_server/src/http.rs",
+        "discussion_id": "2079718110",
+        "commented_code": "@@ -1383,7 +1385,36 @@ fn validate_auth_header(header: HeaderValue) -> Result<Vec<u8>, AuthenticationEr\n         return Err(AuthenticationError::MalformedRequest);\n     }\n \n-    Ok(token.as_bytes().to_vec())\n+    let token = if auth_scheme == \"Basic\" {\n+        token_part_as_bytes(token)?\n+    } else {\n+        token.as_bytes().to_vec()\n+    };\n+\n+    Ok(token)\n+}\n+\n+fn token_part_as_bytes(token: &str) -> Result<Vec<u8>, AuthenticationError> {\n+    let decoded = B64_STANDARD.decode(token).map_err(|err| {\n+        error!(?err, \"cannot decode basic auth token\");\n+        AuthenticationError::MalformedRequest\n+    })?;\n+\n+    let token_parts = String::from_utf8(decoded)\n+        .map_err(|err| {\n+            error!(?err, \"cannot decode basic auth token to string\");\n+            AuthenticationError::MalformedRequest\n+        })?\n+        .split(\":\")\n+        .map(|part| part.to_owned())\n+        .collect::<Vec<String>>();\n+\n+    let token_part = token_parts.get(1).ok_or_else(|| {",
+        "comment_created_at": "2025-05-08T13:26:49+00:00",
+        "comment_author": "jdstrand",
+        "comment_body": "This is a bit of a nitpick but this will not work right if the user happens to specify `:` in the username (eg, `foo:bar:apiv3_...`). Granted, username is ignored and a malformed username like this will cause the token to be `bar` which will result in a 401 so this is ok from a security POV (failing closed), but it seems we should a) ensure there is at least 1 `:`, b) split on `:` and c) take the last part, not `1`. Perhaps use `.last()` instead of `.get(1)` (and be sure the length of the vector is 2 or more)?\r\n\r\nWhile I don't foresee us ever considering the username, if we ever did want to, adjusting this function would avoid a latent bug.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2079775868",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26363,
+        "pr_file": "influxdb3_server/src/http.rs",
+        "discussion_id": "2079718110",
+        "commented_code": "@@ -1383,7 +1385,36 @@ fn validate_auth_header(header: HeaderValue) -> Result<Vec<u8>, AuthenticationEr\n         return Err(AuthenticationError::MalformedRequest);\n     }\n \n-    Ok(token.as_bytes().to_vec())\n+    let token = if auth_scheme == \"Basic\" {\n+        token_part_as_bytes(token)?\n+    } else {\n+        token.as_bytes().to_vec()\n+    };\n+\n+    Ok(token)\n+}\n+\n+fn token_part_as_bytes(token: &str) -> Result<Vec<u8>, AuthenticationError> {\n+    let decoded = B64_STANDARD.decode(token).map_err(|err| {\n+        error!(?err, \"cannot decode basic auth token\");\n+        AuthenticationError::MalformedRequest\n+    })?;\n+\n+    let token_parts = String::from_utf8(decoded)\n+        .map_err(|err| {\n+            error!(?err, \"cannot decode basic auth token to string\");\n+            AuthenticationError::MalformedRequest\n+        })?\n+        .split(\":\")\n+        .map(|part| part.to_owned())\n+        .collect::<Vec<String>>();\n+\n+    let token_part = token_parts.get(1).ok_or_else(|| {",
+        "comment_created_at": "2025-05-08T13:56:48+00:00",
+        "comment_author": "praveen-influx",
+        "comment_body": "I could be misinterpreting the [RFC](https://datatracker.ietf.org/doc/html/rfc7617), I thought `:` is not allowed in username? \r\n\r\n> For the user-id, recipients MUST support all characters defined in\r\n   the \"UsernameCasePreserved\" profile defined in Section 3.3 of\r\n   [RFC7613], with the exception of the colon (\":\") character.\r\n   \r\nI'll still change this implementation but I interpreted that RFC section as clients won't be able to set \":\" in username part of the `user-pass` pair.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2079777756",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26363,
+        "pr_file": "influxdb3_server/src/http.rs",
+        "discussion_id": "2079718110",
+        "commented_code": "@@ -1383,7 +1385,36 @@ fn validate_auth_header(header: HeaderValue) -> Result<Vec<u8>, AuthenticationEr\n         return Err(AuthenticationError::MalformedRequest);\n     }\n \n-    Ok(token.as_bytes().to_vec())\n+    let token = if auth_scheme == \"Basic\" {\n+        token_part_as_bytes(token)?\n+    } else {\n+        token.as_bytes().to_vec()\n+    };\n+\n+    Ok(token)\n+}\n+\n+fn token_part_as_bytes(token: &str) -> Result<Vec<u8>, AuthenticationError> {\n+    let decoded = B64_STANDARD.decode(token).map_err(|err| {\n+        error!(?err, \"cannot decode basic auth token\");\n+        AuthenticationError::MalformedRequest\n+    })?;\n+\n+    let token_parts = String::from_utf8(decoded)\n+        .map_err(|err| {\n+            error!(?err, \"cannot decode basic auth token to string\");\n+            AuthenticationError::MalformedRequest\n+        })?\n+        .split(\":\")\n+        .map(|part| part.to_owned())\n+        .collect::<Vec<String>>();\n+\n+    let token_part = token_parts.get(1).ok_or_else(|| {",
+        "comment_created_at": "2025-05-08T13:57:37+00:00",
+        "comment_author": "hiltontj",
+        "comment_body": "Might be a case worthy of [`str::rsplit_once`](https://doc.rust-lang.org/std/primitive.str.html#method.rsplit_once) so that for, e.g., `foo:bar:apiv3_...`, it will only take `apiv3_...`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2079904237",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26363,
+        "pr_file": "influxdb3_server/src/http.rs",
+        "discussion_id": "2079718110",
+        "commented_code": "@@ -1383,7 +1385,36 @@ fn validate_auth_header(header: HeaderValue) -> Result<Vec<u8>, AuthenticationEr\n         return Err(AuthenticationError::MalformedRequest);\n     }\n \n-    Ok(token.as_bytes().to_vec())\n+    let token = if auth_scheme == \"Basic\" {\n+        token_part_as_bytes(token)?\n+    } else {\n+        token.as_bytes().to_vec()\n+    };\n+\n+    Ok(token)\n+}\n+\n+fn token_part_as_bytes(token: &str) -> Result<Vec<u8>, AuthenticationError> {\n+    let decoded = B64_STANDARD.decode(token).map_err(|err| {\n+        error!(?err, \"cannot decode basic auth token\");\n+        AuthenticationError::MalformedRequest\n+    })?;\n+\n+    let token_parts = String::from_utf8(decoded)\n+        .map_err(|err| {\n+            error!(?err, \"cannot decode basic auth token to string\");\n+            AuthenticationError::MalformedRequest\n+        })?\n+        .split(\":\")\n+        .map(|part| part.to_owned())\n+        .collect::<Vec<String>>();\n+\n+    let token_part = token_parts.get(1).ok_or_else(|| {",
+        "comment_created_at": "2025-05-08T15:01:53+00:00",
+        "comment_author": "jdstrand",
+        "comment_body": "> I could be misinterpreting the [RFC](https://datatracker.ietf.org/doc/html/rfc7617), I thought `:` is not allowed in username?\r\n> \r\n> > For the user-id, recipients MUST support all characters defined in\r\n> > the \"UsernameCasePreserved\" profile defined in Section 3.3 of\r\n> > [RFC7613], with the exception of the colon (\":\") character.\r\n> \r\n> I'll still change this implementation but I interpreted that RFC section as clients won't be able to set \":\" in username part of the `user-pass` pair.\r\n\r\nHmm, you're right: \"_Furthermore, a user-id containing a colon character is invalid, as the first colon in a user-pass string separates user-id and password from one another; text after the first colon is part of the password. User-ids containing colons cannot be encoded in user-pass strings._\"\r\n\r\nWith that in mind, like @hiltontj suggested, you can a) ensure that `:` is present and b) split once and use `get(1)` (or `last()`). The end result is quite similar to your original implementation but is explicitly coded according to the RFC (so even more of a nitpick, heh).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2079968631",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26363,
+        "pr_file": "influxdb3_server/src/http.rs",
+        "discussion_id": "2079718110",
+        "commented_code": "@@ -1383,7 +1385,36 @@ fn validate_auth_header(header: HeaderValue) -> Result<Vec<u8>, AuthenticationEr\n         return Err(AuthenticationError::MalformedRequest);\n     }\n \n-    Ok(token.as_bytes().to_vec())\n+    let token = if auth_scheme == \"Basic\" {\n+        token_part_as_bytes(token)?\n+    } else {\n+        token.as_bytes().to_vec()\n+    };\n+\n+    Ok(token)\n+}\n+\n+fn token_part_as_bytes(token: &str) -> Result<Vec<u8>, AuthenticationError> {\n+    let decoded = B64_STANDARD.decode(token).map_err(|err| {\n+        error!(?err, \"cannot decode basic auth token\");\n+        AuthenticationError::MalformedRequest\n+    })?;\n+\n+    let token_parts = String::from_utf8(decoded)\n+        .map_err(|err| {\n+            error!(?err, \"cannot decode basic auth token to string\");\n+            AuthenticationError::MalformedRequest\n+        })?\n+        .split(\":\")\n+        .map(|part| part.to_owned())\n+        .collect::<Vec<String>>();\n+\n+    let token_part = token_parts.get(1).ok_or_else(|| {",
+        "comment_created_at": "2025-05-08T15:37:11+00:00",
+        "comment_author": "praveen-influx",
+        "comment_body": "~I cannot request review @jdstrand~ , I've reverted back and made sure if there's more than one `:` it returns a `MalformedRequest` error.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2005962994",
+    "pr_number": 26168,
+    "pr_file": "influxdb3/tests/server/configure.rs",
+    "created_at": "2025-03-20T15:54:27+00:00",
+    "commented_code": ".expect(\"create table call failed\");\n     assert_eq!(StatusCode::OK, resp.status());\n     let result = server\n-        .api_v3_query_sql(&[\n-            (\"db\", \"foo\"),\n-            (\"q\", \"SELECT * FROM bar\"),\n-            (\"format\", \"json\"),\n-        ])\n-        .await\n-        .json::<Value>()\n-        .await\n+        .query_sql(\"foo\")",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "2005962994",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26168,
+        "pr_file": "influxdb3/tests/server/configure.rs",
+        "discussion_id": "2005962994",
+        "commented_code": "@@ -1049,14 +1049,9 @@ async fn api_v3_configure_table_create_then_write() {\n         .expect(\"create table call failed\");\n     assert_eq!(StatusCode::OK, resp.status());\n     let result = server\n-        .api_v3_query_sql(&[\n-            (\"db\", \"foo\"),\n-            (\"q\", \"SELECT * FROM bar\"),\n-            (\"format\", \"json\"),\n-        ])\n-        .await\n-        .json::<Value>()\n-        .await\n+        .query_sql(\"foo\")",
+        "comment_created_at": "2025-03-20T15:54:27+00:00",
+        "comment_author": "waynr",
+        "comment_body": "nit: The semantics of this bother me a bit it reads as \"query <database> with query\" which feels weird rolling off the mental togue. What do you think about `.query(<database_name>).with_sql(<sql_string>)` instead? Then for influxql queries we would have `.query(<database_name>).with_influxql(<influxql_string>)`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2005979918",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26168,
+        "pr_file": "influxdb3/tests/server/configure.rs",
+        "discussion_id": "2005962994",
+        "commented_code": "@@ -1049,14 +1049,9 @@ async fn api_v3_configure_table_create_then_write() {\n         .expect(\"create table call failed\");\n     assert_eq!(StatusCode::OK, resp.status());\n     let result = server\n-        .api_v3_query_sql(&[\n-            (\"db\", \"foo\"),\n-            (\"q\", \"SELECT * FROM bar\"),\n-            (\"format\", \"json\"),\n-        ])\n-        .await\n-        .json::<Value>()\n-        .await\n+        .query_sql(\"foo\")",
+        "comment_created_at": "2025-03-20T16:03:00+00:00",
+        "comment_author": "jacksonrnewhouse",
+        "comment_body": "Will do!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2006009217",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26168,
+        "pr_file": "influxdb3/tests/server/configure.rs",
+        "discussion_id": "2005962994",
+        "commented_code": "@@ -1049,14 +1049,9 @@ async fn api_v3_configure_table_create_then_write() {\n         .expect(\"create table call failed\");\n     assert_eq!(StatusCode::OK, resp.status());\n     let result = server\n-        .api_v3_query_sql(&[\n-            (\"db\", \"foo\"),\n-            (\"q\", \"SELECT * FROM bar\"),\n-            (\"format\", \"json\"),\n-        ])\n-        .await\n-        .json::<Value>()\n-        .await\n+        .query_sql(\"foo\")",
+        "comment_created_at": "2025-03-20T16:18:21+00:00",
+        "comment_author": "waynr",
+        "comment_body": "Actually, I just realize I was confusing myself -- I thought this change was happening in the `influxdb3_client` crate and was hoping to see an improvement in the semantics of that API :facepalm:. Thanks for making the requested change!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1935793639",
+    "pr_number": 25935,
+    "pr_file": "influxdb3_client/src/lib.rs",
+    "created_at": "2025-01-30T15:16:58+00:00",
+    "commented_code": "Nanosecond,\n }\n \n+impl std::str::FromStr for Precision {",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1935793639",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25935,
+        "pr_file": "influxdb3_client/src/lib.rs",
+        "discussion_id": "1935793639",
+        "commented_code": "@@ -903,6 +906,21 @@ pub enum Precision {\n     Nanosecond,\n }\n \n+impl std::str::FromStr for Precision {",
+        "comment_created_at": "2025-01-30T15:16:58+00:00",
+        "comment_author": "pauldix",
+        "comment_body": "Can we re-use whatever it is that parses the precision argument from the HTTP API? That way they're always the exact same.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1935809174",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25935,
+        "pr_file": "influxdb3_client/src/lib.rs",
+        "discussion_id": "1935793639",
+        "commented_code": "@@ -903,6 +906,21 @@ pub enum Precision {\n     Nanosecond,\n }\n \n+impl std::str::FromStr for Precision {",
+        "comment_created_at": "2025-01-30T15:25:46+00:00",
+        "comment_author": "hiltontj",
+        "comment_body": "Several types are duplicated in this crate, e.g., `Format`, from the `influxdb3_server` crate. Perhaps we should pull `influxdb3_server` as a dependency of `influxdb3_client` and re-use them directly, or move the types to a central crate.\r\n\r\nBut this has bit us a couple times now.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1935903703",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25935,
+        "pr_file": "influxdb3_client/src/lib.rs",
+        "discussion_id": "1935793639",
+        "commented_code": "@@ -903,6 +906,21 @@ pub enum Precision {\n     Nanosecond,\n }\n \n+impl std::str::FromStr for Precision {",
+        "comment_created_at": "2025-01-30T16:23:08+00:00",
+        "comment_author": "waynr",
+        "comment_body": "I looked into the type used for the HTTP API since my initial grep for an appropriate type turned up both, but it looks to me like the HTTP API uses `serde` deserialization where the HTTP request body refers to the precision types as \"second\", \"millisecond\", etc (as opposed to \"s\", \"ms\", etc).\r\n\r\nEven if we wanted to use the full word for precision unit for the CLI, we would still need to impl `FromStr`, which is what `clap` uses to parse arguments.\r\n\r\n@hiltontj I did notice the TODOs in the code around consolidating types between crates -- is there a github issue tracking that? I could look into that after this PR.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1935995277",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25935,
+        "pr_file": "influxdb3_client/src/lib.rs",
+        "discussion_id": "1935793639",
+        "commented_code": "@@ -903,6 +906,21 @@ pub enum Precision {\n     Nanosecond,\n }\n \n+impl std::str::FromStr for Precision {",
+        "comment_created_at": "2025-01-30T17:22:53+00:00",
+        "comment_author": "hiltontj",
+        "comment_body": "https://github.com/influxdata/influxdb/issues/24672",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1847164107",
+    "pr_number": 25549,
+    "pr_file": "influxdb3_client/src/lib.rs",
+    "created_at": "2024-11-18T19:51:37+00:00",
+    "commented_code": "}\n     }\n \n+    /// Make a request to the `DELETE /api/v3/configure/database?db=foo` API\n+    pub async fn api_v3_configure_db_delete(&self, db: impl Into<String> + Send) -> Result<()> {\n+        let api_path = \"/api/v3/configure/database\";\n+        let db_query_param = format!(\"db={}\", db.into());\n+\n+        let mut url = self.base_url.join(api_path)?;\n+        url.set_query(Some(&db_query_param));\n+\n+        let mut req = self.http_client.delete(url);",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1847164107",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25549,
+        "pr_file": "influxdb3_client/src/lib.rs",
+        "discussion_id": "1847164107",
+        "commented_code": "@@ -259,6 +259,32 @@ impl Client {\n         }\n     }\n \n+    /// Make a request to the `DELETE /api/v3/configure/database?db=foo` API\n+    pub async fn api_v3_configure_db_delete(&self, db: impl Into<String> + Send) -> Result<()> {\n+        let api_path = \"/api/v3/configure/database\";\n+        let db_query_param = format!(\"db={}\", db.into());\n+\n+        let mut url = self.base_url.join(api_path)?;\n+        url.set_query(Some(&db_query_param));\n+\n+        let mut req = self.http_client.delete(url);",
+        "comment_created_at": "2024-11-18T19:51:37+00:00",
+        "comment_author": "hiltontj",
+        "comment_body": "With `reqwest`, you can use the [`query` API](https://docs.rs/reqwest/latest/reqwest/struct.RequestBuilder.html#method.query) to set the param, e.g.,\r\n```suggestion\r\n    /// Make a request to the `DELETE /api/v3/configure/database?db=foo` API\r\n    pub async fn api_v3_configure_db_delete(&self, db: impl AsRef<str> + Send) -> Result<()> {\r\n        let api_path = \"/api/v3/configure/database\";\r\n\r\n        let mut url = self.base_url.join(api_path)?;\r\n\r\n        let mut req = self.http_client.delete(url).query(&[(\"db\", db.as_ref())]);\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1785134230",
+    "pr_number": 25421,
+    "pr_file": "influxdb3_catalog/src/catalog.rs",
+    "created_at": "2024-10-02T19:40:08+00:00",
+    "commented_code": "}\n \n                 info!(\"return new db {}\", db_name);\n-                let db = Arc::new(DatabaseSchema::new(DbId::new(), db_name.into()));\n-                inner\n-                    .databases\n-                    .insert(Arc::clone(&db.name), Arc::clone(&db));\n+                let db_id = DbId::new();\n+                let db_name = db_name.into();\n+                let db = Arc::new(DatabaseSchema::new(db_id, Arc::clone(&db_name)));\n+                inner.databases.insert(db.id, Arc::clone(&db));\n                 inner.sequence = inner.sequence.next();\n                 inner.updated = true;\n+                self.db_map.write().insert(db_id, db_name);\n                 db\n             }\n         };\n \n         Ok(db)\n     }\n \n-    pub fn db_schema(&self, name: &str) -> Option<Arc<DatabaseSchema>> {\n-        self.inner.read().databases.get(name).cloned()\n+    pub fn add_table_to_lookup(&self, db_id: DbId, table_id: TableId, name: Arc<str>) {",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1785134230",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25421,
+        "pr_file": "influxdb3_catalog/src/catalog.rs",
+        "discussion_id": "1785134230",
+        "commented_code": "@@ -150,21 +202,53 @@ impl Catalog {\n                 }\n \n                 info!(\"return new db {}\", db_name);\n-                let db = Arc::new(DatabaseSchema::new(DbId::new(), db_name.into()));\n-                inner\n-                    .databases\n-                    .insert(Arc::clone(&db.name), Arc::clone(&db));\n+                let db_id = DbId::new();\n+                let db_name = db_name.into();\n+                let db = Arc::new(DatabaseSchema::new(db_id, Arc::clone(&db_name)));\n+                inner.databases.insert(db.id, Arc::clone(&db));\n                 inner.sequence = inner.sequence.next();\n                 inner.updated = true;\n+                self.db_map.write().insert(db_id, db_name);\n                 db\n             }\n         };\n \n         Ok(db)\n     }\n \n-    pub fn db_schema(&self, name: &str) -> Option<Arc<DatabaseSchema>> {\n-        self.inner.read().databases.get(name).cloned()\n+    pub fn add_table_to_lookup(&self, db_id: DbId, table_id: TableId, name: Arc<str>) {",
+        "comment_created_at": "2024-10-02T19:40:08+00:00",
+        "comment_author": "pauldix",
+        "comment_body": "I don't think this should be part of the public API. The public API for the Catalog should be to add the table (through a CatalogOp) and as part of that API it should add it to the map.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1786626457",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25421,
+        "pr_file": "influxdb3_catalog/src/catalog.rs",
+        "discussion_id": "1785134230",
+        "commented_code": "@@ -150,21 +202,53 @@ impl Catalog {\n                 }\n \n                 info!(\"return new db {}\", db_name);\n-                let db = Arc::new(DatabaseSchema::new(DbId::new(), db_name.into()));\n-                inner\n-                    .databases\n-                    .insert(Arc::clone(&db.name), Arc::clone(&db));\n+                let db_id = DbId::new();\n+                let db_name = db_name.into();\n+                let db = Arc::new(DatabaseSchema::new(db_id, Arc::clone(&db_name)));\n+                inner.databases.insert(db.id, Arc::clone(&db));\n                 inner.sequence = inner.sequence.next();\n                 inner.updated = true;\n+                self.db_map.write().insert(db_id, db_name);\n                 db\n             }\n         };\n \n         Ok(db)\n     }\n \n-    pub fn db_schema(&self, name: &str) -> Option<Arc<DatabaseSchema>> {\n-        self.inner.read().databases.get(name).cloned()\n+    pub fn add_table_to_lookup(&self, db_id: DbId, table_id: TableId, name: Arc<str>) {",
+        "comment_created_at": "2024-10-03T17:40:56+00:00",
+        "comment_author": "mgattozzi",
+        "comment_body": "There's a tricky bit where we have to add it into the validation of lines when creating a new table id or else we get a new one on each line validation so I took this function out of the catalog and did it inline where necessary in two places.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,240 @@
+[
+  {
+    "discussion_id": "2098044061",
+    "pr_number": 4532,
+    "pr_file": "tests/functional/test_s3.py",
+    "created_at": "2025-05-20T13:56:34+00:00",
+    "commented_code": "}\n         )\n         expected_params.update({\"Bucket\": self.bucket, \"Key\": self.key})\n+        if extra_params is not None:",
+    "repo_full_name": "boto/boto3",
+    "discussion_comments": [
+      {
+        "comment_id": "2098044061",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 4532,
+        "pr_file": "tests/functional/test_s3.py",
+        "discussion_id": "2098044061",
+        "commented_code": "@@ -429,14 +432,18 @@ def stub_get_object(self, full_contents, start_byte=0, end_byte=None):\n             }\n         )\n         expected_params.update({\"Bucket\": self.bucket, \"Key\": self.key})\n+        if extra_params is not None:",
+        "comment_created_at": "2025-05-20T13:56:34+00:00",
+        "comment_author": "SamRemis",
+        "comment_body": "Kind of a nit here, but can we get rid of this if statement by just defaulting `extra_params` to `{}` instead of `None`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2098083666",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 4532,
+        "pr_file": "tests/functional/test_s3.py",
+        "discussion_id": "2098044061",
+        "commented_code": "@@ -429,14 +432,18 @@ def stub_get_object(self, full_contents, start_byte=0, end_byte=None):\n             }\n         )\n         expected_params.update({\"Bucket\": self.bucket, \"Key\": self.key})\n+        if extra_params is not None:",
+        "comment_created_at": "2025-05-20T14:08:01+00:00",
+        "comment_author": "hssyoo",
+        "comment_body": "It's not recommended to supply a default argument that's mutable since default arguments are evaluated once. I guess it's not too important since this test should only be run once, but I'd rather not do it at all.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2098948226",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 4532,
+        "pr_file": "tests/functional/test_s3.py",
+        "discussion_id": "2098044061",
+        "commented_code": "@@ -429,14 +432,18 @@ def stub_get_object(self, full_contents, start_byte=0, end_byte=None):\n             }\n         )\n         expected_params.update({\"Bucket\": self.bucket, \"Key\": self.key})\n+        if extra_params is not None:",
+        "comment_created_at": "2025-05-20T22:05:29+00:00",
+        "comment_author": "nateprewitt",
+        "comment_body": "The convention for defaulting to `{}` would be, which is just the inverse of what Steve is doing:\r\n\r\n```\r\nif extra_params is None:\r\n    extra_params = {}\r\n```\r\n\r\nYou can't use singletons like lists or dicts in function signatures because they're initialized in global scope and will maintain state between invocations. [This article](https://realpython.com/python-optional-arguments/#data-types-that-shouldnt-be-used-as-default-arguments) gives a decent overview.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1405575231",
+    "pr_number": 3946,
+    "pr_file": "boto3/crt.py",
+    "created_at": "2023-11-27T03:16:21+00:00",
+    "commented_code": "+# Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\"). You\n+# may not use this file except in compliance with the License. A copy of\n+# the License is located at\n+#\n+# https://aws.amazon.com/apache2.0/\n+#\n+# or in the \"license\" file accompanying this file. This file is\n+# distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF\n+# ANY KIND, either express or implied. See the License for the specific\n+# language governing permissions and limitations under the License.\n+\"\"\"\n+This file contains private functionality for interacting with the AWS\n+Common Runtime library (awscrt) in boto3.\n+\n+All code contained within this file is for internal usage within this\n+project and is not intended for external consumption. All interfaces\n+contained within are subject to abrupt breaking changes.\n+\"\"\"\n+\n+import threading\n+\n+import botocore.exceptions\n+from botocore.session import Session\n+from s3transfer.crt import (\n+    BotocoreCRTCredentialsWrapper,\n+    BotocoreCRTRequestSerializer,\n+    CRTTransferManager,\n+    acquire_crt_s3_process_lock,\n+    create_s3_crt_client,\n+)\n+\n+# Singletons for CRT-backed transfers\n+_CRT_S3_CLIENT = None\n+_BOTOCORE_CRT_SERIALIZER = None\n+\n+CLIENT_CREATION_LOCK = threading.Lock()\n+PROCESS_LOCK_NAME = 'boto3'\n+\n+\n+def _create_crt_client(session, config, region_name, cred_provider):\n+    \"\"\"Create a CRT S3 Client for file transfer.\n+\n+    Instantiating many of these may lead to degraded performance or\n+    system resource exhaustion.\n+    \"\"\"\n+    create_crt_client_kwargs = {\n+        'region': region_name,\n+        'use_ssl': True,\n+        'crt_credentials_provider': cred_provider,\n+    }\n+    return create_s3_crt_client(**create_crt_client_kwargs)\n+\n+\n+def _create_crt_request_serializer(session, region_name):\n+    return BotocoreCRTRequestSerializer(\n+        session, {'region_name': region_name, 'endpoint_url': None}\n+    )\n+\n+\n+def _create_crt_s3_client(session, config, region_name, credentials, **kwargs):\n+    \"\"\"Create boto3 wrapper class to manage crt lock reference and S3 client.\"\"\"\n+    lock = acquire_crt_s3_process_lock(PROCESS_LOCK_NAME)\n+    if lock is None:\n+        # If we're unable to acquire the lock, we cannot\n+        # use the CRT in this process and should default to\n+        # the classic s3transfer manager.\n+        return None\n+\n+    cred_wrapper = BotocoreCRTCredentialsWrapper(credentials)\n+    cred_provider = cred_wrapper.to_crt_credentials_provider()\n+    return CRTS3Client(\n+        _create_crt_client(session, config, region_name, cred_provider),\n+        lock,\n+        region_name,\n+        cred_wrapper,\n+    )\n+\n+\n+def _initialize_crt_transfer_primatives(client, config):\n+    session = Session()\n+    region_name = client.meta.region_name\n+    credentials = client._get_credentials()\n+\n+    serializer = _create_crt_request_serializer(session, region_name)\n+    s3_client = _create_crt_s3_client(\n+        session, config, region_name, credentials\n+    )\n+    return serializer, s3_client\n+\n+\n+def get_crt_s3_client(client, config):\n+    global _CRT_S3_CLIENT\n+    global _BOTOCORE_CRT_SERIALIZER\n+\n+    with CLIENT_CREATION_LOCK:\n+        if _CRT_S3_CLIENT is None:\n+            serializer, s3_client = _initialize_crt_transfer_primatives(\n+                client, config\n+            )\n+            _BOTOCORE_CRT_SERIALIZER = serializer\n+            _CRT_S3_CLIENT = s3_client\n+\n+    return _CRT_S3_CLIENT\n+\n+\n+class CRTS3Client:\n+    \"\"\"\n+    This wrapper keeps track of our underlying CRT client, the lock used to\n+    acquire it and the region we've used to instantiate the client.\n+\n+    Due to limitations in the existing CRT interfaces, we can only make calls\n+    in a single region and does not support redirects. We track the region to\n+    ensure we don't use the CRT client when a successful request cannot be made.\n+    \"\"\"\n+\n+    def __init__(self, crt_client, process_lock, region, cred_provider):\n+        self.crt_client = crt_client\n+        self.process_lock = process_lock\n+        self.region = region\n+        self.cred_provider = cred_provider\n+\n+\n+def is_crt_compatible_request(client, crt_s3_client):\n+    \"\"\"\n+    Boto3 client must use same signing region and credentials\n+    as the _CRT_S3_CLIENT singleton. Otherwise fallback to classic.\n+    \"\"\"\n+    if crt_s3_client is None:\n+        return False\n+\n+    is_same_region = client.meta.region_name == crt_s3_client.region\n+    is_same_identity = compare_identity(\n+        client._get_credentials(), crt_s3_client.cred_provider",
+    "repo_full_name": "boto/boto3",
+    "discussion_comments": [
+      {
+        "comment_id": "1405575231",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 3946,
+        "pr_file": "boto3/crt.py",
+        "discussion_id": "1405575231",
+        "commented_code": "@@ -0,0 +1,161 @@\n+# Copyright 2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\"). You\n+# may not use this file except in compliance with the License. A copy of\n+# the License is located at\n+#\n+# https://aws.amazon.com/apache2.0/\n+#\n+# or in the \"license\" file accompanying this file. This file is\n+# distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF\n+# ANY KIND, either express or implied. See the License for the specific\n+# language governing permissions and limitations under the License.\n+\"\"\"\n+This file contains private functionality for interacting with the AWS\n+Common Runtime library (awscrt) in boto3.\n+\n+All code contained within this file is for internal usage within this\n+project and is not intended for external consumption. All interfaces\n+contained within are subject to abrupt breaking changes.\n+\"\"\"\n+\n+import threading\n+\n+import botocore.exceptions\n+from botocore.session import Session\n+from s3transfer.crt import (\n+    BotocoreCRTCredentialsWrapper,\n+    BotocoreCRTRequestSerializer,\n+    CRTTransferManager,\n+    acquire_crt_s3_process_lock,\n+    create_s3_crt_client,\n+)\n+\n+# Singletons for CRT-backed transfers\n+_CRT_S3_CLIENT = None\n+_BOTOCORE_CRT_SERIALIZER = None\n+\n+CLIENT_CREATION_LOCK = threading.Lock()\n+PROCESS_LOCK_NAME = 'boto3'\n+\n+\n+def _create_crt_client(session, config, region_name, cred_provider):\n+    \"\"\"Create a CRT S3 Client for file transfer.\n+\n+    Instantiating many of these may lead to degraded performance or\n+    system resource exhaustion.\n+    \"\"\"\n+    create_crt_client_kwargs = {\n+        'region': region_name,\n+        'use_ssl': True,\n+        'crt_credentials_provider': cred_provider,\n+    }\n+    return create_s3_crt_client(**create_crt_client_kwargs)\n+\n+\n+def _create_crt_request_serializer(session, region_name):\n+    return BotocoreCRTRequestSerializer(\n+        session, {'region_name': region_name, 'endpoint_url': None}\n+    )\n+\n+\n+def _create_crt_s3_client(session, config, region_name, credentials, **kwargs):\n+    \"\"\"Create boto3 wrapper class to manage crt lock reference and S3 client.\"\"\"\n+    lock = acquire_crt_s3_process_lock(PROCESS_LOCK_NAME)\n+    if lock is None:\n+        # If we're unable to acquire the lock, we cannot\n+        # use the CRT in this process and should default to\n+        # the classic s3transfer manager.\n+        return None\n+\n+    cred_wrapper = BotocoreCRTCredentialsWrapper(credentials)\n+    cred_provider = cred_wrapper.to_crt_credentials_provider()\n+    return CRTS3Client(\n+        _create_crt_client(session, config, region_name, cred_provider),\n+        lock,\n+        region_name,\n+        cred_wrapper,\n+    )\n+\n+\n+def _initialize_crt_transfer_primatives(client, config):\n+    session = Session()\n+    region_name = client.meta.region_name\n+    credentials = client._get_credentials()\n+\n+    serializer = _create_crt_request_serializer(session, region_name)\n+    s3_client = _create_crt_s3_client(\n+        session, config, region_name, credentials\n+    )\n+    return serializer, s3_client\n+\n+\n+def get_crt_s3_client(client, config):\n+    global _CRT_S3_CLIENT\n+    global _BOTOCORE_CRT_SERIALIZER\n+\n+    with CLIENT_CREATION_LOCK:\n+        if _CRT_S3_CLIENT is None:\n+            serializer, s3_client = _initialize_crt_transfer_primatives(\n+                client, config\n+            )\n+            _BOTOCORE_CRT_SERIALIZER = serializer\n+            _CRT_S3_CLIENT = s3_client\n+\n+    return _CRT_S3_CLIENT\n+\n+\n+class CRTS3Client:\n+    \"\"\"\n+    This wrapper keeps track of our underlying CRT client, the lock used to\n+    acquire it and the region we've used to instantiate the client.\n+\n+    Due to limitations in the existing CRT interfaces, we can only make calls\n+    in a single region and does not support redirects. We track the region to\n+    ensure we don't use the CRT client when a successful request cannot be made.\n+    \"\"\"\n+\n+    def __init__(self, crt_client, process_lock, region, cred_provider):\n+        self.crt_client = crt_client\n+        self.process_lock = process_lock\n+        self.region = region\n+        self.cred_provider = cred_provider\n+\n+\n+def is_crt_compatible_request(client, crt_s3_client):\n+    \"\"\"\n+    Boto3 client must use same signing region and credentials\n+    as the _CRT_S3_CLIENT singleton. Otherwise fallback to classic.\n+    \"\"\"\n+    if crt_s3_client is None:\n+        return False\n+\n+    is_same_region = client.meta.region_name == crt_s3_client.region\n+    is_same_identity = compare_identity(\n+        client._get_credentials(), crt_s3_client.cred_provider",
+        "comment_created_at": "2023-11-27T03:16:21+00:00",
+        "comment_author": "kyleknap",
+        "comment_body": "A couple of things here:\r\n1. Is it possible for `_get_credentials()` to be `None` here? I'm wondering if we can run into a case where we try to access properties such as `access_key`, `secret_key`, etc on a `None` object.\r\n2. I'm wondering if we should be calling `get_frozen_credentials()` on the return value from `_get_credentials()`? This would guarantee we don't run into race conditions where we access one of the properties and a refresh happens on us in between comparison of another property.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "625812617",
+    "pr_number": 2746,
+    "pr_file": "boto3/session.py",
+    "created_at": "2021-05-04T14:06:56+00:00",
+    "commented_code": ":return: Service client instance\n \n         \"\"\"\n+        if endpoint_url is None:\n+            try:\n+                endpoint_url = os.environ[\"AWS_ENDPOINT_URL\"]\n+            except KeyError:\n+                pass",
+    "repo_full_name": "boto/boto3",
+    "discussion_comments": [
+      {
+        "comment_id": "625812617",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 2746,
+        "pr_file": "boto3/session.py",
+        "discussion_id": "625812617",
+        "commented_code": "@@ -255,6 +255,12 @@ def client(self, service_name, region_name=None, api_version=None,\n         :return: Service client instance\n \n         \"\"\"\n+        if endpoint_url is None:\n+            try:\n+                endpoint_url = os.environ[\"AWS_ENDPOINT_URL\"]\n+            except KeyError:\n+                pass",
+        "comment_created_at": "2021-05-04T14:06:56+00:00",
+        "comment_author": "AidanDelaney",
+        "comment_body": "This could do a `.get()` which returns `None` if the env var is not set.\r\n```suggestion\r\n            endpoint_url = os.environ.get(\"AWS_ENDPOINT_URL\")\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "626469593",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 2746,
+        "pr_file": "boto3/session.py",
+        "discussion_id": "625812617",
+        "commented_code": "@@ -255,6 +255,12 @@ def client(self, service_name, region_name=None, api_version=None,\n         :return: Service client instance\n \n         \"\"\"\n+        if endpoint_url is None:\n+            try:\n+                endpoint_url = os.environ[\"AWS_ENDPOINT_URL\"]\n+            except KeyError:\n+                pass",
+        "comment_created_at": "2021-05-05T11:03:55+00:00",
+        "comment_author": "CodePint",
+        "comment_body": "Are we able to make this change and get the PR merged?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "882112779",
+    "pr_number": 3279,
+    "pr_file": "boto3/dynamodb/table.py",
+    "created_at": "2022-05-25T21:01:46+00:00",
+    "commented_code": "response = self._client.batch_write_item(\n             RequestItems={self._table_name: items_to_send}\n         )\n-        unprocessed_items = response['UnprocessedItems']\n-\n-        if unprocessed_items and unprocessed_items[self._table_name]:\n-            # Any unprocessed_items are immediately added to the\n-            # next batch we send.\n-            self._items_buffer.extend(unprocessed_items[self._table_name])\n-        else:\n-            self._items_buffer = []\n+        unprocessed_items = response['UnprocessedItems'].get(\n+            self._table_name, []",
+    "repo_full_name": "boto/boto3",
+    "discussion_comments": [
+      {
+        "comment_id": "882112779",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 3279,
+        "pr_file": "boto3/dynamodb/table.py",
+        "discussion_id": "882112779",
+        "commented_code": "@@ -144,14 +144,12 @@ def _flush(self):\n         response = self._client.batch_write_item(\n             RequestItems={self._table_name: items_to_send}\n         )\n-        unprocessed_items = response['UnprocessedItems']\n-\n-        if unprocessed_items and unprocessed_items[self._table_name]:\n-            # Any unprocessed_items are immediately added to the\n-            # next batch we send.\n-            self._items_buffer.extend(unprocessed_items[self._table_name])\n-        else:\n-            self._items_buffer = []\n+        unprocessed_items = response['UnprocessedItems'].get(\n+            self._table_name, []",
+        "comment_created_at": "2022-05-25T21:01:46+00:00",
+        "comment_author": "dlm6693",
+        "comment_body": "@nateprewitt do you know of an event where `response` would be falsey? At least according to previously existing tests if there are no `UnprocessedItems` that key would still exist. If response can be `{}` or `None` I'll add an `if` back in.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "887216665",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 3279,
+        "pr_file": "boto3/dynamodb/table.py",
+        "discussion_id": "882112779",
+        "commented_code": "@@ -144,14 +144,12 @@ def _flush(self):\n         response = self._client.batch_write_item(\n             RequestItems={self._table_name: items_to_send}\n         )\n-        unprocessed_items = response['UnprocessedItems']\n-\n-        if unprocessed_items and unprocessed_items[self._table_name]:\n-            # Any unprocessed_items are immediately added to the\n-            # next batch we send.\n-            self._items_buffer.extend(unprocessed_items[self._table_name])\n-        else:\n-            self._items_buffer = []\n+        unprocessed_items = response['UnprocessedItems'].get(\n+            self._table_name, []",
+        "comment_created_at": "2022-06-01T19:19:29+00:00",
+        "comment_author": "nateprewitt",
+        "comment_body": "It _shouldn't_ be `None` but we were previously accounting for that. I think the simplest approach is to do a quick check and convert if we encounter it.\r\n\r\ni.e.\r\n\r\n```suggestion\r\n        if not unprocessed_items:\r\n            unprocessed_items = {}\r\n        unprocessed_items = response['UnprocessedItems'].get(\r\n            self._table_name, []\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "888076263",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 3279,
+        "pr_file": "boto3/dynamodb/table.py",
+        "discussion_id": "882112779",
+        "commented_code": "@@ -144,14 +144,12 @@ def _flush(self):\n         response = self._client.batch_write_item(\n             RequestItems={self._table_name: items_to_send}\n         )\n-        unprocessed_items = response['UnprocessedItems']\n-\n-        if unprocessed_items and unprocessed_items[self._table_name]:\n-            # Any unprocessed_items are immediately added to the\n-            # next batch we send.\n-            self._items_buffer.extend(unprocessed_items[self._table_name])\n-        else:\n-            self._items_buffer = []\n+        unprocessed_items = response['UnprocessedItems'].get(\n+            self._table_name, []",
+        "comment_created_at": "2022-06-02T15:21:23+00:00",
+        "comment_author": "dlm6693",
+        "comment_body": "done. thanks Nate!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "888158032",
+    "pr_number": 3279,
+    "pr_file": "boto3/dynamodb/table.py",
+    "created_at": "2022-06-02T16:30:34+00:00",
+    "commented_code": "RequestItems={self._table_name: items_to_send}\n         )\n         unprocessed_items = response['UnprocessedItems']\n-\n-        if unprocessed_items and unprocessed_items[self._table_name]:\n-            # Any unprocessed_items are immediately added to the\n-            # next batch we send.\n-            self._items_buffer.extend(unprocessed_items[self._table_name])\n+        if unprocessed_items is None:",
+    "repo_full_name": "boto/boto3",
+    "discussion_comments": [
+      {
+        "comment_id": "888158032",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 3279,
+        "pr_file": "boto3/dynamodb/table.py",
+        "discussion_id": "888158032",
+        "commented_code": "@@ -145,13 +145,13 @@ def _flush(self):\n             RequestItems={self._table_name: items_to_send}\n         )\n         unprocessed_items = response['UnprocessedItems']\n-\n-        if unprocessed_items and unprocessed_items[self._table_name]:\n-            # Any unprocessed_items are immediately added to the\n-            # next batch we send.\n-            self._items_buffer.extend(unprocessed_items[self._table_name])\n+        if unprocessed_items is None:",
+        "comment_created_at": "2022-06-02T16:30:34+00:00",
+        "comment_author": "nateprewitt",
+        "comment_body": "The semantics for this change are slightly different than what I'd proposed. This change accounts explicitly for `None`, but we were previously checking for anything falsey. For the sake of robustness the `if not unprocessed_items` may prevent any unintended failures.\r\n\r\nAlso it looks like you set `unprocessed_items` to an empty list. Ideally we want to be minimize type swapping for the same variable within a function. It obviously happens because we're accounting for falsey types above, but we should aim to avoid it. Otherwise, it's going to make type hints harder for us if they're added in the future. Was there an added benefit with this approach?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "888237522",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 3279,
+        "pr_file": "boto3/dynamodb/table.py",
+        "discussion_id": "888158032",
+        "commented_code": "@@ -145,13 +145,13 @@ def _flush(self):\n             RequestItems={self._table_name: items_to_send}\n         )\n         unprocessed_items = response['UnprocessedItems']\n-\n-        if unprocessed_items and unprocessed_items[self._table_name]:\n-            # Any unprocessed_items are immediately added to the\n-            # next batch we send.\n-            self._items_buffer.extend(unprocessed_items[self._table_name])\n+        if unprocessed_items is None:",
+        "comment_created_at": "2022-06-02T17:53:10+00:00",
+        "comment_author": "dlm6693",
+        "comment_body": "Ah sorry i think i misunderstood your previous comment about checking for `None`. No added benefit, but thought it made sense considering we were casting to an empty list if `get` returned `None`. I'll update to more closely reflect what you suggested.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "563945566",
+    "pr_number": 2719,
+    "pr_file": "boto3/iam/inject.py",
+    "created_at": "2021-01-25T18:25:01+00:00",
+    "commented_code": "+# Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\"). You\n+# may not use this file except in compliance with the License. A copy of\n+# the License is located at\n+#\n+# http://aws.amazon.com/apache2.0/\n+#\n+# or in the \"license\" file accompanying this file. This file is\n+# distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF\n+# ANY KIND, either express or implied. See the License for the specific\n+# language governing permissions and limitations under the License.\n+\n+from boto3 import utils\n+\n+def inject_access_key_methods(class_attributes, **kwargs):\n+    utils.inject_attribute(class_attributes, 'load', access_key_load)\n+\n+def access_key_load(self, *args, **kwargs):\n+    \"\"\"\n+    Call iam.client.list_access_keys to get the status\n+    \"\"\"\n+    response = self.meta.client.list_access_keys(UserName=self.user_name)\n+    for access_key_dict in response['AccessKeyMetadata']:\n+        if access_key_dict['AccessKeyId'] == self.id:\n+            new_response = access_key_dict\n+            break\n+    self.meta.data = new_response",
+    "repo_full_name": "boto/boto3",
+    "discussion_comments": [
+      {
+        "comment_id": "563945566",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 2719,
+        "pr_file": "boto3/iam/inject.py",
+        "discussion_id": "563945566",
+        "commented_code": "@@ -0,0 +1,28 @@\n+# Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\"). You\n+# may not use this file except in compliance with the License. A copy of\n+# the License is located at\n+#\n+# http://aws.amazon.com/apache2.0/\n+#\n+# or in the \"license\" file accompanying this file. This file is\n+# distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF\n+# ANY KIND, either express or implied. See the License for the specific\n+# language governing permissions and limitations under the License.\n+\n+from boto3 import utils\n+\n+def inject_access_key_methods(class_attributes, **kwargs):\n+    utils.inject_attribute(class_attributes, 'load', access_key_load)\n+\n+def access_key_load(self, *args, **kwargs):\n+    \"\"\"\n+    Call iam.client.list_access_keys to get the status\n+    \"\"\"\n+    response = self.meta.client.list_access_keys(UserName=self.user_name)\n+    for access_key_dict in response['AccessKeyMetadata']:\n+        if access_key_dict['AccessKeyId'] == self.id:\n+            new_response = access_key_dict\n+            break\n+    self.meta.data = new_response ",
+        "comment_created_at": "2021-01-25T18:25:01+00:00",
+        "comment_author": "nateprewitt",
+        "comment_body": "This assumes we'll always find the key in our access keys. We may want to add some logic to handle the event the key id doesn't exist.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "565562118",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 2719,
+        "pr_file": "boto3/iam/inject.py",
+        "discussion_id": "563945566",
+        "commented_code": "@@ -0,0 +1,28 @@\n+# Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\"). You\n+# may not use this file except in compliance with the License. A copy of\n+# the License is located at\n+#\n+# http://aws.amazon.com/apache2.0/\n+#\n+# or in the \"license\" file accompanying this file. This file is\n+# distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF\n+# ANY KIND, either express or implied. See the License for the specific\n+# language governing permissions and limitations under the License.\n+\n+from boto3 import utils\n+\n+def inject_access_key_methods(class_attributes, **kwargs):\n+    utils.inject_attribute(class_attributes, 'load', access_key_load)\n+\n+def access_key_load(self, *args, **kwargs):\n+    \"\"\"\n+    Call iam.client.list_access_keys to get the status\n+    \"\"\"\n+    response = self.meta.client.list_access_keys(UserName=self.user_name)\n+    for access_key_dict in response['AccessKeyMetadata']:\n+        if access_key_dict['AccessKeyId'] == self.id:\n+            new_response = access_key_dict\n+            break\n+    self.meta.data = new_response ",
+        "comment_created_at": "2021-01-27T19:05:41+00:00",
+        "comment_author": "swetashre",
+        "comment_body": "Add the logic to return a empty dict if key is not present. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "31545466",
+    "pr_number": 118,
+    "pr_file": "boto3/dynamodb/table.py",
+    "created_at": "2015-06-02T17:04:22+00:00",
+    "commented_code": "+# Copyright 2015 Amazon.com, Inc. or its affiliates. All Rights Reserved.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\"). You\n+# may not use this file except in compliance with the License. A copy of\n+# the License is located at\n+#\n+# http://aws.amazon.com/apache2.0/\n+#\n+# or in the \"license\" file accompanying this file. This file is\n+# distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF\n+# ANY KIND, either express or implied. See the License for the specific\n+# language governing permissions and limitations under the License.\n+import logging\n+\n+\n+logger = logging.getLogger(__name__)\n+\n+\n+def register_table_methods(base_classes, **kwargs):\n+    base_classes.insert(0, TableResource)\n+\n+\n+# This class can be used to add any additional methods we want\n+# onto a table resource.  Ideally to avoid creating a new\n+# base class for every method we can just update this\n+# class instead.  Just be sure to move the bulk of the\n+# actual method implementation to another class.\n+class TableResource(object):\n+    def __init__(self, *args, **kwargs):\n+        super(TableResource, self).__init__(*args, **kwargs)\n+\n+    def batch_writer(self):\n+        \"\"\"Create a batch writer object.\n+\n+        This method creates a context manager for writing\n+        objects to Amazon DynamoDB in batch.\n+\n+        The batch writer will automatically handle buffering and sending items\n+        in batches.  In addition, the batch writer will also automatically\n+        handle any unprocessed items and resend them as needed.  All you need\n+        to do is call ``put_item`` for any items you want to add, and\n+        ``delete_item`` for any items you want to delete.\n+\n+        Example usage::\n+\n+            with table.batch_writer() as batch:\n+                for _ in xrange(1000000):\n+                    batch.put_item(Item={'HashKey': '...',\n+                                         'Otherstuff': '...'})\n+                # You can also delete_items in a batch.\n+                batch.delete_item(Key={'HashKey': 'SomeHashKey'})\n+\n+        \"\"\"\n+        return BatchWriter(self.name, self.meta.client)\n+\n+\n+class BatchWriter(object):\n+    \"\"\"Automatically handle batch writes to DynamoDB for a single table.\"\"\"\n+    def __init__(self, table_name, client, flush_amount=25):\n+        \"\"\"\n+\n+        :type table_name: str\n+        :param table_name: The name of the table.  The class handles\n+            batch writes to a single table.\n+\n+        :type client: ``botocore.client.Client``\n+        :param client: A botocore client.  Note this client\n+            **must** have the dynamodb customizations applied\n+            to it for transforming AttributeValues into the\n+            wire protocol.  What this means in practice is that\n+            you need to use a client that comes from a DynamoDB\n+            resource if you're going to instantiate this class\n+            directly, i.e\n+            ``boto3.resource('dynamodb').Table('foo').meta.client``.\n+\n+        :type flush_amount: int\n+        :param flush_amount: The number of items to keep in\n+            a local buffer before sending a batch_write_item\n+            request to DynamoDB.\n+\n+\n+        \"\"\"\n+        self._table_name = table_name\n+        self._client = client\n+        self._items_buffer = []\n+        self._flush_amount = flush_amount\n+\n+    def put_item(self, Item):\n+        self._items_buffer.append({'PutRequest': {'Item': Item}})\n+        self._flush_if_needed()\n+\n+    def delete_item(self, Key):\n+        self._items_buffer.append({'DeleteRequest': {'Key': Key}})\n+        self._flush_if_needed()\n+\n+    def _flush_if_needed(self):\n+        if len(self._items_buffer) >= self._flush_amount:\n+            self._flush()\n+\n+    def _flush(self):\n+        logger.debug(\"Batch writer flushing pending items.\")\n+        response = self._client.batch_write_item(\n+            RequestItems={self._table_name: self._items_buffer})\n+        unprocessed_items = response['UnprocessedItems']\n+\n+        if unprocessed_items and unprocessed_items[self._table_name]:",
+    "repo_full_name": "boto/boto3",
+    "discussion_comments": [
+      {
+        "comment_id": "31545466",
+        "repo_full_name": "boto/boto3",
+        "pr_number": 118,
+        "pr_file": "boto3/dynamodb/table.py",
+        "discussion_id": "31545466",
+        "commented_code": "@@ -0,0 +1,124 @@\n+# Copyright 2015 Amazon.com, Inc. or its affiliates. All Rights Reserved.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\"). You\n+# may not use this file except in compliance with the License. A copy of\n+# the License is located at\n+#\n+# http://aws.amazon.com/apache2.0/\n+#\n+# or in the \"license\" file accompanying this file. This file is\n+# distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF\n+# ANY KIND, either express or implied. See the License for the specific\n+# language governing permissions and limitations under the License.\n+import logging\n+\n+\n+logger = logging.getLogger(__name__)\n+\n+\n+def register_table_methods(base_classes, **kwargs):\n+    base_classes.insert(0, TableResource)\n+\n+\n+# This class can be used to add any additional methods we want\n+# onto a table resource.  Ideally to avoid creating a new\n+# base class for every method we can just update this\n+# class instead.  Just be sure to move the bulk of the\n+# actual method implementation to another class.\n+class TableResource(object):\n+    def __init__(self, *args, **kwargs):\n+        super(TableResource, self).__init__(*args, **kwargs)\n+\n+    def batch_writer(self):\n+        \"\"\"Create a batch writer object.\n+\n+        This method creates a context manager for writing\n+        objects to Amazon DynamoDB in batch.\n+\n+        The batch writer will automatically handle buffering and sending items\n+        in batches.  In addition, the batch writer will also automatically\n+        handle any unprocessed items and resend them as needed.  All you need\n+        to do is call ``put_item`` for any items you want to add, and\n+        ``delete_item`` for any items you want to delete.\n+\n+        Example usage::\n+\n+            with table.batch_writer() as batch:\n+                for _ in xrange(1000000):\n+                    batch.put_item(Item={'HashKey': '...',\n+                                         'Otherstuff': '...'})\n+                # You can also delete_items in a batch.\n+                batch.delete_item(Key={'HashKey': 'SomeHashKey'})\n+\n+        \"\"\"\n+        return BatchWriter(self.name, self.meta.client)\n+\n+\n+class BatchWriter(object):\n+    \"\"\"Automatically handle batch writes to DynamoDB for a single table.\"\"\"\n+    def __init__(self, table_name, client, flush_amount=25):\n+        \"\"\"\n+\n+        :type table_name: str\n+        :param table_name: The name of the table.  The class handles\n+            batch writes to a single table.\n+\n+        :type client: ``botocore.client.Client``\n+        :param client: A botocore client.  Note this client\n+            **must** have the dynamodb customizations applied\n+            to it for transforming AttributeValues into the\n+            wire protocol.  What this means in practice is that\n+            you need to use a client that comes from a DynamoDB\n+            resource if you're going to instantiate this class\n+            directly, i.e\n+            ``boto3.resource('dynamodb').Table('foo').meta.client``.\n+\n+        :type flush_amount: int\n+        :param flush_amount: The number of items to keep in\n+            a local buffer before sending a batch_write_item\n+            request to DynamoDB.\n+\n+\n+        \"\"\"\n+        self._table_name = table_name\n+        self._client = client\n+        self._items_buffer = []\n+        self._flush_amount = flush_amount\n+\n+    def put_item(self, Item):\n+        self._items_buffer.append({'PutRequest': {'Item': Item}})\n+        self._flush_if_needed()\n+\n+    def delete_item(self, Key):\n+        self._items_buffer.append({'DeleteRequest': {'Key': Key}})\n+        self._flush_if_needed()\n+\n+    def _flush_if_needed(self):\n+        if len(self._items_buffer) >= self._flush_amount:\n+            self._flush()\n+\n+    def _flush(self):\n+        logger.debug(\"Batch writer flushing pending items.\")\n+        response = self._client.batch_write_item(\n+            RequestItems={self._table_name: self._items_buffer})\n+        unprocessed_items = response['UnprocessedItems']\n+\n+        if unprocessed_items and unprocessed_items[self._table_name]:",
+        "comment_created_at": "2015-06-02T17:04:22+00:00",
+        "comment_author": "kyleknap",
+        "comment_body": "Is it guaranteed that the table_name is in the unprocessed_items? I would be wary of accessing it directly. Probably would use a `get()`.\n",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

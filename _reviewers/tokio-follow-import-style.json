@@ -1,0 +1,182 @@
+[
+  {
+    "discussion_id": "2176238000",
+    "pr_number": 7418,
+    "pr_file": "tokio/src/sync/set_once.rs",
+    "created_at": "2025-07-01T01:44:48+00:00",
+    "commented_code": "+use super::{Notify, SetError};\n+use crate::loom::cell::UnsafeCell;\n+use std::fmt;\n+use std::mem::MaybeUninit;\n+use std::ops::Drop;\n+use std::ptr;\n+use std::sync::atomic::{AtomicU8, Ordering};\n+\n+// This file contains an implementation of an SetOnce. The value of SetOnce\n+// can only be modified once during initialization.\n+//\n+//  1. When `value_set` is false, the `value` is not initialized and wait()\n+//      future will keep on waiting\n+//  2. When `value_set` is true, the wait() future completes, get() will return\n+//      Some(&T)\n+//\n+// The value cannot be changed after set() is called. Subsequent calls to set()\n+// will return a `SetError`\n+\n+/// A thread-safe cell that can be written to only once.\n+/// A `SetOnce` is inspired from python's\n+/// [`asyncio.Event`](https://docs.python.org/3/library/asyncio-sync.html#asyncio.Event)\n+/// type. It can be used to wait until the value of the `SetOnce` is set like\n+/// a \"Event\" mechanism\n+///\n+/// # Example\n+///\n+/// ```\n+/// use tokio::sync::SetOnce;\n+/// use std::sync::Arc;\n+///\n+/// #[tokio::main]\n+/// async fn main() {\n+///     let once = SetOnce::new();\n+///\n+///     let arc = Arc::new(once);\n+///     let first_cl = Arc::clone(&arc);\n+///     let second_cl = Arc::clone(&arc);\n+///\n+///     tokio::spawn(async move { first_cl.set(20) });\n+///\n+///     tokio::spawn(async move { second_cl.set(10) });\n+///\n+///     let res = arc.get(); // returns None\n+///     arc.wait().await; // lets wait until the value is set\n+///\n+///     println!(\"{:?}\", arc.get());\n+/// }\n+/// ```\n+///\n+/// A `SetOnce` is typically used for global variables that need to be\n+/// initialized once on first use, but need no further changes. The `SetOnce`\n+/// in Tokio allows the initialization procedure to be asynchronous.\n+///\n+/// # Example\n+///\n+/// ```\n+/// use tokio::sync::{SetOnce, SetError};\n+///\n+///\n+/// static ONCE: SetOnce<u32> = SetOnce::const_new();\n+///\n+/// #[tokio::main]\n+/// async fn main() -> Result<(), SetError<u32>> {\n+///     ONCE.set(2)?;\n+///     let result = ONCE.get();\n+///     assert_eq!(result, Some(&2));\n+///\n+///     Ok(())\n+/// }\n+/// ```\n+pub struct SetOnce<T> {\n+    // AtomicU8 has 3 states, EMPTY, SETTING and DONE\n+    // is described by the `AtomicState` enum.\n+    value_set: AtomicU8,\n+    value: UnsafeCell<MaybeUninit<T>>,\n+    notify: Notify,\n+}\n+\n+#[repr(u8)]\n+#[derive(PartialEq, Eq)]\n+pub(crate) enum AtomicState {\n+    Empty = 0,\n+    // SETTING means \"set is currently running\"\n+    Setting = 1,\n+    Done = 2,\n+}",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "2176238000",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7418,
+        "pr_file": "tokio/src/sync/set_once.rs",
+        "discussion_id": "2176238000",
+        "commented_code": "@@ -0,0 +1,377 @@\n+use super::{Notify, SetError};\n+use crate::loom::cell::UnsafeCell;\n+use std::fmt;\n+use std::mem::MaybeUninit;\n+use std::ops::Drop;\n+use std::ptr;\n+use std::sync::atomic::{AtomicU8, Ordering};\n+\n+// This file contains an implementation of an SetOnce. The value of SetOnce\n+// can only be modified once during initialization.\n+//\n+//  1. When `value_set` is false, the `value` is not initialized and wait()\n+//      future will keep on waiting\n+//  2. When `value_set` is true, the wait() future completes, get() will return\n+//      Some(&T)\n+//\n+// The value cannot be changed after set() is called. Subsequent calls to set()\n+// will return a `SetError`\n+\n+/// A thread-safe cell that can be written to only once.\n+/// A `SetOnce` is inspired from python's\n+/// [`asyncio.Event`](https://docs.python.org/3/library/asyncio-sync.html#asyncio.Event)\n+/// type. It can be used to wait until the value of the `SetOnce` is set like\n+/// a \"Event\" mechanism\n+///\n+/// # Example\n+///\n+/// ```\n+/// use tokio::sync::SetOnce;\n+/// use std::sync::Arc;\n+///\n+/// #[tokio::main]\n+/// async fn main() {\n+///     let once = SetOnce::new();\n+///\n+///     let arc = Arc::new(once);\n+///     let first_cl = Arc::clone(&arc);\n+///     let second_cl = Arc::clone(&arc);\n+///\n+///     tokio::spawn(async move { first_cl.set(20) });\n+///\n+///     tokio::spawn(async move { second_cl.set(10) });\n+///\n+///     let res = arc.get(); // returns None\n+///     arc.wait().await; // lets wait until the value is set\n+///\n+///     println!(\"{:?}\", arc.get());\n+/// }\n+/// ```\n+///\n+/// A `SetOnce` is typically used for global variables that need to be\n+/// initialized once on first use, but need no further changes. The `SetOnce`\n+/// in Tokio allows the initialization procedure to be asynchronous.\n+///\n+/// # Example\n+///\n+/// ```\n+/// use tokio::sync::{SetOnce, SetError};\n+///\n+///\n+/// static ONCE: SetOnce<u32> = SetOnce::const_new();\n+///\n+/// #[tokio::main]\n+/// async fn main() -> Result<(), SetError<u32>> {\n+///     ONCE.set(2)?;\n+///     let result = ONCE.get();\n+///     assert_eq!(result, Some(&2));\n+///\n+///     Ok(())\n+/// }\n+/// ```\n+pub struct SetOnce<T> {\n+    // AtomicU8 has 3 states, EMPTY, SETTING and DONE\n+    // is described by the `AtomicState` enum.\n+    value_set: AtomicU8,\n+    value: UnsafeCell<MaybeUninit<T>>,\n+    notify: Notify,\n+}\n+\n+#[repr(u8)]\n+#[derive(PartialEq, Eq)]\n+pub(crate) enum AtomicState {\n+    Empty = 0,\n+    // SETTING means \"set is currently running\"\n+    Setting = 1,\n+    Done = 2,\n+}",
+        "comment_created_at": "2025-07-01T01:44:48+00:00",
+        "comment_author": "ADD-SP",
+        "comment_body": "The common style in tokio is declare there const values. I don't strongly against this `enum` approach, but it would be better aligning to existing style.\r\n\r\nhttps://github.com/tokio-rs/tokio/blob/3e890cc0171ddb210acdcfec831b7c7bcbb0d2d9/tokio/src/sync/task/atomic_waker.rs#L131-L138",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2176344850",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7418,
+        "pr_file": "tokio/src/sync/set_once.rs",
+        "discussion_id": "2176238000",
+        "commented_code": "@@ -0,0 +1,377 @@\n+use super::{Notify, SetError};\n+use crate::loom::cell::UnsafeCell;\n+use std::fmt;\n+use std::mem::MaybeUninit;\n+use std::ops::Drop;\n+use std::ptr;\n+use std::sync::atomic::{AtomicU8, Ordering};\n+\n+// This file contains an implementation of an SetOnce. The value of SetOnce\n+// can only be modified once during initialization.\n+//\n+//  1. When `value_set` is false, the `value` is not initialized and wait()\n+//      future will keep on waiting\n+//  2. When `value_set` is true, the wait() future completes, get() will return\n+//      Some(&T)\n+//\n+// The value cannot be changed after set() is called. Subsequent calls to set()\n+// will return a `SetError`\n+\n+/// A thread-safe cell that can be written to only once.\n+/// A `SetOnce` is inspired from python's\n+/// [`asyncio.Event`](https://docs.python.org/3/library/asyncio-sync.html#asyncio.Event)\n+/// type. It can be used to wait until the value of the `SetOnce` is set like\n+/// a \"Event\" mechanism\n+///\n+/// # Example\n+///\n+/// ```\n+/// use tokio::sync::SetOnce;\n+/// use std::sync::Arc;\n+///\n+/// #[tokio::main]\n+/// async fn main() {\n+///     let once = SetOnce::new();\n+///\n+///     let arc = Arc::new(once);\n+///     let first_cl = Arc::clone(&arc);\n+///     let second_cl = Arc::clone(&arc);\n+///\n+///     tokio::spawn(async move { first_cl.set(20) });\n+///\n+///     tokio::spawn(async move { second_cl.set(10) });\n+///\n+///     let res = arc.get(); // returns None\n+///     arc.wait().await; // lets wait until the value is set\n+///\n+///     println!(\"{:?}\", arc.get());\n+/// }\n+/// ```\n+///\n+/// A `SetOnce` is typically used for global variables that need to be\n+/// initialized once on first use, but need no further changes. The `SetOnce`\n+/// in Tokio allows the initialization procedure to be asynchronous.\n+///\n+/// # Example\n+///\n+/// ```\n+/// use tokio::sync::{SetOnce, SetError};\n+///\n+///\n+/// static ONCE: SetOnce<u32> = SetOnce::const_new();\n+///\n+/// #[tokio::main]\n+/// async fn main() -> Result<(), SetError<u32>> {\n+///     ONCE.set(2)?;\n+///     let result = ONCE.get();\n+///     assert_eq!(result, Some(&2));\n+///\n+///     Ok(())\n+/// }\n+/// ```\n+pub struct SetOnce<T> {\n+    // AtomicU8 has 3 states, EMPTY, SETTING and DONE\n+    // is described by the `AtomicState` enum.\n+    value_set: AtomicU8,\n+    value: UnsafeCell<MaybeUninit<T>>,\n+    notify: Notify,\n+}\n+\n+#[repr(u8)]\n+#[derive(PartialEq, Eq)]\n+pub(crate) enum AtomicState {\n+    Empty = 0,\n+    // SETTING means \"set is currently running\"\n+    Setting = 1,\n+    Done = 2,\n+}",
+        "comment_created_at": "2025-07-01T03:40:17+00:00",
+        "comment_author": "Daksh14",
+        "comment_body": "Then this style shall be adhered \ud83d\udc4d  I was debating which method to use",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2180731239",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7418,
+        "pr_file": "tokio/src/sync/set_once.rs",
+        "discussion_id": "2176238000",
+        "commented_code": "@@ -0,0 +1,377 @@\n+use super::{Notify, SetError};\n+use crate::loom::cell::UnsafeCell;\n+use std::fmt;\n+use std::mem::MaybeUninit;\n+use std::ops::Drop;\n+use std::ptr;\n+use std::sync::atomic::{AtomicU8, Ordering};\n+\n+// This file contains an implementation of an SetOnce. The value of SetOnce\n+// can only be modified once during initialization.\n+//\n+//  1. When `value_set` is false, the `value` is not initialized and wait()\n+//      future will keep on waiting\n+//  2. When `value_set` is true, the wait() future completes, get() will return\n+//      Some(&T)\n+//\n+// The value cannot be changed after set() is called. Subsequent calls to set()\n+// will return a `SetError`\n+\n+/// A thread-safe cell that can be written to only once.\n+/// A `SetOnce` is inspired from python's\n+/// [`asyncio.Event`](https://docs.python.org/3/library/asyncio-sync.html#asyncio.Event)\n+/// type. It can be used to wait until the value of the `SetOnce` is set like\n+/// a \"Event\" mechanism\n+///\n+/// # Example\n+///\n+/// ```\n+/// use tokio::sync::SetOnce;\n+/// use std::sync::Arc;\n+///\n+/// #[tokio::main]\n+/// async fn main() {\n+///     let once = SetOnce::new();\n+///\n+///     let arc = Arc::new(once);\n+///     let first_cl = Arc::clone(&arc);\n+///     let second_cl = Arc::clone(&arc);\n+///\n+///     tokio::spawn(async move { first_cl.set(20) });\n+///\n+///     tokio::spawn(async move { second_cl.set(10) });\n+///\n+///     let res = arc.get(); // returns None\n+///     arc.wait().await; // lets wait until the value is set\n+///\n+///     println!(\"{:?}\", arc.get());\n+/// }\n+/// ```\n+///\n+/// A `SetOnce` is typically used for global variables that need to be\n+/// initialized once on first use, but need no further changes. The `SetOnce`\n+/// in Tokio allows the initialization procedure to be asynchronous.\n+///\n+/// # Example\n+///\n+/// ```\n+/// use tokio::sync::{SetOnce, SetError};\n+///\n+///\n+/// static ONCE: SetOnce<u32> = SetOnce::const_new();\n+///\n+/// #[tokio::main]\n+/// async fn main() -> Result<(), SetError<u32>> {\n+///     ONCE.set(2)?;\n+///     let result = ONCE.get();\n+///     assert_eq!(result, Some(&2));\n+///\n+///     Ok(())\n+/// }\n+/// ```\n+pub struct SetOnce<T> {\n+    // AtomicU8 has 3 states, EMPTY, SETTING and DONE\n+    // is described by the `AtomicState` enum.\n+    value_set: AtomicU8,\n+    value: UnsafeCell<MaybeUninit<T>>,\n+    notify: Notify,\n+}\n+\n+#[repr(u8)]\n+#[derive(PartialEq, Eq)]\n+pub(crate) enum AtomicState {\n+    Empty = 0,\n+    // SETTING means \"set is currently running\"\n+    Setting = 1,\n+    Done = 2,\n+}",
+        "comment_created_at": "2025-07-02T18:30:21+00:00",
+        "comment_author": "Daksh14",
+        "comment_body": "Closing as we're back to using `AtomicBool` and Mutex",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1946432359",
+    "pr_number": 7142,
+    "pr_file": "tokio-util/src/udp/frame.rs",
+    "created_at": "2025-02-07T12:08:52+00:00",
+    "commented_code": "// Safety: This is guaranteed to be the number of initialized (and read) bytes due\n                 // to the invariants provided by `ReadBuf::filled`.\n-                unsafe { pin.rd.advance_mut(read.filled().len()) };\n+                let filled = read.filled().len();\n+                unsafe { pin.rd.advance_mut(filled) };",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "1946432359",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7142,
+        "pr_file": "tokio-util/src/udp/frame.rs",
+        "discussion_id": "1946432359",
+        "commented_code": "@@ -93,7 +93,8 @@ where\n \n                 // Safety: This is guaranteed to be the number of initialized (and read) bytes due\n                 // to the invariants provided by `ReadBuf::filled`.\n-                unsafe { pin.rd.advance_mut(read.filled().len()) };\n+                let filled = read.filled().len();\n+                unsafe { pin.rd.advance_mut(filled) };",
+        "comment_created_at": "2025-02-07T12:08:52+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "Safety comments must be right before the unsafe block. Please move `let filled` before it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1938317466",
+    "pr_number": 7136,
+    "pr_file": "tokio-util/src/net/mod.rs",
+    "created_at": "2025-02-01T18:03:22+00:00",
+    "commented_code": "listener: &'a mut L,\n }\n \n-impl<'a, L> Future for ListenerAcceptFut<'a, L>\n+impl<L> Future for ListenerAcceptFut<'_, L>",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "1938317466",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7136,
+        "pr_file": "tokio-util/src/net/mod.rs",
+        "discussion_id": "1938317466",
+        "commented_code": "@@ -51,7 +52,7 @@ pub struct ListenerAcceptFut<'a, L> {\n     listener: &'a mut L,\n }\n \n-impl<'a, L> Future for ListenerAcceptFut<'a, L>\n+impl<L> Future for ListenerAcceptFut<'_, L>",
+        "comment_created_at": "2025-02-01T18:03:22+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "Which lint is this?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1938318263",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7136,
+        "pr_file": "tokio-util/src/net/mod.rs",
+        "discussion_id": "1938317466",
+        "commented_code": "@@ -51,7 +52,7 @@ pub struct ListenerAcceptFut<'a, L> {\n     listener: &'a mut L,\n }\n \n-impl<'a, L> Future for ListenerAcceptFut<'a, L>\n+impl<L> Future for ListenerAcceptFut<'_, L>",
+        "comment_created_at": "2025-02-01T18:09:18+00:00",
+        "comment_author": "rex4539",
+        "comment_body": "```\r\nwarning: the following explicit lifetimes could be elided: 'a\r\n  --> tokio-util/src/net/mod.rs:54:6\r\n   |\r\n54 | impl<'a, L> Future for ListenerAcceptFut<'a, L>\r\n   |      ^^                                  ^^\r\n   |\r\n   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_lifetimes\r\n   = note: `#[warn(clippy::needless_lifetimes)]` on by default\r\nhelp: elide the lifetimes\r\n   |\r\n54 - impl<'a, L> Future for ListenerAcceptFut<'a, L>\r\n54 + impl<L> Future for ListenerAcceptFut<'_, L>\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1942990328",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7136,
+        "pr_file": "tokio-util/src/net/mod.rs",
+        "discussion_id": "1938317466",
+        "commented_code": "@@ -51,7 +52,7 @@ pub struct ListenerAcceptFut<'a, L> {\n     listener: &'a mut L,\n }\n \n-impl<'a, L> Future for ListenerAcceptFut<'a, L>\n+impl<L> Future for ListenerAcceptFut<'_, L>",
+        "comment_created_at": "2025-02-05T13:55:52+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "I think this lint does not improve the code. Please add `#![allow(clippy::needless_lifetimes)]` to the top of the `lib.rs` files instead to silence it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1528236166",
+    "pr_number": 6409,
+    "pr_file": "tokio-stream/tests/stream_stream_map.rs",
+    "created_at": "2024-03-18T09:59:24+00:00",
+    "commented_code": "+use futures::stream::iter;\n use tokio_stream::{self as stream, pending, Stream, StreamExt, StreamMap};\n use tokio_test::{assert_ok, assert_pending, assert_ready, task};\n \n+use std::{\n+    future::{poll_fn, Future},\n+    pin::{pin, Pin},\n+    task::Poll,\n+};",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "1528236166",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6409,
+        "pr_file": "tokio-stream/tests/stream_stream_map.rs",
+        "discussion_id": "1528236166",
+        "commented_code": "@@ -1,14 +1,19 @@\n+use futures::stream::iter;\n use tokio_stream::{self as stream, pending, Stream, StreamExt, StreamMap};\n use tokio_test::{assert_ok, assert_pending, assert_ready, task};\n \n+use std::{\n+    future::{poll_fn, Future},\n+    pin::{pin, Pin},\n+    task::Poll,\n+};",
+        "comment_created_at": "2024-03-18T09:59:24+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "We don't use this import style. Please split this into three `use` statements.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1789717907",
+    "pr_number": 6884,
+    "pr_file": "tokio-util/src/time/mod.rs",
+    "created_at": "2024-10-07T07:57:20+00:00",
+    "commented_code": "//!\n //! This type must be used from within the context of the `Runtime`.\n \n-use futures_core::Future;\n-use std::time::Duration;\n+use core::{future::Future, time::Duration};",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "1789717907",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6884,
+        "pr_file": "tokio-util/src/time/mod.rs",
+        "discussion_id": "1789717907",
+        "commented_code": "@@ -8,8 +8,7 @@\n //!\n //! This type must be used from within the context of the `Runtime`.\n \n-use futures_core::Future;\n-use std::time::Duration;\n+use core::{future::Future, time::Duration};",
+        "comment_created_at": "2024-10-07T07:57:20+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "In Tokio we usually split up imports from different modules like this:\r\n```suggestion\r\nuse std::future::Future;\r\nuse std::time::Duration;\r\n```\r\nThe brackets are only used for items in the same module.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1597581409",
+    "pr_number": 6552,
+    "pr_file": "tokio/tests/io_poll_aio.rs",
+    "created_at": "2024-05-12T08:29:42+00:00",
+    "commented_code": "use std::{\n     future::Future,\n     io, mem,\n-    os::unix::io::{AsRawFd, RawFd},\n+    os::{\n+        fd::AsFd,\n+        unix::io::{AsRawFd, RawFd}\n+    },",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "1597581409",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6552,
+        "pr_file": "tokio/tests/io_poll_aio.rs",
+        "discussion_id": "1597581409",
+        "commented_code": "@@ -5,7 +5,10 @@ use mio_aio::{AioFsyncMode, SourceApi};\n use std::{\n     future::Future,\n     io, mem,\n-    os::unix::io::{AsRawFd, RawFd},\n+    os::{\n+        fd::AsFd,\n+        unix::io::{AsRawFd, RawFd}\n+    },",
+        "comment_created_at": "2024-05-12T08:29:42+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "Tokio uses this convention for imports:\r\n```suggestion\r\n    os::fd::AsFd,\r\n    os::unix::io::{AsRawFd, RawFd},\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

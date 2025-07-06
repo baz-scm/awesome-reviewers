@@ -1,0 +1,202 @@
+[
+  {
+    "discussion_id": "2029302315",
+    "pr_number": 26211,
+    "pr_file": "tsdb/engine/tsm1/compact.go",
+    "created_at": "2025-04-04T19:01:45+00:00",
+    "commented_code": "// FullyCompacted returns true if the shard is fully compacted.\n func (c *DefaultPlanner) FullyCompacted() (bool, string) {\n-\tgens := c.findGenerations(false)\n+\tgens := c.findGenerations(true)",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "2029302315",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26211,
+        "pr_file": "tsdb/engine/tsm1/compact.go",
+        "discussion_id": "2029302315",
+        "commented_code": "@@ -255,7 +255,7 @@ func (c *DefaultPlanner) ParseFileName(path string) (int, int, error) {\n \n // FullyCompacted returns true if the shard is fully compacted.\n func (c *DefaultPlanner) FullyCompacted() (bool, string) {\n-\tgens := c.findGenerations(false)\n+\tgens := c.findGenerations(true)",
+        "comment_created_at": "2025-04-04T19:01:45+00:00",
+        "comment_author": "gwossum",
+        "comment_body": "@devanbenz I think the code works properly for compactions, but I think we should find a better name for `FullyCompacted`, since it will now return true even if there compactions currently running. I checked and there are no `FullyCompacted` calls in plutonium, so the change should not ripple up.\r\n\r\nNot sure what a good name is, though. Maybe `OptimizationsAvailable`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2029319699",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26211,
+        "pr_file": "tsdb/engine/tsm1/compact.go",
+        "discussion_id": "2029302315",
+        "commented_code": "@@ -255,7 +255,7 @@ func (c *DefaultPlanner) ParseFileName(path string) (int, int, error) {\n \n // FullyCompacted returns true if the shard is fully compacted.\n func (c *DefaultPlanner) FullyCompacted() (bool, string) {\n-\tgens := c.findGenerations(false)\n+\tgens := c.findGenerations(true)",
+        "comment_created_at": "2025-04-04T19:18:41+00:00",
+        "comment_author": "devanbenz",
+        "comment_body": "Changed the name to `CompactionOptimizationAvailable`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1972387425",
+    "pr_number": 25982,
+    "pr_file": "authorization/hasher.go",
+    "created_at": "2025-02-26T20:48:16+00:00",
+    "commented_code": "+package authorization\n+\n+import (\n+\t\"errors\"\n+\t\"fmt\"\n+\n+\t\"github.com/go-crypt/crypt\"\n+\t\"github.com/go-crypt/crypt/algorithm\"\n+\tinfluxdb2_algo \"github.com/influxdata/influxdb/v2/pkg/crypt/algorithm/influxdb2\"\n+)\n+\n+var (\n+\tErrNoDecoders = errors.New(\"no authorization decoders specified\")\n+)\n+\n+type AuthorizationHasher struct {\n+\t// hasher encodes tokens into hashed PHC-encoded tokens.\n+\thasher algorithm.Hash\n+\n+\t// decoder decodes hashed PHC-encoded tokens into crypt.Digest objects.\n+\tdecoder *crypt.Decoder\n+\n+\t// allHashers is the list of all hashers which could be used for hashed index lookup.\n+\tallHashers []algorithm.Hash\n+}\n+\n+const (\n+\tDefaultHashVariant     = influxdb2_algo.VariantSHA256\n+\tDefaultHashVariantName = influxdb2_algo.VariantIdentifierSHA256\n+)\n+\n+type authorizationHasherOptions struct {\n+\thasherVariant   influxdb2_algo.Variant\n+\tdecoderVariants []influxdb2_algo.Variant\n+}\n+\n+type AuthorizationHasherOption func(o *authorizationHasherOptions)\n+\n+func WithHasherVariant(variant influxdb2_algo.Variant) AuthorizationHasherOption {\n+\treturn func(o *authorizationHasherOptions) {\n+\t\to.hasherVariant = variant\n+\t}\n+}\n+\n+func WithDecoderVariants(variants []influxdb2_algo.Variant) AuthorizationHasherOption {\n+\treturn func(o *authorizationHasherOptions) {\n+\t\to.decoderVariants = variants\n+\t}\n+}\n+\n+// NewAuthorizationHasher creates an AuthorizationHasher for influxdb2 algorithm hashed tokens.\n+// variantName specifies which token hashing variant to use, with blank indicating to use the default\n+// hashing variant. By default, all variants of the influxdb2 hashing scheme are supported for\n+// maximal compatibility.\n+func NewAuthorizationHasher(opts ...AuthorizationHasherOption) (*AuthorizationHasher, error) {\n+\toptions := authorizationHasherOptions{\n+\t\thasherVariant:   DefaultHashVariant,\n+\t\tdecoderVariants: influxdb2_algo.AllVariants,\n+\t}\n+\n+\tfor _, o := range opts {\n+\t\to(&options)\n+\t}\n+\n+\tif len(options.decoderVariants) == 0 {\n+\t\treturn nil, ErrNoDecoders\n+\t}\n+\n+\t// Create the hasher used for hashing new tokens before storage.\n+\thasher, err := influxdb2_algo.New(influxdb2_algo.WithVariant(options.hasherVariant))\n+\tif err != nil {\n+\t\treturn nil, fmt.Errorf(\"creating hasher for AuthorizationHasher: %w\", err)\n+\t}\n+\n+\t// Create decoder and register all requested decoder variants.\n+\tdecoder := crypt.NewDecoder()\n+\tfor _, variant := range options.decoderVariants {\n+\t\tif err := variant.RegisterDecoder(decoder); err != nil {\n+\t\t\treturn nil, fmt.Errorf(\"registering variant %s with decoder: %w\", variant.Prefix(), err)\n+\t\t}\n+\t}\n+\n+\t// Create all variant hashers needed for requested decoder variants. This is required for operations where\n+\t// all potential variations of a raw token must be hashed, such as looking up a hash in the hashed token index.\n+\tvar allHashers []algorithm.Hash\n+\tfor _, variant := range options.decoderVariants {\n+\t\th, err := influxdb2_algo.New(influxdb2_algo.WithVariant(variant))\n+\t\tif err != nil {\n+\t\t\treturn nil, fmt.Errorf(\"creating hasher %s for authorization service index lookups: %w\", variant.Prefix(), err)\n+\t\t}\n+\t\tallHashers = append(allHashers, h)\n+\t}\n+\n+\treturn &AuthorizationHasher{\n+\t\thasher:     hasher,\n+\t\tdecoder:    decoder,\n+\t\tallHashers: allHashers,\n+\t}, nil\n+}\n+\n+// Hash generates a PHC-encoded hash of token using the selected hash algorithm variant.\n+func (h *AuthorizationHasher) Hash(token string) (string, error) {\n+\tdigest, err := h.hasher.Hash(token)\n+\tif err != nil {\n+\t\treturn \"\", fmt.Errorf(\"hashing raw token failed: %w\", err)\n+\t}\n+\treturn digest.Encode(), nil\n+}\n+\n+// AllHashes generates a list of PHC-encoded hashes of token for all deterministic (i.e. non-salted) supported hashes.\n+func (h *AuthorizationHasher) AllHashes(token string) ([]string, error) {\n+\thashes := make([]string, len(h.allHashers))\n+\tfor idx, hasher := range h.allHashers {\n+\t\tdigest, err := hasher.Hash(token)\n+\t\tif err != nil {\n+\t\t\tvariantName := \"N/A\"",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1972387425",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25982,
+        "pr_file": "authorization/hasher.go",
+        "discussion_id": "1972387425",
+        "commented_code": "@@ -0,0 +1,145 @@\n+package authorization\n+\n+import (\n+\t\"errors\"\n+\t\"fmt\"\n+\n+\t\"github.com/go-crypt/crypt\"\n+\t\"github.com/go-crypt/crypt/algorithm\"\n+\tinfluxdb2_algo \"github.com/influxdata/influxdb/v2/pkg/crypt/algorithm/influxdb2\"\n+)\n+\n+var (\n+\tErrNoDecoders = errors.New(\"no authorization decoders specified\")\n+)\n+\n+type AuthorizationHasher struct {\n+\t// hasher encodes tokens into hashed PHC-encoded tokens.\n+\thasher algorithm.Hash\n+\n+\t// decoder decodes hashed PHC-encoded tokens into crypt.Digest objects.\n+\tdecoder *crypt.Decoder\n+\n+\t// allHashers is the list of all hashers which could be used for hashed index lookup.\n+\tallHashers []algorithm.Hash\n+}\n+\n+const (\n+\tDefaultHashVariant     = influxdb2_algo.VariantSHA256\n+\tDefaultHashVariantName = influxdb2_algo.VariantIdentifierSHA256\n+)\n+\n+type authorizationHasherOptions struct {\n+\thasherVariant   influxdb2_algo.Variant\n+\tdecoderVariants []influxdb2_algo.Variant\n+}\n+\n+type AuthorizationHasherOption func(o *authorizationHasherOptions)\n+\n+func WithHasherVariant(variant influxdb2_algo.Variant) AuthorizationHasherOption {\n+\treturn func(o *authorizationHasherOptions) {\n+\t\to.hasherVariant = variant\n+\t}\n+}\n+\n+func WithDecoderVariants(variants []influxdb2_algo.Variant) AuthorizationHasherOption {\n+\treturn func(o *authorizationHasherOptions) {\n+\t\to.decoderVariants = variants\n+\t}\n+}\n+\n+// NewAuthorizationHasher creates an AuthorizationHasher for influxdb2 algorithm hashed tokens.\n+// variantName specifies which token hashing variant to use, with blank indicating to use the default\n+// hashing variant. By default, all variants of the influxdb2 hashing scheme are supported for\n+// maximal compatibility.\n+func NewAuthorizationHasher(opts ...AuthorizationHasherOption) (*AuthorizationHasher, error) {\n+\toptions := authorizationHasherOptions{\n+\t\thasherVariant:   DefaultHashVariant,\n+\t\tdecoderVariants: influxdb2_algo.AllVariants,\n+\t}\n+\n+\tfor _, o := range opts {\n+\t\to(&options)\n+\t}\n+\n+\tif len(options.decoderVariants) == 0 {\n+\t\treturn nil, ErrNoDecoders\n+\t}\n+\n+\t// Create the hasher used for hashing new tokens before storage.\n+\thasher, err := influxdb2_algo.New(influxdb2_algo.WithVariant(options.hasherVariant))\n+\tif err != nil {\n+\t\treturn nil, fmt.Errorf(\"creating hasher for AuthorizationHasher: %w\", err)\n+\t}\n+\n+\t// Create decoder and register all requested decoder variants.\n+\tdecoder := crypt.NewDecoder()\n+\tfor _, variant := range options.decoderVariants {\n+\t\tif err := variant.RegisterDecoder(decoder); err != nil {\n+\t\t\treturn nil, fmt.Errorf(\"registering variant %s with decoder: %w\", variant.Prefix(), err)\n+\t\t}\n+\t}\n+\n+\t// Create all variant hashers needed for requested decoder variants. This is required for operations where\n+\t// all potential variations of a raw token must be hashed, such as looking up a hash in the hashed token index.\n+\tvar allHashers []algorithm.Hash\n+\tfor _, variant := range options.decoderVariants {\n+\t\th, err := influxdb2_algo.New(influxdb2_algo.WithVariant(variant))\n+\t\tif err != nil {\n+\t\t\treturn nil, fmt.Errorf(\"creating hasher %s for authorization service index lookups: %w\", variant.Prefix(), err)\n+\t\t}\n+\t\tallHashers = append(allHashers, h)\n+\t}\n+\n+\treturn &AuthorizationHasher{\n+\t\thasher:     hasher,\n+\t\tdecoder:    decoder,\n+\t\tallHashers: allHashers,\n+\t}, nil\n+}\n+\n+// Hash generates a PHC-encoded hash of token using the selected hash algorithm variant.\n+func (h *AuthorizationHasher) Hash(token string) (string, error) {\n+\tdigest, err := h.hasher.Hash(token)\n+\tif err != nil {\n+\t\treturn \"\", fmt.Errorf(\"hashing raw token failed: %w\", err)\n+\t}\n+\treturn digest.Encode(), nil\n+}\n+\n+// AllHashes generates a list of PHC-encoded hashes of token for all deterministic (i.e. non-salted) supported hashes.\n+func (h *AuthorizationHasher) AllHashes(token string) ([]string, error) {\n+\thashes := make([]string, len(h.allHashers))\n+\tfor idx, hasher := range h.allHashers {\n+\t\tdigest, err := hasher.Hash(token)\n+\t\tif err != nil {\n+\t\t\tvariantName := \"N/A\"",
+        "comment_created_at": "2025-02-26T20:48:16+00:00",
+        "comment_author": "devanbenz",
+        "comment_body": "Hardcoding \"N/A\" here seems weird to me. Could this be an enum or a constant of some sort? ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1972427127",
+    "pr_number": 25982,
+    "pr_file": "authorization/http_server_test.go",
+    "created_at": "2025-02-26T21:17:04+00:00",
+    "commented_code": "var authorizationCmpOptions = cmp.Options{\n \tcmpopts.EquateEmpty(),\n-\tcmpopts.IgnoreFields(influxdb.Authorization{}, \"ID\", \"Token\", \"CreatedAt\", \"UpdatedAt\"),\n+\tcmpopts.IgnoreFields(influxdb.Authorization{}, \"ID\", \"Token\", \"HashedToken\", \"CreatedAt\", \"UpdatedAt\"),",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1972427127",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25982,
+        "pr_file": "authorization/http_server_test.go",
+        "discussion_id": "1972427127",
+        "commented_code": "@@ -895,7 +875,7 @@ func jsonDiff(s1, s2 string) (diff string, err error) {\n \n var authorizationCmpOptions = cmp.Options{\n \tcmpopts.EquateEmpty(),\n-\tcmpopts.IgnoreFields(influxdb.Authorization{}, \"ID\", \"Token\", \"CreatedAt\", \"UpdatedAt\"),\n+\tcmpopts.IgnoreFields(influxdb.Authorization{}, \"ID\", \"Token\", \"HashedToken\", \"CreatedAt\", \"UpdatedAt\"),",
+        "comment_created_at": "2025-02-26T21:17:04+00:00",
+        "comment_author": "devanbenz",
+        "comment_body": "Could it be a good idea to make \r\n```\r\n\"ID\", \"Token\", \"HashedToken\", \"CreatedAt\", \"UpdatedAt\"\r\n```\r\nEnums or constants? That way its not \"magic strings\" ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1973980024",
+    "pr_number": 25982,
+    "pr_file": "cmd/influxd/recovery/auth/auth.go",
+    "created_at": "2025-02-27T16:50:06+00:00",
+    "commented_code": "if err == nil && user != nil {\n \t\t\tuserName = user.Name\n \t\t}\n+\t\tvar token string\n+\t\tif t.Token != \"\" {\n+\t\t\ttoken = t.Token\n+\t\t} else if t.HashedToken != \"\" {\n+\t\t\ttoken = \"REDACTED\"",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1973980024",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25982,
+        "pr_file": "cmd/influxd/recovery/auth/auth.go",
+        "discussion_id": "1973980024",
+        "commented_code": "@@ -197,12 +217,20 @@ func PrintAuth(ctx context.Context, w io.Writer, v []*influxdb.Authorization, us\n \t\tif err == nil && user != nil {\n \t\t\tuserName = user.Name\n \t\t}\n+\t\tvar token string\n+\t\tif t.Token != \"\" {\n+\t\t\ttoken = t.Token\n+\t\t} else if t.HashedToken != \"\" {\n+\t\t\ttoken = \"REDACTED\"",
+        "comment_created_at": "2025-02-27T16:50:06+00:00",
+        "comment_author": "devanbenz",
+        "comment_body": "Could \"N/A\" and \"REDACTED\" be Enums or consts? ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1968204928",
+    "pr_number": 26054,
+    "pr_file": "tsdb/field_validator.go",
+    "created_at": "2025-02-24T18:30:08+00:00",
+    "commented_code": "const MaxFieldValueLength = 1048576\n \n-// ValidateFields will return a PartialWriteError if:\n+// ValidateAndCreateFields will return a PartialWriteError if:\n //   - the point has inconsistent fields, or\n //   - the point has fields that are too long\n-func ValidateFields(mf *MeasurementFields, point models.Point, skipSizeValidation bool) ([]*FieldCreate, error) {\n+func ValidateAndCreateFields(mf *MeasurementFields, point models.Point, skipSizeValidation bool) ([]*FieldCreate, *PartialWriteError) {\n \tpointSize := point.StringSize()\n \titer := point.FieldIterator()\n \tvar fieldsToCreate []*FieldCreate",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1968204928",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26054,
+        "pr_file": "tsdb/field_validator.go",
+        "discussion_id": "1968204928",
+        "commented_code": "@@ -10,24 +11,27 @@ import (\n \n const MaxFieldValueLength = 1048576\n \n-// ValidateFields will return a PartialWriteError if:\n+// ValidateAndCreateFields will return a PartialWriteError if:\n //   - the point has inconsistent fields, or\n //   - the point has fields that are too long\n-func ValidateFields(mf *MeasurementFields, point models.Point, skipSizeValidation bool) ([]*FieldCreate, error) {\n+func ValidateAndCreateFields(mf *MeasurementFields, point models.Point, skipSizeValidation bool) ([]*FieldCreate, *PartialWriteError) {\n \tpointSize := point.StringSize()\n \titer := point.FieldIterator()\n \tvar fieldsToCreate []*FieldCreate",
+        "comment_created_at": "2025-02-24T18:30:08+00:00",
+        "comment_author": "philjb",
+        "comment_body": "naming nit: `fieldsToCreate` is now tracking fields that have been created. suggestion: `createdFields`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1968326003",
+    "pr_number": 26054,
+    "pr_file": "tsdb/shard.go",
+    "created_at": "2025-02-24T19:48:53+00:00",
+    "commented_code": "// CreateFieldIfNotExists creates a new field with the given name and type.\n // Returns an error if the field already exists with a different type.\n-func (m *MeasurementFields) CreateFieldIfNotExists(name string, typ influxql.DataType) (bool, error) {\n+func (m *MeasurementFields) CreateFieldIfNotExists(name string, typ influxql.DataType) (*Field, bool, error) {",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1968326003",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26054,
+        "pr_file": "tsdb/shard.go",
+        "discussion_id": "1968326003",
+        "commented_code": "@@ -1589,18 +1575,19 @@ func (m *MeasurementFields) bytes() int {\n \n // CreateFieldIfNotExists creates a new field with the given name and type.\n // Returns an error if the field already exists with a different type.\n-func (m *MeasurementFields) CreateFieldIfNotExists(name string, typ influxql.DataType) (bool, error) {\n+func (m *MeasurementFields) CreateFieldIfNotExists(name string, typ influxql.DataType) (*Field, bool, error) {",
+        "comment_created_at": "2025-02-24T19:48:53+00:00",
+        "comment_author": "philjb",
+        "comment_body": "I was momentarily confused by the `bool` - it is true if the field is created, so it is the opposite of `loaded`. \r\n\r\nI suggest naming the return values. `(f *Field, created bool, err error)`\r\n\r\nalso I point out `CreateFieldIfNotExists` currently can only return a `ErrFieldTypeConflict` so it could get the same treatment that `ValidateAndCreateFields` to return a specific error type - your pick. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1968437659",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 26054,
+        "pr_file": "tsdb/shard.go",
+        "discussion_id": "1968326003",
+        "commented_code": "@@ -1589,18 +1575,19 @@ func (m *MeasurementFields) bytes() int {\n \n // CreateFieldIfNotExists creates a new field with the given name and type.\n // Returns an error if the field already exists with a different type.\n-func (m *MeasurementFields) CreateFieldIfNotExists(name string, typ influxql.DataType) (bool, error) {\n+func (m *MeasurementFields) CreateFieldIfNotExists(name string, typ influxql.DataType) (*Field, bool, error) {",
+        "comment_created_at": "2025-02-24T21:24:23+00:00",
+        "comment_author": "davidby-influx",
+        "comment_body": "It is called in many, many places, so I would prefer not to change the error return type.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1887711278",
+    "pr_number": 25594,
+    "pr_file": "tsdb/engine/tsm1/compact.go",
+    "created_at": "2024-12-16T23:39:11+00:00",
+    "commented_code": "// PlanOptimize returns all TSM files if they are in different generations in order\n // to optimize the index across TSM files.  Each returned compaction group can be\n // compacted concurrently.\n-func (c *DefaultPlanner) PlanOptimize() ([]CompactionGroup, int64) {\n+func (c *DefaultPlanner) PlanOptimize() ([]CompactionGroup, int64, int64) {",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1887711278",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25594,
+        "pr_file": "tsdb/engine/tsm1/compact.go",
+        "discussion_id": "1887711278",
+        "commented_code": "@@ -335,13 +339,13 @@ func (c *DefaultPlanner) PlanLevel(level int) ([]CompactionGroup, int64) {\n // PlanOptimize returns all TSM files if they are in different generations in order\n // to optimize the index across TSM files.  Each returned compaction group can be\n // compacted concurrently.\n-func (c *DefaultPlanner) PlanOptimize() ([]CompactionGroup, int64) {\n+func (c *DefaultPlanner) PlanOptimize() ([]CompactionGroup, int64, int64) {",
+        "comment_created_at": "2024-12-16T23:39:11+00:00",
+        "comment_author": "davidby-influx",
+        "comment_body": "Name the return values.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1909574579",
+    "pr_number": 25710,
+    "pr_file": "query/executor.go",
+    "created_at": "2025-01-09T23:15:35+00:00",
+    "commented_code": "e.TaskManager.Logger = e.Logger\n }\n \n+func startFileLogWatcher(w WatcherInterface, e *Executor, ctx context.Context) error {",
+    "repo_full_name": "influxdata/influxdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1909574579",
+        "repo_full_name": "influxdata/influxdb",
+        "pr_number": 25710,
+        "pr_file": "query/executor.go",
+        "discussion_id": "1909574579",
+        "commented_code": "@@ -289,6 +306,94 @@ func (e *Executor) WithLogger(log *zap.Logger) {\n \te.TaskManager.Logger = e.Logger\n }\n \n+func startFileLogWatcher(w WatcherInterface, e *Executor, ctx context.Context) error {",
+        "comment_created_at": "2025-01-09T23:15:35+00:00",
+        "comment_author": "gwossum",
+        "comment_body": "`startFileLogWatcher` made me think this was going to spawn a goroutine, but it doesn't. It's the body of a goroutine. Maybe either `doFileLogWatch` or simply `fileLogWatch`?",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

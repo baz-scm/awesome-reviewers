@@ -1,0 +1,194 @@
+[
+  {
+    "discussion_id": "1285859634",
+    "pr_number": 34763,
+    "pr_file": "spring-boot-project/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/pulsar/PulsarAutoConfiguration.java",
+    "created_at": "2023-08-07T13:20:48+00:00",
+    "commented_code": "+/*\n+ * Copyright 2012-2023 the original author or authors.\n+ *\n+ * Licensed under the Apache License, Version 2.0 (the \"License\");\n+ * you may not use this file except in compliance with the License.\n+ * You may obtain a copy of the License at\n+ *\n+ *      https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS,\n+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+ * See the License for the specific language governing permissions and\n+ * limitations under the License.\n+ */\n+\n+package org.springframework.boot.autoconfigure.pulsar;\n+\n+import java.util.Optional;\n+\n+import org.apache.pulsar.client.api.PulsarClient;\n+import org.apache.pulsar.client.api.PulsarClientException;\n+import org.apache.pulsar.client.api.interceptor.ProducerInterceptor;\n+\n+import org.springframework.beans.factory.ObjectProvider;\n+import org.springframework.boot.autoconfigure.AutoConfiguration;\n+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;\n+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;\n+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;\n+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;\n+import org.springframework.boot.context.properties.EnableConfigurationProperties;\n+import org.springframework.context.annotation.Bean;\n+import org.springframework.context.annotation.Import;\n+import org.springframework.pulsar.core.CachingPulsarProducerFactory;\n+import org.springframework.pulsar.core.DefaultPulsarClientFactory;\n+import org.springframework.pulsar.core.DefaultPulsarConsumerFactory;\n+import org.springframework.pulsar.core.DefaultPulsarProducerFactory;\n+import org.springframework.pulsar.core.DefaultPulsarReaderFactory;\n+import org.springframework.pulsar.core.DefaultSchemaResolver;\n+import org.springframework.pulsar.core.DefaultTopicResolver;\n+import org.springframework.pulsar.core.PulsarAdministration;\n+import org.springframework.pulsar.core.PulsarClientBuilderCustomizer;\n+import org.springframework.pulsar.core.PulsarConsumerFactory;\n+import org.springframework.pulsar.core.PulsarProducerFactory;\n+import org.springframework.pulsar.core.PulsarReaderFactory;\n+import org.springframework.pulsar.core.PulsarTemplate;\n+import org.springframework.pulsar.core.SchemaResolver;\n+import org.springframework.pulsar.core.SchemaResolver.SchemaResolverCustomizer;\n+import org.springframework.pulsar.core.TopicResolver;\n+import org.springframework.pulsar.function.PulsarFunction;\n+import org.springframework.pulsar.function.PulsarFunctionAdministration;\n+import org.springframework.pulsar.function.PulsarSink;\n+import org.springframework.pulsar.function.PulsarSource;\n+\n+/**\n+ * {@link EnableAutoConfiguration Auto-configuration} for Apache Pulsar.\n+ *\n+ * @author Soby Chacko\n+ * @author Chris Bono\n+ * @author Alexander Preu\u00df\n+ * @since 3.2.0\n+ */\n+@AutoConfiguration\n+@ConditionalOnClass(PulsarTemplate.class)\n+@EnableConfigurationProperties(PulsarProperties.class)\n+@Import({ PulsarAnnotationDrivenConfiguration.class })\n+public class PulsarAutoConfiguration {\n+\n+\tprivate final PulsarProperties properties;\n+\n+\tPulsarAutoConfiguration(PulsarProperties properties) {\n+\t\tthis.properties = properties;\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean\n+\tPulsarClientBuilderConfigurer pulsarClientBuilderConfigurer(PulsarProperties pulsarProperties,\n+\t\t\tObjectProvider<PulsarClientBuilderCustomizer> customizers) {\n+\t\treturn new PulsarClientBuilderConfigurer(pulsarProperties, customizers.orderedStream().toList());\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean\n+\tPulsarClient pulsarClient(PulsarClientBuilderConfigurer configurer) {\n+\t\tvar clientFactory = new DefaultPulsarClientFactory(configurer::configure);\n+\t\ttry {\n+\t\t\treturn clientFactory.createClient();\n+\t\t}\n+\t\tcatch (PulsarClientException ex) {\n+\t\t\tthrow new IllegalArgumentException(\"Failed to create client: \" + ex.getMessage(), ex);\n+\t\t}\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean\n+\t@ConditionalOnProperty(name = \"spring.pulsar.producer.cache.enabled\", havingValue = \"false\")\n+\tPulsarProducerFactory<?> pulsarProducerFactory(PulsarClient pulsarClient, TopicResolver topicResolver) {\n+\t\treturn new DefaultPulsarProducerFactory<>(pulsarClient, this.properties.getProducer().getTopicName(),\n+\t\t\t\tthis.properties.getProducer().toProducerBuilderCustomizer(), topicResolver);\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean\n+\t@ConditionalOnProperty(name = \"spring.pulsar.producer.cache.enabled\", havingValue = \"true\", matchIfMissing = true)\n+\tPulsarProducerFactory<?> cachingPulsarProducerFactory(PulsarClient pulsarClient, TopicResolver topicResolver) {\n+\t\treturn new CachingPulsarProducerFactory<>(pulsarClient, this.properties.getProducer().getTopicName(),\n+\t\t\t\tthis.properties.getProducer().toProducerBuilderCustomizer(), topicResolver,\n+\t\t\t\tthis.properties.getProducer().getCache().getExpireAfterAccess(),\n+\t\t\t\tthis.properties.getProducer().getCache().getMaximumSize(),\n+\t\t\t\tthis.properties.getProducer().getCache().getInitialCapacity());\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean\n+\tPulsarTemplate<?> pulsarTemplate(PulsarProducerFactory<?> pulsarProducerFactory,\n+\t\t\tObjectProvider<ProducerInterceptor> interceptorsProvider, SchemaResolver schemaResolver,\n+\t\t\tTopicResolver topicResolver) {\n+\t\treturn new PulsarTemplate<>(pulsarProducerFactory, interceptorsProvider.orderedStream().toList(),\n+\t\t\t\tschemaResolver, topicResolver, this.properties.getTemplate().isObservationsEnabled());\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean(SchemaResolver.class)\n+\tDefaultSchemaResolver schemaResolver(PulsarProperties pulsarProperties,\n+\t\t\tOptional<SchemaResolverCustomizer<DefaultSchemaResolver>> schemaResolverCustomizer) {\n+\t\tvar schemaResolver = new DefaultSchemaResolver();\n+\t\tif (pulsarProperties.getDefaults().getTypeMappings() != null) {\n+\t\t\tpulsarProperties.getDefaults()\n+\t\t\t\t.getTypeMappings()\n+\t\t\t\t.stream()\n+\t\t\t\t.filter((tm) -> tm.schemaInfo() != null)\n+\t\t\t\t.forEach((tm) -> {\n+\t\t\t\t\tvar schema = schemaResolver\n+\t\t\t\t\t\t.resolveSchema(tm.schemaInfo().schemaType(), tm.messageType(), tm.schemaInfo().messageKeyType())\n+\t\t\t\t\t\t.orElseThrow();\n+\t\t\t\t\tschemaResolver.addCustomSchemaMapping(tm.messageType(), schema);\n+\t\t\t\t});\n+\t\t}\n+\t\tschemaResolverCustomizer.ifPresent((customizer) -> customizer.customize(schemaResolver));\n+\t\treturn schemaResolver;\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean(TopicResolver.class)\n+\tDefaultTopicResolver topicResolver(PulsarProperties pulsarProperties) {\n+\t\tvar topicResolver = new DefaultTopicResolver();\n+\t\tif (pulsarProperties.getDefaults().getTypeMappings() != null) {\n+\t\t\tpulsarProperties.getDefaults()\n+\t\t\t\t.getTypeMappings()\n+\t\t\t\t.stream()\n+\t\t\t\t.filter((tm) -> tm.topicName() != null)\n+\t\t\t\t.forEach((tm) -> topicResolver.addCustomTopicMapping(tm.messageType(), tm.topicName()));\n+\t\t}\n+\t\treturn topicResolver;\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean\n+\tPulsarConsumerFactory<?> pulsarConsumerFactory(PulsarClient pulsarClient) {",
+    "repo_full_name": "spring-projects/spring-boot",
+    "discussion_comments": [
+      {
+        "comment_id": "1285859634",
+        "repo_full_name": "spring-projects/spring-boot",
+        "pr_number": 34763,
+        "pr_file": "spring-boot-project/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/pulsar/PulsarAutoConfiguration.java",
+        "discussion_id": "1285859634",
+        "commented_code": "@@ -0,0 +1,187 @@\n+/*\n+ * Copyright 2012-2023 the original author or authors.\n+ *\n+ * Licensed under the Apache License, Version 2.0 (the \"License\");\n+ * you may not use this file except in compliance with the License.\n+ * You may obtain a copy of the License at\n+ *\n+ *      https://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS,\n+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+ * See the License for the specific language governing permissions and\n+ * limitations under the License.\n+ */\n+\n+package org.springframework.boot.autoconfigure.pulsar;\n+\n+import java.util.Optional;\n+\n+import org.apache.pulsar.client.api.PulsarClient;\n+import org.apache.pulsar.client.api.PulsarClientException;\n+import org.apache.pulsar.client.api.interceptor.ProducerInterceptor;\n+\n+import org.springframework.beans.factory.ObjectProvider;\n+import org.springframework.boot.autoconfigure.AutoConfiguration;\n+import org.springframework.boot.autoconfigure.EnableAutoConfiguration;\n+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;\n+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;\n+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;\n+import org.springframework.boot.context.properties.EnableConfigurationProperties;\n+import org.springframework.context.annotation.Bean;\n+import org.springframework.context.annotation.Import;\n+import org.springframework.pulsar.core.CachingPulsarProducerFactory;\n+import org.springframework.pulsar.core.DefaultPulsarClientFactory;\n+import org.springframework.pulsar.core.DefaultPulsarConsumerFactory;\n+import org.springframework.pulsar.core.DefaultPulsarProducerFactory;\n+import org.springframework.pulsar.core.DefaultPulsarReaderFactory;\n+import org.springframework.pulsar.core.DefaultSchemaResolver;\n+import org.springframework.pulsar.core.DefaultTopicResolver;\n+import org.springframework.pulsar.core.PulsarAdministration;\n+import org.springframework.pulsar.core.PulsarClientBuilderCustomizer;\n+import org.springframework.pulsar.core.PulsarConsumerFactory;\n+import org.springframework.pulsar.core.PulsarProducerFactory;\n+import org.springframework.pulsar.core.PulsarReaderFactory;\n+import org.springframework.pulsar.core.PulsarTemplate;\n+import org.springframework.pulsar.core.SchemaResolver;\n+import org.springframework.pulsar.core.SchemaResolver.SchemaResolverCustomizer;\n+import org.springframework.pulsar.core.TopicResolver;\n+import org.springframework.pulsar.function.PulsarFunction;\n+import org.springframework.pulsar.function.PulsarFunctionAdministration;\n+import org.springframework.pulsar.function.PulsarSink;\n+import org.springframework.pulsar.function.PulsarSource;\n+\n+/**\n+ * {@link EnableAutoConfiguration Auto-configuration} for Apache Pulsar.\n+ *\n+ * @author Soby Chacko\n+ * @author Chris Bono\n+ * @author Alexander Preu\u00df\n+ * @since 3.2.0\n+ */\n+@AutoConfiguration\n+@ConditionalOnClass(PulsarTemplate.class)\n+@EnableConfigurationProperties(PulsarProperties.class)\n+@Import({ PulsarAnnotationDrivenConfiguration.class })\n+public class PulsarAutoConfiguration {\n+\n+\tprivate final PulsarProperties properties;\n+\n+\tPulsarAutoConfiguration(PulsarProperties properties) {\n+\t\tthis.properties = properties;\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean\n+\tPulsarClientBuilderConfigurer pulsarClientBuilderConfigurer(PulsarProperties pulsarProperties,\n+\t\t\tObjectProvider<PulsarClientBuilderCustomizer> customizers) {\n+\t\treturn new PulsarClientBuilderConfigurer(pulsarProperties, customizers.orderedStream().toList());\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean\n+\tPulsarClient pulsarClient(PulsarClientBuilderConfigurer configurer) {\n+\t\tvar clientFactory = new DefaultPulsarClientFactory(configurer::configure);\n+\t\ttry {\n+\t\t\treturn clientFactory.createClient();\n+\t\t}\n+\t\tcatch (PulsarClientException ex) {\n+\t\t\tthrow new IllegalArgumentException(\"Failed to create client: \" + ex.getMessage(), ex);\n+\t\t}\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean\n+\t@ConditionalOnProperty(name = \"spring.pulsar.producer.cache.enabled\", havingValue = \"false\")\n+\tPulsarProducerFactory<?> pulsarProducerFactory(PulsarClient pulsarClient, TopicResolver topicResolver) {\n+\t\treturn new DefaultPulsarProducerFactory<>(pulsarClient, this.properties.getProducer().getTopicName(),\n+\t\t\t\tthis.properties.getProducer().toProducerBuilderCustomizer(), topicResolver);\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean\n+\t@ConditionalOnProperty(name = \"spring.pulsar.producer.cache.enabled\", havingValue = \"true\", matchIfMissing = true)\n+\tPulsarProducerFactory<?> cachingPulsarProducerFactory(PulsarClient pulsarClient, TopicResolver topicResolver) {\n+\t\treturn new CachingPulsarProducerFactory<>(pulsarClient, this.properties.getProducer().getTopicName(),\n+\t\t\t\tthis.properties.getProducer().toProducerBuilderCustomizer(), topicResolver,\n+\t\t\t\tthis.properties.getProducer().getCache().getExpireAfterAccess(),\n+\t\t\t\tthis.properties.getProducer().getCache().getMaximumSize(),\n+\t\t\t\tthis.properties.getProducer().getCache().getInitialCapacity());\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean\n+\tPulsarTemplate<?> pulsarTemplate(PulsarProducerFactory<?> pulsarProducerFactory,\n+\t\t\tObjectProvider<ProducerInterceptor> interceptorsProvider, SchemaResolver schemaResolver,\n+\t\t\tTopicResolver topicResolver) {\n+\t\treturn new PulsarTemplate<>(pulsarProducerFactory, interceptorsProvider.orderedStream().toList(),\n+\t\t\t\tschemaResolver, topicResolver, this.properties.getTemplate().isObservationsEnabled());\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean(SchemaResolver.class)\n+\tDefaultSchemaResolver schemaResolver(PulsarProperties pulsarProperties,\n+\t\t\tOptional<SchemaResolverCustomizer<DefaultSchemaResolver>> schemaResolverCustomizer) {\n+\t\tvar schemaResolver = new DefaultSchemaResolver();\n+\t\tif (pulsarProperties.getDefaults().getTypeMappings() != null) {\n+\t\t\tpulsarProperties.getDefaults()\n+\t\t\t\t.getTypeMappings()\n+\t\t\t\t.stream()\n+\t\t\t\t.filter((tm) -> tm.schemaInfo() != null)\n+\t\t\t\t.forEach((tm) -> {\n+\t\t\t\t\tvar schema = schemaResolver\n+\t\t\t\t\t\t.resolveSchema(tm.schemaInfo().schemaType(), tm.messageType(), tm.schemaInfo().messageKeyType())\n+\t\t\t\t\t\t.orElseThrow();\n+\t\t\t\t\tschemaResolver.addCustomSchemaMapping(tm.messageType(), schema);\n+\t\t\t\t});\n+\t\t}\n+\t\tschemaResolverCustomizer.ifPresent((customizer) -> customizer.customize(schemaResolver));\n+\t\treturn schemaResolver;\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean(TopicResolver.class)\n+\tDefaultTopicResolver topicResolver(PulsarProperties pulsarProperties) {\n+\t\tvar topicResolver = new DefaultTopicResolver();\n+\t\tif (pulsarProperties.getDefaults().getTypeMappings() != null) {\n+\t\t\tpulsarProperties.getDefaults()\n+\t\t\t\t.getTypeMappings()\n+\t\t\t\t.stream()\n+\t\t\t\t.filter((tm) -> tm.topicName() != null)\n+\t\t\t\t.forEach((tm) -> topicResolver.addCustomTopicMapping(tm.messageType(), tm.topicName()));\n+\t\t}\n+\t\treturn topicResolver;\n+\t}\n+\n+\t@Bean\n+\t@ConditionalOnMissingBean\n+\tPulsarConsumerFactory<?> pulsarConsumerFactory(PulsarClient pulsarClient) {",
+        "comment_created_at": "2023-08-07T13:20:48+00:00",
+        "comment_author": "wilkinsona",
+        "comment_body": "The return type of a `@Bean` method should be as specific as possible. Could this be `DefaultPulsarConsumerFactory` with `@ConditionalOnMissingBean(PulsarConsumerFactory.class)`, similar to `topicResolver` above?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1468523494",
+    "pr_number": 39308,
+    "pr_file": "spring-boot-project/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/pulsar/PulsarAutoConfiguration.java",
+    "created_at": "2024-01-27T16:39:29+00:00",
+    "commented_code": "@Bean\n \t@ConditionalOnMissingBean(PulsarConsumerFactory.class)\n-\tDefaultPulsarConsumerFactory<Object> pulsarConsumerFactory(PulsarClient pulsarClient,\n+\tDefaultPulsarConsumerFactory<?> pulsarConsumerFactory(PulsarClient pulsarClient,",
+    "repo_full_name": "spring-projects/spring-boot",
+    "discussion_comments": [
+      {
+        "comment_id": "1468523494",
+        "repo_full_name": "spring-projects/spring-boot",
+        "pr_number": 39308,
+        "pr_file": "spring-boot-project/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/pulsar/PulsarAutoConfiguration.java",
+        "discussion_id": "1468523494",
+        "commented_code": "@@ -131,7 +132,7 @@ PulsarTemplate<?> pulsarTemplate(PulsarProducerFactory<?> pulsarProducerFactory,\n \n \t@Bean\n \t@ConditionalOnMissingBean(PulsarConsumerFactory.class)\n-\tDefaultPulsarConsumerFactory<Object> pulsarConsumerFactory(PulsarClient pulsarClient,\n+\tDefaultPulsarConsumerFactory<?> pulsarConsumerFactory(PulsarClient pulsarClient,",
+        "comment_created_at": "2024-01-27T16:39:29+00:00",
+        "comment_author": "jonas-grgt",
+        "comment_body": "I also noticed a concrete impl. is in the signature as opposed to the interface `PulsarConsumerFactory` which is on its turn used in the `@ConditionalOnMissingBean`, is this deliberate? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1468533873",
+        "repo_full_name": "spring-projects/spring-boot",
+        "pr_number": 39308,
+        "pr_file": "spring-boot-project/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/pulsar/PulsarAutoConfiguration.java",
+        "discussion_id": "1468523494",
+        "commented_code": "@@ -131,7 +132,7 @@ PulsarTemplate<?> pulsarTemplate(PulsarProducerFactory<?> pulsarProducerFactory,\n \n \t@Bean\n \t@ConditionalOnMissingBean(PulsarConsumerFactory.class)\n-\tDefaultPulsarConsumerFactory<Object> pulsarConsumerFactory(PulsarClient pulsarClient,\n+\tDefaultPulsarConsumerFactory<?> pulsarConsumerFactory(PulsarClient pulsarClient,",
+        "comment_created_at": "2024-01-27T17:06:23+00:00",
+        "comment_author": "wilkinsona",
+        "comment_body": "Yes. This provides as much type information as possible to the bean factory while allow the bean to back off when any `PulsarConsumerFactory` bean is defined.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1204169897",
+    "pr_number": 35619,
+    "pr_file": "spring-boot-project/spring-boot-actuator-autoconfigure/src/main/java/org/springframework/boot/actuate/autoconfigure/metrics/export/prometheus/PrometheusMetricsExportAutoConfiguration.java",
+    "created_at": "2023-05-24T13:44:26+00:00",
+    "commented_code": "@Bean\n \t@ConditionalOnMissingBean\n \t@ConditionalOnBean(SpanContextSupplier.class)\n-\tpublic DefaultExemplarSampler exemplarSampler(SpanContextSupplier spanContextSupplier) {",
+    "repo_full_name": "spring-projects/spring-boot",
+    "discussion_comments": [
+      {
+        "comment_id": "1204169897",
+        "repo_full_name": "spring-projects/spring-boot",
+        "pr_number": 35619,
+        "pr_file": "spring-boot-project/spring-boot-actuator-autoconfigure/src/main/java/org/springframework/boot/actuate/autoconfigure/metrics/export/prometheus/PrometheusMetricsExportAutoConfiguration.java",
+        "discussion_id": "1204169897",
+        "commented_code": "@@ -92,7 +92,7 @@ public CollectorRegistry collectorRegistry() {\n \t@Bean\n \t@ConditionalOnMissingBean\n \t@ConditionalOnBean(SpanContextSupplier.class)\n-\tpublic DefaultExemplarSampler exemplarSampler(SpanContextSupplier spanContextSupplier) {",
+        "comment_created_at": "2023-05-24T13:44:26+00:00",
+        "comment_author": "wilkinsona",
+        "comment_body": "Rather than changing the return type, which deprives the bean factory of type information, it would be better to change `@ConditionalOnMissingBean` to `@ConditionalOnMissingBean(ExamplarSampler.class)`. This will cause `exemplarSampler` to back off if there's an `ExamplarEampler` bean defined, while also still telling the bean factory that `exemplarSampler` is a `DefaultExemplarSampler`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1204185433",
+        "repo_full_name": "spring-projects/spring-boot",
+        "pr_number": 35619,
+        "pr_file": "spring-boot-project/spring-boot-actuator-autoconfigure/src/main/java/org/springframework/boot/actuate/autoconfigure/metrics/export/prometheus/PrometheusMetricsExportAutoConfiguration.java",
+        "discussion_id": "1204169897",
+        "commented_code": "@@ -92,7 +92,7 @@ public CollectorRegistry collectorRegistry() {\n \t@Bean\n \t@ConditionalOnMissingBean\n \t@ConditionalOnBean(SpanContextSupplier.class)\n-\tpublic DefaultExemplarSampler exemplarSampler(SpanContextSupplier spanContextSupplier) {",
+        "comment_created_at": "2023-05-24T13:52:30+00:00",
+        "comment_author": "johnnywiller",
+        "comment_body": "Thanks for the review, changed. \r\nI'm not particularly familiar with best practices around bean autoconfiguration and conditional beans idiom, but I though defining interfaces instead of implementation would allow for more overall flexibility.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1204578293",
+        "repo_full_name": "spring-projects/spring-boot",
+        "pr_number": 35619,
+        "pr_file": "spring-boot-project/spring-boot-actuator-autoconfigure/src/main/java/org/springframework/boot/actuate/autoconfigure/metrics/export/prometheus/PrometheusMetricsExportAutoConfiguration.java",
+        "discussion_id": "1204169897",
+        "commented_code": "@@ -92,7 +92,7 @@ public CollectorRegistry collectorRegistry() {\n \t@Bean\n \t@ConditionalOnMissingBean\n \t@ConditionalOnBean(SpanContextSupplier.class)\n-\tpublic DefaultExemplarSampler exemplarSampler(SpanContextSupplier spanContextSupplier) {",
+        "comment_created_at": "2023-05-24T17:57:11+00:00",
+        "comment_author": "philwebb",
+        "comment_body": "When Spring Framework creates bean definitions from `@Configuration` classes it only has the method signature to go on. It won't actually invoke the method and get the real bean instance until much later.\r\n\r\nFor that reason, it's always best to use the most specific type in the method signature. That way Spring has as much information as possible.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1204802579",
+    "pr_number": 35619,
+    "pr_file": "spring-boot-project/spring-boot-actuator-autoconfigure/src/test/java/org/springframework/boot/actuate/autoconfigure/metrics/export/prometheus/PrometheusMetricsExportAutoConfigurationTests.java",
+    "created_at": "2023-05-24T22:03:01+00:00",
+    "commented_code": "this.contextRunner.run((context) -> assertThat(context).doesNotHaveBean(PrometheusMeterRegistry.class));\n \t}\n \n+\t@Test\n+\tvoid backsOfWhenExemplarSamplerIsPresent() {\n+\t\tthis.contextRunner.withUserConfiguration(ExemplarsConfiguration.class)\n+\t\t\t\t.run((context) -> assertThat(context).doesNotHaveBean(DefaultExemplarSampler.class));",
+    "repo_full_name": "spring-projects/spring-boot",
+    "discussion_comments": [
+      {
+        "comment_id": "1204802579",
+        "repo_full_name": "spring-projects/spring-boot",
+        "pr_number": 35619,
+        "pr_file": "spring-boot-project/spring-boot-actuator-autoconfigure/src/test/java/org/springframework/boot/actuate/autoconfigure/metrics/export/prometheus/PrometheusMetricsExportAutoConfigurationTests.java",
+        "discussion_id": "1204802579",
+        "commented_code": "@@ -64,6 +66,12 @@ void backsOffWithoutAClock() {\n \t\tthis.contextRunner.run((context) -> assertThat(context).doesNotHaveBean(PrometheusMeterRegistry.class));\n \t}\n \n+\t@Test\n+\tvoid backsOfWhenExemplarSamplerIsPresent() {\n+\t\tthis.contextRunner.withUserConfiguration(ExemplarsConfiguration.class)\n+\t\t\t\t.run((context) -> assertThat(context).doesNotHaveBean(DefaultExemplarSampler.class));",
+        "comment_created_at": "2023-05-24T22:03:01+00:00",
+        "comment_author": "johnnywiller",
+        "comment_body": "asserting on the absence of `DefaultExemplarSampler` since a bean of type `ExemplarSampler` is present from `ExemplarsConfiguration`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1194279145",
+    "pr_number": 35424,
+    "pr_file": "spring-boot-project/spring-boot-actuator-autoconfigure/src/main/java/org/springframework/boot/actuate/autoconfigure/tracing/zipkin/ZipkinConfigurations.java",
+    "created_at": "2023-05-15T19:29:52+00:00",
+    "commented_code": "@Bean\n \t\t@ConditionalOnMissingBean\n \t\t@ConditionalOnBean(Sender.class)\n-\t\tAsyncReporter<Span> spanReporter(Sender sender, BytesEncoder<Span> encoder) {\n+\t\tReporter<Span> spanReporter(Sender sender, BytesEncoder<Span> encoder) {",
+    "repo_full_name": "spring-projects/spring-boot",
+    "discussion_comments": [
+      {
+        "comment_id": "1194279145",
+        "repo_full_name": "spring-projects/spring-boot",
+        "pr_number": 35424,
+        "pr_file": "spring-boot-project/spring-boot-actuator-autoconfigure/src/main/java/org/springframework/boot/actuate/autoconfigure/tracing/zipkin/ZipkinConfigurations.java",
+        "discussion_id": "1194279145",
+        "commented_code": "@@ -129,7 +129,7 @@ static class ReporterConfiguration {\n \t\t@Bean\n \t\t@ConditionalOnMissingBean\n \t\t@ConditionalOnBean(Sender.class)\n-\t\tAsyncReporter<Span> spanReporter(Sender sender, BytesEncoder<Span> encoder) {\n+\t\tReporter<Span> spanReporter(Sender sender, BytesEncoder<Span> encoder) {",
+        "comment_created_at": "2023-05-15T19:29:52+00:00",
+        "comment_author": "wilkinsona",
+        "comment_body": "I think this could be considered a bug and, therefore, it should be handled separately. Could you please split this out into a new PR, along with a test that verifies that the auto-configured `spanReporter` bean backs off when you define a custom `Reporter` bean?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1194487916",
+        "repo_full_name": "spring-projects/spring-boot",
+        "pr_number": 35424,
+        "pr_file": "spring-boot-project/spring-boot-actuator-autoconfigure/src/main/java/org/springframework/boot/actuate/autoconfigure/tracing/zipkin/ZipkinConfigurations.java",
+        "discussion_id": "1194279145",
+        "commented_code": "@@ -129,7 +129,7 @@ static class ReporterConfiguration {\n \t\t@Bean\n \t\t@ConditionalOnMissingBean\n \t\t@ConditionalOnBean(Sender.class)\n-\t\tAsyncReporter<Span> spanReporter(Sender sender, BytesEncoder<Span> encoder) {\n+\t\tReporter<Span> spanReporter(Sender sender, BytesEncoder<Span> encoder) {",
+        "comment_created_at": "2023-05-16T00:52:22+00:00",
+        "comment_author": "be-hase",
+        "comment_body": "OK !",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1195937820",
+        "repo_full_name": "spring-projects/spring-boot",
+        "pr_number": 35424,
+        "pr_file": "spring-boot-project/spring-boot-actuator-autoconfigure/src/main/java/org/springframework/boot/actuate/autoconfigure/tracing/zipkin/ZipkinConfigurations.java",
+        "discussion_id": "1194279145",
+        "commented_code": "@@ -129,7 +129,7 @@ static class ReporterConfiguration {\n \t\t@Bean\n \t\t@ConditionalOnMissingBean\n \t\t@ConditionalOnBean(Sender.class)\n-\t\tAsyncReporter<Span> spanReporter(Sender sender, BytesEncoder<Span> encoder) {\n+\t\tReporter<Span> spanReporter(Sender sender, BytesEncoder<Span> encoder) {",
+        "comment_created_at": "2023-05-17T04:57:09+00:00",
+        "comment_author": "be-hase",
+        "comment_body": "submit: https://github.com/spring-projects/spring-boot/pull/35455",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "965519936",
+    "pr_number": 32214,
+    "pr_file": "spring-boot-project/spring-boot-actuator-autoconfigure/src/main/java/org/springframework/boot/actuate/autoconfigure/tracing/OpenTelemetryConfigurations.java",
+    "created_at": "2022-09-08T05:39:18+00:00",
+    "commented_code": "new DefaultHttpServerAttributesExtractor());\n \t\t}\n \n+\t\t@Configuration(proxyBeanMethods = false)\n+\t\tstatic class PropagationConfiguration {\n+\n+\t\t\t@Bean\n+\t\t\t@ConditionalOnMissingBean\n+\t\t\t@ConditionalOnProperty(value = \"management.tracing.propagation\", havingValue = \"B3\", matchIfMissing = true)\n+\t\t\tTextMapPropagator b3TextMapPropagator() {",
+    "repo_full_name": "spring-projects/spring-boot",
+    "discussion_comments": [
+      {
+        "comment_id": "965519936",
+        "repo_full_name": "spring-projects/spring-boot",
+        "pr_number": 32214,
+        "pr_file": "spring-boot-project/spring-boot-actuator-autoconfigure/src/main/java/org/springframework/boot/actuate/autoconfigure/tracing/OpenTelemetryConfigurations.java",
+        "discussion_id": "965519936",
+        "commented_code": "@@ -168,6 +182,105 @@ OtelHttpServerHandler otelHttpServerHandler(OpenTelemetry openTelemetry) {\n \t\t\t\t\tnew DefaultHttpServerAttributesExtractor());\n \t\t}\n \n+\t\t@Configuration(proxyBeanMethods = false)\n+\t\tstatic class PropagationConfiguration {\n+\n+\t\t\t@Bean\n+\t\t\t@ConditionalOnMissingBean\n+\t\t\t@ConditionalOnProperty(value = \"management.tracing.propagation\", havingValue = \"B3\", matchIfMissing = true)\n+\t\t\tTextMapPropagator b3TextMapPropagator() {",
+        "comment_created_at": "2022-09-08T05:39:18+00:00",
+        "comment_author": "wilkinsona",
+        "comment_body": "To provide as much type information as possible to the bean factory, the signature should show that it returns a `B3Propagator`.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

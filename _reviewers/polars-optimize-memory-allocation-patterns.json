@@ -1,0 +1,146 @@
+[
+  {
+    "discussion_id": "2173816719",
+    "pr_number": 23323,
+    "pr_file": "crates/polars-ops/src/chunked_array/list/namespace.rs",
+    "created_at": "2025-06-29T16:04:41+00:00",
+    "commented_code": "list_ca.apply_amortized(|s| s.as_ref().drop_nulls())\n     }\n \n+    #[cfg(feature = \"list_pad\")]\n+    fn lst_pad_start(&self, fill_value: &Column, length: &Column) -> PolarsResult<ListChunked> {\n+        let list_ca = self.as_list();\n+        Ok(\n+            with_match_physical_numeric_type!(length.dtype().to_physical(), |$T| {\n+                let length = length.$T().unwrap();\n+                arity::binary(list_ca, length, |list_arr, length_arr| {\n+                    let rows = list_arr.len();\n+                    let values_arr: &dyn ArrowArray = list_arr.values().as_ref();\n+                    let inner_dtype = values_arr.dtype().clone();\n+                    let raw_offsets = list_arr.offsets().as_slice();\n+\n+                    let total_inner = list_arr\n+                        .offsets()\n+                        .windows(2)\n+                        .zip(length_arr.values().iter())\n+                        .map(|(o_list, length)| max(o_list[1] - o_list[0] - 1, max(*length as i64, 0)) as usize)",
+    "repo_full_name": "pola-rs/polars",
+    "discussion_comments": [
+      {
+        "comment_id": "2173816719",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 23323,
+        "pr_file": "crates/polars-ops/src/chunked_array/list/namespace.rs",
+        "discussion_id": "2173816719",
+        "commented_code": "@@ -571,6 +586,80 @@ pub trait ListNameSpaceImpl: AsList {\n         list_ca.apply_amortized(|s| s.as_ref().drop_nulls())\n     }\n \n+    #[cfg(feature = \"list_pad\")]\n+    fn lst_pad_start(&self, fill_value: &Column, length: &Column) -> PolarsResult<ListChunked> {\n+        let list_ca = self.as_list();\n+        Ok(\n+            with_match_physical_numeric_type!(length.dtype().to_physical(), |$T| {\n+                let length = length.$T().unwrap();\n+                arity::binary(list_ca, length, |list_arr, length_arr| {\n+                    let rows = list_arr.len();\n+                    let values_arr: &dyn ArrowArray = list_arr.values().as_ref();\n+                    let inner_dtype = values_arr.dtype().clone();\n+                    let raw_offsets = list_arr.offsets().as_slice();\n+\n+                    let total_inner = list_arr\n+                        .offsets()\n+                        .windows(2)\n+                        .zip(length_arr.values().iter())\n+                        .map(|(o_list, length)| max(o_list[1] - o_list[0] - 1, max(*length as i64, 0)) as usize)",
+        "comment_created_at": "2025-06-29T16:04:41+00:00",
+        "comment_author": "coastalwhite",
+        "comment_body": "Since you are looping over the offsets here already, should you maybe check whether any work is necessary at all and do a fast path if not?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2125914488",
+    "pr_number": 22840,
+    "pr_file": "crates/polars-ops/src/chunked_array/binary/cast_binary_to_numerical.rs",
+    "created_at": "2025-06-04T07:45:31+00:00",
+    "commented_code": "is_little_endian,\n     )))\n }\n+\n+/// Casts a [`BinaryArray`] to a [`PrimitiveArray`], making any un-castable value a Null.\n+pub(super) fn try_cast_binview_to_array_primitive<T>(\n+    from: &BinaryViewArray,\n+    to: &ArrowDataType,\n+    is_little_endian: bool,\n+    element_size: usize,\n+) -> PolarsResult<FixedSizeListArray>\n+where\n+    T: Cast + NativeType,\n+{\n+    let ArrowDataType::FixedSizeList(_, size) = to else {\n+        panic!(\"Bug, non-Array passed in.\")\n+    };\n+    let size = *size;\n+    let mut result = MutableFixedSizeListArray::new(\n+        MutablePrimitiveArray::<T>::with_capacity(\n+            from.len()\n+                * from\n+                    .get(0)\n+                    .map(|bytes| bytes.len() / element_size)\n+                    .unwrap_or(0),\n+        ),\n+        size,\n+    );\n+\n+    from.iter().try_for_each(|x| {\n+        if let Some(x) = x {\n+            if x.len() != element_size * size {\n+                result.push_null();\n+                return Ok(());\n+            }\n+\n+            result.try_push(Some(\n+                x.chunks_exact(element_size)\n+                    .map(|val| {\n+                        if is_little_endian {\n+                            T::cast_le(val)\n+                        } else {\n+                            T::cast_be(val)\n+                        }\n+                    })\n+                    .collect::<Vec<_>>(),",
+    "repo_full_name": "pola-rs/polars",
+    "discussion_comments": [
+      {
+        "comment_id": "2125914488",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 22840,
+        "pr_file": "crates/polars-ops/src/chunked_array/binary/cast_binary_to_numerical.rs",
+        "discussion_id": "2125914488",
+        "commented_code": "@@ -78,3 +81,74 @@ where\n         is_little_endian,\n     )))\n }\n+\n+/// Casts a [`BinaryArray`] to a [`PrimitiveArray`], making any un-castable value a Null.\n+pub(super) fn try_cast_binview_to_array_primitive<T>(\n+    from: &BinaryViewArray,\n+    to: &ArrowDataType,\n+    is_little_endian: bool,\n+    element_size: usize,\n+) -> PolarsResult<FixedSizeListArray>\n+where\n+    T: Cast + NativeType,\n+{\n+    let ArrowDataType::FixedSizeList(_, size) = to else {\n+        panic!(\"Bug, non-Array passed in.\")\n+    };\n+    let size = *size;\n+    let mut result = MutableFixedSizeListArray::new(\n+        MutablePrimitiveArray::<T>::with_capacity(\n+            from.len()\n+                * from\n+                    .get(0)\n+                    .map(|bytes| bytes.len() / element_size)\n+                    .unwrap_or(0),\n+        ),\n+        size,\n+    );\n+\n+    from.iter().try_for_each(|x| {\n+        if let Some(x) = x {\n+            if x.len() != element_size * size {\n+                result.push_null();\n+                return Ok(());\n+            }\n+\n+            result.try_push(Some(\n+                x.chunks_exact(element_size)\n+                    .map(|val| {\n+                        if is_little_endian {\n+                            T::cast_le(val)\n+                        } else {\n+                            T::cast_be(val)\n+                        }\n+                    })\n+                    .collect::<Vec<_>>(),",
+        "comment_created_at": "2025-06-04T07:45:31+00:00",
+        "comment_author": "nameexhaustion",
+        "comment_body": "Remove this `collect::<Vec<_>>()`, this allocates per-row and is unnecessary - `try_push` accepts a generic `IntoIterator`.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2127982724",
+    "pr_number": 22840,
+    "pr_file": "crates/polars-core/src/datatypes/dtype.rs",
+    "created_at": "2025-06-05T05:27:54+00:00",
+    "commented_code": "}\n         level\n     }\n+\n+    pub fn byte_size(&self) -> Option<usize> {",
+    "repo_full_name": "pola-rs/polars",
+    "discussion_comments": [
+      {
+        "comment_id": "2127982724",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 22840,
+        "pr_file": "crates/polars-core/src/datatypes/dtype.rs",
+        "discussion_id": "2127982724",
+        "commented_code": "@@ -942,6 +942,55 @@ impl DataType {\n         }\n         level\n     }\n+\n+    pub fn byte_size(&self) -> Option<usize> {",
+        "comment_created_at": "2025-06-05T05:27:54+00:00",
+        "comment_author": "nameexhaustion",
+        "comment_body": "This function should be removed. From what I can see it's used in 2 places:\r\n* In a `polars_ensure!` - it's enough to check that the inner type is a primitive type\r\n* For `element_size`, you can get this from `std::mem::size_of::<T>()` inside the function instead of passing it in.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1997523643",
+    "pr_number": 21206,
+    "pr_file": "crates/polars-ops/src/chunked_array/repeat_by.rs",
+    "created_at": "2025-03-16T08:15:55+00:00",
+    "commented_code": "}\n }\n \n+fn repeat_by_list(ca: &ListChunked, by: &IdxCa) -> PolarsResult<ListChunked> {\n+    check_lengths(ca.len(), by.len())?;\n+\n+    match (ca.len(), by.len()) {\n+        (left_len, right_len) if left_len == right_len => Ok(repeat_by_generic_inner(ca, by)),\n+        (_, 1) => {\n+            let by = new_by(by, ca.len());\n+            repeat_by_list(ca, &by)\n+        },\n+        (1, _) => {\n+            let new_array = ca.new_from_index(0, by.len());\n+            repeat_by_list(&new_array, by)\n+        },\n+        // we have already checked the length\n+        _ => unreachable!(),\n+    }\n+}\n+\n+#[cfg(feature = \"dtype-struct\")]\n+fn repeat_by_struct(ca: &StructChunked, by: &IdxCa) -> PolarsResult<ListChunked> {\n+    check_lengths(ca.len(), by.len())?;\n+\n+    match (ca.len(), by.len()) {\n+        (left_len, right_len) if left_len == right_len => Ok(repeat_by_generic_inner(ca, by)),\n+        (_, 1) => {\n+            let by = new_by(by, ca.len());\n+            repeat_by_struct(ca, &by)\n+        },\n+        (1, _) => {\n+            let new_array = ca.new_from_index(0, by.len());\n+            repeat_by_struct(&new_array, by)\n+        },\n+        // we have already checked the length\n+        _ => unreachable!(),\n+    }\n+}\n+\n+fn repeat_by_generic_inner<T: PolarsDataType>(ca: &ChunkedArray<T>, by: &IdxCa) -> ListChunked {\n+    arity::binary(ca, by, |arr, by| {\n+        let output_length = by.iter().flatten().map(|x| *x as usize).sum();\n+        let mut builder = make_builder(arr.dtype());",
+    "repo_full_name": "pola-rs/polars",
+    "discussion_comments": [
+      {
+        "comment_id": "1997523643",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 21206,
+        "pr_file": "crates/polars-ops/src/chunked_array/repeat_by.rs",
+        "discussion_id": "1997523643",
+        "commented_code": "@@ -111,6 +115,74 @@ fn repeat_by_binary(ca: &BinaryChunked, by: &IdxCa) -> PolarsResult<ListChunked>\n     }\n }\n \n+fn repeat_by_list(ca: &ListChunked, by: &IdxCa) -> PolarsResult<ListChunked> {\n+    check_lengths(ca.len(), by.len())?;\n+\n+    match (ca.len(), by.len()) {\n+        (left_len, right_len) if left_len == right_len => Ok(repeat_by_generic_inner(ca, by)),\n+        (_, 1) => {\n+            let by = new_by(by, ca.len());\n+            repeat_by_list(ca, &by)\n+        },\n+        (1, _) => {\n+            let new_array = ca.new_from_index(0, by.len());\n+            repeat_by_list(&new_array, by)\n+        },\n+        // we have already checked the length\n+        _ => unreachable!(),\n+    }\n+}\n+\n+#[cfg(feature = \"dtype-struct\")]\n+fn repeat_by_struct(ca: &StructChunked, by: &IdxCa) -> PolarsResult<ListChunked> {\n+    check_lengths(ca.len(), by.len())?;\n+\n+    match (ca.len(), by.len()) {\n+        (left_len, right_len) if left_len == right_len => Ok(repeat_by_generic_inner(ca, by)),\n+        (_, 1) => {\n+            let by = new_by(by, ca.len());\n+            repeat_by_struct(ca, &by)\n+        },\n+        (1, _) => {\n+            let new_array = ca.new_from_index(0, by.len());\n+            repeat_by_struct(&new_array, by)\n+        },\n+        // we have already checked the length\n+        _ => unreachable!(),\n+    }\n+}\n+\n+fn repeat_by_generic_inner<T: PolarsDataType>(ca: &ChunkedArray<T>, by: &IdxCa) -> ListChunked {\n+    arity::binary(ca, by, |arr, by| {\n+        let output_length = by.iter().flatten().map(|x| *x as usize).sum();\n+        let mut builder = make_builder(arr.dtype());",
+        "comment_created_at": "2025-03-16T08:15:55+00:00",
+        "comment_author": "orlp",
+        "comment_body": "Can you move the creation of `builder` outside of the inner loop? You'll also have to change `.freeze()` into `.freeze_reset()`. You'll need to compute the datatype to pass in yourself using `ca.dtype().to_arrow(CompatLevel::newest())`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1997524249",
+    "pr_number": 21206,
+    "pr_file": "crates/polars-ops/src/chunked_array/repeat_by.rs",
+    "created_at": "2025-03-16T08:17:23+00:00",
+    "commented_code": "}\n }\n \n+fn repeat_by_list(ca: &ListChunked, by: &IdxCa) -> PolarsResult<ListChunked> {\n+    check_lengths(ca.len(), by.len())?;\n+\n+    match (ca.len(), by.len()) {\n+        (left_len, right_len) if left_len == right_len => Ok(repeat_by_generic_inner(ca, by)),\n+        (_, 1) => {\n+            let by = new_by(by, ca.len());\n+            repeat_by_list(ca, &by)\n+        },\n+        (1, _) => {\n+            let new_array = ca.new_from_index(0, by.len());\n+            repeat_by_list(&new_array, by)\n+        },\n+        // we have already checked the length\n+        _ => unreachable!(),\n+    }\n+}\n+\n+#[cfg(feature = \"dtype-struct\")]\n+fn repeat_by_struct(ca: &StructChunked, by: &IdxCa) -> PolarsResult<ListChunked> {\n+    check_lengths(ca.len(), by.len())?;\n+\n+    match (ca.len(), by.len()) {\n+        (left_len, right_len) if left_len == right_len => Ok(repeat_by_generic_inner(ca, by)),\n+        (_, 1) => {\n+            let by = new_by(by, ca.len());\n+            repeat_by_struct(ca, &by)\n+        },\n+        (1, _) => {\n+            let new_array = ca.new_from_index(0, by.len());\n+            repeat_by_struct(&new_array, by)\n+        },\n+        // we have already checked the length\n+        _ => unreachable!(),\n+    }\n+}\n+\n+fn repeat_by_generic_inner<T: PolarsDataType>(ca: &ChunkedArray<T>, by: &IdxCa) -> ListChunked {\n+    arity::binary(ca, by, |arr, by| {\n+        let output_length = by.iter().flatten().map(|x| *x as usize).sum();\n+        let mut builder = make_builder(arr.dtype());\n+        let mut validity = BitmapBuilder::with_capacity(output_length);\n+        let mut offsets = Offsets::<i64>::with_capacity(output_length);",
+    "repo_full_name": "pola-rs/polars",
+    "discussion_comments": [
+      {
+        "comment_id": "1997524249",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 21206,
+        "pr_file": "crates/polars-ops/src/chunked_array/repeat_by.rs",
+        "discussion_id": "1997524249",
+        "commented_code": "@@ -111,6 +115,74 @@ fn repeat_by_binary(ca: &BinaryChunked, by: &IdxCa) -> PolarsResult<ListChunked>\n     }\n }\n \n+fn repeat_by_list(ca: &ListChunked, by: &IdxCa) -> PolarsResult<ListChunked> {\n+    check_lengths(ca.len(), by.len())?;\n+\n+    match (ca.len(), by.len()) {\n+        (left_len, right_len) if left_len == right_len => Ok(repeat_by_generic_inner(ca, by)),\n+        (_, 1) => {\n+            let by = new_by(by, ca.len());\n+            repeat_by_list(ca, &by)\n+        },\n+        (1, _) => {\n+            let new_array = ca.new_from_index(0, by.len());\n+            repeat_by_list(&new_array, by)\n+        },\n+        // we have already checked the length\n+        _ => unreachable!(),\n+    }\n+}\n+\n+#[cfg(feature = \"dtype-struct\")]\n+fn repeat_by_struct(ca: &StructChunked, by: &IdxCa) -> PolarsResult<ListChunked> {\n+    check_lengths(ca.len(), by.len())?;\n+\n+    match (ca.len(), by.len()) {\n+        (left_len, right_len) if left_len == right_len => Ok(repeat_by_generic_inner(ca, by)),\n+        (_, 1) => {\n+            let by = new_by(by, ca.len());\n+            repeat_by_struct(ca, &by)\n+        },\n+        (1, _) => {\n+            let new_array = ca.new_from_index(0, by.len());\n+            repeat_by_struct(&new_array, by)\n+        },\n+        // we have already checked the length\n+        _ => unreachable!(),\n+    }\n+}\n+\n+fn repeat_by_generic_inner<T: PolarsDataType>(ca: &ChunkedArray<T>, by: &IdxCa) -> ListChunked {\n+    arity::binary(ca, by, |arr, by| {\n+        let output_length = by.iter().flatten().map(|x| *x as usize).sum();\n+        let mut builder = make_builder(arr.dtype());\n+        let mut validity = BitmapBuilder::with_capacity(output_length);\n+        let mut offsets = Offsets::<i64>::with_capacity(output_length);",
+        "comment_created_at": "2025-03-16T08:17:23+00:00",
+        "comment_author": "orlp",
+        "comment_body": "Can you add a `builder.reserve(output_length)` call? And change the `with_capacity` from `output_length` to `by.len()` for `validity` and `offsets`? Those are 1:1 with the number of lists, not the total number of elements.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1922603327",
+    "pr_number": 20804,
+    "pr_file": "crates/polars-stream/src/nodes/io_sinks/csv.rs",
+    "created_at": "2025-01-20T15:55:09+00:00",
+    "commented_code": "+use std::cmp::Reverse;\n+use std::io::Write;\n+use std::path::{Path, PathBuf};\n+\n+use polars_core::frame::DataFrame;\n+use polars_core::schema::SchemaRef;\n+use polars_error::PolarsResult;\n+use polars_expr::state::ExecutionState;\n+use polars_io::prelude::{CsvWriter, CsvWriterOptions};\n+use polars_io::SerWriter;\n+use polars_utils::priority::Priority;\n+\n+use crate::async_primitives::linearizer::Linearizer;\n+use crate::nodes::{ComputeNode, JoinHandle, MorselSeq, PortState, TaskPriority, TaskScope};\n+use crate::pipe::{RecvPort, SendPort};\n+use crate::DEFAULT_LINEARIZER_BUFFER_SIZE;\n+\n+pub struct CsvSinkNode {\n+    path: PathBuf,\n+    schema: SchemaRef,\n+\n+    write_options: CsvWriterOptions,\n+}\n+\n+impl CsvSinkNode {\n+    pub fn new(\n+        schema: SchemaRef,\n+        path: &Path,\n+        write_options: &CsvWriterOptions,\n+    ) -> PolarsResult<Self> {\n+        Ok(Self {\n+            path: path.to_path_buf(),\n+            schema,\n+\n+            write_options: write_options.clone(),\n+        })\n+    }\n+}\n+\n+impl ComputeNode for CsvSinkNode {\n+    fn name(&self) -> &str {\n+        \"csv_sink\"\n+    }\n+\n+    fn update_state(&mut self, recv: &mut [PortState], send: &mut [PortState]) -> PolarsResult<()> {\n+        assert!(send.is_empty());\n+        assert!(recv.len() == 1);\n+\n+        // We are always ready to receive, unless the sender is done, then we're\n+        // also done.\n+        if recv[0] != PortState::Done {\n+            recv[0] = PortState::Ready;\n+        }\n+\n+        Ok(())\n+    }\n+\n+    fn spawn<'env, 's>(\n+        &'env mut self,\n+        scope: &'s TaskScope<'s, 'env>,\n+        recv_ports: &mut [Option<RecvPort<'_>>],\n+        send_ports: &mut [Option<SendPort<'_>>],\n+        _state: &'s ExecutionState,\n+        join_handles: &mut Vec<JoinHandle<PolarsResult<()>>>,\n+    ) {\n+        assert!(recv_ports.len() == 1);\n+        assert!(send_ports.is_empty());\n+\n+        // .. -> Encode task\n+        let receivers = recv_ports[0].take().unwrap().parallel();\n+        // Encode tasks -> IO task\n+        let (mut linearizer, senders) = Linearizer::<Priority<Reverse<MorselSeq>, Vec<u8>>>::new(\n+            receivers.len(),\n+            DEFAULT_LINEARIZER_BUFFER_SIZE,\n+        );\n+\n+        let slf = &*self;\n+\n+        // 16MB\n+        const DEFAULT_ALLOCATION_SIZE: usize = 1 << 24;\n+\n+        // Encode task.\n+        //\n+        // Task encodes the columns into their corresponding CSV encoding.\n+        for (mut receiver, mut sender) in receivers.into_iter().zip(senders) {\n+            join_handles.push(scope.spawn_task(TaskPriority::High, async move {\n+                // Amortize the allocations over time. If we see that we need to do way larger\n+                // allocations, we adjust to that over time.\n+                let mut allocation_size = DEFAULT_ALLOCATION_SIZE;\n+                let options = slf.write_options.clone();\n+\n+                while let Ok(morsel) = receiver.recv().await {\n+                    let (df, seq, _, _) = morsel.into_inner();\n+\n+                    let mut buffer = Vec::with_capacity(allocation_size);\n+                    let mut writer = CsvWriter::new(&mut buffer)\n+                        .include_bom(false) // Handled once in the IO task.",
+    "repo_full_name": "pola-rs/polars",
+    "discussion_comments": [
+      {
+        "comment_id": "1922603327",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 20804,
+        "pr_file": "crates/polars-stream/src/nodes/io_sinks/csv.rs",
+        "discussion_id": "1922603327",
+        "commented_code": "@@ -0,0 +1,164 @@\n+use std::cmp::Reverse;\n+use std::io::Write;\n+use std::path::{Path, PathBuf};\n+\n+use polars_core::frame::DataFrame;\n+use polars_core::schema::SchemaRef;\n+use polars_error::PolarsResult;\n+use polars_expr::state::ExecutionState;\n+use polars_io::prelude::{CsvWriter, CsvWriterOptions};\n+use polars_io::SerWriter;\n+use polars_utils::priority::Priority;\n+\n+use crate::async_primitives::linearizer::Linearizer;\n+use crate::nodes::{ComputeNode, JoinHandle, MorselSeq, PortState, TaskPriority, TaskScope};\n+use crate::pipe::{RecvPort, SendPort};\n+use crate::DEFAULT_LINEARIZER_BUFFER_SIZE;\n+\n+pub struct CsvSinkNode {\n+    path: PathBuf,\n+    schema: SchemaRef,\n+\n+    write_options: CsvWriterOptions,\n+}\n+\n+impl CsvSinkNode {\n+    pub fn new(\n+        schema: SchemaRef,\n+        path: &Path,\n+        write_options: &CsvWriterOptions,\n+    ) -> PolarsResult<Self> {\n+        Ok(Self {\n+            path: path.to_path_buf(),\n+            schema,\n+\n+            write_options: write_options.clone(),\n+        })\n+    }\n+}\n+\n+impl ComputeNode for CsvSinkNode {\n+    fn name(&self) -> &str {\n+        \"csv_sink\"\n+    }\n+\n+    fn update_state(&mut self, recv: &mut [PortState], send: &mut [PortState]) -> PolarsResult<()> {\n+        assert!(send.is_empty());\n+        assert!(recv.len() == 1);\n+\n+        // We are always ready to receive, unless the sender is done, then we're\n+        // also done.\n+        if recv[0] != PortState::Done {\n+            recv[0] = PortState::Ready;\n+        }\n+\n+        Ok(())\n+    }\n+\n+    fn spawn<'env, 's>(\n+        &'env mut self,\n+        scope: &'s TaskScope<'s, 'env>,\n+        recv_ports: &mut [Option<RecvPort<'_>>],\n+        send_ports: &mut [Option<SendPort<'_>>],\n+        _state: &'s ExecutionState,\n+        join_handles: &mut Vec<JoinHandle<PolarsResult<()>>>,\n+    ) {\n+        assert!(recv_ports.len() == 1);\n+        assert!(send_ports.is_empty());\n+\n+        // .. -> Encode task\n+        let receivers = recv_ports[0].take().unwrap().parallel();\n+        // Encode tasks -> IO task\n+        let (mut linearizer, senders) = Linearizer::<Priority<Reverse<MorselSeq>, Vec<u8>>>::new(\n+            receivers.len(),\n+            DEFAULT_LINEARIZER_BUFFER_SIZE,\n+        );\n+\n+        let slf = &*self;\n+\n+        // 16MB\n+        const DEFAULT_ALLOCATION_SIZE: usize = 1 << 24;\n+\n+        // Encode task.\n+        //\n+        // Task encodes the columns into their corresponding CSV encoding.\n+        for (mut receiver, mut sender) in receivers.into_iter().zip(senders) {\n+            join_handles.push(scope.spawn_task(TaskPriority::High, async move {\n+                // Amortize the allocations over time. If we see that we need to do way larger\n+                // allocations, we adjust to that over time.\n+                let mut allocation_size = DEFAULT_ALLOCATION_SIZE;\n+                let options = slf.write_options.clone();\n+\n+                while let Ok(morsel) = receiver.recv().await {\n+                    let (df, seq, _, _) = morsel.into_inner();\n+\n+                    let mut buffer = Vec::with_capacity(allocation_size);\n+                    let mut writer = CsvWriter::new(&mut buffer)\n+                        .include_bom(false) // Handled once in the IO task.",
+        "comment_created_at": "2025-01-20T15:55:09+00:00",
+        "comment_author": "ritchie46",
+        "comment_body": "Maybe we can hoist the writer out of the while loop?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1922605834",
+        "repo_full_name": "pola-rs/polars",
+        "pr_number": 20804,
+        "pr_file": "crates/polars-stream/src/nodes/io_sinks/csv.rs",
+        "discussion_id": "1922603327",
+        "commented_code": "@@ -0,0 +1,164 @@\n+use std::cmp::Reverse;\n+use std::io::Write;\n+use std::path::{Path, PathBuf};\n+\n+use polars_core::frame::DataFrame;\n+use polars_core::schema::SchemaRef;\n+use polars_error::PolarsResult;\n+use polars_expr::state::ExecutionState;\n+use polars_io::prelude::{CsvWriter, CsvWriterOptions};\n+use polars_io::SerWriter;\n+use polars_utils::priority::Priority;\n+\n+use crate::async_primitives::linearizer::Linearizer;\n+use crate::nodes::{ComputeNode, JoinHandle, MorselSeq, PortState, TaskPriority, TaskScope};\n+use crate::pipe::{RecvPort, SendPort};\n+use crate::DEFAULT_LINEARIZER_BUFFER_SIZE;\n+\n+pub struct CsvSinkNode {\n+    path: PathBuf,\n+    schema: SchemaRef,\n+\n+    write_options: CsvWriterOptions,\n+}\n+\n+impl CsvSinkNode {\n+    pub fn new(\n+        schema: SchemaRef,\n+        path: &Path,\n+        write_options: &CsvWriterOptions,\n+    ) -> PolarsResult<Self> {\n+        Ok(Self {\n+            path: path.to_path_buf(),\n+            schema,\n+\n+            write_options: write_options.clone(),\n+        })\n+    }\n+}\n+\n+impl ComputeNode for CsvSinkNode {\n+    fn name(&self) -> &str {\n+        \"csv_sink\"\n+    }\n+\n+    fn update_state(&mut self, recv: &mut [PortState], send: &mut [PortState]) -> PolarsResult<()> {\n+        assert!(send.is_empty());\n+        assert!(recv.len() == 1);\n+\n+        // We are always ready to receive, unless the sender is done, then we're\n+        // also done.\n+        if recv[0] != PortState::Done {\n+            recv[0] = PortState::Ready;\n+        }\n+\n+        Ok(())\n+    }\n+\n+    fn spawn<'env, 's>(\n+        &'env mut self,\n+        scope: &'s TaskScope<'s, 'env>,\n+        recv_ports: &mut [Option<RecvPort<'_>>],\n+        send_ports: &mut [Option<SendPort<'_>>],\n+        _state: &'s ExecutionState,\n+        join_handles: &mut Vec<JoinHandle<PolarsResult<()>>>,\n+    ) {\n+        assert!(recv_ports.len() == 1);\n+        assert!(send_ports.is_empty());\n+\n+        // .. -> Encode task\n+        let receivers = recv_ports[0].take().unwrap().parallel();\n+        // Encode tasks -> IO task\n+        let (mut linearizer, senders) = Linearizer::<Priority<Reverse<MorselSeq>, Vec<u8>>>::new(\n+            receivers.len(),\n+            DEFAULT_LINEARIZER_BUFFER_SIZE,\n+        );\n+\n+        let slf = &*self;\n+\n+        // 16MB\n+        const DEFAULT_ALLOCATION_SIZE: usize = 1 << 24;\n+\n+        // Encode task.\n+        //\n+        // Task encodes the columns into their corresponding CSV encoding.\n+        for (mut receiver, mut sender) in receivers.into_iter().zip(senders) {\n+            join_handles.push(scope.spawn_task(TaskPriority::High, async move {\n+                // Amortize the allocations over time. If we see that we need to do way larger\n+                // allocations, we adjust to that over time.\n+                let mut allocation_size = DEFAULT_ALLOCATION_SIZE;\n+                let options = slf.write_options.clone();\n+\n+                while let Ok(morsel) = receiver.recv().await {\n+                    let (df, seq, _, _) = morsel.into_inner();\n+\n+                    let mut buffer = Vec::with_capacity(allocation_size);\n+                    let mut writer = CsvWriter::new(&mut buffer)\n+                        .include_bom(false) // Handled once in the IO task.",
+        "comment_created_at": "2025-01-20T15:57:11+00:00",
+        "comment_author": "coastalwhite",
+        "comment_body": "I don't think it matters much since the `CsvWriter` creation is cheap, and we cannot reuse the allocation anyway because it needs to be passed to the IO task.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

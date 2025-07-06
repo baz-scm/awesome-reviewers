@@ -1,37 +1,61 @@
 ---
 title: Avoid hardcoded secrets
-description: Never hardcode sensitive information like passwords, API keys, or other
-  secrets directly in infrastructure code. These secrets can be exposed through version
-  control systems, putting your infrastructure at risk.
+description: Never include hardcoded secrets or credentials in your infrastructure
+  as code files. Secrets in configuration files pose significant security risks as
+  they may be inadvertently exposed through version control systems or shared repositories.
 repository: bridgecrewio/checkov
 label: Security
 language: Terraform
 comments_count: 1
-repository_stars: 7667
+repository_stars: 7668
 ---
 
-Never hardcode sensitive information like passwords, API keys, or other secrets directly in infrastructure code. These secrets can be exposed through version control systems, putting your infrastructure at risk.
+Never include hardcoded secrets or credentials in your infrastructure as code files. Secrets in configuration files pose significant security risks as they may be inadvertently exposed through version control systems or shared repositories.
 
 Instead:
-1. Use secret management solutions (Azure Key Vault, HashiCorp Vault, etc.)
-2. Reference environment variables or secure input variables
-3. For Terraform specifically, utilize tfvars files (kept outside of version control)
-4. Consider using dynamic providers that can fetch secrets at runtime
+- Use secret management services like Azure Key Vault, HashiCorp Vault, or AWS Secrets Manager
+- Reference environment variables or other external sources
+- Utilize native secret handling mechanisms in your infrastructure platforms
 
-When testing infrastructure code that requires secrets, use placeholder values and clearly annotate them with security scan exemptions:
+When writing Terraform configurations for Azure Container Instances, use variable references instead of hardcoded values:
 
 ```hcl
-container {
-  # Other configuration...
+# BAD PRACTICE - Hardcoded secret
+resource "azurerm_container_group" "example" {
+  # other configuration...
   
-  secure_environment_variables = {
-    API_KEY = var.api_key  # Proper approach: using a variable
-    # Instead of hardcoding: API_KEY = "actual-secret-value"
+  container {
+    # other settings...
     
-    # For test environments only:
-    TEST_SECRET = "dummy-value"  # checkov:skip=CKV_SECRET_6 test environment only
+    secure_environment_variables = {
+      API_KEY = "actual-secret-value-here"  # Security risk!
+    }
+  }
+}
+
+# GOOD PRACTICE - Referenced secret
+variable "api_key" {
+  description = "API key for the container"
+  sensitive   = true  # Marks as sensitive in Terraform
+}
+
+resource "azurerm_container_group" "example" {
+  # other configuration...
+  
+  container {
+    # other settings...
+    
+    secure_environment_variables = {
+      API_KEY = var.api_key
+    }
   }
 }
 ```
 
-Regularly audit your code for hardcoded secrets using security scanning tools like Checkov as part of your CI/CD pipeline.
+For testing scenarios where you need placeholder secrets, use clearly marked test values and include security check exceptions:
+
+```hcl
+secure_environment_variables = {
+  TEST_API_KEY = "test-value-only"  # checkov:skip=CKV_SECRET_6 test-only secret
+}
+```

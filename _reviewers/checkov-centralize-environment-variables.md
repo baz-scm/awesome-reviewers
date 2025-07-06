@@ -1,40 +1,36 @@
 ---
 title: Centralize environment variables
-description: All environment variables should be defined in a central configuration
-  file and imported where needed, rather than scattered throughout the codebase. This
-  practice improves maintainability, ensures consistency, and makes configuration
-  management more robust.
+description: All environment variables should be defined in a centralized location
+  (`checkov/common/util/env_vars_config.py`) rather than scattered throughout the
+  codebase. This approach enhances maintainability, promotes consistency, and simplifies
+  tracking of configuration settings.
 repository: bridgecrewio/checkov
 label: Configurations
 language: Python
-comments_count: 7
-repository_stars: 7667
+comments_count: 9
+repository_stars: 7668
 ---
 
-All environment variables should be defined in a central configuration file and imported where needed, rather than scattered throughout the codebase. This practice improves maintainability, ensures consistency, and makes configuration management more robust.
+All environment variables should be defined in a centralized location (`checkov/common/util/env_vars_config.py`) rather than scattered throughout the codebase. This approach enhances maintainability, promotes consistency, and simplifies tracking of configuration settings.
 
-Key practices to follow:
-1. Define all environment variables in `checkov/common/util/env_vars_config.py`
-2. Use proper type conversion functions for environment variables
-3. Import environment variables from the central file instead of directly accessing them with `os.getenv()`
+When adding a new environment variable:
+1. Define it in the centralized config file with proper type conversion
+2. Add a descriptive comment explaining its purpose
+3. Import and use the variable in your code instead of direct `os.getenv()` calls
+
+Always use `strtobool()` for boolean environment variables since `bool('False')` evaluates to `True`.
 
 Example:
 ```python
-# INCORRECT - Defining environment variables locally in different files
-def some_function():
-    use_feature = bool(os.getenv('FEATURE_FLAG', 'False'))  # Also incorrect conversion!
-    if use_feature:
-        # Feature-specific code
+# In checkov/common/util/env_vars_config.py
+from distutils.util import strtobool
 
-# CORRECT - Define in central config file (env_vars_config.py)
-FEATURE_FLAG = strtobool(os.getenv('FEATURE_FLAG', 'False'))
+# Controls whether to ignore hidden directories (default: True)
+IGNORE_HIDDEN_DIRECTORY_ENV = strtobool(os.getenv("CKV_IGNORE_HIDDEN_DIRECTORIES", "True"))
 
-# Then import and use in other files
-from checkov.common.util.env_vars_config import FEATURE_FLAG
+# In your code
+from checkov.common.util.env_vars_config import IGNORE_HIDDEN_DIRECTORY_ENV
 
-def some_function():
-    if FEATURE_FLAG:
-        # Feature-specific code
+if IGNORE_HIDDEN_DIRECTORY_ENV:
+    # Skip hidden directories logic here
 ```
-
-Note that when converting string environment variables to boolean values, use `strtobool()` instead of `bool()`, as `bool('False')` evaluates to `True`.

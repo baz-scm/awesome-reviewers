@@ -1,44 +1,49 @@
 ---
 title: Structure API doc blocks
-description: 'Each documentation block should follow a consistent structure:
+description: 'Each public API documentation block should follow a consistent structure:
 
 
-  1. Start with a single-line summary of the item''s purpose
+  1. Start with a single-line summary that concisely describes the item
 
   2. Add an empty line after the summary'
 repository: tokio-rs/tokio
 label: Documentation
 language: Rust
 comments_count: 5
-repository_stars: 28981
+repository_stars: 28988
 ---
 
-Each documentation block should follow a consistent structure:
+Each public API documentation block should follow a consistent structure:
 
-1. Start with a single-line summary of the item's purpose
+1. Start with a single-line summary that concisely describes the item
 2. Add an empty line after the summary
 3. Follow with detailed documentation paragraphs
 4. Use empty lines between sections (paragraphs, code blocks, headers)
-5. Put Rust types in backticks (e.g. `String`, `Option<T>`)
+5. Format Rust types using backticks (e.g., [`String`])
 
 Example:
 
 ```rust
-/// Copies data between two buffers.
+/// Receives the next value from the channel.
 ///
-/// This function efficiently transfers data from the source buffer
-/// to the destination buffer using an internal temporary buffer.
-/// 
+/// This method returns `None` if the channel has been closed and there are
+/// no remaining messages in the channel's queue. The channel is closed when
+/// all senders have been dropped.
+///
 /// # Examples
 ///
 /// ```
-/// let mut src = vec![1, 2, 3];
-/// let mut dst = Vec::new();
-/// copy_data(&mut src, &mut dst);
-/// ```
+/// use tokio::sync::mpsc;
 ///
-/// The operation will return early if the destination `Buffer` is full
-/// or the source is empty.
+/// #[tokio::main]
+/// async fn main() {
+///     let (tx, mut rx) = mpsc::channel(100);
+///     assert!(rx.recv().await.is_none());
+/// }
+/// ```
+pub async fn recv(&mut self) -> Option<T> {
+    // Implementation
+}
 ```
 
-This structure ensures documentation is consistently formatted and easy to read, with clear separation between the summary, detailed explanation, examples, and additional notes.
+This structure improves readability and ensures documentation is both scannable and detailed when needed. The single-line summary is particularly important as it appears in module documentation and IDE tooltips.

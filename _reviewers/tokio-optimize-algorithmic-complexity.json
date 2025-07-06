@@ -1,0 +1,322 @@
+[
+  {
+    "discussion_id": "1308436191",
+    "pr_number": 5958,
+    "pr_file": "tokio/src/io/blocking.rs",
+    "created_at": "2023-08-29T08:49:10+00:00",
+    "commented_code": "self.buf.truncate(0);\n             ret\n         }\n+\n+        pub(crate) fn copy_from_bufs(&mut self, bufs: &[io::IoSlice<'_>]) -> usize {\n+            assert!(self.is_empty());\n+\n+            let n = bufs.iter().map(|b| b.len()).sum::<usize>().min(MAX_BUF);",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "1308436191",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 5958,
+        "pr_file": "tokio/src/io/blocking.rs",
+        "discussion_id": "1308436191",
+        "commented_code": "@@ -276,5 +276,24 @@ cfg_fs! {\n             self.buf.truncate(0);\n             ret\n         }\n+\n+        pub(crate) fn copy_from_bufs(&mut self, bufs: &[io::IoSlice<'_>]) -> usize {\n+            assert!(self.is_empty());\n+\n+            let n = bufs.iter().map(|b| b.len()).sum::<usize>().min(MAX_BUF);",
+        "comment_created_at": "2023-08-29T08:49:10+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "This iterates all of the buffers every time, even if we only write a few of them. If the buffers are very long and this is called in a loop, that gives quadratic performance.\r\n\r\nWe should be able to embed this logic inside the for loop instead to avoid that.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1308484295",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 5958,
+        "pr_file": "tokio/src/io/blocking.rs",
+        "discussion_id": "1308436191",
+        "commented_code": "@@ -276,5 +276,24 @@ cfg_fs! {\n             self.buf.truncate(0);\n             ret\n         }\n+\n+        pub(crate) fn copy_from_bufs(&mut self, bufs: &[io::IoSlice<'_>]) -> usize {\n+            assert!(self.is_empty());\n+\n+            let n = bufs.iter().map(|b| b.len()).sum::<usize>().min(MAX_BUF);",
+        "comment_created_at": "2023-08-29T09:27:53+00:00",
+        "comment_author": "maminrayej",
+        "comment_body": "You mean `b.len()` is `O(n)` and causes the `bufs.iter()` to be `O(n^2)`? I thought since it's a `Deref` to `&[u8]`, it's `O(1)`.\r\nI've provided an alternate implementation that doesn't use `bufs.iter()`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1308547194",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 5958,
+        "pr_file": "tokio/src/io/blocking.rs",
+        "discussion_id": "1308436191",
+        "commented_code": "@@ -276,5 +276,24 @@ cfg_fs! {\n             self.buf.truncate(0);\n             ret\n         }\n+\n+        pub(crate) fn copy_from_bufs(&mut self, bufs: &[io::IoSlice<'_>]) -> usize {\n+            assert!(self.is_empty());\n+\n+            let n = bufs.iter().map(|b| b.len()).sum::<usize>().min(MAX_BUF);",
+        "comment_created_at": "2023-08-29T10:18:57+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "No, `b.len()` is constant time. Instead, it's O(n) in the length of `bufs`, which you iterate over.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1536609325",
+    "pr_number": 6414,
+    "pr_file": "tokio-util/src/codec/length_delimited.rs",
+    "created_at": "2024-03-23T10:21:37+00:00",
+    "commented_code": "self.num_skip\n             .unwrap_or(self.length_field_offset + self.length_field_len)\n     }\n+\n+    fn adjust_max_frame_len(&mut self) {\n+        // This function is basically `std::u64::saturating_add_signed`. Since it\n+        // requires MSRV 1.66, its implementation is copied here.\n+        //\n+        // TODO: use the method from std when MSRV becomes >= 1.66\n+        fn saturating_add_signed(num: u64, rhs: i64) -> u64 {\n+            let (res, overflow) = num.overflowing_add(rhs as u64);\n+            if overflow == (rhs < 0) {\n+                res\n+            } else if overflow {\n+                u64::MAX\n+            } else {\n+                0\n+            }\n+        }\n+\n+        // Calculate the maximum number that can be represented using `length_field_len` bytes.\n+        let max_number = 2u64.saturating_pow((8 * self.length_field_len - 1) as u32);\n+        // In order to prevent an overflow, we do the last part manually.\n+        let max_number = max_number + (max_number - 1);",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "1536609325",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6414,
+        "pr_file": "tokio-util/src/codec/length_delimited.rs",
+        "discussion_id": "1536609325",
+        "commented_code": "@@ -1018,6 +1026,34 @@ impl Builder {\n         self.num_skip\n             .unwrap_or(self.length_field_offset + self.length_field_len)\n     }\n+\n+    fn adjust_max_frame_len(&mut self) {\n+        // This function is basically `std::u64::saturating_add_signed`. Since it\n+        // requires MSRV 1.66, its implementation is copied here.\n+        //\n+        // TODO: use the method from std when MSRV becomes >= 1.66\n+        fn saturating_add_signed(num: u64, rhs: i64) -> u64 {\n+            let (res, overflow) = num.overflowing_add(rhs as u64);\n+            if overflow == (rhs < 0) {\n+                res\n+            } else if overflow {\n+                u64::MAX\n+            } else {\n+                0\n+            }\n+        }\n+\n+        // Calculate the maximum number that can be represented using `length_field_len` bytes.\n+        let max_number = 2u64.saturating_pow((8 * self.length_field_len - 1) as u32);\n+        // In order to prevent an overflow, we do the last part manually.\n+        let max_number = max_number + (max_number - 1);",
+        "comment_created_at": "2024-03-23T10:21:37+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "I would expect that `saturating_pow` is rather expensive compared to a shift.\r\n```suggestion\r\n        let max_number = match 1.checked_shl(8 * self.length_field_len) {\r\n            Some(shl) => shl - 1,\r\n            None => u64::MAX,\r\n        };\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1528233904",
+    "pr_number": 6409,
+    "pr_file": "tokio-stream/src/stream_map.rs",
+    "created_at": "2024-03-18T09:57:53+00:00",
+    "commented_code": "}\n }\n \n+impl<K, V> StreamMap<K, V>\n+where\n+    K: Clone + Unpin,\n+    V: Stream + Unpin,\n+{\n+    /// Polls to receive multiple items on this `StreamMap`, extending the provided `buffer`.\n+    ///\n+    /// This method returns:\n+    /// * `Poll::Pending` if no items are available but the `StreamMap` is not empty.\n+    /// * `Poll::Ready(count)` where `count` is the number of items successfully received and\n+    ///   stored in `buffer`. This can be less than, or equal to, `limit`.\n+    /// * `Poll::Ready(0)` if `limit` is set to zero or when the `StreamMap` is empty.\n+    ///\n+    /// When the method returns `Poll::Pending`, the `Waker` in the provided\n+    /// `Context` is scheduled to receive a wakeup when an item is sent on any of the\n+    /// underlying stream. Note that on multiple calls to `poll_recv_many`, only\n+    /// the `Waker` from the `Context` passed to the most recent call is scheduled\n+    /// to receive a wakeup.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    pub fn poll_recv_many(\n+        &mut self,\n+        cx: &mut Context<'_>,\n+        buffer: &mut Vec<(K, V::Item)>,\n+        limit: usize,\n+    ) -> Poll<usize> {\n+        if limit == 0 {\n+            return Poll::Ready(0);\n+        }\n+\n+        let mut remaining = limit;\n+\n+        while remaining > 0 {\n+            match self.poll_next_entry(cx) {",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "1528233904",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6409,
+        "pr_file": "tokio-stream/src/stream_map.rs",
+        "discussion_id": "1528233904",
+        "commented_code": "@@ -561,6 +563,78 @@ impl<K, V> Default for StreamMap<K, V> {\n     }\n }\n \n+impl<K, V> StreamMap<K, V>\n+where\n+    K: Clone + Unpin,\n+    V: Stream + Unpin,\n+{\n+    /// Polls to receive multiple items on this `StreamMap`, extending the provided `buffer`.\n+    ///\n+    /// This method returns:\n+    /// * `Poll::Pending` if no items are available but the `StreamMap` is not empty.\n+    /// * `Poll::Ready(count)` where `count` is the number of items successfully received and\n+    ///   stored in `buffer`. This can be less than, or equal to, `limit`.\n+    /// * `Poll::Ready(0)` if `limit` is set to zero or when the `StreamMap` is empty.\n+    ///\n+    /// When the method returns `Poll::Pending`, the `Waker` in the provided\n+    /// `Context` is scheduled to receive a wakeup when an item is sent on any of the\n+    /// underlying stream. Note that on multiple calls to `poll_recv_many`, only\n+    /// the `Waker` from the `Context` passed to the most recent call is scheduled\n+    /// to receive a wakeup.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    pub fn poll_recv_many(\n+        &mut self,\n+        cx: &mut Context<'_>,\n+        buffer: &mut Vec<(K, V::Item)>,\n+        limit: usize,\n+    ) -> Poll<usize> {\n+        if limit == 0 {\n+            return Poll::Ready(0);\n+        }\n+\n+        let mut remaining = limit;\n+\n+        while remaining > 0 {\n+            match self.poll_next_entry(cx) {",
+        "comment_created_at": "2024-03-18T09:57:53+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "If we're going to the effort of providing an implementation, then I think we should not go for a version that just calls `poll_next_entry` in a loop. At that point, it might as well be a generic piece of functionality that works for any `Stream`.\r\n\r\nEach call to that method generates a random number to pick a stream to start at, but I think it would make more sense to pick a random number only once, and then keep going around the loop until we have `limit` items, or until we've polled `self.entries.len()` times in a row without getting an item.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1536646186",
+    "pr_number": 6409,
+    "pr_file": "tokio-stream/src/stream_map.rs",
+    "created_at": "2024-03-23T14:59:35+00:00",
+    "commented_code": "}\n }\n \n+impl<K, V> StreamMap<K, V>\n+where\n+    K: Clone + Unpin,\n+    V: Stream + Unpin,\n+{\n+    /// Receives multiple items on this [`StreamMap`], extending the provided `buffer`.\n+    ///\n+    /// This method returns the number of items that is appended to the `buffer`.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    ///\n+    /// # Cancel safety\n+    ///\n+    /// This method is cancel safe. If `recv_many` is used as the event in a\n+    /// [`tokio::select!`](tokio::select) statement and some other branch\n+    /// completes first, it is guaranteed that no items were received on any of\n+    /// the underlying streams.\n+    pub async fn next_many(&mut self, buffer: &mut Vec<(K, V::Item)>, limit: usize) -> usize {\n+        poll_fn(|cx| self.poll_next_many(cx, buffer, limit)).await\n+    }\n+\n+    /// Polls to receive multiple items on this `StreamMap`, extending the provided `buffer`.\n+    ///\n+    /// This method returns:\n+    /// * `Poll::Pending` if no items are available but the `StreamMap` is not empty.\n+    /// * `Poll::Ready(count)` where `count` is the number of items successfully received and\n+    ///   stored in `buffer`. This can be less than, or equal to, `limit`.\n+    /// * `Poll::Ready(0)` if `limit` is set to zero or when the `StreamMap` is empty.\n+    ///\n+    /// When the method returns `Poll::Pending`, the `Waker` in the provided\n+    /// `Context` is scheduled to receive a wakeup when an item is sent on any of the\n+    /// underlying stream. Note that on multiple calls to `poll_recv_many`, only\n+    /// the `Waker` from the `Context` passed to the most recent call is scheduled\n+    /// to receive a wakeup.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    pub fn poll_next_many(\n+        &mut self,\n+        cx: &mut Context<'_>,\n+        buffer: &mut Vec<(K, V::Item)>,\n+        limit: usize,\n+    ) -> Poll<usize> {\n+        if limit == 0 {\n+            return Poll::Ready(0);\n+        }\n+\n+        let mut remaining = limit;\n+        let mut start = self::rand::thread_rng_n(self.entries.len() as u32) as usize;\n+\n+        while remaining > 0 {\n+            match self.poll_one(cx, start) {",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "1536646186",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6409,
+        "pr_file": "tokio-stream/src/stream_map.rs",
+        "discussion_id": "1536646186",
+        "commented_code": "@@ -561,6 +566,90 @@ impl<K, V> Default for StreamMap<K, V> {\n     }\n }\n \n+impl<K, V> StreamMap<K, V>\n+where\n+    K: Clone + Unpin,\n+    V: Stream + Unpin,\n+{\n+    /// Receives multiple items on this [`StreamMap`], extending the provided `buffer`.\n+    ///\n+    /// This method returns the number of items that is appended to the `buffer`.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    ///\n+    /// # Cancel safety\n+    ///\n+    /// This method is cancel safe. If `recv_many` is used as the event in a\n+    /// [`tokio::select!`](tokio::select) statement and some other branch\n+    /// completes first, it is guaranteed that no items were received on any of\n+    /// the underlying streams.\n+    pub async fn next_many(&mut self, buffer: &mut Vec<(K, V::Item)>, limit: usize) -> usize {\n+        poll_fn(|cx| self.poll_next_many(cx, buffer, limit)).await\n+    }\n+\n+    /// Polls to receive multiple items on this `StreamMap`, extending the provided `buffer`.\n+    ///\n+    /// This method returns:\n+    /// * `Poll::Pending` if no items are available but the `StreamMap` is not empty.\n+    /// * `Poll::Ready(count)` where `count` is the number of items successfully received and\n+    ///   stored in `buffer`. This can be less than, or equal to, `limit`.\n+    /// * `Poll::Ready(0)` if `limit` is set to zero or when the `StreamMap` is empty.\n+    ///\n+    /// When the method returns `Poll::Pending`, the `Waker` in the provided\n+    /// `Context` is scheduled to receive a wakeup when an item is sent on any of the\n+    /// underlying stream. Note that on multiple calls to `poll_recv_many`, only\n+    /// the `Waker` from the `Context` passed to the most recent call is scheduled\n+    /// to receive a wakeup.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    pub fn poll_next_many(\n+        &mut self,\n+        cx: &mut Context<'_>,\n+        buffer: &mut Vec<(K, V::Item)>,\n+        limit: usize,\n+    ) -> Poll<usize> {\n+        if limit == 0 {\n+            return Poll::Ready(0);\n+        }\n+\n+        let mut remaining = limit;\n+        let mut start = self::rand::thread_rng_n(self.entries.len() as u32) as usize;\n+\n+        while remaining > 0 {\n+            match self.poll_one(cx, start) {",
+        "comment_created_at": "2024-03-23T14:59:35+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "Hmm. I imagine that when we get many items, we would want to get them from different streams (probably in the order they're stored). But with this strategy, whichever stream is at `start` will be preferred every time.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1536647118",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6409,
+        "pr_file": "tokio-stream/src/stream_map.rs",
+        "discussion_id": "1536646186",
+        "commented_code": "@@ -561,6 +566,90 @@ impl<K, V> Default for StreamMap<K, V> {\n     }\n }\n \n+impl<K, V> StreamMap<K, V>\n+where\n+    K: Clone + Unpin,\n+    V: Stream + Unpin,\n+{\n+    /// Receives multiple items on this [`StreamMap`], extending the provided `buffer`.\n+    ///\n+    /// This method returns the number of items that is appended to the `buffer`.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    ///\n+    /// # Cancel safety\n+    ///\n+    /// This method is cancel safe. If `recv_many` is used as the event in a\n+    /// [`tokio::select!`](tokio::select) statement and some other branch\n+    /// completes first, it is guaranteed that no items were received on any of\n+    /// the underlying streams.\n+    pub async fn next_many(&mut self, buffer: &mut Vec<(K, V::Item)>, limit: usize) -> usize {\n+        poll_fn(|cx| self.poll_next_many(cx, buffer, limit)).await\n+    }\n+\n+    /// Polls to receive multiple items on this `StreamMap`, extending the provided `buffer`.\n+    ///\n+    /// This method returns:\n+    /// * `Poll::Pending` if no items are available but the `StreamMap` is not empty.\n+    /// * `Poll::Ready(count)` where `count` is the number of items successfully received and\n+    ///   stored in `buffer`. This can be less than, or equal to, `limit`.\n+    /// * `Poll::Ready(0)` if `limit` is set to zero or when the `StreamMap` is empty.\n+    ///\n+    /// When the method returns `Poll::Pending`, the `Waker` in the provided\n+    /// `Context` is scheduled to receive a wakeup when an item is sent on any of the\n+    /// underlying stream. Note that on multiple calls to `poll_recv_many`, only\n+    /// the `Waker` from the `Context` passed to the most recent call is scheduled\n+    /// to receive a wakeup.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    pub fn poll_next_many(\n+        &mut self,\n+        cx: &mut Context<'_>,\n+        buffer: &mut Vec<(K, V::Item)>,\n+        limit: usize,\n+    ) -> Poll<usize> {\n+        if limit == 0 {\n+            return Poll::Ready(0);\n+        }\n+\n+        let mut remaining = limit;\n+        let mut start = self::rand::thread_rng_n(self.entries.len() as u32) as usize;\n+\n+        while remaining > 0 {\n+            match self.poll_one(cx, start) {",
+        "comment_created_at": "2024-03-23T15:07:23+00:00",
+        "comment_author": "maminrayej",
+        "comment_body": "How about we move the `start` index forward every time we call `poll_one` in a wrapping manner? With extra logic to make sure we do not go out of bounds, it can also replace regenerating a new `start` whenever `entries.len()` gets smaller.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1536648870",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6409,
+        "pr_file": "tokio-stream/src/stream_map.rs",
+        "discussion_id": "1536646186",
+        "commented_code": "@@ -561,6 +566,90 @@ impl<K, V> Default for StreamMap<K, V> {\n     }\n }\n \n+impl<K, V> StreamMap<K, V>\n+where\n+    K: Clone + Unpin,\n+    V: Stream + Unpin,\n+{\n+    /// Receives multiple items on this [`StreamMap`], extending the provided `buffer`.\n+    ///\n+    /// This method returns the number of items that is appended to the `buffer`.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    ///\n+    /// # Cancel safety\n+    ///\n+    /// This method is cancel safe. If `recv_many` is used as the event in a\n+    /// [`tokio::select!`](tokio::select) statement and some other branch\n+    /// completes first, it is guaranteed that no items were received on any of\n+    /// the underlying streams.\n+    pub async fn next_many(&mut self, buffer: &mut Vec<(K, V::Item)>, limit: usize) -> usize {\n+        poll_fn(|cx| self.poll_next_many(cx, buffer, limit)).await\n+    }\n+\n+    /// Polls to receive multiple items on this `StreamMap`, extending the provided `buffer`.\n+    ///\n+    /// This method returns:\n+    /// * `Poll::Pending` if no items are available but the `StreamMap` is not empty.\n+    /// * `Poll::Ready(count)` where `count` is the number of items successfully received and\n+    ///   stored in `buffer`. This can be less than, or equal to, `limit`.\n+    /// * `Poll::Ready(0)` if `limit` is set to zero or when the `StreamMap` is empty.\n+    ///\n+    /// When the method returns `Poll::Pending`, the `Waker` in the provided\n+    /// `Context` is scheduled to receive a wakeup when an item is sent on any of the\n+    /// underlying stream. Note that on multiple calls to `poll_recv_many`, only\n+    /// the `Waker` from the `Context` passed to the most recent call is scheduled\n+    /// to receive a wakeup.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    pub fn poll_next_many(\n+        &mut self,\n+        cx: &mut Context<'_>,\n+        buffer: &mut Vec<(K, V::Item)>,\n+        limit: usize,\n+    ) -> Poll<usize> {\n+        if limit == 0 {\n+            return Poll::Ready(0);\n+        }\n+\n+        let mut remaining = limit;\n+        let mut start = self::rand::thread_rng_n(self.entries.len() as u32) as usize;\n+\n+        while remaining > 0 {\n+            match self.poll_one(cx, start) {",
+        "comment_created_at": "2024-03-23T15:21:56+00:00",
+        "comment_author": "maminrayej",
+        "comment_body": "Or maybe we could remember the stream with the smallest index that was ready, and start polling from there next time we call `poll_one`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1536691521",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6409,
+        "pr_file": "tokio-stream/src/stream_map.rs",
+        "discussion_id": "1536646186",
+        "commented_code": "@@ -561,6 +566,90 @@ impl<K, V> Default for StreamMap<K, V> {\n     }\n }\n \n+impl<K, V> StreamMap<K, V>\n+where\n+    K: Clone + Unpin,\n+    V: Stream + Unpin,\n+{\n+    /// Receives multiple items on this [`StreamMap`], extending the provided `buffer`.\n+    ///\n+    /// This method returns the number of items that is appended to the `buffer`.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    ///\n+    /// # Cancel safety\n+    ///\n+    /// This method is cancel safe. If `recv_many` is used as the event in a\n+    /// [`tokio::select!`](tokio::select) statement and some other branch\n+    /// completes first, it is guaranteed that no items were received on any of\n+    /// the underlying streams.\n+    pub async fn next_many(&mut self, buffer: &mut Vec<(K, V::Item)>, limit: usize) -> usize {\n+        poll_fn(|cx| self.poll_next_many(cx, buffer, limit)).await\n+    }\n+\n+    /// Polls to receive multiple items on this `StreamMap`, extending the provided `buffer`.\n+    ///\n+    /// This method returns:\n+    /// * `Poll::Pending` if no items are available but the `StreamMap` is not empty.\n+    /// * `Poll::Ready(count)` where `count` is the number of items successfully received and\n+    ///   stored in `buffer`. This can be less than, or equal to, `limit`.\n+    /// * `Poll::Ready(0)` if `limit` is set to zero or when the `StreamMap` is empty.\n+    ///\n+    /// When the method returns `Poll::Pending`, the `Waker` in the provided\n+    /// `Context` is scheduled to receive a wakeup when an item is sent on any of the\n+    /// underlying stream. Note that on multiple calls to `poll_recv_many`, only\n+    /// the `Waker` from the `Context` passed to the most recent call is scheduled\n+    /// to receive a wakeup.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    pub fn poll_next_many(\n+        &mut self,\n+        cx: &mut Context<'_>,\n+        buffer: &mut Vec<(K, V::Item)>,\n+        limit: usize,\n+    ) -> Poll<usize> {\n+        if limit == 0 {\n+            return Poll::Ready(0);\n+        }\n+\n+        let mut remaining = limit;\n+        let mut start = self::rand::thread_rng_n(self.entries.len() as u32) as usize;\n+\n+        while remaining > 0 {\n+            match self.poll_one(cx, start) {",
+        "comment_created_at": "2024-03-23T20:57:26+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "Easiest is probably to either return the next index from `poll_one`, or to copy its implementation into `poll_next_many`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1536834647",
+    "pr_number": 6409,
+    "pr_file": "tokio-stream/src/stream_map.rs",
+    "created_at": "2024-03-24T14:55:06+00:00",
+    "commented_code": "}\n }\n \n+impl<K, V> StreamMap<K, V>\n+where\n+    K: Clone + Unpin,\n+    V: Stream + Unpin,\n+{\n+    /// Receives multiple items on this [`StreamMap`], extending the provided `buffer`.\n+    ///\n+    /// This method returns the number of items that is appended to the `buffer`.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    ///\n+    /// # Cancel safety\n+    ///\n+    /// This method is cancel safe. If `next_many` is used as the event in a\n+    /// [`tokio::select!`](tokio::select) statement and some other branch\n+    /// completes first, it is guaranteed that no items were received on any of\n+    /// the underlying streams.\n+    pub async fn next_many(&mut self, buffer: &mut Vec<(K, V::Item)>, limit: usize) -> usize {\n+        poll_fn(|cx| self.poll_next_many(cx, buffer, limit)).await\n+    }\n+\n+    /// Polls to receive multiple items on this `StreamMap`, extending the provided `buffer`.\n+    ///\n+    /// This method returns:\n+    /// * `Poll::Pending` if no items are available but the `StreamMap` is not empty.\n+    /// * `Poll::Ready(count)` where `count` is the number of items successfully received and\n+    ///   stored in `buffer`. This can be less than, or equal to, `limit`.\n+    /// * `Poll::Ready(0)` if `limit` is set to zero or when the `StreamMap` is empty.\n+    ///\n+    /// When the method returns `Poll::Pending`, the `Waker` in the provided\n+    /// `Context` is scheduled to receive a wakeup when an item is sent on any of the\n+    /// underlying stream. Note that on multiple calls to `poll_next_many`, only\n+    /// the `Waker` from the `Context` passed to the most recent call is scheduled\n+    /// to receive a wakeup.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    pub fn poll_next_many(\n+        &mut self,\n+        cx: &mut Context<'_>,\n+        buffer: &mut Vec<(K, V::Item)>,\n+        limit: usize,\n+    ) -> Poll<usize> {\n+        if limit == 0 || self.entries.is_empty() {\n+            return Poll::Ready(0);\n+        }\n+\n+        let mut remaining = limit;\n+        let mut start = self::rand::thread_rng_n(self.entries.len() as u32) as usize;\n+\n+        while remaining > 0 {\n+            match self.poll_one(cx, start) {\n+                Poll::Ready(Some((idx, val))) => {\n+                    remaining -= 1;\n+                    let key = self.entries[idx].0.clone();\n+                    buffer.push((key, val));\n+\n+                    start = idx.wrapping_add(1) % self.entries.len();\n+                }\n+                Poll::Ready(None) | Poll::Pending => break,\n+            }\n+        }\n+\n+        let added = limit - remaining;",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "1536834647",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6409,
+        "pr_file": "tokio-stream/src/stream_map.rs",
+        "discussion_id": "1536834647",
+        "commented_code": "@@ -561,6 +566,86 @@ impl<K, V> Default for StreamMap<K, V> {\n     }\n }\n \n+impl<K, V> StreamMap<K, V>\n+where\n+    K: Clone + Unpin,\n+    V: Stream + Unpin,\n+{\n+    /// Receives multiple items on this [`StreamMap`], extending the provided `buffer`.\n+    ///\n+    /// This method returns the number of items that is appended to the `buffer`.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    ///\n+    /// # Cancel safety\n+    ///\n+    /// This method is cancel safe. If `next_many` is used as the event in a\n+    /// [`tokio::select!`](tokio::select) statement and some other branch\n+    /// completes first, it is guaranteed that no items were received on any of\n+    /// the underlying streams.\n+    pub async fn next_many(&mut self, buffer: &mut Vec<(K, V::Item)>, limit: usize) -> usize {\n+        poll_fn(|cx| self.poll_next_many(cx, buffer, limit)).await\n+    }\n+\n+    /// Polls to receive multiple items on this `StreamMap`, extending the provided `buffer`.\n+    ///\n+    /// This method returns:\n+    /// * `Poll::Pending` if no items are available but the `StreamMap` is not empty.\n+    /// * `Poll::Ready(count)` where `count` is the number of items successfully received and\n+    ///   stored in `buffer`. This can be less than, or equal to, `limit`.\n+    /// * `Poll::Ready(0)` if `limit` is set to zero or when the `StreamMap` is empty.\n+    ///\n+    /// When the method returns `Poll::Pending`, the `Waker` in the provided\n+    /// `Context` is scheduled to receive a wakeup when an item is sent on any of the\n+    /// underlying stream. Note that on multiple calls to `poll_next_many`, only\n+    /// the `Waker` from the `Context` passed to the most recent call is scheduled\n+    /// to receive a wakeup.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    pub fn poll_next_many(\n+        &mut self,\n+        cx: &mut Context<'_>,\n+        buffer: &mut Vec<(K, V::Item)>,\n+        limit: usize,\n+    ) -> Poll<usize> {\n+        if limit == 0 || self.entries.is_empty() {\n+            return Poll::Ready(0);\n+        }\n+\n+        let mut remaining = limit;\n+        let mut start = self::rand::thread_rng_n(self.entries.len() as u32) as usize;\n+\n+        while remaining > 0 {\n+            match self.poll_one(cx, start) {\n+                Poll::Ready(Some((idx, val))) => {\n+                    remaining -= 1;\n+                    let key = self.entries[idx].0.clone();\n+                    buffer.push((key, val));\n+\n+                    start = idx.wrapping_add(1) % self.entries.len();\n+                }\n+                Poll::Ready(None) | Poll::Pending => break,\n+            }\n+        }\n+\n+        let added = limit - remaining;",
+        "comment_created_at": "2024-03-24T14:55:06+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "Seems simpler to just keep track of `added` from the beginning and change the while loop to `while added < limit`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1536925662",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6409,
+        "pr_file": "tokio-stream/src/stream_map.rs",
+        "discussion_id": "1536834647",
+        "commented_code": "@@ -561,6 +566,86 @@ impl<K, V> Default for StreamMap<K, V> {\n     }\n }\n \n+impl<K, V> StreamMap<K, V>\n+where\n+    K: Clone + Unpin,\n+    V: Stream + Unpin,\n+{\n+    /// Receives multiple items on this [`StreamMap`], extending the provided `buffer`.\n+    ///\n+    /// This method returns the number of items that is appended to the `buffer`.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    ///\n+    /// # Cancel safety\n+    ///\n+    /// This method is cancel safe. If `next_many` is used as the event in a\n+    /// [`tokio::select!`](tokio::select) statement and some other branch\n+    /// completes first, it is guaranteed that no items were received on any of\n+    /// the underlying streams.\n+    pub async fn next_many(&mut self, buffer: &mut Vec<(K, V::Item)>, limit: usize) -> usize {\n+        poll_fn(|cx| self.poll_next_many(cx, buffer, limit)).await\n+    }\n+\n+    /// Polls to receive multiple items on this `StreamMap`, extending the provided `buffer`.\n+    ///\n+    /// This method returns:\n+    /// * `Poll::Pending` if no items are available but the `StreamMap` is not empty.\n+    /// * `Poll::Ready(count)` where `count` is the number of items successfully received and\n+    ///   stored in `buffer`. This can be less than, or equal to, `limit`.\n+    /// * `Poll::Ready(0)` if `limit` is set to zero or when the `StreamMap` is empty.\n+    ///\n+    /// When the method returns `Poll::Pending`, the `Waker` in the provided\n+    /// `Context` is scheduled to receive a wakeup when an item is sent on any of the\n+    /// underlying stream. Note that on multiple calls to `poll_next_many`, only\n+    /// the `Waker` from the `Context` passed to the most recent call is scheduled\n+    /// to receive a wakeup.\n+    ///\n+    /// Note that this method does not guarantee that exactly `limit` items\n+    /// are received. Rather, if at least one item is available, it returns\n+    /// as many items as it can up to the given limit. This method returns\n+    /// zero only if the `StreamMap` is empty (or if `limit` is zero).\n+    pub fn poll_next_many(\n+        &mut self,\n+        cx: &mut Context<'_>,\n+        buffer: &mut Vec<(K, V::Item)>,\n+        limit: usize,\n+    ) -> Poll<usize> {\n+        if limit == 0 || self.entries.is_empty() {\n+            return Poll::Ready(0);\n+        }\n+\n+        let mut remaining = limit;\n+        let mut start = self::rand::thread_rng_n(self.entries.len() as u32) as usize;\n+\n+        while remaining > 0 {\n+            match self.poll_one(cx, start) {\n+                Poll::Ready(Some((idx, val))) => {\n+                    remaining -= 1;\n+                    let key = self.entries[idx].0.clone();\n+                    buffer.push((key, val));\n+\n+                    start = idx.wrapping_add(1) % self.entries.len();\n+                }\n+                Poll::Ready(None) | Poll::Pending => break,\n+            }\n+        }\n+\n+        let added = limit - remaining;",
+        "comment_created_at": "2024-03-24T22:29:44+00:00",
+        "comment_author": "maminrayej",
+        "comment_body": "You're right.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1724758332",
+    "pr_number": 6779,
+    "pr_file": "tokio/src/runtime/time/mod.rs",
+    "created_at": "2024-08-21T09:40:36+00:00",
+    "commented_code": "assert!(!handle.is_shutdown());\n \n         // Finds out the min expiration time to park.\n-        let locks = (0..rt_handle.time().inner.get_shard_size())\n-            .map(|id| rt_handle.time().inner.lock_sharded_wheel(id))\n-            .collect::<Vec<_>>();\n-\n-        let expiration_time = locks\n-            .iter()\n-            .filter_map(|lock| lock.next_expiration_time())\n-            .min();\n-\n-        rt_handle\n-            .time()\n-            .inner\n-            .next_wake\n-            .store(next_wake_time(expiration_time));\n-\n-        // Safety: After updating the `next_wake`, we drop all the locks.\n-        drop(locks);\n+        let expiration_time = {\n+            let mut wheels_lock = rt_handle\n+                .time()\n+                .inner\n+                .wheels\n+                .write()\n+                .expect(\"Timer wheel shards poisoned\");\n+            let expiration_time = (0..rt_handle.time().inner.get_shard_size())\n+                .filter_map(|id| {\n+                    let wheel = wheels_lock.get_sharded_wheel_mut(id);\n+                    wheel.next_expiration_time()\n+                })",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "1724758332",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6779,
+        "pr_file": "tokio/src/runtime/time/mod.rs",
+        "discussion_id": "1724758332",
+        "commented_code": "@@ -190,23 +198,28 @@ impl Driver {\n         assert!(!handle.is_shutdown());\n \n         // Finds out the min expiration time to park.\n-        let locks = (0..rt_handle.time().inner.get_shard_size())\n-            .map(|id| rt_handle.time().inner.lock_sharded_wheel(id))\n-            .collect::<Vec<_>>();\n-\n-        let expiration_time = locks\n-            .iter()\n-            .filter_map(|lock| lock.next_expiration_time())\n-            .min();\n-\n-        rt_handle\n-            .time()\n-            .inner\n-            .next_wake\n-            .store(next_wake_time(expiration_time));\n-\n-        // Safety: After updating the `next_wake`, we drop all the locks.\n-        drop(locks);\n+        let expiration_time = {\n+            let mut wheels_lock = rt_handle\n+                .time()\n+                .inner\n+                .wheels\n+                .write()\n+                .expect(\"Timer wheel shards poisoned\");\n+            let expiration_time = (0..rt_handle.time().inner.get_shard_size())\n+                .filter_map(|id| {\n+                    let wheel = wheels_lock.get_sharded_wheel_mut(id);\n+                    wheel.next_expiration_time()\n+                })",
+        "comment_created_at": "2024-08-21T09:40:36+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "Could something like this make more sense?\r\n```\r\nwheels_lock.0.iter_mut()\r\n    .filter_map(|wheel| wheel.get_mut().next_expiration_time())\r\n    .min();\r\n```\r\nThis way, we don't need to touch indexes at all.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1725360141",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 6779,
+        "pr_file": "tokio/src/runtime/time/mod.rs",
+        "discussion_id": "1724758332",
+        "commented_code": "@@ -190,23 +198,28 @@ impl Driver {\n         assert!(!handle.is_shutdown());\n \n         // Finds out the min expiration time to park.\n-        let locks = (0..rt_handle.time().inner.get_shard_size())\n-            .map(|id| rt_handle.time().inner.lock_sharded_wheel(id))\n-            .collect::<Vec<_>>();\n-\n-        let expiration_time = locks\n-            .iter()\n-            .filter_map(|lock| lock.next_expiration_time())\n-            .min();\n-\n-        rt_handle\n-            .time()\n-            .inner\n-            .next_wake\n-            .store(next_wake_time(expiration_time));\n-\n-        // Safety: After updating the `next_wake`, we drop all the locks.\n-        drop(locks);\n+        let expiration_time = {\n+            let mut wheels_lock = rt_handle\n+                .time()\n+                .inner\n+                .wheels\n+                .write()\n+                .expect(\"Timer wheel shards poisoned\");\n+            let expiration_time = (0..rt_handle.time().inner.get_shard_size())\n+                .filter_map(|id| {\n+                    let wheel = wheels_lock.get_sharded_wheel_mut(id);\n+                    wheel.next_expiration_time()\n+                })",
+        "comment_created_at": "2024-08-21T16:07:56+00:00",
+        "comment_author": "tglane",
+        "comment_body": "I like this. At least when calculating the min expiration time we indeed don't need the indexes anymore and we can get rid of one function.\r\nImplemented it in [1610c12](https://github.com/tokio-rs/tokio/pull/6779/commits/1610c12fff5bceefd4680082d77ecdc467810d61)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2039828485",
+    "pr_number": 7249,
+    "pr_file": "tokio/src/process/unix/mod.rs",
+    "created_at": "2025-04-11T15:47:22+00:00",
+    "commented_code": "}\n }\n \n-pub(crate) fn spawn_child(cmd: &mut std::process::Command) -> io::Result<SpawnedChild> {\n-    let mut child = cmd.spawn()?;\n+pub(crate) fn spawn_child_with(\n+    cmd: &mut StdCommand,\n+    with: impl Fn(&mut StdCommand) -> io::Result<StdChild>,\n+) -> io::Result<SpawnedChild> {\n+    let mut child = with(cmd)?;",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "2039828485",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7249,
+        "pr_file": "tokio/src/process/unix/mod.rs",
+        "discussion_id": "2039828485",
+        "commented_code": "@@ -115,8 +115,11 @@ impl fmt::Debug for Child {\n     }\n }\n \n-pub(crate) fn spawn_child(cmd: &mut std::process::Command) -> io::Result<SpawnedChild> {\n-    let mut child = cmd.spawn()?;\n+pub(crate) fn spawn_child_with(\n+    cmd: &mut StdCommand,\n+    with: impl Fn(&mut StdCommand) -> io::Result<StdChild>,\n+) -> io::Result<SpawnedChild> {\n+    let mut child = with(cmd)?;",
+        "comment_created_at": "2025-04-11T15:47:22+00:00",
+        "comment_author": "ipetkov",
+        "comment_body": "Might be worth reworking this slightly to avoid monomorphization bloat (basically the entire rest of the function body does not need to be re-monormorphized for every unique `with` that is passed in):\r\n\r\nSomething like:\r\n\r\n```rust\r\npub(crate) fn spawn_child_with(\r\n    cmd: &mut StdCommand,\r\n    with: impl Fn(&mut StdCommand) -> io::Result<StdChild>,\r\n) -> io::Result<SpawnedChild> {\r\n    spawn_child(&mut with(cmd)?)\r\n}\r\n\r\nfn spawn_child(cmd: &mut StdCommand) -> io::Result<SpawnedChild> {\r\n  // ...\r\n}\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2040057980",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7249,
+        "pr_file": "tokio/src/process/unix/mod.rs",
+        "discussion_id": "2039828485",
+        "commented_code": "@@ -115,8 +115,11 @@ impl fmt::Debug for Child {\n     }\n }\n \n-pub(crate) fn spawn_child(cmd: &mut std::process::Command) -> io::Result<SpawnedChild> {\n-    let mut child = cmd.spawn()?;\n+pub(crate) fn spawn_child_with(\n+    cmd: &mut StdCommand,\n+    with: impl Fn(&mut StdCommand) -> io::Result<StdChild>,\n+) -> io::Result<SpawnedChild> {\n+    let mut child = with(cmd)?;",
+        "comment_created_at": "2025-04-11T18:04:36+00:00",
+        "comment_author": "PaulDance",
+        "comment_body": "Here, you probably meant that the helper function takes an `std::process::Child` in since `with: impl Fn(&mut StdCommand) -> io::Result<StdChild>`, right? This is what I've used in the proposed update.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2074989999",
+    "pr_number": 7307,
+    "pr_file": "tokio/src/macros/try_join.rs",
+    "created_at": "2025-05-06T08:33:12+00:00",
+    "commented_code": "// <https://internals.rust-lang.org/t/surprising-soundness-trouble-around-pollfn/17484>\n         let mut futures = &mut futures;\n \n-        // Each time the future created by poll_fn is polled, a different future will be polled first\n+        // Each time the future created by poll_fn is polled,\n+        // if not running in biased mode,\n+        // a different future will be polled first\n         // to ensure every future passed to join! gets a chance to make progress even if\n         // one of the futures consumes the whole budget.\n         //\n         // This is number of futures that will be skipped in the first loop\n         // iteration the next time.\n+        //\n+        // If running in biased mode, this value will always be 0.\n         let mut skip_next_time: u32 = 0;\n+        let rotate_skip = $rotate_poll_order;",
+    "repo_full_name": "tokio-rs/tokio",
+    "discussion_comments": [
+      {
+        "comment_id": "2074989999",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7307,
+        "pr_file": "tokio/src/macros/try_join.rs",
+        "discussion_id": "2074989999",
+        "commented_code": "@@ -142,13 +196,18 @@ doc! {macro_rules! try_join {\n         // <https://internals.rust-lang.org/t/surprising-soundness-trouble-around-pollfn/17484>\n         let mut futures = &mut futures;\n \n-        // Each time the future created by poll_fn is polled, a different future will be polled first\n+        // Each time the future created by poll_fn is polled,\n+        // if not running in biased mode,\n+        // a different future will be polled first\n         // to ensure every future passed to join! gets a chance to make progress even if\n         // one of the futures consumes the whole budget.\n         //\n         // This is number of futures that will be skipped in the first loop\n         // iteration the next time.\n+        //\n+        // If running in biased mode, this value will always be 0.\n         let mut skip_next_time: u32 = 0;\n+        let rotate_skip = $rotate_poll_order;",
+        "comment_created_at": "2025-05-06T08:33:12+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "I would like to avoid having this variable at all when using biased. I don't think it can be optimized out because it gets stored as a field in the closure type.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2078490610",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7307,
+        "pr_file": "tokio/src/macros/try_join.rs",
+        "discussion_id": "2074989999",
+        "commented_code": "@@ -142,13 +196,18 @@ doc! {macro_rules! try_join {\n         // <https://internals.rust-lang.org/t/surprising-soundness-trouble-around-pollfn/17484>\n         let mut futures = &mut futures;\n \n-        // Each time the future created by poll_fn is polled, a different future will be polled first\n+        // Each time the future created by poll_fn is polled,\n+        // if not running in biased mode,\n+        // a different future will be polled first\n         // to ensure every future passed to join! gets a chance to make progress even if\n         // one of the futures consumes the whole budget.\n         //\n         // This is number of futures that will be skipped in the first loop\n         // iteration the next time.\n+        //\n+        // If running in biased mode, this value will always be 0.\n         let mut skip_next_time: u32 = 0;\n+        let rotate_skip = $rotate_poll_order;",
+        "comment_created_at": "2025-05-07T21:04:32+00:00",
+        "comment_author": "jlizen",
+        "comment_body": "My newest commit removes this variable, along with `skip_next_time`, from the biased branch's `poll_fn()` (so it will now be smaller than the unbiased equivalent). \r\n\r\nIt's a bit verbose... since each branch of `match $rotate_poll_order {}` needs to generate its own unnameable poll function. I initially was pulling out common logic into a closure, but I felt it was ultimately less readable.\r\n\r\nGlad to take another stab at simplifying if you have any feedback.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2079326596",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7307,
+        "pr_file": "tokio/src/macros/try_join.rs",
+        "discussion_id": "2074989999",
+        "commented_code": "@@ -142,13 +196,18 @@ doc! {macro_rules! try_join {\n         // <https://internals.rust-lang.org/t/surprising-soundness-trouble-around-pollfn/17484>\n         let mut futures = &mut futures;\n \n-        // Each time the future created by poll_fn is polled, a different future will be polled first\n+        // Each time the future created by poll_fn is polled,\n+        // if not running in biased mode,\n+        // a different future will be polled first\n         // to ensure every future passed to join! gets a chance to make progress even if\n         // one of the futures consumes the whole budget.\n         //\n         // This is number of futures that will be skipped in the first loop\n         // iteration the next time.\n+        //\n+        // If running in biased mode, this value will always be 0.\n         let mut skip_next_time: u32 = 0;\n+        let rotate_skip = $rotate_poll_order;",
+        "comment_created_at": "2025-05-08T09:39:59+00:00",
+        "comment_author": "Darksonn",
+        "comment_body": "Yeah, I don't think we want the match. It duplicates the entire logic, which isn't nice. One option could be to define two helper types:\r\n```rs\r\n#[derive(Default)]\r\npub struct Rotater<const COUNT: usize> {\r\n    next: usize,\r\n}\r\n\r\nimpl<const COUNT: usize> Rotater<COUNT> {\r\n    #[inline]\r\n    pub fn num_skip(&mut self) -> usize {\r\n        let mut num_skip = self.next;\r\n        self.next += 1;\r\n        if self.next == COUNT {\r\n            self.next = 0;\r\n        }\r\n        num_skip\r\n    }\r\n}\r\n\r\n#[derive(Default)]\r\npub struct BiasedRotater {}\r\n\r\nimpl BiasedRotater {\r\n    #[inline]\r\n    pub fn num_skip(&mut self) -> usize {\r\n        0\r\n    }\r\n}\r\n```\r\nand then have the macro select which type to use:\r\n```text\r\n( biased; $($e:expr),+ $(,)?) => {\r\n    $crate::join!(@{ rotator=$crate::macros::support::BiasedRotator; () (0) } $($e,)*)\r\n};\r\n\r\n( $($e:expr),+ $(,)?) => {\r\n    $crate::join!(@{ rotator=$crate::macros::support::Rotator; () (0) } $($e,)*)\r\n};\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2079884381",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7307,
+        "pr_file": "tokio/src/macros/try_join.rs",
+        "discussion_id": "2074989999",
+        "commented_code": "@@ -142,13 +196,18 @@ doc! {macro_rules! try_join {\n         // <https://internals.rust-lang.org/t/surprising-soundness-trouble-around-pollfn/17484>\n         let mut futures = &mut futures;\n \n-        // Each time the future created by poll_fn is polled, a different future will be polled first\n+        // Each time the future created by poll_fn is polled,\n+        // if not running in biased mode,\n+        // a different future will be polled first\n         // to ensure every future passed to join! gets a chance to make progress even if\n         // one of the futures consumes the whole budget.\n         //\n         // This is number of futures that will be skipped in the first loop\n         // iteration the next time.\n+        //\n+        // If running in biased mode, this value will always be 0.\n         let mut skip_next_time: u32 = 0;\n+        let rotate_skip = $rotate_poll_order;",
+        "comment_created_at": "2025-05-08T14:53:13+00:00",
+        "comment_author": "jlizen",
+        "comment_body": "Ah, that's clever. Thanks for the advice! Will take a crack at it.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2080385333",
+        "repo_full_name": "tokio-rs/tokio",
+        "pr_number": 7307,
+        "pr_file": "tokio/src/macros/try_join.rs",
+        "discussion_id": "2074989999",
+        "commented_code": "@@ -142,13 +196,18 @@ doc! {macro_rules! try_join {\n         // <https://internals.rust-lang.org/t/surprising-soundness-trouble-around-pollfn/17484>\n         let mut futures = &mut futures;\n \n-        // Each time the future created by poll_fn is polled, a different future will be polled first\n+        // Each time the future created by poll_fn is polled,\n+        // if not running in biased mode,\n+        // a different future will be polled first\n         // to ensure every future passed to join! gets a chance to make progress even if\n         // one of the futures consumes the whole budget.\n         //\n         // This is number of futures that will be skipped in the first loop\n         // iteration the next time.\n+        //\n+        // If running in biased mode, this value will always be 0.\n         let mut skip_next_time: u32 = 0;\n+        let rotate_skip = $rotate_poll_order;",
+        "comment_created_at": "2025-05-08T20:00:27+00:00",
+        "comment_author": "jlizen",
+        "comment_body": "Got it working, thanks!",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

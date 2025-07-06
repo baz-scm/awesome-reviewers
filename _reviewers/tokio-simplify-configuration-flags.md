@@ -1,25 +1,38 @@
 ---
 title: Simplify configuration flags
-description: Use concise, meaningful names for configuration flags and consolidate
-  related flags when possible to improve readability and maintainability. Avoid overly
-  verbose or nested naming patterns when a simpler alternative conveys the same information.
+description: Keep configuration flags, feature toggles, and build settings concise
+  and well-organized. Use simpler names where appropriate and consolidate related
+  flags when possible to improve readability and maintainability.
 repository: tokio-rs/tokio
 label: Configurations
 language: Yaml
 comments_count: 2
-repository_stars: 28981
+repository_stars: 28988
 ---
 
-Use concise, meaningful names for configuration flags and consolidate related flags when possible to improve readability and maintainability. Avoid overly verbose or nested naming patterns when a simpler alternative conveys the same information.
+Keep configuration flags, feature toggles, and build settings concise and well-organized. Use simpler names where appropriate and consolidate related flags when possible to improve readability and maintainability.
 
-For example, instead of:
-```
-RUSTFLAGS: -Dwarnings --check-cfg=cfg(loom) --check-cfg=cfg(tokio_unstable) --check-cfg=cfg(tokio_taskdump) --check-cfg=cfg(fuzzing) --check-cfg=cfg(mio_unsupported_force_poll_poll)
+When defining new configuration flags:
+- Choose concise, descriptive names without redundant prefixes
+- Consider the context in which flags will be used
+- Group related configuration options when possible
+
+Example of simplifying multiple flags:
+```diff
+# Before: Multiple separate flags
+- RUSTFLAGS: -Dwarnings --check-cfg=cfg(loom) --check-cfg=cfg(tokio_unstable) --check-cfg=cfg(tokio_taskdump) --check-cfg=cfg(fuzzing)
+
+# After: Consolidated flags
++ RUSTFLAGS: -Dwarnings --check-cfg=cfg(loom, tokio_unstable, tokio_taskdump, fuzzing)
 ```
 
-Prefer:
-```
-RUSTFLAGS: -Dwarnings --check-cfg=cfg(loom, tokio_unstable, tokio_taskdump, fuzzing, mio_unsupported_force_poll_poll)
+For feature flags and conditional compilation:
+```diff
+# Before: Verbose, redundant naming
+- --cfg tokio_unstable_uring
+
+# After: Simplified naming
++ --cfg tokio_uring
 ```
 
-Similarly, prefer simplified flag names like `tokio_uring` over more complex variants like `tokio_unstable_uring` when the additional qualification doesn't provide meaningful context. This principle applies to all configuration elements: feature flags, environment variables, and command line arguments.
+This approach makes configuration more maintainable, reduces verbosity, and improves readability, especially as the number of configuration options grows over time.

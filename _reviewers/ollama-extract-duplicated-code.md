@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: Code Style
 language: Other
 comments_count: 2
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 Identify repeated code segments and extract them into reusable functions or variables. This improves maintainability, reduces the risk of inconsistencies, and makes the code more concise.

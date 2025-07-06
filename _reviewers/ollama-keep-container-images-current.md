@@ -9,7 +9,7 @@ repository: ollama/ollama
 label: Configurations
 language: Dockerfile
 comments_count: 2
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 Always use up-to-date and supported container images in Dockerfiles and configuration files. Before specifying a base image or version:

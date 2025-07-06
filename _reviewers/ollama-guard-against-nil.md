@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: Null Handling
 language: Go
 comments_count: 5
-repository_stars: 145700
+repository_stars: 145704
 ---
 
 Always check for nil values and successful type assertions before accessing or dereferencing objects, especially when working with interfaces, type conversions, or functions that may return nil values.

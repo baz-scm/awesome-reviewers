@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: Algorithms
 language: Go
 comments_count: 6
-repository_stars: 145700
+repository_stars: 145704
 ---
 
 When implementing algorithms, prefer using Go's standard library over custom implementations or external dependencies for common operations. The standard library offers well-tested, efficient implementations for many algorithmic needs.

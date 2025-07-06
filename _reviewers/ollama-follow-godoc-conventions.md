@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: Documentation
 language: Go
 comments_count: 8
-repository_stars: 145700
+repository_stars: 145704
 ---
 
 Document code following Go's official documentation style guide (https://tip.golang.org/doc/comment). All exported functions, types, interfaces, and struct fields should have descriptive comments. 

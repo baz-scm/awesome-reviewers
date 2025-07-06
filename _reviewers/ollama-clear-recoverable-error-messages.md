@@ -9,7 +9,7 @@ repository: ollama/ollama
 label: Error Handling
 language: Go
 comments_count: 5
-repository_stars: 145700
+repository_stars: 145704
 ---
 
 Error messages should be clear, actionable, and indicate whether recovery is possible. When designing error handling:

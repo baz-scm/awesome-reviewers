@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: Configurations
 language: Go
 comments_count: 5
-repository_stars: 145700
+repository_stars: 145704
 ---
 
 Use environment variables instead of hardcoding configuration values such as file paths, port numbers, or system-specific locations. This makes the code more flexible across different platforms, installation methods, and user preferences.

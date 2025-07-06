@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: Configurations
 language: Markdown
 comments_count: 4
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 Always document platform-specific configuration differences and requirements thoroughly. When writing documentation or implementing configuration-related code, explicitly address variations across different operating systems and environments.

@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: Performance Optimization
 language: Go
 comments_count: 4
-repository_stars: 145700
+repository_stars: 145704
 ---
 
 For frequently called methods or hot code paths, reuse allocations instead of creating new buffers on each call. This significantly reduces GC pressure and improves performance in memory-intensive operations.

@@ -8,7 +8,7 @@ repository: ollama/ollama
 label: AI
 language: Shell
 comments_count: 2
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 When deploying AI models on specialized hardware accelerators (GPUs, NPUs), ensure you're using compatible model precision formats. Different hardware platforms have different optimal precision requirements that significantly impact performance and compatibility.

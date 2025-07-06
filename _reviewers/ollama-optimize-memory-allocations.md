@@ -11,7 +11,7 @@ repository: ollama/ollama
 label: Performance Optimization
 language: C++
 comments_count: 2
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 Be strategic about memory allocations to improve performance in your C++ code. Consider two key optimization patterns:

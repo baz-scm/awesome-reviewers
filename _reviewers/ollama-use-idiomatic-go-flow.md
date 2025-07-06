@@ -9,7 +9,7 @@ repository: ollama/ollama
 label: Code Style
 language: Go
 comments_count: 5
-repository_stars: 145700
+repository_stars: 145704
 ---
 
 Follow Go's idiomatic control flow patterns to improve code readability and maintainability. Key practices include:

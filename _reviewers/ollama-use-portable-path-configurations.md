@@ -6,7 +6,7 @@ repository: ollama/ollama
 label: Configurations
 language: Shell
 comments_count: 3
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 Build and configuration scripts should use portable path handling techniques to ensure they work correctly across different environments and installations. 

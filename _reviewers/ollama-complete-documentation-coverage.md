@@ -9,7 +9,7 @@ repository: ollama/ollama
 label: Documentation
 language: Markdown
 comments_count: 2
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 Documentation should comprehensively cover all supported options, variations, and potential future use cases. When creating documentation:

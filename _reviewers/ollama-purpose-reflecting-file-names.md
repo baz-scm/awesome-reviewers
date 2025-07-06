@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: Naming Conventions
 language: Other
 comments_count: 2
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 File names should clearly communicate their purpose and functionality. Avoid generic, ambiguous, or numbered names (like "Makefile2") that don't convey the file's actual role or lead to recurring questions.

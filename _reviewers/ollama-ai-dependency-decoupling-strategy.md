@@ -9,7 +9,7 @@ repository: ollama/ollama
 label: AI
 language: C++
 comments_count: 2
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 Implement clear boundaries between your core AI system and external machine learning libraries through abstraction layers. This facilitates future library updates or replacements as AI technology evolves. When integrating external libraries (like llama.cpp), establish documented synchronization processes and gradually work toward independence, especially for critical components like tokenizers.

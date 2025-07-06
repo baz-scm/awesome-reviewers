@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: AI
 language: Go
 comments_count: 5
-repository_stars: 145700
+repository_stars: 145704
 ---
 
 When implementing AI model operations, create clean abstractions through interfaces that separate core mathematical operations from specific implementations. This enables:

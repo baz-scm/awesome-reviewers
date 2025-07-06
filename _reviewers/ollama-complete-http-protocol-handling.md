@@ -10,7 +10,7 @@ repository: ollama/ollama
 label: Networking
 language: Go
 comments_count: 2
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 When implementing HTTP client functionality, ensure comprehensive support for all standard HTTP status codes and secure connection scenarios:

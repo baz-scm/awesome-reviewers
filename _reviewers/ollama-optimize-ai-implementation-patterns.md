@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: AI
 language: Other
 comments_count: 3
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 When implementing AI systems, prioritize established patterns and optimizations rather than creating new implementations for existing problems. This applies to all aspects of AI development:

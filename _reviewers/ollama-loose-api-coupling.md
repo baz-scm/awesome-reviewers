@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: API
 language: Go
 comments_count: 4
-repository_stars: 145700
+repository_stars: 145704
 ---
 
 Maintain a clear separation between API definitions and their implementations by avoiding direct passing of API structures to implementation layers. Extract only the necessary values from API structures when passing data downstream.

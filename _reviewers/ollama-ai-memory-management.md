@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: AI
 language: Markdown
 comments_count: 3
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 Document and implement proper memory management strategies for AI model inference to prevent out-of-memory errors and optimize performance. When developing AI applications or documentation:

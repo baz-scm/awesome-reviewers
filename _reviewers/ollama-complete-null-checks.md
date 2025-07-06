@@ -7,7 +7,7 @@ repository: ollama/ollama
 label: Null Handling
 language: C++
 comments_count: 3
-repository_stars: 145700
+repository_stars: 145705
 ---
 
 Always perform thorough null checks before dereferencing pointers, and ensure all operations on potentially null objects are contained within the null check block. This prevents null pointer dereferences and undefined behavior.

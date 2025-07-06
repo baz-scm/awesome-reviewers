@@ -9,7 +9,7 @@ repository: ollama/ollama
 label: Concurrency
 language: Go
 comments_count: 5
-repository_stars: 145700
+repository_stars: 145704
 ---
 
 Always clearly document the purpose and scope of synchronization primitives (mutexes, read-write locks) by:

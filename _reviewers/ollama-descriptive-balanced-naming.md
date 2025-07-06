@@ -6,7 +6,7 @@ repository: ollama/ollama
 label: Naming Conventions
 language: Go
 comments_count: 8
-repository_stars: 145700
+repository_stars: 145704
 ---
 
 Choose identifier names that clearly communicate their purpose while maintaining an appropriate balance between brevity and clarity. 

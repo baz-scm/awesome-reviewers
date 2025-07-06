@@ -12,13 +12,15 @@ repository_stars: 68825
 Always use proper quoting in shell scripts (especially GitHub Actions workflows) to prevent word splitting, globbing, and ensure correct variable expansion:
 
 1. Use double quotes around variable expansions and command substitutions to prevent word splitting:
+   {% raw %}
    ```bash
    # Incorrect
    go list -f '{{.Dir}}/...' -m | xargs go test -short -covermode=atomic -timeout=5m
-   
+
    # Correct
    go list -f '{{.Dir}}/...' -m | xargs bash -c "go test -short -covermode=atomic -timeout=5m"
    ```
+   {% endraw %}
 
 2. Use double quotes (not single quotes) when you need variable expansion:
    ```bash

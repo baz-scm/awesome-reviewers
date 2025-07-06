@@ -40,5 +40,7 @@ For build caching strategies, be intentional about clean vs. incremental builds:
 - name: Docker Cargo caches
   uses: actions/cache@v4
   with:
+    {% raw %}
     key: docker-cargo-caches-${{ matrix.platform }}-${{ hashFiles('Dockerfile', 'crates/**', 'Cargo.toml', 'Cargo.lock') }}
+    {% endraw %}
 ```

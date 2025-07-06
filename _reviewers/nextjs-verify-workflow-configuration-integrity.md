@@ -34,6 +34,7 @@ branches:
 ```
 
 3. Use appropriate conditions for workflow execution, considering job skip scenarios:
+{% raw %}
 ```yaml
 # May cause issues when dependency is skipped
 if: ${{ always() && needs.deploy-target.outputs.value != '' }}
@@ -41,3 +42,4 @@ if: ${{ always() && needs.deploy-target.outputs.value != '' }}
 # More robust handling of skipped jobs
 if: ${{ always() && needs.deploy-target.result != 'skipped' }}
 ```
+{% endraw %}

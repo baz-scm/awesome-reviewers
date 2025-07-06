@@ -34,9 +34,11 @@ Ensure documentation adheres to established style guidelines and technical stand
      [Supported Resources](#supported-resources)
      ```
    - For project pages, use Hugo shortcodes instead of ref: syntax:
+     {% raw %}
      ```
      {{< relref "./path/to/page" >}}
      ```
+     {% endraw %}
 
 4. **Handle deprecated features properly:**
    - Don't mention removed options in documentation

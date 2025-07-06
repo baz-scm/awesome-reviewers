@@ -15,10 +15,12 @@ repository_stars: 62119
 Ensure naming follows consistent patterns throughout the codebase in both style and structure:
 
 1. Use agreed-upon case style for identifiers (e.g., snake_case for functions):
+{% raw %}
 ```diff
 - {{# if (hasTool 'grep') }}
 + {{# if (has_tool 'grep') }}
 ```
+{% endraw %}
 
 2. Maintain consistent ordering in hierarchical names, with namespaces coming first:
 ```diff

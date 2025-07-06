@@ -3,7 +3,7 @@ title: "Type-safe API designs"
 description: "Design APIs with strong type safety to improve developer experience and catch errors at compile time. Avoid using any types when possible, carefully order generic parameters to support type inference, and ensure return types accurately reflect API behavior."
 repository: "fastify/fastify"
 label: "API"
-language: "TypeScript"
+language: "Typescript"
 comments_count: 5
 repository_stars: 34000
 ---

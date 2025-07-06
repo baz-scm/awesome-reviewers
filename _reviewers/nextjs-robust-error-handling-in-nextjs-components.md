@@ -3,7 +3,7 @@ title: "Robust Error Handling in Next.js Components"
 description: "When building Next.js components, it is crucial to implement robust error handling to ensure the stability and predictability of your application. Always explicitly check for error conditions before proceeding with normal execution flow."
 repository: "vercel/next.js"
 label: "Next.js"
-language: "JavaScript"
+language: "Javascript"
 comments_count: 2
 repository_stars: 133000
 ---

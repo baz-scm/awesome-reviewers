@@ -3,7 +3,7 @@ title: "Secure Content-Type validation"
 description: "When implementing Content-Type validation, ensure regular expressions start with '^' or include ';?' to properly detect the essence MIME type. Improper validation patterns may create vulnerabilities to CORS attacks."
 repository: "fastify/fastify"
 label: "Security"
-language: "JavaScript"
+language: "Javascript"
 comments_count: 1
 repository_stars: 34000
 ---

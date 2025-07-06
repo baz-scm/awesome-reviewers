@@ -3,7 +3,7 @@ title: "Handling Dynamic Content in Next.js Components"
 description: "When implementing Next.js components that rely on dynamic content (e.g. random values, current time), it is crucial to use proper boundary handling to avoid hydration errors and performance issues."
 repository: "vercel/next.js"
 label: "Next.js"
-language: "JavaScript"
+language: "Javascript"
 comments_count: 6
 repository_stars: 133000
 ---

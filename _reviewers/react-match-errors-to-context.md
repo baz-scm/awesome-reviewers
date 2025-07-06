@@ -3,7 +3,7 @@ title: "Match errors to context"
 description: "Choose error handling mechanisms based on the error's severity and context. For critical issues that should prevent further execution, throw explicit exceptions. For non-critical issues, use logging with sufficient detail to aid debugging without interrupting execution."
 repository: "facebook/react"
 label: "Error Handling"
-language: "TypeScript"
+language: "Typescript"
 comments_count: 3
 repository_stars: 237000
 ---

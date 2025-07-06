@@ -3,7 +3,7 @@ title: "Complete error handling chain"
 description: "Implement comprehensive error handling throughout the codebase by ensuring all error scenarios are properly caught, typed, and propagated. This includes always including catch blocks for async operations, properly typing and propagating error information, using standardized error codes, and ensuring error callbacks receive and handle error parameters."
 repository: "axios/axios"
 label: "Error Handling"
-language: "JavaScript"
+language: "Javascript"
 comments_count: 5
 repository_stars: 107000
 ---

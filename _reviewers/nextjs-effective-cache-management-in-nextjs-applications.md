@@ -3,7 +3,7 @@ title: "Effective Cache Management in Next.js Applications"
 description: "When implementing caching in Next.js applications, it is crucial to be intentional about the caching behavior for each component and function. Apply caching directives consistently and consider their implications."
 repository: "vercel/next.js"
 label: "Next.js"
-language: "JavaScript"
+language: "Javascript"
 comments_count: 8
 repository_stars: 133000
 ---

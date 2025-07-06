@@ -3,7 +3,7 @@ title: "Secure Data Handling in Next.js Applications"
 description: "When building Next.js applications that handle sensitive data, it's crucial to implement robust security measures to prevent data leakage and injection attacks."
 repository: "vercel/next.js"
 label: "Next.js"
-language: "JavaScript"
+language: "Javascript"
 comments_count: 8
 repository_stars: 133000
 ---

@@ -18,13 +18,13 @@
 
 <div align="center">
 
-📝 **474** Reviewers &nbsp;&nbsp;•&nbsp;&nbsp; 💬 **Thousands** of Discussions &nbsp;&nbsp;•&nbsp;&nbsp; ⭐ Popular OSS repositories &nbsp;&nbsp;•&nbsp;&nbsp; 🚀 **15+** Languages
+📝 **1K+** Reviewers &nbsp;&nbsp;•&nbsp;&nbsp; 💬 **Thousands** of Discussions &nbsp;&nbsp;•&nbsp;&nbsp; ⭐ Popular OSS repositories &nbsp;&nbsp;•&nbsp;&nbsp; 🚀 **15+** Languages
 
 </div>
 
 ## Features
 
-* **🎯 Hundreds of Curated Prompts:** Over 470 specialized review prompts covering many languages and frameworks. Each prompt is distilled from actual pull request comments, ensuring practical, actionable advice grounded in real code review scenarios.
+* **🎯 1K+ Curated Prompts:** Over 1,000 specialized review prompts covering many languages and frameworks. Each prompt is distilled from actual pull request comments, ensuring practical, actionable advice grounded in real code review scenarios.
 
 * **📊 Real Open-Source Insights:** Every reviewer includes context from the open-source repository it came from, including a link to the source repo and stats like how many times that feedback appeared and the repo’s popularity. This transparency helps you trust the guidance – it’s based on patterns that occurred in high-quality projects (e.g. a prompt might note **9** prior comments advocating a rule in a project with **16k⭐** on GitHub). In short, these AI prompts encapsulate community-agreed best practices.
 

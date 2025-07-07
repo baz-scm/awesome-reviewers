@@ -1,0 +1,222 @@
+[
+  {
+    "discussion_id": "2091770207",
+    "pr_number": 4586,
+    "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_shared_internal/__init__.py",
+    "created_at": "2025-05-15T18:40:23+00:00",
+    "commented_code": ")\n                 detach(token)\n \n+    # Do not add any logging.log statements to this function, they can be being routed back to this `emit` function,\n+    # resulting in endless recursive calls that crash the program.",
+    "repo_full_name": "open-telemetry/opentelemetry-python",
+    "discussion_comments": [
+      {
+        "comment_id": "2091770207",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4586,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_shared_internal/__init__.py",
+        "discussion_id": "2091770207",
+        "commented_code": "@@ -167,15 +167,14 @@ def _export(self, batch_strategy: BatchExportStrategy) -> None:\n                     )\n                 detach(token)\n \n+    # Do not add any logging.log statements to this function, they can be being routed back to this `emit` function,\n+    # resulting in endless recursive calls that crash the program.",
+        "comment_created_at": "2025-05-15T18:40:23+00:00",
+        "comment_author": "emdneto",
+        "comment_body": "```suggestion\r\n    # resulting in endless recursive calls that crash the program.\r\n    # See https://github.com/open-telemetry/opentelemetry-python/issues/4261 \r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2021851521",
+    "pr_number": 4510,
+    "pr_file": "exporter/opentelemetry-exporter-otlp-proto-common/src/opentelemetry/exporter/otlp/proto/common/_internal/__init__.py",
+    "created_at": "2025-03-31T22:21:03+00:00",
+    "commented_code": "]\n             )\n         )\n+    elif fallback is not None:\n+        return _encode_value(fallback(value), allow_null)",
+    "repo_full_name": "open-telemetry/opentelemetry-python",
+    "discussion_comments": [
+      {
+        "comment_id": "2021851521",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4510,
+        "pr_file": "exporter/opentelemetry-exporter-otlp-proto-common/src/opentelemetry/exporter/otlp/proto/common/_internal/__init__.py",
+        "discussion_id": "2021851521",
+        "commented_code": "@@ -99,6 +101,8 @@ def _encode_value(\n                 ]\n             )\n         )\n+    elif fallback is not None:\n+        return _encode_value(fallback(value), allow_null)",
+        "comment_created_at": "2025-03-31T22:21:03+00:00",
+        "comment_author": "jomcgi",
+        "comment_body": "Could this create unexpected behaviour when complex objects passed incorrectly?\r\neg. we mask an actual error by logging `<MyObject instance at 0x...` instead of raising an exception",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2021940332",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4510,
+        "pr_file": "exporter/opentelemetry-exporter-otlp-proto-common/src/opentelemetry/exporter/otlp/proto/common/_internal/__init__.py",
+        "discussion_id": "2021851521",
+        "commented_code": "@@ -99,6 +101,8 @@ def _encode_value(\n                 ]\n             )\n         )\n+    elif fallback is not None:\n+        return _encode_value(fallback(value), allow_null)",
+        "comment_created_at": "2025-04-01T00:21:26+00:00",
+        "comment_author": "lukaslihotzki-f",
+        "comment_body": "This function is executed during batch processing, and not when the complex object is passed. Therefore, the exception does not carry a useful stack trace. The exception would carry the type name, but the type name is also contained in the string representation. Also, raising an exception here impacts the whole batch (all lines in it), so not raising here also has some benefits.\r\n\r\nMore importantly, Python's native `logging` also converts to strings by default instead of raising an exception. Therefore, OpenTelemetry should follow this approach instead of raising surprising exceptions:\r\n```\r\nimport logging\r\n\r\nclass Foo:\r\n    pass\r\n\r\nlogging.warning(Foo())\r\n# no exception, prints `WARNING:root:<__main__.Foo object at 0x\u2026>`\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2022358579",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4510,
+        "pr_file": "exporter/opentelemetry-exporter-otlp-proto-common/src/opentelemetry/exporter/otlp/proto/common/_internal/__init__.py",
+        "discussion_id": "2021851521",
+        "commented_code": "@@ -99,6 +101,8 @@ def _encode_value(\n                 ]\n             )\n         )\n+    elif fallback is not None:\n+        return _encode_value(fallback(value), allow_null)",
+        "comment_created_at": "2025-04-01T08:04:45+00:00",
+        "comment_author": "jomcgi",
+        "comment_body": "That would expand the scope of this function from serializing to the spec to transforming data to comply with the spec.\r\n\r\nA different approach was suggested in #3389 which I think would be more appropriate here.\r\n\r\nThey sub-classed the LoggingHandler and modified it to account for this scenario.\r\n\r\n```python\r\nfrom twisted.logger._stdlib import StringifiableFromEvent\r\n\r\ndef create_logging_handler():\r\n    logger_provider = LoggerProvider()\r\n    logger_provider.add_log_record_processor(\r\n        BatchLogRecordProcessor(OTLPLogExporter(insecure=True))\r\n    )\r\n\r\n    class ModifiedHandler(LoggingHandler):\r\n        def emit(self, record):\r\n            to_str_types = (StringifiableFromEvent)\r\n            if isinstance(record.msg, to_str_types):\r\n                record.msg = str(record.message)\r\n            super().emit(record)\r\n\r\n    otel_handler = ModifiedHandler(logger_provider=logger_provider)\r\n    return otel_handler\r\n```\r\n\r\nThe logging handler already includes a translate function ([here](https://github.com/open-telemetry/opentelemetry-python/blob/db2dd1eaae5f6eab2ede127d291be824e10a1256/opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/__init__.py#L505C1-L529C43)), this would make it easy to create a Logging Handler in opentelemetry-python-contrib that handles this scenario for the third party library.\r\n\r\nThere is a contrib example that we never merged here: https://github.com/open-telemetry/opentelemetry-python-contrib/pull/2492/\r\n\r\n\r\nA similar issue (support for structlog) was discussed in #2993.\r\n\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2025124696",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4510,
+        "pr_file": "exporter/opentelemetry-exporter-otlp-proto-common/src/opentelemetry/exporter/otlp/proto/common/_internal/__init__.py",
+        "discussion_id": "2021851521",
+        "commented_code": "@@ -99,6 +101,8 @@ def _encode_value(\n                 ]\n             )\n         )\n+    elif fallback is not None:\n+        return _encode_value(fallback(value), allow_null)",
+        "comment_created_at": "2025-04-02T15:47:36+00:00",
+        "comment_author": "lukaslihotzki-f",
+        "comment_body": "Is this about the `_encode_value` function specifically? If so, this could be rewritten somehow. I still think that stringification should be the default, because application developers generally don't know what some library may pass to the logging function, and these exceptions result in a bad user experience for app developers integrating OpenTelemetry. For example, I decided to modify your sample to unconditionally stringify all `record.msg`, because synapse including all of its dependencies is huge, and I don't want to continuously maintain a `to_str_types` list.\r\n\r\nThanks for the sample. It works for me now. I already used a custom LoggingHandler subclass, so only the emit method was missing.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2025134462",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4510,
+        "pr_file": "exporter/opentelemetry-exporter-otlp-proto-common/src/opentelemetry/exporter/otlp/proto/common/_internal/__init__.py",
+        "discussion_id": "2021851521",
+        "commented_code": "@@ -99,6 +101,8 @@ def _encode_value(\n                 ]\n             )\n         )\n+    elif fallback is not None:\n+        return _encode_value(fallback(value), allow_null)",
+        "comment_created_at": "2025-04-02T15:51:20+00:00",
+        "comment_author": "lukaslihotzki-f",
+        "comment_body": "Also, this PR is useful for #4514, although it may not be ideal. This indicates that the behavior is useful for general purpose, not just for the StringifiableFromEvent from twisted.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1834601469",
+    "pr_number": 4259,
+    "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/__init__.py",
+    "created_at": "2024-11-08T15:40:13+00:00",
+    "commented_code": "attributes: Optional[Attributes] = None,\n     ) -> Logger:\n         if self._disabled:\n-            _logger.warning(\"SDK is disabled.\")\n+            warnings.warn(\"SDK is disabled.\")",
+    "repo_full_name": "open-telemetry/opentelemetry-python",
+    "discussion_comments": [
+      {
+        "comment_id": "1834601469",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4259,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/__init__.py",
+        "discussion_id": "1834601469",
+        "commented_code": "@@ -692,7 +692,7 @@ def get_logger(\n         attributes: Optional[Attributes] = None,\n     ) -> Logger:\n         if self._disabled:\n-            _logger.warning(\"SDK is disabled.\")\n+            warnings.warn(\"SDK is disabled.\")",
+        "comment_created_at": "2024-11-08T15:40:13+00:00",
+        "comment_author": "lzchen",
+        "comment_body": "+ 1 to this. Wdyt about using `warnings` instead of logger for other places in which are common to have recursions?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1834605545",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4259,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/__init__.py",
+        "discussion_id": "1834601469",
+        "commented_code": "@@ -692,7 +692,7 @@ def get_logger(\n         attributes: Optional[Attributes] = None,\n     ) -> Logger:\n         if self._disabled:\n-            _logger.warning(\"SDK is disabled.\")\n+            warnings.warn(\"SDK is disabled.\")",
+        "comment_created_at": "2024-11-08T15:43:04+00:00",
+        "comment_author": "emdneto",
+        "comment_body": "+1 to this \u2b06\ufe0f ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1834617665",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4259,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/__init__.py",
+        "discussion_id": "1834601469",
+        "commented_code": "@@ -692,7 +692,7 @@ def get_logger(\n         attributes: Optional[Attributes] = None,\n     ) -> Logger:\n         if self._disabled:\n-            _logger.warning(\"SDK is disabled.\")\n+            warnings.warn(\"SDK is disabled.\")",
+        "comment_created_at": "2024-11-08T15:50:18+00:00",
+        "comment_author": "emdneto",
+        "comment_body": "We are already using warnings https://github.com/open-telemetry/opentelemetry-python/blob/main/opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/__init__.py#L209 in other places ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1834636333",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4259,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/__init__.py",
+        "discussion_id": "1834601469",
+        "commented_code": "@@ -692,7 +692,7 @@ def get_logger(\n         attributes: Optional[Attributes] = None,\n     ) -> Logger:\n         if self._disabled:\n-            _logger.warning(\"SDK is disabled.\")\n+            warnings.warn(\"SDK is disabled.\")",
+        "comment_created_at": "2024-11-08T16:03:51+00:00",
+        "comment_author": "aabmass",
+        "comment_body": "Will this break again if someone is using `logging.captureWarnings()`? https://docs.python.org/3/library/logging.html#integration-with-the-warnings-module",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1834657376",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4259,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/__init__.py",
+        "discussion_id": "1834601469",
+        "commented_code": "@@ -692,7 +692,7 @@ def get_logger(\n         attributes: Optional[Attributes] = None,\n     ) -> Logger:\n         if self._disabled:\n-            _logger.warning(\"SDK is disabled.\")\n+            warnings.warn(\"SDK is disabled.\")",
+        "comment_created_at": "2024-11-08T16:17:52+00:00",
+        "comment_author": "xrmx",
+        "comment_body": "> Wdyt about using warnings instead of logger for other places in which are common to have recursions?\r\n\r\nWe should open an issue and add it to the logging board :)\r\n\r\n> Will this break again if someone is using `logging.captureWarnings()`? https://docs.python.org/3/library/logging.html#integration-with-the-warnings-module\r\n\r\nI guess so but at least we don't ship code using that ourself :)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1834693413",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4259,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/__init__.py",
+        "discussion_id": "1834601469",
+        "commented_code": "@@ -692,7 +692,7 @@ def get_logger(\n         attributes: Optional[Attributes] = None,\n     ) -> Logger:\n         if self._disabled:\n-            _logger.warning(\"SDK is disabled.\")\n+            warnings.warn(\"SDK is disabled.\")",
+        "comment_created_at": "2024-11-08T16:28:31+00:00",
+        "comment_author": "aabmass",
+        "comment_body": "That's true but it seems like a common configuration that will break our SDK. My point is, I don't think warnings alone will solve recursion issues\r\n\r\nI'm OK to go ahead with this PR for the patch release.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1834699911",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4259,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/__init__.py",
+        "discussion_id": "1834601469",
+        "commented_code": "@@ -692,7 +692,7 @@ def get_logger(\n         attributes: Optional[Attributes] = None,\n     ) -> Logger:\n         if self._disabled:\n-            _logger.warning(\"SDK is disabled.\")\n+            warnings.warn(\"SDK is disabled.\")",
+        "comment_created_at": "2024-11-08T16:34:08+00:00",
+        "comment_author": "xrmx",
+        "comment_body": "Opened an issue for handling this more generally here https://github.com/open-telemetry/opentelemetry-python/issues/4261",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1891027744",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4259,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/__init__.py",
+        "discussion_id": "1834601469",
+        "commented_code": "@@ -692,7 +692,7 @@ def get_logger(\n         attributes: Optional[Attributes] = None,\n     ) -> Logger:\n         if self._disabled:\n-            _logger.warning(\"SDK is disabled.\")\n+            warnings.warn(\"SDK is disabled.\")",
+        "comment_created_at": "2024-12-19T01:42:18+00:00",
+        "comment_author": "anuraaga",
+        "comment_body": "I was trying to run an app with the SDK disabled intentionally and got this warning spammed. Can it be removed or use some opt-in debug mechanism? Note I couldn't find any similar logging in trace/metrics.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1696393967",
+    "pr_number": 4088,
+    "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/export/__init__.py",
+    "created_at": "2024-07-30T06:41:00+00:00",
+    "commented_code": "try:\n             self._exporter.export((log_data,))\n         except Exception:  # pylint: disable=broad-exception-caught\n-            _logger.exception(\"Exception while exporting logs.\")\n+            traceback_str = traceback.format_exc()\n+            print(f\"Exception while exporting logs: {traceback_str}\")",
+    "repo_full_name": "open-telemetry/opentelemetry-python",
+    "discussion_comments": [
+      {
+        "comment_id": "1696393967",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4088,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/_logs/_internal/export/__init__.py",
+        "discussion_id": "1696393967",
+        "commented_code": "@@ -128,7 +129,8 @@ def emit(self, log_data: LogData):\n         try:\n             self._exporter.export((log_data,))\n         except Exception:  # pylint: disable=broad-exception-caught\n-            _logger.exception(\"Exception while exporting logs.\")\n+            traceback_str = traceback.format_exc()\n+            print(f\"Exception while exporting logs: {traceback_str}\")",
+        "comment_created_at": "2024-07-30T06:41:00+00:00",
+        "comment_author": "mariojonke",
+        "comment_body": "the print to stdout can potentially have unwanted side-effects, e.g. when an application communicates with other processes via pipes.\r\n\r\nadditionally, i think the print doesn't fully solve the original recursive logging problem since an exporter might still emit its own log messages.\r\n\r\nsince the `SimpleLogRecordProcessor` is already setting the [suppress instrumentation](https://github.com/open-telemetry/opentelemetry-python/pull/4088/files#diff-f72d80bed91a7ebff9f47b509561d42e57edacd454317801f445d6ba4226d4c8R128) key on the context, would it maybe make sense to consider this in the `LoggingHandler`/`Logger` and skip emitting the logs accordingly?",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,180 @@
+[
+  {
+    "discussion_id": "381076816",
+    "pr_number": 431,
+    "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/util.py",
+    "created_at": "2020-02-19T04:54:05+00:00",
+    "commented_code": "# pylint: disable=protected-access\n         bounded_dict._dict = mapping\n         return bounded_dict\n+\n+\n+class InstrumentationInfo:",
+    "repo_full_name": "open-telemetry/opentelemetry-python",
+    "discussion_comments": [
+      {
+        "comment_id": "381076816",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 431,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/util.py",
+        "discussion_id": "381076816",
+        "commented_code": "@@ -140,3 +140,44 @@ def from_map(cls, maxlen, mapping):\n         # pylint: disable=protected-access\n         bounded_dict._dict = mapping\n         return bounded_dict\n+\n+\n+class InstrumentationInfo:",
+        "comment_created_at": "2020-02-19T04:54:05+00:00",
+        "comment_author": "toumorokoshi",
+        "comment_body": "could this just be moved to a module called instrumentation_info? generic util modules make things harder to find (can't find a related file in an IDE file autocomplete), in my opinion.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "381552663",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 431,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/util.py",
+        "discussion_id": "381076816",
+        "commented_code": "@@ -140,3 +140,44 @@ def from_map(cls, maxlen, mapping):\n         # pylint: disable=protected-access\n         bounded_dict._dict = mapping\n         return bounded_dict\n+\n+\n+class InstrumentationInfo:",
+        "comment_created_at": "2020-02-19T21:24:03+00:00",
+        "comment_author": "lzchen",
+        "comment_body": "I changed this so it follows more like how API modules are structured.\r\nThere is a `util` folder with now with `instrumentation.py` as a separate module.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "378365055",
+    "pr_number": 378,
+    "pr_file": "ext/opentelemetry-ext-prometheus/src/opentelemetry/ext/prometheus/__init__.py",
+    "created_at": "2020-02-12T16:28:44+00:00",
+    "commented_code": "+# Copyright 2020, OpenTelemetry Authors\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+\"\"\"Prometheus Metrics Exporter for OpenTelemetry.\"\"\"\n+\n+import logging\n+import re\n+from typing import Sequence\n+\n+from prometheus_client import start_http_server\n+from prometheus_client.core import (\n+    REGISTRY,\n+    CollectorRegistry,\n+    CounterMetricFamily,\n+    GaugeMetricFamily,\n+    UnknownMetricFamily,\n+)\n+\n+from opentelemetry.metrics import Counter, Gauge, Measure, Metric\n+from opentelemetry.sdk.metrics.export import (\n+    MetricRecord,\n+    MetricsExporter,\n+    MetricsExportResult,\n+)\n+\n+logger = logging.getLogger(__name__)\n+\n+\n+class PrometheusMetricsExporter(MetricsExporter):\n+    \"\"\"Prometheus metric exporter for OpenTelemetry.\n+\n+    Args:\n+        port: The Prometheus port to be used.\n+        address: The Prometheus address to be used.\n+        prefix: single-word application prefix relevant to the domain the metric belongs to.\n+    \"\"\"\n+\n+    def __init__(self, port: int = 8000, address: str = \"\", prefix: str = \"\"):\n+        self._port = port\n+        self._address = address\n+        self._collector = CustomCollector(prefix)\n+\n+        start_http_server(port=self._port, addr=str(self._address))\n+        REGISTRY.register(self._collector)\n+\n+    def export(\n+        self, metric_records: Sequence[MetricRecord]\n+    ) -> MetricsExportResult:\n+        self._collector.add_metrics_data(metric_records)\n+        return MetricsExportResult.SUCCESS\n+\n+    def shutdown(self) -> None:\n+        REGISTRY.unregister(self._collector)\n+\n+\n+class CustomCollector:\n+    \"\"\" CustomCollector represents the Prometheus Collector object\n+        https://github.com/prometheus/client_python#custom-collectors\n+    \"\"\"\n+\n+    def __init__(self, prefix: str = \"\"):\n+        self._prefix = prefix\n+        self._metrics_to_export = []\n+\n+    def add_metrics_data(self, metric_records: Sequence[MetricRecord]):\n+        self._metrics_to_export.append(metric_records)\n+\n+    def collect(self):\n+        \"\"\"Collect fetches the metrics from OpenTelemetry\n+        and delivers them as Prometheus Metrics.\n+        Collect is invoked every time a prometheus.Gatherer is run\n+        for example when the HTTP endpoint is invoked by Prometheus.\n+        \"\"\"\n+\n+        for metric_batch in self._metrics_to_export:\n+            for metric_record in metric_batch:\n+                prometheus_metric = self._translate_to_prometheus(\n+                    metric_record\n+                )\n+                if prometheus_metric:\n+                    yield prometheus_metric\n+            self._metrics_to_export.remove(metric_batch)\n+\n+    def _translate_to_prometheus(self, metric_record: MetricRecord):\n+        prometheus_metric = None\n+        label_values = []\n+        label_keys = []\n+        for label in metric_record.label_set.labels:\n+            for index, label_tuple_value in enumerate(label):\n+                # Odd number\n+                if index & 1 == 1:\n+                    label_values.append(label_tuple_value)\n+\n+        for label_key in metric_record.metric.label_keys:\n+            label_keys.append(sanitize(label_key))\n+        metric_name = \"\"\n+        if self._prefix != \"\":\n+            metric_name = self._prefix + \"_\"\n+        metric_name += sanitize(metric_record.metric.name)\n+\n+        if isinstance(metric_record.metric, Counter):\n+            prometheus_metric = CounterMetricFamily(\n+                name=metric_name,\n+                documentation=metric_record.metric.description,\n+                labels=label_keys,\n+            )\n+            prometheus_metric.add_metric(\n+                labels=label_values, value=metric_record.aggregator.check_point\n+            )\n+\n+        elif isinstance(metric_record.metric, Gauge):\n+            prometheus_metric = GaugeMetricFamily(\n+                name=metric_name,\n+                documentation=metric_record.metric.description,\n+                labels=label_keys,\n+            )\n+            prometheus_metric.add_metric(\n+                labels=label_values, value=metric_record.aggregator.check_point\n+            )\n+\n+        # TODO: Add support for histograms when supported in OT\n+        elif isinstance(metric_record.metric, Measure):\n+            prometheus_metric = UnknownMetricFamily(\n+                name=metric_name,\n+                documentation=metric_record.metric.description,\n+                labels=label_keys,\n+            )\n+            prometheus_metric.add_metric(\n+                labels=label_values, value=metric_record.aggregator.check_point\n+            )\n+\n+        else:\n+            logger.warning(\n+                \"Unsupported metric type. %s\", type(metric_record.metric)\n+            )\n+        return prometheus_metric\n+\n+\n+_NON_LETTERS_NOR_DIGITS_RE = re.compile(r\"[^\\w]\", re.UNICODE | re.IGNORECASE)\n+\n+\n+def sanitize(key):",
+    "repo_full_name": "open-telemetry/opentelemetry-python",
+    "discussion_comments": [
+      {
+        "comment_id": "378365055",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 378,
+        "pr_file": "ext/opentelemetry-ext-prometheus/src/opentelemetry/ext/prometheus/__init__.py",
+        "discussion_id": "378365055",
+        "commented_code": "@@ -0,0 +1,157 @@\n+# Copyright 2020, OpenTelemetry Authors\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+\"\"\"Prometheus Metrics Exporter for OpenTelemetry.\"\"\"\n+\n+import logging\n+import re\n+from typing import Sequence\n+\n+from prometheus_client import start_http_server\n+from prometheus_client.core import (\n+    REGISTRY,\n+    CollectorRegistry,\n+    CounterMetricFamily,\n+    GaugeMetricFamily,\n+    UnknownMetricFamily,\n+)\n+\n+from opentelemetry.metrics import Counter, Gauge, Measure, Metric\n+from opentelemetry.sdk.metrics.export import (\n+    MetricRecord,\n+    MetricsExporter,\n+    MetricsExportResult,\n+)\n+\n+logger = logging.getLogger(__name__)\n+\n+\n+class PrometheusMetricsExporter(MetricsExporter):\n+    \"\"\"Prometheus metric exporter for OpenTelemetry.\n+\n+    Args:\n+        port: The Prometheus port to be used.\n+        address: The Prometheus address to be used.\n+        prefix: single-word application prefix relevant to the domain the metric belongs to.\n+    \"\"\"\n+\n+    def __init__(self, port: int = 8000, address: str = \"\", prefix: str = \"\"):\n+        self._port = port\n+        self._address = address\n+        self._collector = CustomCollector(prefix)\n+\n+        start_http_server(port=self._port, addr=str(self._address))\n+        REGISTRY.register(self._collector)\n+\n+    def export(\n+        self, metric_records: Sequence[MetricRecord]\n+    ) -> MetricsExportResult:\n+        self._collector.add_metrics_data(metric_records)\n+        return MetricsExportResult.SUCCESS\n+\n+    def shutdown(self) -> None:\n+        REGISTRY.unregister(self._collector)\n+\n+\n+class CustomCollector:\n+    \"\"\" CustomCollector represents the Prometheus Collector object\n+        https://github.com/prometheus/client_python#custom-collectors\n+    \"\"\"\n+\n+    def __init__(self, prefix: str = \"\"):\n+        self._prefix = prefix\n+        self._metrics_to_export = []\n+\n+    def add_metrics_data(self, metric_records: Sequence[MetricRecord]):\n+        self._metrics_to_export.append(metric_records)\n+\n+    def collect(self):\n+        \"\"\"Collect fetches the metrics from OpenTelemetry\n+        and delivers them as Prometheus Metrics.\n+        Collect is invoked every time a prometheus.Gatherer is run\n+        for example when the HTTP endpoint is invoked by Prometheus.\n+        \"\"\"\n+\n+        for metric_batch in self._metrics_to_export:\n+            for metric_record in metric_batch:\n+                prometheus_metric = self._translate_to_prometheus(\n+                    metric_record\n+                )\n+                if prometheus_metric:\n+                    yield prometheus_metric\n+            self._metrics_to_export.remove(metric_batch)\n+\n+    def _translate_to_prometheus(self, metric_record: MetricRecord):\n+        prometheus_metric = None\n+        label_values = []\n+        label_keys = []\n+        for label in metric_record.label_set.labels:\n+            for index, label_tuple_value in enumerate(label):\n+                # Odd number\n+                if index & 1 == 1:\n+                    label_values.append(label_tuple_value)\n+\n+        for label_key in metric_record.metric.label_keys:\n+            label_keys.append(sanitize(label_key))\n+        metric_name = \"\"\n+        if self._prefix != \"\":\n+            metric_name = self._prefix + \"_\"\n+        metric_name += sanitize(metric_record.metric.name)\n+\n+        if isinstance(metric_record.metric, Counter):\n+            prometheus_metric = CounterMetricFamily(\n+                name=metric_name,\n+                documentation=metric_record.metric.description,\n+                labels=label_keys,\n+            )\n+            prometheus_metric.add_metric(\n+                labels=label_values, value=metric_record.aggregator.check_point\n+            )\n+\n+        elif isinstance(metric_record.metric, Gauge):\n+            prometheus_metric = GaugeMetricFamily(\n+                name=metric_name,\n+                documentation=metric_record.metric.description,\n+                labels=label_keys,\n+            )\n+            prometheus_metric.add_metric(\n+                labels=label_values, value=metric_record.aggregator.check_point\n+            )\n+\n+        # TODO: Add support for histograms when supported in OT\n+        elif isinstance(metric_record.metric, Measure):\n+            prometheus_metric = UnknownMetricFamily(\n+                name=metric_name,\n+                documentation=metric_record.metric.description,\n+                labels=label_keys,\n+            )\n+            prometheus_metric.add_metric(\n+                labels=label_values, value=metric_record.aggregator.check_point\n+            )\n+\n+        else:\n+            logger.warning(\n+                \"Unsupported metric type. %s\", type(metric_record.metric)\n+            )\n+        return prometheus_metric\n+\n+\n+_NON_LETTERS_NOR_DIGITS_RE = re.compile(r\"[^\\w]\", re.UNICODE | re.IGNORECASE)\n+\n+\n+def sanitize(key):",
+        "comment_created_at": "2020-02-12T16:28:44+00:00",
+        "comment_author": "ocelotl",
+        "comment_body": "This is adding a function in the module level, as it was part of an API, please put it in the most specific scope possible (the `_translate_to_prometheus` function). Also `_NON_LETTERS_NOR_DIGITS_RE` is used only once, is better to just put this where it is used instead of having a global variable at module level, even if it is made \"private\" by preceding it with an underscore.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1920467352",
+    "pr_number": 4361,
+    "pr_file": "opentelemetry-api/src/opentelemetry/metrics/_internal/__init__.py",
+    "created_at": "2025-01-17T16:45:43+00:00",
+    "commented_code": "name: str,\n         unit: str = \"\",\n         description: str = \"\",\n+        advisory: None = None,\n     ) -> Counter:\n         \"\"\"Returns a no-op Counter.\"\"\"\n-        if self._is_instrument_registered(\n-            name, NoOpCounter, unit, description\n-        )[0]:\n+        _, status = self._register_instrument(\n+            name, NoOpCounter, unit, description, advisory\n+        )\n+        if status.conflict:\n             _logger.warning(",
+    "repo_full_name": "open-telemetry/opentelemetry-python",
+    "discussion_comments": [
+      {
+        "comment_id": "1920467352",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4361,
+        "pr_file": "opentelemetry-api/src/opentelemetry/metrics/_internal/__init__.py",
+        "discussion_id": "1920467352",
+        "commented_code": "@@ -600,18 +647,22 @@ def create_counter(\n         name: str,\n         unit: str = \"\",\n         description: str = \"\",\n+        advisory: None = None,\n     ) -> Counter:\n         \"\"\"Returns a no-op Counter.\"\"\"\n-        if self._is_instrument_registered(\n-            name, NoOpCounter, unit, description\n-        )[0]:\n+        _, status = self._register_instrument(\n+            name, NoOpCounter, unit, description, advisory\n+        )\n+        if status.conflict:\n             _logger.warning(",
+        "comment_created_at": "2025-01-17T16:45:43+00:00",
+        "comment_author": "aabmass",
+        "comment_body": "Should we move this repetitive code into a util?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1922105400",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 4361,
+        "pr_file": "opentelemetry-api/src/opentelemetry/metrics/_internal/__init__.py",
+        "discussion_id": "1920467352",
+        "commented_code": "@@ -600,18 +647,22 @@ def create_counter(\n         name: str,\n         unit: str = \"\",\n         description: str = \"\",\n+        advisory: None = None,\n     ) -> Counter:\n         \"\"\"Returns a no-op Counter.\"\"\"\n-        if self._is_instrument_registered(\n-            name, NoOpCounter, unit, description\n-        )[0]:\n+        _, status = self._register_instrument(\n+            name, NoOpCounter, unit, description, advisory\n+        )\n+        if status.conflict:\n             _logger.warning(",
+        "comment_created_at": "2025-01-20T09:47:57+00:00",
+        "comment_author": "xrmx",
+        "comment_body": "Done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1475506180",
+    "pr_number": 3633,
+    "pr_file": "opentelemetry-api/src/opentelemetry/trace/__init__.py",
+    "created_at": "2024-02-02T04:13:32+00:00",
+    "commented_code": "logger = getLogger(__name__)\n \n \n+class _AgnosticContextManager(",
+    "repo_full_name": "open-telemetry/opentelemetry-python",
+    "discussion_comments": [
+      {
+        "comment_id": "1475506180",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 3633,
+        "pr_file": "opentelemetry-api/src/opentelemetry/trace/__init__.py",
+        "discussion_id": "1475506180",
+        "commented_code": "@@ -116,6 +119,97 @@\n logger = getLogger(__name__)\n \n \n+class _AgnosticContextManager(",
+        "comment_created_at": "2024-02-02T04:13:32+00:00",
+        "comment_author": "aabmass",
+        "comment_body": "Would you mind moving the decorator implementation to a new file in [opentelemetry-api/src/opentelemetry/util](https://github.com/open-telemetry/opentelemetry-python/tree/main/opentelemetry-api/src/opentelemetry/util)? This file is already quite long.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1610474111",
+    "pr_number": 3771,
+    "pr_file": "exporter/opentelemetry-exporter-otlp-proto-common/src/opentelemetry/exporter/otlp/proto/common/_internal/metrics_encoder/__init__.py",
+    "created_at": "2024-05-22T18:36:19+00:00",
+    "commented_code": "elif isinstance(metric.data, ExponentialHistogramType):\n                     for data_point in metric.data.data_points:\n \n-                        if data_point.positive.bucket_counts:\n+                        if positive_buckets := truncate_trailing_zeros(data_point.positive.bucket_counts):",
+    "repo_full_name": "open-telemetry/opentelemetry-python",
+    "discussion_comments": [
+      {
+        "comment_id": "1610474111",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 3771,
+        "pr_file": "exporter/opentelemetry-exporter-otlp-proto-common/src/opentelemetry/exporter/otlp/proto/common/_internal/metrics_encoder/__init__.py",
+        "discussion_id": "1610474111",
+        "commented_code": "@@ -272,18 +278,18 @@ def encode_metrics(data: MetricsData) -> ExportMetricsServiceRequest:\n                 elif isinstance(metric.data, ExponentialHistogramType):\n                     for data_point in metric.data.data_points:\n \n-                        if data_point.positive.bucket_counts:\n+                        if positive_buckets := truncate_trailing_zeros(data_point.positive.bucket_counts):",
+        "comment_created_at": "2024-05-22T18:36:19+00:00",
+        "comment_author": "euroelessar",
+        "comment_body": "maybe move truncation logic into `def bucket_counts` implementation to avoid duplication?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1376715183",
+    "pr_number": 3486,
+    "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/metrics/_internal/_view_instrument_match.py",
+    "created_at": "2023-10-30T19:31:53+00:00",
+    "commented_code": "aggr_key = frozenset(attributes.items())\n \n+        if len(self._attributes_aggregation) >= self._aggregation_cardinality_limit - 1:",
+    "repo_full_name": "open-telemetry/opentelemetry-python",
+    "discussion_comments": [
+      {
+        "comment_id": "1376715183",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 3486,
+        "pr_file": "opentelemetry-sdk/src/opentelemetry/sdk/metrics/_internal/_view_instrument_match.py",
+        "discussion_id": "1376715183",
+        "commented_code": "@@ -97,6 +100,13 @@ def consume_measurement(self, measurement: Measurement) -> None:\n \n         aggr_key = frozenset(attributes.items())\n \n+        if len(self._attributes_aggregation) >= self._aggregation_cardinality_limit - 1:",
+        "comment_created_at": "2023-10-30T19:31:53+00:00",
+        "comment_author": "pmcollins",
+        "comment_body": "Just a style nit, but another option here, because this function is perhaps starting to get a bit hairy, and to make things easier to understand at a glance, would be to put the aggregation key resolution into its own function.\r\n\r\n    def get_aggregation_key(self, attributes):\r\n        if len(self._attributes_aggregation) >= self._aggregation_cardinality_limit - 1:\r\n            _logger.warning(\r\n                \"Metric cardinality limit of {} exceeded. Aggregating under overflow attribute.\"\r\n                .format(self._aggregation_cardinality_limit)\r\n            )\r\n            aggr_key = frozenset([OVERFLOW_ATTRIBUTE])\r\n        else:\r\n            aggr_key = frozenset(attributes.items())\r\n        return aggr_key\r\n\r\nthen\r\n\r\n        aggr_key = self.get_aggregation_key(attributes)\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1508204933",
+    "pr_number": 3586,
+    "pr_file": "opentelemetry-semantic-conventions/src/opentelemetry/semconv/v1_23_1/db_metrics.py",
+    "created_at": "2024-02-29T21:18:46+00:00",
+    "commented_code": "+\n+# Copyright The OpenTelemetry Authors\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+from opentelemetry.metrics import (\n+    Counter,\n+    Histogram,\n+    Meter,\n+    UpDownCounter,\n+    ObservableGauge,\n+)\n+from typing import Callable, Sequence\n+\n+class DbMetrics:\n+\n+    \"\"\"\n+    The time it took to create a new connection\n+    \"\"\"\n+    @staticmethod\n+    def create_db_client_connections_create_time(meter: Meter) -> Histogram:",
+    "repo_full_name": "open-telemetry/opentelemetry-python",
+    "discussion_comments": [
+      {
+        "comment_id": "1508204933",
+        "repo_full_name": "open-telemetry/opentelemetry-python",
+        "pr_number": 3586,
+        "pr_file": "opentelemetry-semantic-conventions/src/opentelemetry/semconv/v1_23_1/db_metrics.py",
+        "discussion_id": "1508204933",
+        "commented_code": "@@ -0,0 +1,133 @@\n+\n+# Copyright The OpenTelemetry Authors\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+from opentelemetry.metrics import (\n+    Counter,\n+    Histogram,\n+    Meter,\n+    UpDownCounter,\n+    ObservableGauge,\n+)\n+from typing import Callable, Sequence\n+\n+class DbMetrics:\n+\n+    \"\"\"\n+    The time it took to create a new connection\n+    \"\"\"\n+    @staticmethod\n+    def create_db_client_connections_create_time(meter: Meter) -> Histogram:",
+        "comment_created_at": "2024-02-29T21:18:46+00:00",
+        "comment_author": "aabmass",
+        "comment_body": "Similar to the comment about constants, since all the methods are static you can just make these free functions at the module level. Then they can be used like\r\n\r\n```py\r\nfrom opentelemetry.semconv.v1_23_1 import db_metrics\r\n\r\ndb_metrics.create_db_client_connections_create_time()\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

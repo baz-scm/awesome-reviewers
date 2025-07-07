@@ -1,0 +1,192 @@
+[
+  {
+    "discussion_id": "2172702631",
+    "pr_number": 18333,
+    "pr_file": "crates/ty_python_semantic/src/semantic_index/reachability_constraints.rs",
+    "created_at": "2025-06-27T19:12:07+00:00",
+    "commented_code": "let ty = infer_expression_type(db, test_expr);\n                 ty.bool(db).negate_if(!predicate.is_positive)\n             }\n+            PredicateNode::ReturnsNever(test_expr) => {\n+                let ty = infer_expression_type(db, test_expr);\n+                if let Type::FunctionLiteral(function_literal) = ty {\n+                    let returns_never =\n+                        if function_literal\n+                            .signature(db)\n+                            .overloads\n+                            .iter()\n+                            .all(|overload| {\n+                                // HACK: for now, require that *all* overloads are annotated with\n+                                // returning `Never`\n+                                // Ideally, if only some overloads return `Never`, we should consider\n+                                // the types of the arguments.\n+                                overload.return_ty.is_some_and(|return_type| {\n+                                    return_type.is_equivalent_to(db, Type::Never)\n+                                })\n+                            })\n+                        {\n+                            Truthiness::AlwaysTrue\n+                        } else {\n+                            Truthiness::AlwaysFalse\n+                        };\n+                    returns_never.negate_if(!predicate.is_positive)\n+                } else {\n+                    // Should I add a panic here?",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2172702631",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18333,
+        "pr_file": "crates/ty_python_semantic/src/semantic_index/reachability_constraints.rs",
+        "discussion_id": "2172702631",
+        "commented_code": "@@ -678,6 +678,35 @@ impl ReachabilityConstraints {\n                 let ty = infer_expression_type(db, test_expr);\n                 ty.bool(db).negate_if(!predicate.is_positive)\n             }\n+            PredicateNode::ReturnsNever(test_expr) => {\n+                let ty = infer_expression_type(db, test_expr);\n+                if let Type::FunctionLiteral(function_literal) = ty {\n+                    let returns_never =\n+                        if function_literal\n+                            .signature(db)\n+                            .overloads\n+                            .iter()\n+                            .all(|overload| {\n+                                // HACK: for now, require that *all* overloads are annotated with\n+                                // returning `Never`\n+                                // Ideally, if only some overloads return `Never`, we should consider\n+                                // the types of the arguments.\n+                                overload.return_ty.is_some_and(|return_type| {\n+                                    return_type.is_equivalent_to(db, Type::Never)\n+                                })\n+                            })\n+                        {\n+                            Truthiness::AlwaysTrue\n+                        } else {\n+                            Truthiness::AlwaysFalse\n+                        };\n+                    returns_never.negate_if(!predicate.is_positive)\n+                } else {\n+                    // Should I add a panic here?",
+        "comment_created_at": "2025-06-27T19:12:07+00:00",
+        "comment_author": "carljm",
+        "comment_body": "No we shouldn't add a panic here, we should silently return something and let type checking emit a diagnostic for a bad call.\r\n\r\nIt's an interesting question what we should return. In principle it makes sense to return `AlwaysTrue` (calling a non-callable will raise an error and thus terminate control flow). But we don't do that for other diagnostics that are high-confidence will-raise-an-error, so it seems inconsistent to do it here. Thus I think we should probably return `AlwaysFalse`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2165264181",
+    "pr_number": 18713,
+    "pr_file": "crates/ty_python_semantic/src/types.rs",
+    "created_at": "2025-06-25T01:38:21+00:00",
+    "commented_code": "self.definition(db),\n             self.bound_or_constraints(db)\n                 .map(|b| b.materialize(db, variance)),\n-            self.variance(db),\n+            self.explicit_variance(db), // TODO: this could be Some(self.inferred_variance(db))\n             self.default_ty(db),\n             self.kind(db),\n         )\n     }\n+\n+    #[track_caller]\n+    fn inferred_variance(self, db: &'db dyn Db) -> TypeVarVariance {\n+        let _span = tracing::trace_span!(\"inferred_variance\").entered();\n+        assert_eq!(self.kind(db), TypeVarKind::Pep695);\n+        match self.definition(db) {\n+            Some(definition) => {\n+                let file = definition.file(db);\n+                let module = parsed_module(db.upcast(), file).load(db.upcast());\n+                let defn_key: DefinitionNodeKey = match definition.scope(db).node(db) {\n+                    crate::semantic_index::place::NodeWithScopeKind::ClassTypeParameters(\n+                        ast_node_ref,\n+                    ) => {\n+                        // For class type parameters, we can infer variance from the class's\n+                        // base classes and their type parameters.\n+                        ast_node_ref.node(&module).into()\n+                    }\n+                    crate::semantic_index::place::NodeWithScopeKind::FunctionTypeParameters(\n+                        ast_node_ref,\n+                    ) => ast_node_ref.node(&module).into(),\n+                    crate::semantic_index::place::NodeWithScopeKind::TypeAliasTypeParameters(\n+                        ast_node_ref,\n+                    ) => ast_node_ref.node(&module).into(),\n+                    crate::semantic_index::place::NodeWithScopeKind::TypeAlias(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::Lambda(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::Function(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::ListComprehension(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::SetComprehension(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::DictComprehension(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::GeneratorExpression(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::Module\n+                    | crate::semantic_index::place::NodeWithScopeKind::Class(_) => {\n+                        unreachable!(\"invalid definition kind for type variable\")",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2165264181",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18713,
+        "pr_file": "crates/ty_python_semantic/src/types.rs",
+        "discussion_id": "2165264181",
+        "commented_code": "@@ -6140,11 +6288,62 @@ impl<'db> TypeVarInstance<'db> {\n             self.definition(db),\n             self.bound_or_constraints(db)\n                 .map(|b| b.materialize(db, variance)),\n-            self.variance(db),\n+            self.explicit_variance(db), // TODO: this could be Some(self.inferred_variance(db))\n             self.default_ty(db),\n             self.kind(db),\n         )\n     }\n+\n+    #[track_caller]\n+    fn inferred_variance(self, db: &'db dyn Db) -> TypeVarVariance {\n+        let _span = tracing::trace_span!(\"inferred_variance\").entered();\n+        assert_eq!(self.kind(db), TypeVarKind::Pep695);\n+        match self.definition(db) {\n+            Some(definition) => {\n+                let file = definition.file(db);\n+                let module = parsed_module(db.upcast(), file).load(db.upcast());\n+                let defn_key: DefinitionNodeKey = match definition.scope(db).node(db) {\n+                    crate::semantic_index::place::NodeWithScopeKind::ClassTypeParameters(\n+                        ast_node_ref,\n+                    ) => {\n+                        // For class type parameters, we can infer variance from the class's\n+                        // base classes and their type parameters.\n+                        ast_node_ref.node(&module).into()\n+                    }\n+                    crate::semantic_index::place::NodeWithScopeKind::FunctionTypeParameters(\n+                        ast_node_ref,\n+                    ) => ast_node_ref.node(&module).into(),\n+                    crate::semantic_index::place::NodeWithScopeKind::TypeAliasTypeParameters(\n+                        ast_node_ref,\n+                    ) => ast_node_ref.node(&module).into(),\n+                    crate::semantic_index::place::NodeWithScopeKind::TypeAlias(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::Lambda(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::Function(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::ListComprehension(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::SetComprehension(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::DictComprehension(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::GeneratorExpression(_)\n+                    | crate::semantic_index::place::NodeWithScopeKind::Module\n+                    | crate::semantic_index::place::NodeWithScopeKind::Class(_) => {\n+                        unreachable!(\"invalid definition kind for type variable\")",
+        "comment_created_at": "2025-06-25T01:38:21+00:00",
+        "comment_author": "dcreager",
+        "comment_body": "Make this a `panic!` instead of an `unreachable!`. The speed difference will not be noticeable, and the extra safety of a panic will be important",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2172052370",
+    "pr_number": 18984,
+    "pr_file": "crates/ty_server/src/server.rs",
+    "created_at": "2025-06-27T13:29:07+00:00",
+    "commented_code": "writeln!(stderr, \"{panic_info}\n{backtrace}\").ok();\n \n             if let Some(client) = hook_client.upgrade() {\n-                client\n-                    .show_message(\n-                        \"The ty language server exited with a panic. See the logs for more details.\",\n-                        MessageType::ERROR,\n-                    )\n-                    .ok();\n+                client.show_message(",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2172052370",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18984,
+        "pr_file": "crates/ty_server/src/server.rs",
+        "discussion_id": "2172052370",
+        "commented_code": "@@ -227,12 +227,10 @@ impl ServerPanicHookHandler {\n             writeln!(stderr, \"{panic_info}\\n{backtrace}\").ok();\n \n             if let Some(client) = hook_client.upgrade() {\n-                client\n-                    .show_message(\n-                        \"The ty language server exited with a panic. See the logs for more details.\",\n-                        MessageType::ERROR,\n-                    )\n-                    .ok();\n+                client.show_message(",
+        "comment_created_at": "2025-06-27T13:29:07+00:00",
+        "comment_author": "MichaReiser",
+        "comment_body": "I decided to change all the `Client` methods to not return a `Result` if the only reason why they can fail is if the channel `Receiver` gets dropped. The main motivation is that this should never happen. The `main_loop` receiver is always alive for as long as the `Server` is alive. The client receiver could die due to a panic in that thread. That's why we keep writing a log message but we no longer propagate the `Result`. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2150938490",
+    "pr_number": 18433,
+    "pr_file": "crates/ruff_linter/src/rules/flake8_return/rules/function.rs",
+    "created_at": "2025-06-16T21:37:54+00:00",
+    "commented_code": "// Avoid false positives for generators.\n     if stack.is_generator {\n-        return;\n+        return None;\n     }\n \n+    Some(stack)\n+}\n+\n+/// Run all checks from the `flake8-return` plugin, but `RET504` which is ran\n+/// after the semantic model is fully built.\n+pub(crate) fn function(checker: &Checker, function_def: &ast::StmtFunctionDef) {\n+    let ast::StmtFunctionDef {\n+        decorator_list,\n+        returns,\n+        body,\n+        ..\n+    } = function_def;\n+\n+    let Some(stack) = create_stack(checker, function_def) else {\n+        return;\n+    };\n+\n+    // SAFETY: `create_stack` checks if the function has the last statement.\n+    let last_stmt = body.last().unwrap();",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2150938490",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18433,
+        "pr_file": "crates/ruff_linter/src/rules/flake8_return/rules/function.rs",
+        "discussion_id": "2150938490",
+        "commented_code": "@@ -713,9 +740,29 @@ pub(crate) fn function(checker: &Checker, function_def: &ast::StmtFunctionDef) {\n \n     // Avoid false positives for generators.\n     if stack.is_generator {\n-        return;\n+        return None;\n     }\n \n+    Some(stack)\n+}\n+\n+/// Run all checks from the `flake8-return` plugin, but `RET504` which is ran\n+/// after the semantic model is fully built.\n+pub(crate) fn function(checker: &Checker, function_def: &ast::StmtFunctionDef) {\n+    let ast::StmtFunctionDef {\n+        decorator_list,\n+        returns,\n+        body,\n+        ..\n+    } = function_def;\n+\n+    let Some(stack) = create_stack(checker, function_def) else {\n+        return;\n+    };\n+\n+    // SAFETY: `create_stack` checks if the function has the last statement.\n+    let last_stmt = body.last().unwrap();",
+        "comment_created_at": "2025-06-16T21:37:54+00:00",
+        "comment_author": "ntBre",
+        "comment_body": "nit: I'd personally just return early in these cases (referring to this one and the new `unreachable!()` above instead of panicking. If you really want to check them but still avoid panicking in release builds, you could either add a `debug_assert!(false, \"<message>\")` or a `log::debug!` to print a message in `--verbose` mode, at least.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2159061792",
+    "pr_number": 18763,
+    "pr_file": "crates/ruff_linter/src/rules/flake8_use_pathlib/rules/os_path_getsize.rs",
+    "created_at": "2025-06-20T13:56:57+00:00",
+    "commented_code": "pub(crate) struct OsPathGetsize;\n \n impl Violation for OsPathGetsize {\n+    const FIX_AVAILABILITY: FixAvailability = FixAvailability::Sometimes;\n+\n     #[derive_message_formats]\n     fn message(&self) -> String {\n         \"`os.path.getsize` should be replaced by `Path.stat().st_size`\".to_string()\n     }\n+\n+    fn fix_title(&self) -> Option<String> {\n+        Some(\"Replace with `Path(...).stat().st_size`\".to_string())\n+    }\n+}\n+\n+/// PTH202\n+pub(crate) fn os_path_getsize(checker: &Checker, call: &ExprCall) {\n+    if !matches!(\n+        checker\n+            .semantic()\n+            .resolve_qualified_name(&call.func)\n+            .as_ref()\n+            .map(QualifiedName::segments),\n+        Some([\"os\", \"path\", \"getsize\"])\n+    ) {\n+        return;\n+    }\n+\n+    let arg = match (&call.arguments.args[..], &call.arguments.keywords[..]) {\n+        ([arg], []) => arg,\n+        ([], [kwarg]) if kwarg.arg.as_deref() == Some(\"filename\") => &kwarg.value,\n+        _ => return,\n+    };\n+\n+    let arg_code = checker.locator().slice(arg.range());\n+    let range = call.range();\n+\n+    let Ok((import_edit, binding)) = checker.importer().get_or_import_symbol(\n+        &ImportRequest::import(\"pathlib\", \"Path\"),\n+        call.start(),\n+        checker.semantic(),\n+    ) else {\n+        let replacement = format!(\"Path({arg_code}).stat().st_size\");\n+        let mut diagnostic = checker.report_diagnostic(OsPathGetsize, range);\n+        diagnostic.try_set_fix(|| Ok(Fix::safe_edit(Edit::range_replacement(replacement, range))));\n+        return;\n+    };",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2159061792",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18763,
+        "pr_file": "crates/ruff_linter/src/rules/flake8_use_pathlib/rules/os_path_getsize.rs",
+        "discussion_id": "2159061792",
+        "commented_code": "@@ -43,8 +50,64 @@ use crate::Violation;\n pub(crate) struct OsPathGetsize;\n \n impl Violation for OsPathGetsize {\n+    const FIX_AVAILABILITY: FixAvailability = FixAvailability::Sometimes;\n+\n     #[derive_message_formats]\n     fn message(&self) -> String {\n         \"`os.path.getsize` should be replaced by `Path.stat().st_size`\".to_string()\n     }\n+\n+    fn fix_title(&self) -> Option<String> {\n+        Some(\"Replace with `Path(...).stat().st_size`\".to_string())\n+    }\n+}\n+\n+/// PTH202\n+pub(crate) fn os_path_getsize(checker: &Checker, call: &ExprCall) {\n+    if !matches!(\n+        checker\n+            .semantic()\n+            .resolve_qualified_name(&call.func)\n+            .as_ref()\n+            .map(QualifiedName::segments),\n+        Some([\"os\", \"path\", \"getsize\"])\n+    ) {\n+        return;\n+    }\n+\n+    let arg = match (&call.arguments.args[..], &call.arguments.keywords[..]) {\n+        ([arg], []) => arg,\n+        ([], [kwarg]) if kwarg.arg.as_deref() == Some(\"filename\") => &kwarg.value,\n+        _ => return,\n+    };\n+\n+    let arg_code = checker.locator().slice(arg.range());\n+    let range = call.range();\n+\n+    let Ok((import_edit, binding)) = checker.importer().get_or_import_symbol(\n+        &ImportRequest::import(\"pathlib\", \"Path\"),\n+        call.start(),\n+        checker.semantic(),\n+    ) else {\n+        let replacement = format!(\"Path({arg_code}).stat().st_size\");\n+        let mut diagnostic = checker.report_diagnostic(OsPathGetsize, range);\n+        diagnostic.try_set_fix(|| Ok(Fix::safe_edit(Edit::range_replacement(replacement, range))));\n+        return;\n+    };",
+        "comment_created_at": "2025-06-20T13:56:57+00:00",
+        "comment_author": "ntBre",
+        "comment_body": "This doesn't look right. What are you trying to accomplish here?\r\n\r\nI don't think we should be doing a replacement if the import fails, the `get_or_import_symbol` call should be in `try_set_fix` so that any error is logged, and the current `try_set_fix` call isn't doing anything since the contents are always `Ok`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2116521223",
+    "pr_number": 18391,
+    "pr_file": "crates/ruff_linter/src/checkers/tokens.rs",
+    "created_at": "2025-05-30T19:34:04+00:00",
+    "commented_code": "pycodestyle::rules::too_many_newlines_at_end_of_file(context, tokens, cell_offsets);\n     }\n \n-    context\n-        .as_mut_vec()\n-        .retain(|diagnostic| settings.rules.enabled(diagnostic.rule()));\n+    context.as_mut_vec().retain(|diagnostic| {\n+        diagnostic\n+            .to_rule()\n+            .is_none_or(|rule| settings.rules.enabled(rule))",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2116521223",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18391,
+        "pr_file": "crates/ruff_linter/src/checkers/tokens.rs",
+        "discussion_id": "2116521223",
+        "commented_code": "@@ -171,7 +171,9 @@ pub(crate) fn check_tokens(\n         pycodestyle::rules::too_many_newlines_at_end_of_file(context, tokens, cell_offsets);\n     }\n \n-    context\n-        .as_mut_vec()\n-        .retain(|diagnostic| settings.rules.enabled(diagnostic.rule()));\n+    context.as_mut_vec().retain(|diagnostic| {\n+        diagnostic\n+            .to_rule()\n+            .is_none_or(|rule| settings.rules.enabled(rule))",
+        "comment_created_at": "2025-05-30T19:34:04+00:00",
+        "comment_author": "ntBre",
+        "comment_body": "Looking at this again, maybe these should all be `is_some_and`. I don't think it actually matters because they should all be lint diagnostics, not syntax errors, at this point, but `is_none_or` would retain syntax errors if they were ever present at this point.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2122869169",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18391,
+        "pr_file": "crates/ruff_linter/src/checkers/tokens.rs",
+        "discussion_id": "2116521223",
+        "commented_code": "@@ -171,7 +171,9 @@ pub(crate) fn check_tokens(\n         pycodestyle::rules::too_many_newlines_at_end_of_file(context, tokens, cell_offsets);\n     }\n \n-    context\n-        .as_mut_vec()\n-        .retain(|diagnostic| settings.rules.enabled(diagnostic.rule()));\n+    context.as_mut_vec().retain(|diagnostic| {\n+        diagnostic\n+            .to_rule()\n+            .is_none_or(|rule| settings.rules.enabled(rule))",
+        "comment_created_at": "2025-06-03T06:43:58+00:00",
+        "comment_author": "MichaReiser",
+        "comment_body": "I didn't realize this before but it's pretty scary that `check_tokens` could remove diagnostics that were added outside `check_tokens` (we aren't in control of where the context comes from). I think we should refactor this and avoid pushing diagnostics that aren't enabled instead.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2154970356",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18391,
+        "pr_file": "crates/ruff_linter/src/checkers/tokens.rs",
+        "discussion_id": "2116521223",
+        "commented_code": "@@ -171,7 +171,9 @@ pub(crate) fn check_tokens(\n         pycodestyle::rules::too_many_newlines_at_end_of_file(context, tokens, cell_offsets);\n     }\n \n-    context\n-        .as_mut_vec()\n-        .retain(|diagnostic| settings.rules.enabled(diagnostic.rule()));\n+    context.as_mut_vec().retain(|diagnostic| {\n+        diagnostic\n+            .to_rule()\n+            .is_none_or(|rule| settings.rules.enabled(rule))",
+        "comment_created_at": "2025-06-18T15:52:59+00:00",
+        "comment_author": "ntBre",
+        "comment_body": "Yeah I looked into this a bit originally, and it's just a big refactor. Every rule reachable from this function needs to be updated to check if its rule is enabled before emitting a diagnostic. But it will make things simpler and more performant too. (And less scary, I didn't even consider dropping unrelated diagnostics before!)\r\n\r\nI'll tackle that separately!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2155519687",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18391,
+        "pr_file": "crates/ruff_linter/src/checkers/tokens.rs",
+        "discussion_id": "2116521223",
+        "commented_code": "@@ -171,7 +171,9 @@ pub(crate) fn check_tokens(\n         pycodestyle::rules::too_many_newlines_at_end_of_file(context, tokens, cell_offsets);\n     }\n \n-    context\n-        .as_mut_vec()\n-        .retain(|diagnostic| settings.rules.enabled(diagnostic.rule()));\n+    context.as_mut_vec().retain(|diagnostic| {\n+        diagnostic\n+            .to_rule()\n+            .is_none_or(|rule| settings.rules.enabled(rule))",
+        "comment_created_at": "2025-06-18T21:11:58+00:00",
+        "comment_author": "ntBre",
+        "comment_body": "Resolved by https://github.com/astral-sh/ruff/pull/18769",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2125949489",
+    "pr_number": 18445,
+    "pr_file": "crates/ty_python_semantic/src/ast_node_ref.rs",
+    "created_at": "2025-06-04T07:59:53+00:00",
+    "commented_code": "/// run on every AST change. All other queries only run when the expression's identity changes.\n #[derive(Clone)]\n pub struct AstNodeRef<T> {\n-    /// Owned reference to the node's [`ParsedModule`].\n+    /// Owned reference to the node's [`ParsedModuleRef`].\n     ///\n     /// The node's reference is guaranteed to remain valid as long as it's enclosing\n-    /// [`ParsedModule`] is alive.\n-    parsed: ParsedModule,\n+    /// [`ParsedModuleRef`] is alive.\n+    parsed: ParsedModuleRef,\n \n     /// Pointer to the referenced node.\n     node: std::ptr::NonNull<T>,\n }\n \n #[expect(unsafe_code)]\n impl<T> AstNodeRef<T> {\n-    /// Creates a new `AstNodeRef` that references `node`. The `parsed` is the [`ParsedModule`] to\n+    /// Creates a new `AstNodeRef` that references `node`. The `parsed` is the [`ParsedModuleRef`] to\n     /// which the `AstNodeRef` belongs.\n     ///\n     /// ## Safety\n     ///\n     /// Dereferencing the `node` can result in undefined behavior if `parsed` isn't the\n-    /// [`ParsedModule`] to which `node` belongs. It's the caller's responsibility to ensure that\n+    /// [`ParsedModuleRef`] to which `node` belongs. It's the caller's responsibility to ensure that\n     /// the invariant `node belongs to parsed` is upheld.\n-    pub(super) unsafe fn new(parsed: ParsedModule, node: &T) -> Self {\n+    pub(super) unsafe fn new(parsed: ParsedModuleRef, node: &T) -> Self {\n         Self {\n             parsed,\n             node: std::ptr::NonNull::from(node),\n         }\n     }\n \n     /// Returns a reference to the wrapped node.\n-    pub const fn node(&self) -> &T {\n+    pub fn node<'ast>(&self, parsed: &'ast ParsedModuleRef) -> &'ast T {",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2125949489",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18445,
+        "pr_file": "crates/ty_python_semantic/src/ast_node_ref.rs",
+        "discussion_id": "2125949489",
+        "commented_code": "@@ -33,82 +32,51 @@ use ruff_db::parsed::ParsedModule;\n /// run on every AST change. All other queries only run when the expression's identity changes.\n #[derive(Clone)]\n pub struct AstNodeRef<T> {\n-    /// Owned reference to the node's [`ParsedModule`].\n+    /// Owned reference to the node's [`ParsedModuleRef`].\n     ///\n     /// The node's reference is guaranteed to remain valid as long as it's enclosing\n-    /// [`ParsedModule`] is alive.\n-    parsed: ParsedModule,\n+    /// [`ParsedModuleRef`] is alive.\n+    parsed: ParsedModuleRef,\n \n     /// Pointer to the referenced node.\n     node: std::ptr::NonNull<T>,\n }\n \n #[expect(unsafe_code)]\n impl<T> AstNodeRef<T> {\n-    /// Creates a new `AstNodeRef` that references `node`. The `parsed` is the [`ParsedModule`] to\n+    /// Creates a new `AstNodeRef` that references `node`. The `parsed` is the [`ParsedModuleRef`] to\n     /// which the `AstNodeRef` belongs.\n     ///\n     /// ## Safety\n     ///\n     /// Dereferencing the `node` can result in undefined behavior if `parsed` isn't the\n-    /// [`ParsedModule`] to which `node` belongs. It's the caller's responsibility to ensure that\n+    /// [`ParsedModuleRef`] to which `node` belongs. It's the caller's responsibility to ensure that\n     /// the invariant `node belongs to parsed` is upheld.\n-    pub(super) unsafe fn new(parsed: ParsedModule, node: &T) -> Self {\n+    pub(super) unsafe fn new(parsed: ParsedModuleRef, node: &T) -> Self {\n         Self {\n             parsed,\n             node: std::ptr::NonNull::from(node),\n         }\n     }\n \n     /// Returns a reference to the wrapped node.\n-    pub const fn node(&self) -> &T {\n+    pub fn node<'ast>(&self, parsed: &'ast ParsedModuleRef) -> &'ast T {",
+        "comment_created_at": "2025-06-04T07:59:53+00:00",
+        "comment_author": "MichaReiser",
+        "comment_body": "Let's document that this method panics if `parsed` isn't a reference to the same `ParsedModule` (including revision) as for which the `AstNodeRef` was created with.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

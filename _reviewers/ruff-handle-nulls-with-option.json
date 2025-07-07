@@ -1,0 +1,146 @@
+[
+  {
+    "discussion_id": "2181952552",
+    "pr_number": 19108,
+    "pr_file": "crates/ty_ide/src/semantic_tokens.rs",
+    "created_at": "2025-07-03T06:21:07+00:00",
+    "commented_code": "+use crate::Db;\n+use ruff_db::files::File;\n+use ruff_db::parsed::parsed_module;\n+use ruff_python_ast as ast;\n+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};\n+use ruff_python_ast::{Expr, Stmt, TypeParam, TypeParams};\n+use ruff_text_size::{Ranged, TextRange};\n+use ty_python_semantic::{HasType, SemanticModel, types::Type};\n+\n+// This module walks the AST and collects a set of \"semantic tokens\" for a file\n+// or a range within a file. Each semantic token provides a \"token type\" and zero\n+// or more \"modifiers\". This information can be used by an editor to provide\n+// color coding based on semantic meaning.\n+\n+// Current limitations and areas for future improvement:\n+\n+// TODO: Need to handle semantic tokens within quoted annotations.\n+\n+// TODO: Need to properly handle Annotated expressions. All type arguments other\n+// than the first should be treated as value expressions, not as type expressions.\n+\n+// TODO: An identifier that resolves to a parameter when used within a function\n+// should be classified as a parameter, selfParameter, or clsParameter token.\n+\n+// TODO: Properties (or perhaps more generally, descriptor objects?) should be\n+// classified as property tokens rather than just variables.\n+\n+// TODO: Special forms like Protocol and TypedDict should probably be classified\n+// as class tokens, but they are currently classified as variables.\n+\n+// TODO: Type aliases (including those defined with the Python 3.12 \"type\" statement)\n+// do not currently have a dedicated semantic token type, but they maybe should.\n+\n+// TODO: Additional token modifiers might be added (e.g. for static methods,\n+// abstract methods and classes).\n+\n+/// Semantic token types supported by the language server.\n+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]\n+#[repr(u32)]\n+pub enum SemanticTokenType {\n+    Namespace = 0,\n+    Class = 1,\n+    Parameter = 2,\n+    SelfParameter = 3,\n+    ClsParameter = 4,\n+    Variable = 5,\n+    Property = 6,\n+    Function = 7,\n+    Method = 8,\n+    Keyword = 9,\n+    String = 10,\n+    Number = 11,\n+    Decorator = 12,\n+    BuiltinConstant = 13,\n+    TypeParameter = 14,\n+}\n+\n+impl SemanticTokenType {\n+    /// Returns all supported token types for LSP capabilities.\n+    pub fn all() -> Vec<&'static str> {\n+        vec![\n+            \"namespace\",\n+            \"class\",\n+            \"parameter\",\n+            \"selfParameter\",\n+            \"clsParameter\",\n+            \"variable\",\n+            \"property\",\n+            \"function\",\n+            \"method\",\n+            \"keyword\",\n+            \"string\",\n+            \"number\",\n+            \"decorator\",\n+            \"builtinConstant\",\n+            \"typeParameter\",\n+        ]\n+    }\n+}\n+\n+/// Semantic token modifiers.\n+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]\n+#[repr(u32)]\n+pub enum SemanticTokenModifier {\n+    Definition = 0,\n+    Readonly = 1,\n+    Async = 2,\n+}\n+\n+impl SemanticTokenModifier {\n+    /// Returns all supported token modifiers for LSP capabilities.\n+    pub fn all() -> Vec<&'static str> {\n+        vec![\"definition\", \"readonly\", \"async\"]\n+    }\n+}\n+\n+/// A semantic token with its position and classification.\n+#[derive(Debug, Clone, PartialEq, Eq)]\n+pub struct SemanticToken {\n+    pub range: TextRange,\n+    pub token_type: SemanticTokenType,\n+    pub modifiers: Vec<SemanticTokenModifier>,\n+}\n+\n+/// The result of semantic tokenization.\n+#[derive(Debug, Clone, PartialEq, Eq)]\n+pub struct SemanticTokens {\n+    pub tokens: Vec<SemanticToken>,\n+}\n+\n+/// Generates semantic tokens for a Python file within the specified range.\n+/// Pass a full file range to get tokens for the entire file.\n+pub fn semantic_tokens(db: &dyn Db, file: File, range: TextRange) -> Option<SemanticTokens> {",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2181952552",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 19108,
+        "pr_file": "crates/ty_ide/src/semantic_tokens.rs",
+        "discussion_id": "2181952552",
+        "commented_code": "@@ -0,0 +1,2531 @@\n+use crate::Db;\n+use ruff_db::files::File;\n+use ruff_db::parsed::parsed_module;\n+use ruff_python_ast as ast;\n+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};\n+use ruff_python_ast::{Expr, Stmt, TypeParam, TypeParams};\n+use ruff_text_size::{Ranged, TextRange};\n+use ty_python_semantic::{HasType, SemanticModel, types::Type};\n+\n+// This module walks the AST and collects a set of \"semantic tokens\" for a file\n+// or a range within a file. Each semantic token provides a \"token type\" and zero\n+// or more \"modifiers\". This information can be used by an editor to provide\n+// color coding based on semantic meaning.\n+\n+// Current limitations and areas for future improvement:\n+\n+// TODO: Need to handle semantic tokens within quoted annotations.\n+\n+// TODO: Need to properly handle Annotated expressions. All type arguments other\n+// than the first should be treated as value expressions, not as type expressions.\n+\n+// TODO: An identifier that resolves to a parameter when used within a function\n+// should be classified as a parameter, selfParameter, or clsParameter token.\n+\n+// TODO: Properties (or perhaps more generally, descriptor objects?) should be\n+// classified as property tokens rather than just variables.\n+\n+// TODO: Special forms like Protocol and TypedDict should probably be classified\n+// as class tokens, but they are currently classified as variables.\n+\n+// TODO: Type aliases (including those defined with the Python 3.12 \"type\" statement)\n+// do not currently have a dedicated semantic token type, but they maybe should.\n+\n+// TODO: Additional token modifiers might be added (e.g. for static methods,\n+// abstract methods and classes).\n+\n+/// Semantic token types supported by the language server.\n+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]\n+#[repr(u32)]\n+pub enum SemanticTokenType {\n+    Namespace = 0,\n+    Class = 1,\n+    Parameter = 2,\n+    SelfParameter = 3,\n+    ClsParameter = 4,\n+    Variable = 5,\n+    Property = 6,\n+    Function = 7,\n+    Method = 8,\n+    Keyword = 9,\n+    String = 10,\n+    Number = 11,\n+    Decorator = 12,\n+    BuiltinConstant = 13,\n+    TypeParameter = 14,\n+}\n+\n+impl SemanticTokenType {\n+    /// Returns all supported token types for LSP capabilities.\n+    pub fn all() -> Vec<&'static str> {\n+        vec![\n+            \"namespace\",\n+            \"class\",\n+            \"parameter\",\n+            \"selfParameter\",\n+            \"clsParameter\",\n+            \"variable\",\n+            \"property\",\n+            \"function\",\n+            \"method\",\n+            \"keyword\",\n+            \"string\",\n+            \"number\",\n+            \"decorator\",\n+            \"builtinConstant\",\n+            \"typeParameter\",\n+        ]\n+    }\n+}\n+\n+/// Semantic token modifiers.\n+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]\n+#[repr(u32)]\n+pub enum SemanticTokenModifier {\n+    Definition = 0,\n+    Readonly = 1,\n+    Async = 2,\n+}\n+\n+impl SemanticTokenModifier {\n+    /// Returns all supported token modifiers for LSP capabilities.\n+    pub fn all() -> Vec<&'static str> {\n+        vec![\"definition\", \"readonly\", \"async\"]\n+    }\n+}\n+\n+/// A semantic token with its position and classification.\n+#[derive(Debug, Clone, PartialEq, Eq)]\n+pub struct SemanticToken {\n+    pub range: TextRange,\n+    pub token_type: SemanticTokenType,\n+    pub modifiers: Vec<SemanticTokenModifier>,\n+}\n+\n+/// The result of semantic tokenization.\n+#[derive(Debug, Clone, PartialEq, Eq)]\n+pub struct SemanticTokens {\n+    pub tokens: Vec<SemanticToken>,\n+}\n+\n+/// Generates semantic tokens for a Python file within the specified range.\n+/// Pass a full file range to get tokens for the entire file.\n+pub fn semantic_tokens(db: &dyn Db, file: File, range: TextRange) -> Option<SemanticTokens> {",
+        "comment_created_at": "2025-07-03T06:21:07+00:00",
+        "comment_author": "dhruvmanila",
+        "comment_body": "Should we use `Option<TextRange>` instead where `None` indicates the full file range? This would allow us to avoid doing any range operations which for now is only intersection. The operation can then be changed to the following which skips the intersection checks if it's `None` and defaults to `false`\r\n\r\n```rs\r\nif self.range_filter.is_some_and(|range_filter| range.intersect(range_filter)) { ... }\r\n```\r\n\r\nThis would also simplify the tests where we can directly pass in `None`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2168413125",
+    "pr_number": 18946,
+    "pr_file": "crates/ruff_linter/src/message/text.rs",
+    "created_at": "2025-06-26T07:43:00+00:00",
+    "commented_code": ")\n         .fix_up_empty_spans_after_line_terminator();\n \n-        let label = self\n-            .message\n-            .noqa_code()\n-            .map_or_else(String::new, |code| code.to_string());\n+        let label = self.message.secondary_code().unwrap_or(\"\");",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2168413125",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18946,
+        "pr_file": "crates/ruff_linter/src/message/text.rs",
+        "discussion_id": "2168413125",
+        "commented_code": "@@ -252,10 +252,7 @@ impl Display for MessageCodeFrame<'_> {\n         )\n         .fix_up_empty_spans_after_line_terminator();\n \n-        let label = self\n-            .message\n-            .noqa_code()\n-            .map_or_else(String::new, |code| code.to_string());\n+        let label = self.message.secondary_code().unwrap_or(\"\");",
+        "comment_created_at": "2025-06-26T07:43:00+00:00",
+        "comment_author": "MichaReiser",
+        "comment_body": "```suggestion\r\n        let label = self.message.secondary_code().unwrap_or_default();\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2162039126",
+    "pr_number": 18735,
+    "pr_file": "crates/ruff_linter/src/rules/ruff/helpers.rs",
+    "created_at": "2025-06-23T16:41:28+00:00",
+    "commented_code": "None\n }\n \n+/// Return true if dataclass (stdlib or `attrs`) is frozen,\n+/// or `None` if the class is not a dataclass.\n+pub(super) fn is_frozen_dataclass(\n+    dataclass_decorator: &ast::Decorator,\n+    semantic: &SemanticModel,\n+) -> Option<bool> {\n+    let qualified_name =\n+        semantic.resolve_qualified_name(map_callable(&dataclass_decorator.expression))?;\n+\n+    match qualified_name.segments() {\n+        [\"dataclasses\", \"dataclass\"] => {\n+            let Expr::Call(ExprCall { arguments, .. }) = &dataclass_decorator.expression else {\n+                return Some(false);\n+            };\n+\n+            for keyword in &arguments.keywords {\n+                if keyword.arg.is_none() {\n+                    continue;\n+                }\n+\n+                let keyword_arg = keyword.arg.as_ref().unwrap();\n+                let Identifier {\n+                    id,\n+                    range: _,\n+                    node_index: _,\n+                } = keyword_arg;\n+\n+                if id.as_str() == \"frozen\" {\n+                    return match Truthiness::from_expr(&keyword.value, |id| {\n+                        semantic.has_builtin_binding(id)\n+                    }) {\n+                        Truthiness::Truthy | Truthiness::True => Some(true),\n+                        _ => Some(false),",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2162039126",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18735,
+        "pr_file": "crates/ruff_linter/src/rules/ruff/helpers.rs",
+        "discussion_id": "2162039126",
+        "commented_code": "@@ -163,6 +163,49 @@ pub(super) fn dataclass_kind<'a>(\n     None\n }\n \n+/// Return true if dataclass (stdlib or `attrs`) is frozen,\n+/// or `None` if the class is not a dataclass.\n+pub(super) fn is_frozen_dataclass(\n+    dataclass_decorator: &ast::Decorator,\n+    semantic: &SemanticModel,\n+) -> Option<bool> {\n+    let qualified_name =\n+        semantic.resolve_qualified_name(map_callable(&dataclass_decorator.expression))?;\n+\n+    match qualified_name.segments() {\n+        [\"dataclasses\", \"dataclass\"] => {\n+            let Expr::Call(ExprCall { arguments, .. }) = &dataclass_decorator.expression else {\n+                return Some(false);\n+            };\n+\n+            for keyword in &arguments.keywords {\n+                if keyword.arg.is_none() {\n+                    continue;\n+                }\n+\n+                let keyword_arg = keyword.arg.as_ref().unwrap();\n+                let Identifier {\n+                    id,\n+                    range: _,\n+                    node_index: _,\n+                } = keyword_arg;\n+\n+                if id.as_str() == \"frozen\" {\n+                    return match Truthiness::from_expr(&keyword.value, |id| {\n+                        semantic.has_builtin_binding(id)\n+                    }) {\n+                        Truthiness::Truthy | Truthiness::True => Some(true),\n+                        _ => Some(false),",
+        "comment_created_at": "2025-06-23T16:41:28+00:00",
+        "comment_author": "ntBre",
+        "comment_body": "I think you could use `Truthiness::into_bool` here, with `unwrap_or_default()` if we decide to make the function as a whole return a `bool` instead of an `Option`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2160899260",
+    "pr_number": 18604,
+    "pr_file": "crates/ruff_python_trivia/src/pragmas.rs",
+    "created_at": "2025-06-23T07:22:53+00:00",
+    "commented_code": "-/// Returns `true` if a comment appears to be a pragma comment.\n+/// Returns a tuple containing:\n+/// 1. A boolean indicating if a comment appears to be a pragma comment\n+/// 2. The position in the comment where the pragma begins (0 if the entire comment is a pragma)\n ///\n /// ```\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# type: ignore\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# noqa: F401\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# noqa\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# NoQA\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# nosec\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# nosec B602, B607\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# isort: off\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# isort: skip\"));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# type: ignore\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# noqa: F401\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# noqa\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# NoQA\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# nosec\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# nosec B602, B607\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# isort: off\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# isort: skip\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# test # noqa\"), (true, 6));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# not a pragma\"), (false, 0));\n /// ```\n-pub fn is_pragma_comment(comment: &str) -> bool {\n+pub fn is_pragma_comment(comment: &str) -> (bool, usize) {",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2160899260",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18604,
+        "pr_file": "crates/ruff_python_trivia/src/pragmas.rs",
+        "discussion_id": "2160899260",
+        "commented_code": "@@ -1,30 +1,89 @@\n-/// Returns `true` if a comment appears to be a pragma comment.\n+/// Returns a tuple containing:\n+/// 1. A boolean indicating if a comment appears to be a pragma comment\n+/// 2. The position in the comment where the pragma begins (0 if the entire comment is a pragma)\n ///\n /// ```\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# type: ignore\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# noqa: F401\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# noqa\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# NoQA\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# nosec\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# nosec B602, B607\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# isort: off\"));\n-/// assert!(ruff_python_trivia::is_pragma_comment(\"# isort: skip\"));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# type: ignore\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# noqa: F401\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# noqa\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# NoQA\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# nosec\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# nosec B602, B607\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# isort: off\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# isort: skip\"), (true, 0));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# test # noqa\"), (true, 6));\n+/// assert_eq!(ruff_python_trivia::is_pragma_comment(\"# not a pragma\"), (false, 0));\n /// ```\n-pub fn is_pragma_comment(comment: &str) -> bool {\n+pub fn is_pragma_comment(comment: &str) -> (bool, usize) {",
+        "comment_created_at": "2025-06-23T07:22:53+00:00",
+        "comment_author": "MichaReiser",
+        "comment_body": "We can simplify this to `Option<usize>` where it returns `None` if it isn't a pragma comment and `Some(relative_offset)` otherwise",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2051020801",
+    "pr_number": 17368,
+    "pr_file": "crates/ruff_linter/src/rules/flake8_pytest_style/rules/raises.rs",
+    "created_at": "2025-04-18T19:14:35+00:00",
+    "commented_code": "));\n     }\n }\n+\n+fn try_fix_legacy_raises(stmt: &Stmt, semantic: &SemanticModel) -> anyhow::Result<StmtWith> {",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2051020801",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 17368,
+        "pr_file": "crates/ruff_linter/src/rules/flake8_pytest_style/rules/raises.rs",
+        "discussion_id": "2051020801",
+        "commented_code": "@@ -272,3 +351,128 @@ fn exception_needs_match(checker: &Checker, exception: &Expr) {\n         ));\n     }\n }\n+\n+fn try_fix_legacy_raises(stmt: &Stmt, semantic: &SemanticModel) -> anyhow::Result<StmtWith> {",
+        "comment_created_at": "2025-04-18T19:14:35+00:00",
+        "comment_author": "ntBre",
+        "comment_body": "Does anything here actually return a `Result` naturally? I might be missing something, but everything looks like it returns an `Option`, so we could just return an `Option` from the function and still use `?` everywhere. I don't think the additional messages from `bail` and `context` justify using a `Result` here.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2051488053",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 17368,
+        "pr_file": "crates/ruff_linter/src/rules/flake8_pytest_style/rules/raises.rs",
+        "discussion_id": "2051020801",
+        "commented_code": "@@ -272,3 +351,128 @@ fn exception_needs_match(checker: &Checker, exception: &Expr) {\n         ));\n     }\n }\n+\n+fn try_fix_legacy_raises(stmt: &Stmt, semantic: &SemanticModel) -> anyhow::Result<StmtWith> {",
+        "comment_created_at": "2025-04-19T13:54:00+00:00",
+        "comment_author": "twentyone212121",
+        "comment_body": "I agree, I replaced `Result` with `Option`. The additional messages were helpful for debugging earlier, but using `Option` makes things clearer now.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2140624611",
+    "pr_number": 18629,
+    "pr_file": "crates/ty_ide/src/find_node.rs",
+    "created_at": "2025-06-11T16:29:44+00:00",
+    "commented_code": "};\n \n     root.visit_source_order(&mut visitor);\n-\n-    let minimal = visitor.ancestors.pop().unwrap_or(root);\n+    if visitor.ancestors.is_empty() {\n+        visitor.ancestors.push(root);\n+    }\n     CoveringNode {\n-        node: minimal,\n-        ancestors: visitor.ancestors,\n+        nodes: visitor.ancestors,\n     }\n }\n \n /// The node with a minimal range that fully contains the search range.\n pub(crate) struct CoveringNode<'a> {\n-    /// The node with a minimal range that fully contains the search range.\n-    node: AnyNodeRef<'a>,\n-\n-    /// The node's ancestor (the spine up to the root).\n-    ancestors: Vec<AnyNodeRef<'a>>,\n+    /// The covering node, along with all of its ancestors up to the\n+    /// root. The root is always the first element and the covering\n+    /// node found is always the last node. This sequence is guaranteed\n+    /// to be non-empty.\n+    nodes: Vec<AnyNodeRef<'a>>,\n }\n \n impl<'a> CoveringNode<'a> {\n+    /// Returns the covering node found.\n     pub(crate) fn node(&self) -> AnyNodeRef<'a> {\n-        self.node\n+        *self.nodes.last().unwrap()",
+    "repo_full_name": "astral-sh/ruff",
+    "discussion_comments": [
+      {
+        "comment_id": "2140624611",
+        "repo_full_name": "astral-sh/ruff",
+        "pr_number": 18629,
+        "pr_file": "crates/ty_ide/src/find_node.rs",
+        "discussion_id": "2140624611",
+        "commented_code": "@@ -49,58 +49,78 @@ pub(crate) fn covering_node(root: AnyNodeRef, range: TextRange) -> CoveringNode\n     };\n \n     root.visit_source_order(&mut visitor);\n-\n-    let minimal = visitor.ancestors.pop().unwrap_or(root);\n+    if visitor.ancestors.is_empty() {\n+        visitor.ancestors.push(root);\n+    }\n     CoveringNode {\n-        node: minimal,\n-        ancestors: visitor.ancestors,\n+        nodes: visitor.ancestors,\n     }\n }\n \n /// The node with a minimal range that fully contains the search range.\n pub(crate) struct CoveringNode<'a> {\n-    /// The node with a minimal range that fully contains the search range.\n-    node: AnyNodeRef<'a>,\n-\n-    /// The node's ancestor (the spine up to the root).\n-    ancestors: Vec<AnyNodeRef<'a>>,\n+    /// The covering node, along with all of its ancestors up to the\n+    /// root. The root is always the first element and the covering\n+    /// node found is always the last node. This sequence is guaranteed\n+    /// to be non-empty.\n+    nodes: Vec<AnyNodeRef<'a>>,\n }\n \n impl<'a> CoveringNode<'a> {\n+    /// Returns the covering node found.\n     pub(crate) fn node(&self) -> AnyNodeRef<'a> {\n-        self.node\n+        *self.nodes.last().unwrap()",
+        "comment_created_at": "2025-06-11T16:29:44+00:00",
+        "comment_author": "AlexWaygood",
+        "comment_body": "```suggestion\r\n        *self.nodes.last().expect(\"`CoveringNode::nodes` should always be non-empty\")\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

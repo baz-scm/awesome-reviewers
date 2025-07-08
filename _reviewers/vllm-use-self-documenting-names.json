@@ -1,0 +1,158 @@
+[
+  {
+    "discussion_id": "2185853307",
+    "pr_number": 20495,
+    "pr_file": "vllm/model_executor/models/gemma3n_mm.py",
+    "created_at": "2025-07-04T17:43:21+00:00",
+    "commented_code": "+# SPDX-License-Identifier: Apache-2.0\n+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project\n+from collections.abc import Iterable, Mapping, Sequence\n+from typing import Any, Optional, TypedDict, Union\n+\n+import torch\n+from torch import nn\n+from transformers import AutoModel, BatchFeature\n+from transformers.models.gemma3n import (Gemma3nAudioConfig,\n+                                         Gemma3nAudioFeatureExtractor,\n+                                         Gemma3nConfig, Gemma3nProcessor,\n+                                         Gemma3nTextConfig,\n+                                         Gemma3nVisionConfig)\n+from transformers.models.siglip import SiglipImageProcessorFast\n+\n+from vllm.config import VllmConfig\n+from vllm.logger import init_logger\n+from vllm.model_executor.layers.layernorm import RMSNorm\n+from vllm.model_executor.layers.linear import RowParallelLinear\n+from vllm.model_executor.layers.vocab_parallel_embedding import (\n+    VocabParallelEmbedding)\n+from vllm.model_executor.models.module_mapping import MultiModelKeys\n+from vllm.model_executor.sampling_metadata import SamplingMetadata\n+from vllm.multimodal import MULTIMODAL_REGISTRY\n+from vllm.multimodal.inputs import (MultiModalDataDict, MultiModalFieldConfig,\n+                                    MultiModalKwargs)\n+from vllm.multimodal.parse import ImageProcessorItems, MultiModalDataItems\n+# yapf: disable\n+from vllm.multimodal.processing import (BaseMultiModalProcessor,\n+                                        BaseProcessingInfo, BoundPromptUpdate,\n+                                        PlaceholderFeaturesInfo,\n+                                        PromptReplacement, PromptTargetMatch,\n+                                        PromptUpdate, find_mm_placeholders,\n+                                        replace_token_matches)\n+# yapf: enable\n+from vllm.multimodal.profiling import BaseDummyInputsBuilder\n+from vllm.sequence import IntermediateTensors\n+\n+from .interfaces import MultiModalEmbeddings, SupportsMultiModal\n+from .utils import (AutoWeightsLoader, WeightsMapper,\n+                    init_vllm_registered_model, maybe_prefix,\n+                    merge_multimodal_embeddings)\n+\n+logger = init_logger(__name__)\n+\n+# This should be based on model config but we hardcode them for now.\n+TOKENS_PER_IMAGE = 256\n+TOKENS_PER_AUDIO = 188\n+\n+\n+class Gemma3nImagePixelInputs(TypedDict):\n+    pixel_values: torch.Tensor\n+    \"\"\"Shape: `(batch_size * num_images, num_channels, height, width)`\"\"\"\n+\n+\n+class Gemma3nAudioInputs(TypedDict):\n+    input_features: torch.Tensor\n+    \"\"\"Shape: `(batch_size * num_audio, seq_length, num_features)`\"\"\"\n+    input_features_mask: torch.Tensor\n+    \"\"\"Shape: `(batch_size * num_audio, seq_length)`\"\"\"\n+\n+\n+Gemma3nImageInputs = Gemma3nImagePixelInputs\n+\n+\n+class Gemma3nProcessingInfo(BaseProcessingInfo):\n+\n+    def get_hf_config(self):\n+        return self.ctx.get_hf_config(Gemma3nConfig)\n+\n+    def get_hf_processor(self, **kwargs: object):\n+        return self.ctx.get_hf_processor(Gemma3nProcessor, **kwargs)\n+\n+    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:\n+        return {\"image\": None, \"audio\": None}\n+\n+    def get_max_tokens_per_item(\n+            self, seq_len: int,\n+            mm_counts: Mapping[str, int]) -> Optional[Mapping[str, int]]:\n+\n+        return {\"image\": TOKENS_PER_IMAGE, \"audio\": TOKENS_PER_AUDIO}\n+\n+\n+class Gemma3nDummyInputsBuilder(BaseDummyInputsBuilder[Gemma3nProcessingInfo]):\n+\n+    def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:\n+        num_images = mm_counts.get(\"image\", 0)\n+        num_audios = mm_counts.get(\"audio\", 0)\n+\n+        processor = self.info.get_hf_processor()\n+        image_token = processor.image_token\n+        audio_token = processor.audio_token\n+\n+        return image_token * num_images + audio_token * num_audios\n+\n+    def get_dummy_mm_data(\n+        self,\n+        seq_len: int,\n+        mm_counts: Mapping[str, int],\n+    ) -> MultiModalDataDict:\n+        num_images = mm_counts.get(\"image\", 0)\n+        num_audios = mm_counts.get(\"audio\", 0)\n+        processor = self.info.get_hf_processor()\n+        feature_extractor: Gemma3nAudioFeatureExtractor = processor.feature_extractor  # noqa: E501\n+        # audio_len = feature_extractor.max_length\n+        audio_len = feature_extractor.fft_length\n+        image_processor: SiglipImageProcessorFast = processor.image_processor\n+        img_width = image_processor.size.get(\"width\", 224)\n+        img_height = image_processor.size.get(\"width\", 224)",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2185853307",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 20495,
+        "pr_file": "vllm/model_executor/models/gemma3n_mm.py",
+        "discussion_id": "2185853307",
+        "commented_code": "@@ -0,0 +1,505 @@\n+# SPDX-License-Identifier: Apache-2.0\n+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project\n+from collections.abc import Iterable, Mapping, Sequence\n+from typing import Any, Optional, TypedDict, Union\n+\n+import torch\n+from torch import nn\n+from transformers import AutoModel, BatchFeature\n+from transformers.models.gemma3n import (Gemma3nAudioConfig,\n+                                         Gemma3nAudioFeatureExtractor,\n+                                         Gemma3nConfig, Gemma3nProcessor,\n+                                         Gemma3nTextConfig,\n+                                         Gemma3nVisionConfig)\n+from transformers.models.siglip import SiglipImageProcessorFast\n+\n+from vllm.config import VllmConfig\n+from vllm.logger import init_logger\n+from vllm.model_executor.layers.layernorm import RMSNorm\n+from vllm.model_executor.layers.linear import RowParallelLinear\n+from vllm.model_executor.layers.vocab_parallel_embedding import (\n+    VocabParallelEmbedding)\n+from vllm.model_executor.models.module_mapping import MultiModelKeys\n+from vllm.model_executor.sampling_metadata import SamplingMetadata\n+from vllm.multimodal import MULTIMODAL_REGISTRY\n+from vllm.multimodal.inputs import (MultiModalDataDict, MultiModalFieldConfig,\n+                                    MultiModalKwargs)\n+from vllm.multimodal.parse import ImageProcessorItems, MultiModalDataItems\n+# yapf: disable\n+from vllm.multimodal.processing import (BaseMultiModalProcessor,\n+                                        BaseProcessingInfo, BoundPromptUpdate,\n+                                        PlaceholderFeaturesInfo,\n+                                        PromptReplacement, PromptTargetMatch,\n+                                        PromptUpdate, find_mm_placeholders,\n+                                        replace_token_matches)\n+# yapf: enable\n+from vllm.multimodal.profiling import BaseDummyInputsBuilder\n+from vllm.sequence import IntermediateTensors\n+\n+from .interfaces import MultiModalEmbeddings, SupportsMultiModal\n+from .utils import (AutoWeightsLoader, WeightsMapper,\n+                    init_vllm_registered_model, maybe_prefix,\n+                    merge_multimodal_embeddings)\n+\n+logger = init_logger(__name__)\n+\n+# This should be based on model config but we hardcode them for now.\n+TOKENS_PER_IMAGE = 256\n+TOKENS_PER_AUDIO = 188\n+\n+\n+class Gemma3nImagePixelInputs(TypedDict):\n+    pixel_values: torch.Tensor\n+    \"\"\"Shape: `(batch_size * num_images, num_channels, height, width)`\"\"\"\n+\n+\n+class Gemma3nAudioInputs(TypedDict):\n+    input_features: torch.Tensor\n+    \"\"\"Shape: `(batch_size * num_audio, seq_length, num_features)`\"\"\"\n+    input_features_mask: torch.Tensor\n+    \"\"\"Shape: `(batch_size * num_audio, seq_length)`\"\"\"\n+\n+\n+Gemma3nImageInputs = Gemma3nImagePixelInputs\n+\n+\n+class Gemma3nProcessingInfo(BaseProcessingInfo):\n+\n+    def get_hf_config(self):\n+        return self.ctx.get_hf_config(Gemma3nConfig)\n+\n+    def get_hf_processor(self, **kwargs: object):\n+        return self.ctx.get_hf_processor(Gemma3nProcessor, **kwargs)\n+\n+    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:\n+        return {\"image\": None, \"audio\": None}\n+\n+    def get_max_tokens_per_item(\n+            self, seq_len: int,\n+            mm_counts: Mapping[str, int]) -> Optional[Mapping[str, int]]:\n+\n+        return {\"image\": TOKENS_PER_IMAGE, \"audio\": TOKENS_PER_AUDIO}\n+\n+\n+class Gemma3nDummyInputsBuilder(BaseDummyInputsBuilder[Gemma3nProcessingInfo]):\n+\n+    def get_dummy_text(self, mm_counts: Mapping[str, int]) -> str:\n+        num_images = mm_counts.get(\"image\", 0)\n+        num_audios = mm_counts.get(\"audio\", 0)\n+\n+        processor = self.info.get_hf_processor()\n+        image_token = processor.image_token\n+        audio_token = processor.audio_token\n+\n+        return image_token * num_images + audio_token * num_audios\n+\n+    def get_dummy_mm_data(\n+        self,\n+        seq_len: int,\n+        mm_counts: Mapping[str, int],\n+    ) -> MultiModalDataDict:\n+        num_images = mm_counts.get(\"image\", 0)\n+        num_audios = mm_counts.get(\"audio\", 0)\n+        processor = self.info.get_hf_processor()\n+        feature_extractor: Gemma3nAudioFeatureExtractor = processor.feature_extractor  # noqa: E501\n+        # audio_len = feature_extractor.max_length\n+        audio_len = feature_extractor.fft_length\n+        image_processor: SiglipImageProcessorFast = processor.image_processor\n+        img_width = image_processor.size.get(\"width\", 224)\n+        img_height = image_processor.size.get(\"width\", 224)",
+        "comment_created_at": "2025-07-04T17:43:21+00:00",
+        "comment_author": "gemini-code-assist[bot]",
+        "comment_body": "![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)\n\nThere's a typo here. You are using `image_processor.size.get(\"width\", 224)` to get the image height. This should be `image_processor.size.get(\"height\", 224)`.\n\n```suggestion\n        img_height = image_processor.size.get(\"height\", 224)\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2183786658",
+    "pr_number": 19719,
+    "pr_file": "vllm/compilation/decorators.py",
+    "created_at": "2025-07-03T21:37:20+00:00",
+    "commented_code": "_T = TypeVar(\"_T\", bound=type[nn.Module])\n \n \n+def skip_torch_compile(cls: _T) -> _T:\n+    cls._skip_compile_vllm = True\n+    return cls",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2183786658",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19719,
+        "pr_file": "vllm/compilation/decorators.py",
+        "discussion_id": "2183786658",
+        "commented_code": "@@ -23,6 +23,11 @@\n _T = TypeVar(\"_T\", bound=type[nn.Module])\n \n \n+def skip_torch_compile(cls: _T) -> _T:\n+    cls._skip_compile_vllm = True\n+    return cls",
+        "comment_created_at": "2025-07-03T21:37:20+00:00",
+        "comment_author": "zou3519",
+        "comment_body": "nit: API naming a bit weird to me, this is like: \"if this module has a support_torch_compile decorator directly applied on it, we will ignore it\"",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2190701719",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19719,
+        "pr_file": "vllm/compilation/decorators.py",
+        "discussion_id": "2183786658",
+        "commented_code": "@@ -23,6 +23,11 @@\n _T = TypeVar(\"_T\", bound=type[nn.Module])\n \n \n+def skip_torch_compile(cls: _T) -> _T:\n+    cls._skip_compile_vllm = True\n+    return cls",
+        "comment_created_at": "2025-07-07T17:36:56+00:00",
+        "comment_author": "sarckk",
+        "comment_body": "how about `ignore_torch_compile`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2191324263",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19719,
+        "pr_file": "vllm/compilation/decorators.py",
+        "discussion_id": "2183786658",
+        "commented_code": "@@ -23,6 +23,11 @@\n _T = TypeVar(\"_T\", bound=type[nn.Module])\n \n \n+def skip_torch_compile(cls: _T) -> _T:\n+    cls._skip_compile_vllm = True\n+    return cls",
+        "comment_created_at": "2025-07-08T02:01:12+00:00",
+        "comment_author": "zou3519",
+        "comment_body": "`ignore_torch_compile` seems better, I also want a comment here to the effect of \"if this module has a support_torch_compile decorator directly applied on it, we will ignore it, but we will not ignore subgraphs that have support_torch_compile\", something to point out that it isn't recursive.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2162282949",
+    "pr_number": 18293,
+    "pr_file": "vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py",
+    "created_at": "2025-06-23T18:30:44+00:00",
+    "commented_code": "# New requests are added by update_state_after_alloc in\n         # the scheduler. Used to make metadata passed to Worker.\n         self._reqs_need_recv: dict[str, tuple[Request, list[int]]] = {}\n+        self._reqs_need_send: dict[str, tuple[Request, list[int]]] = {}",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2162282949",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 18293,
+        "pr_file": "vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py",
+        "discussion_id": "2162282949",
+        "commented_code": "@@ -191,6 +227,7 @@ def __init__(self, vllm_config: VllmConfig, engine_id: str):\n         # New requests are added by update_state_after_alloc in\n         # the scheduler. Used to make metadata passed to Worker.\n         self._reqs_need_recv: dict[str, tuple[Request, list[int]]] = {}\n+        self._reqs_need_send: dict[str, tuple[Request, list[int]]] = {}",
+        "comment_created_at": "2025-06-23T18:30:44+00:00",
+        "comment_author": "njhill",
+        "comment_body": "I would suggest renaming this to something like `_reqs_need_save`. Since that's what it controls and it doesn't apply in the direct GPU send case.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2178290651",
+    "pr_number": 20328,
+    "pr_file": "vllm/compilation/wrapper.py",
+    "created_at": "2025-07-01T18:25:28+00:00",
+    "commented_code": "self.__class__.forward.__code__ = self.compiled_codes[index]\n         yield\n         self.__class__.forward.__code__ = self.original_code_object\n+\n+\n+class CudaGraphWrapper:\n+\n+    def __init__(self):\n+        vllm_config = get_current_vllm_config()\n+        self.vllm_config = vllm_config\n+        self.compilation_config = vllm_config.compilation_config\n+\n+        # configs\n+        self.cudagraph_capture_sizes = set(\n+            self.compilation_config.cudagraph_capture_sizes)\n+        self.cudagraph_num_of_warmups = (\n+            self.compilation_config.cudagraph_num_of_warmups)\n+        assert self.compilation_config.simple_cuda_graph",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2178290651",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 20328,
+        "pr_file": "vllm/compilation/wrapper.py",
+        "discussion_id": "2178290651",
+        "commented_code": "@@ -133,3 +134,91 @@ def dispatch_to_code(self, index: int):\n         self.__class__.forward.__code__ = self.compiled_codes[index]\n         yield\n         self.__class__.forward.__code__ = self.original_code_object\n+\n+\n+class CudaGraphWrapper:\n+\n+    def __init__(self):\n+        vllm_config = get_current_vllm_config()\n+        self.vllm_config = vllm_config\n+        self.compilation_config = vllm_config.compilation_config\n+\n+        # configs\n+        self.cudagraph_capture_sizes = set(\n+            self.compilation_config.cudagraph_capture_sizes)\n+        self.cudagraph_num_of_warmups = (\n+            self.compilation_config.cudagraph_num_of_warmups)\n+        assert self.compilation_config.simple_cuda_graph",
+        "comment_created_at": "2025-07-01T18:25:28+00:00",
+        "comment_author": "gemini-code-assist[bot]",
+        "comment_body": "![critical](https://www.gstatic.com/codereviewagent/critical.svg)\n\nThe configuration parameter name should be `simple_cuda_graph`, not `use_simple_cuda_graph`. This will cause the assertion to fail with an `AttributeError`.\n\n```suggestion\n        assert self.compilation_config.simple_cuda_graph\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2146402245",
+    "pr_number": 19636,
+    "pr_file": "vllm/model_executor/layers/fused_moe/__init__.py",
+    "created_at": "2025-06-14T03:28:48+00:00",
+    "commented_code": "\"FusedMoE\",\n     \"FusedMoEMethodBase\",\n     \"FusedMoeWeightScaleSupported\",\n+    \"FusedMoEPermuteExpertsUnpermute\",\n+    \"FusedMoEActivationFormat\",\n+    \"FusedMoEPrepareAndFinalize\",\n+    \"MoEConfig\",",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2146402245",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19636,
+        "pr_file": "vllm/model_executor/layers/fused_moe/__init__.py",
+        "discussion_id": "2146402245",
+        "commented_code": "@@ -28,6 +32,10 @@ def get_config() -> Optional[dict[str, Any]]:\n     \"FusedMoE\",\n     \"FusedMoEMethodBase\",\n     \"FusedMoeWeightScaleSupported\",\n+    \"FusedMoEPermuteExpertsUnpermute\",\n+    \"FusedMoEActivationFormat\",\n+    \"FusedMoEPrepareAndFinalize\",\n+    \"MoEConfig\",",
+        "comment_created_at": "2025-06-14T03:28:48+00:00",
+        "comment_author": "gemini-code-assist[bot]",
+        "comment_body": "![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)\n\nThe `__all__` list includes `\"MoEConfig\"`. However, the configuration class defined in `vllm/model_executor/layers/fused_moe/config.py` is named `FusedMoEConfig`. \n\nTo maintain clarity and consistency in the public API, please ensure that `__all__` accurately reflects the canonical names of the exported classes. \n\nIf `MoEConfig` is intended as an alias for `FusedMoEConfig`, this alias should be explicitly defined in this `__init__.py` file. Otherwise, `__all__` should be updated to use `\"FusedMoEConfig\"`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2188411235",
+    "pr_number": 20526,
+    "pr_file": "vllm/engine/arg_utils.py",
+    "created_at": "2025-07-06T15:40:08+00:00",
+    "commented_code": "**scheduler_kwargs[\"multi_step_stream_outputs\"])\n         scheduler_group.add_argument(\"--scheduling-policy\",\n                                      **scheduler_kwargs[\"policy\"])\n+        scheduler_group.add_argument(\n+            \"--max-waiting-queue-length\",\n+            **scheduler_kwargs[\"max_waiting_queue_length\"])",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2188411235",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 20526,
+        "pr_file": "vllm/engine/arg_utils.py",
+        "discussion_id": "2188411235",
+        "commented_code": "@@ -860,6 +860,9 @@ def add_cli_args(parser: FlexibleArgumentParser) -> FlexibleArgumentParser:\n             **scheduler_kwargs[\"multi_step_stream_outputs\"])\n         scheduler_group.add_argument(\"--scheduling-policy\",\n                                      **scheduler_kwargs[\"policy\"])\n+        scheduler_group.add_argument(\n+            \"--max-waiting-queue-length\",\n+            **scheduler_kwargs[\"max_waiting_queue_length\"])",
+        "comment_created_at": "2025-07-06T15:40:08+00:00",
+        "comment_author": "gemini-code-assist[bot]",
+        "comment_body": "![high](https://www.gstatic.com/codereviewagent/high-priority.svg)\n\nThe argument name `--max-waiting-queue-length` is misleading for a boolean flag. A more appropriate name would be `--limit-queue-length` to match the configuration parameter `limit_queue_length`. Also, the code will raise a `KeyError` because `scheduler_kwargs` does not contain a key `\"max_waiting_queue_length\"`. The code should be accessing `scheduler_kwargs[\"limit_queue_length\"]`.\n\n```suggestion\n        scheduler_group.add_argument(\n            \"--limit-queue-length\",\n            **scheduler_kwargs[\"limit_queue_length\"])\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

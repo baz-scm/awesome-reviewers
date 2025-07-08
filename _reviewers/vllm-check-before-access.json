@@ -1,0 +1,168 @@
+[
+  {
+    "discussion_id": "2161810103",
+    "pr_number": 19988,
+    "pr_file": "vllm/v1/worker/gpu_model_runner.py",
+    "created_at": "2025-06-23T14:45:07+00:00",
+    "commented_code": "0,\n                            torch.from_numpy(token_indices),\n                            out=self.input_ids_cpu[:total_num_scheduled_tokens])\n+        if self.input_batch.token_type_ids_cpu_tensor is not None:\n+            token_type_ids = torch.index_select(\n+                self.input_batch.token_type_ids_cpu_tensor.flatten(), 0,\n+                torch.from_numpy(token_indices))\n+            # Copy the tensors to the GPU.\n+            self.get_token_type_ids()[:total_num_scheduled_tokens]\\\n+                .copy_(token_type_ids, non_blocking=True)",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2161810103",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19988,
+        "pr_file": "vllm/v1/worker/gpu_model_runner.py",
+        "discussion_id": "2161810103",
+        "commented_code": "@@ -627,6 +635,13 @@ def _prepare_inputs(\n                            0,\n                            torch.from_numpy(token_indices),\n                            out=self.input_ids_cpu[:total_num_scheduled_tokens])\n+        if self.input_batch.token_type_ids_cpu_tensor is not None:\n+            token_type_ids = torch.index_select(\n+                self.input_batch.token_type_ids_cpu_tensor.flatten(), 0,\n+                torch.from_numpy(token_indices))\n+            # Copy the tensors to the GPU.\n+            self.get_token_type_ids()[:total_num_scheduled_tokens]\\\n+                .copy_(token_type_ids, non_blocking=True)",
+        "comment_created_at": "2025-06-23T14:45:07+00:00",
+        "comment_author": "gemini-code-assist[bot]",
+        "comment_body": "![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)\n\nConsider adding a check to ensure that `self.input_batch.token_type_ids_cpu_tensor` is not None before attempting to copy the token type IDs to the GPU. This would prevent a potential error if the model does not use token type IDs.\n\n```python\n        if self.input_batch.token_type_ids_cpu_tensor is not None:\n            token_type_ids = torch.index_select(\n                self.input_batch.token_type_ids_cpu_tensor.flatten(), 0,\n                torch.from_numpy(token_indices))\n            # Copy the tensors to the GPU.\n            self.get_token_type_ids()[:total_num_scheduled_tokens]\n                .copy_(token_type_ids, non_blocking=True)\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2161810109",
+    "pr_number": 19988,
+    "pr_file": "vllm/v1/worker/gpu_model_runner.py",
+    "created_at": "2025-06-23T14:45:08+00:00",
+    "commented_code": "else:\n             mm_embeds = []\n \n+        has_token_types = self.token_type_ids is not None\n+        model_kwargs = {}\n+\n         if self.is_multimodal_model and get_pp_group().is_first_rank:\n             # NOTE(woosuk): To unify token ids and soft tokens (vision\n             # embeddings), we always use embeddings (rather than token ids)\n             # as input to the multimodal model, even when the input is text.\n             input_ids = self.input_ids[:num_scheduled_tokens]\n+            if has_token_types:\n+                model_kwargs[\"token_type_ids\"] = cast(\n+                    torch.Tensor, self.token_type_ids)[:num_scheduled_tokens]",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2161810109",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19988,
+        "pr_file": "vllm/v1/worker/gpu_model_runner.py",
+        "discussion_id": "2161810109",
+        "commented_code": "@@ -1299,11 +1314,17 @@ def execute_model(\n         else:\n             mm_embeds = []\n \n+        has_token_types = self.token_type_ids is not None\n+        model_kwargs = {}\n+\n         if self.is_multimodal_model and get_pp_group().is_first_rank:\n             # NOTE(woosuk): To unify token ids and soft tokens (vision\n             # embeddings), we always use embeddings (rather than token ids)\n             # as input to the multimodal model, even when the input is text.\n             input_ids = self.input_ids[:num_scheduled_tokens]\n+            if has_token_types:\n+                model_kwargs[\"token_type_ids\"] = cast(\n+                    torch.Tensor, self.token_type_ids)[:num_scheduled_tokens]",
+        "comment_created_at": "2025-06-23T14:45:08+00:00",
+        "comment_author": "gemini-code-assist[bot]",
+        "comment_body": "![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)\n\nConsider adding a check to ensure that `has_token_types` is True before attempting to access `self.token_type_ids`. This would prevent a potential error if the model does not use token type IDs.\n\n```python\n            input_ids = self.input_ids[:num_scheduled_tokens]\n            if has_token_types:\n                model_kwargs[\"token_type_ids\"] = cast(\n                    torch.Tensor, self.token_type_ids)[:num_scheduled_tokens]\n            if mm_embeds:\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2142712715",
+    "pr_number": 19555,
+    "pr_file": "vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py",
+    "created_at": "2025-06-12T13:16:17+00:00",
+    "commented_code": "remote_port=self.side_channel_port,\n         )\n \n+    def get_finished(\n+            self, model_runner_output: ModelRunnerOutput\n+    ) -> tuple[Optional[set[str]], Optional[set[str]]]:\n+        if not model_runner_output.kv_connector_metadata:\n+            return\n+        for kv_connector_metadata in model_runner_output.kv_connector_metadata:\n+            assert isinstance(kv_connector_metadata, NixlWorkerConnectorMetadata)\n+            for req_id in kv_connector_metadata.finished_sending:\n+                self._done_sending_count[req_id] += 1\n+            for req_id in kv_connector_metadata.finished_recving:\n+                self._done_recving_count[req_id] += 1",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2142712715",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19555,
+        "pr_file": "vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py",
+        "discussion_id": "2142712715",
+        "commented_code": "@@ -313,6 +339,32 @@ def request_finished(\n             remote_port=self.side_channel_port,\n         )\n \n+    def get_finished(\n+            self, model_runner_output: ModelRunnerOutput\n+    ) -> tuple[Optional[set[str]], Optional[set[str]]]:\n+        if not model_runner_output.kv_connector_metadata:\n+            return\n+        for kv_connector_metadata in model_runner_output.kv_connector_metadata:\n+            assert isinstance(kv_connector_metadata, NixlWorkerConnectorMetadata)\n+            for req_id in kv_connector_metadata.finished_sending:\n+                self._done_sending_count[req_id] += 1\n+            for req_id in kv_connector_metadata.finished_recving:\n+                self._done_recving_count[req_id] += 1",
+        "comment_created_at": "2025-06-12T13:16:17+00:00",
+        "comment_author": "gemini-code-assist[bot]",
+        "comment_body": "![critical](https://www.gstatic.com/codereviewagent/critical.svg)\n\nThe `finished_sending` and `finished_recving` attributes of `NixlWorkerConnectorMetadata` are `Optional[set[str]]`. Iterating directly over them (e.g., `for req_id in kv_connector_metadata.finished_sending:`) will raise a `TypeError` if they are `None`. You should handle the `None` case, for example, by using `or []` or `or set()`.\n\n```suggestion\n            assert isinstance(kv_connector_metadata, NixlWorkerConnectorMetadata)\n            for req_id in kv_connector_metadata.finished_sending or []:\n                self._done_sending_count[req_id] += 1\n            for req_id in kv_connector_metadata.finished_recving or []:\n                self._done_recving_count[req_id] += 1\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2142712740",
+    "pr_number": 19555,
+    "pr_file": "vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py",
+    "created_at": "2025-06-12T13:16:17+00:00",
+    "commented_code": "remote_port=self.side_channel_port,\n         )\n \n+    def get_finished(\n+            self, model_runner_output: ModelRunnerOutput\n+    ) -> tuple[Optional[set[str]], Optional[set[str]]]:\n+        if not model_runner_output.kv_connector_metadata:\n+            return",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2142712740",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19555,
+        "pr_file": "vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py",
+        "discussion_id": "2142712740",
+        "commented_code": "@@ -313,6 +339,32 @@ def request_finished(\n             remote_port=self.side_channel_port,\n         )\n \n+    def get_finished(\n+            self, model_runner_output: ModelRunnerOutput\n+    ) -> tuple[Optional[set[str]], Optional[set[str]]]:\n+        if not model_runner_output.kv_connector_metadata:\n+            return",
+        "comment_created_at": "2025-06-12T13:16:17+00:00",
+        "comment_author": "gemini-code-assist[bot]",
+        "comment_body": "![high](https://www.gstatic.com/codereviewagent/high-priority.svg)\n\nIf `model_runner_output.kv_connector_metadata` is falsey (e.g., `None` or empty list), this function implicitly returns `None` due to the bare `return` statement. However, the function's return type hint is `tuple[Optional[set[str]], Optional[set[str]]]`. To match the type hint, it should return `(None, None)` or `(set(), set())` in this case.\n\n```suggestion\n        if not model_runner_output.kv_connector_metadata:\n            return None, None\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2190246149",
+    "pr_number": 17112,
+    "pr_file": "vllm/model_executor/layers/quantization/kernels/mixed_precision/__init__.py",
+    "created_at": "2025-07-07T14:17:26+00:00",
+    "commented_code": "if current_platform is None:\n             raise ValueError(\"Cannot determine compute capability\")\n         _cc = current_platform.get_device_capability()\n-        compute_capability = _cc[0] * 10 + _cc[1]\n+        if _cc is not None:",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2190246149",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 17112,
+        "pr_file": "vllm/model_executor/layers/quantization/kernels/mixed_precision/__init__.py",
+        "discussion_id": "2190246149",
+        "commented_code": "@@ -52,20 +56,21 @@ def choose_mp_linear_kernel(\n         if current_platform is None:\n             raise ValueError(\"Cannot determine compute capability\")\n         _cc = current_platform.get_device_capability()\n-        compute_capability = _cc[0] * 10 + _cc[1]\n+        if _cc is not None:",
+        "comment_created_at": "2025-07-07T14:17:26+00:00",
+        "comment_author": "mgoin",
+        "comment_body": "Why did you add capability for cc to be None but not use it in your new quant methods? Is this change needed anymore?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2190356106",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 17112,
+        "pr_file": "vllm/model_executor/layers/quantization/kernels/mixed_precision/__init__.py",
+        "discussion_id": "2190246149",
+        "commented_code": "@@ -52,20 +56,21 @@ def choose_mp_linear_kernel(\n         if current_platform is None:\n             raise ValueError(\"Cannot determine compute capability\")\n         _cc = current_platform.get_device_capability()\n-        compute_capability = _cc[0] * 10 + _cc[1]\n+        if _cc is not None:",
+        "comment_created_at": "2025-07-07T15:04:53+00:00",
+        "comment_author": "nikhil-arm",
+        "comment_body": "current_platform.get_device_capability() returns None on Aarch64 Platform, compute_capability was calculated unconditionally by dereferencing _cc indices.\r\nI added conditional check for platforms where _cc is None\r\nJust like its done in existing code here : https://github.com/nikhil-arm/vllm/blob/67309a1cb55f865f745b36501707f9f73bb023cc/vllm/model_executor/layers/quantization/kernels/scaled_mm/__init__.py#L52",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2189359022",
+    "pr_number": 20553,
+    "pr_file": "vllm/platforms/xpu.py",
+    "created_at": "2025-07-07T08:30:39+00:00",
+    "commented_code": "dtype: torch.dtype, kv_cache_dtype: Optional[str],\n                              block_size: int, use_v1: bool,\n                              use_mla: bool) -> str:\n-        if selected_backend != _Backend.IPEX:\n+        if selected_backend is not None and selected_backend != _Backend.IPEX:",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2189359022",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 20553,
+        "pr_file": "vllm/platforms/xpu.py",
+        "discussion_id": "2189359022",
+        "commented_code": "@@ -37,7 +37,7 @@ def get_attn_backend_cls(cls, selected_backend: _Backend, head_size: int,\n                              dtype: torch.dtype, kv_cache_dtype: Optional[str],\n                              block_size: int, use_v1: bool,\n                              use_mla: bool) -> str:\n-        if selected_backend != _Backend.IPEX:\n+        if selected_backend is not None and selected_backend != _Backend.IPEX:",
+        "comment_created_at": "2025-07-07T08:30:39+00:00",
+        "comment_author": "gemini-code-assist[bot]",
+        "comment_body": "![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)\n\nConsider checking if `selected_backend` is `None` before accessing it to avoid a potential `AttributeError` if it's unexpectedly `None`.\n\n```python\nif selected_backend is not None and selected_backend != _Backend.IPEX:\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2134728705",
+    "pr_number": 19330,
+    "pr_file": "vllm/v1/worker/gpu_model_runner.py",
+    "created_at": "2025-06-08T14:54:03+00:00",
+    "commented_code": ")\n             spec_token_ids = draft_token_ids.tolist()\n \n-        # Clear KVConnector state after all KVs are generated.\n-        if has_kv_transfer_group():\n-            get_kv_transfer_group().clear_connector_metadata()\n+        if is_v1_kv_transfer_group():\n+            connector = get_kv_transfer_group()\n+            # Check for KV load errors\n+            invalid_block_ids = connector.get_block_ids_with_load_errors()\n+            # Clear KVConnector state after all KVs are generated.\n+            connector.clear_connector_metadata()",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2134728705",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19330,
+        "pr_file": "vllm/v1/worker/gpu_model_runner.py",
+        "discussion_id": "2134728705",
+        "commented_code": "@@ -1486,9 +1487,12 @@ def execute_model(\n             )\n             spec_token_ids = draft_token_ids.tolist()\n \n-        # Clear KVConnector state after all KVs are generated.\n-        if has_kv_transfer_group():\n-            get_kv_transfer_group().clear_connector_metadata()\n+        if is_v1_kv_transfer_group():\n+            connector = get_kv_transfer_group()\n+            # Check for KV load errors\n+            invalid_block_ids = connector.get_block_ids_with_load_errors()\n+            # Clear KVConnector state after all KVs are generated.\n+            connector.clear_connector_metadata()",
+        "comment_created_at": "2025-06-08T14:54:03+00:00",
+        "comment_author": "gemini-code-assist[bot]",
+        "comment_body": "![high](https://www.gstatic.com/codereviewagent/high-priority.svg)\n\nThe variable `invalid_block_ids` is assigned within the `if is_v1_kv_transfer_group():` block. If this condition is false, `invalid_block_ids` will not be defined when it's used later in `ModelRunnerOutput(...)` on line 1506. This could lead to an `UnboundLocalError`.\n\nCould you initialize `invalid_block_ids` to `None` before this conditional block to ensure it's always defined?\n\n```suggestion\n        invalid_block_ids: Optional[set[int]] = None\n        if is_v1_kv_transfer_group():\n            connector = get_kv_transfer_group()\n            # Check for KV load errors\n            invalid_block_ids = connector.get_block_ids_with_load_errors()\n            # Clear KVConnector state after all KVs are generated.\n            connector.clear_connector_metadata()\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

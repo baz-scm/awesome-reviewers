@@ -1,0 +1,116 @@
+[
+  {
+    "discussion_id": "2169461330",
+    "pr_number": 20139,
+    "pr_file": "vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py",
+    "created_at": "2025-06-26T16:34:52+00:00",
+    "commented_code": "all_done_sending: set[str] = set()\n             for req_id in list(self._done_sending_count.keys()):\n-                if self._done_sending_count[req_id] == self.world_size:\n+                if self._done_sending_count[req_id] >= self.world_size:\n                     del self._done_sending_count[req_id]\n                     all_done_sending.add(req_id)",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2169461330",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 20139,
+        "pr_file": "vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py",
+        "discussion_id": "2169461330",
+        "commented_code": "@@ -830,7 +858,7 @@ def get_finished(self) -> tuple[set[str], set[str]]:\n \n             all_done_sending: set[str] = set()\n             for req_id in list(self._done_sending_count.keys()):\n-                if self._done_sending_count[req_id] == self.world_size:\n+                if self._done_sending_count[req_id] >= self.world_size:\n                     del self._done_sending_count[req_id]\n                     all_done_sending.add(req_id)",
+        "comment_created_at": "2025-06-26T16:34:52+00:00",
+        "comment_author": "gemini-code-assist[bot]",
+        "comment_body": "![high](https://www.gstatic.com/codereviewagent/high-priority.svg)\n\nThe removal of `self._reqs_to_send[req_id]` here might lead to a race condition if `_get_new_notifs` is called concurrently from multiple threads. Consider using a lock to protect access to `self._reqs_to_send` or using a thread-safe data structure.\n\n```suggestion\n                    notified_req_ids.add(req_id)\n                    del self.consumer_notification_counts_by_req[req_id]\n                    with self._handshake_lock:\n                        del self._reqs_to_send[req_id]\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2172005863",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 20139,
+        "pr_file": "vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py",
+        "discussion_id": "2169461330",
+        "commented_code": "@@ -830,7 +858,7 @@ def get_finished(self) -> tuple[set[str], set[str]]:\n \n             all_done_sending: set[str] = set()\n             for req_id in list(self._done_sending_count.keys()):\n-                if self._done_sending_count[req_id] == self.world_size:\n+                if self._done_sending_count[req_id] >= self.world_size:\n                     del self._done_sending_count[req_id]\n                     all_done_sending.add(req_id)",
+        "comment_created_at": "2025-06-27T13:03:35+00:00",
+        "comment_author": "NickLucche",
+        "comment_body": "it's not called concurrently\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2169461339",
+    "pr_number": 20139,
+    "pr_file": "vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py",
+    "created_at": "2025-06-26T16:34:52+00:00",
+    "commented_code": "all_done_sending: set[str] = set()\n             for req_id in list(self._done_sending_count.keys()):\n-                if self._done_sending_count[req_id] == self.world_size:\n+                if self._done_sending_count[req_id] >= self.world_size:\n                     del self._done_sending_count[req_id]\n                     all_done_sending.add(req_id)",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2169461339",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 20139,
+        "pr_file": "vllm/distributed/kv_transfer/kv_connector/v1/nixl_connector.py",
+        "discussion_id": "2169461339",
+        "commented_code": "@@ -830,7 +858,7 @@ def get_finished(self) -> tuple[set[str], set[str]]:\n \n             all_done_sending: set[str] = set()\n             for req_id in list(self._done_sending_count.keys()):\n-                if self._done_sending_count[req_id] == self.world_size:\n+                if self._done_sending_count[req_id] >= self.world_size:\n                     del self._done_sending_count[req_id]\n                     all_done_sending.add(req_id)",
+        "comment_created_at": "2025-06-26T16:34:52+00:00",
+        "comment_author": "gemini-code-assist[bot]",
+        "comment_body": "![high](https://www.gstatic.com/codereviewagent/high-priority.svg)\n\nIt's crucial to ensure that `self._reqs_to_send` is thread-safe, especially when dealing with asynchronous operations and potential concurrent access. Using a standard dictionary without any synchronization mechanisms can lead to race conditions and data corruption. Consider using `threading.Lock` or `asyncio.Lock` to protect access to this dictionary.\n\n```suggestion\n        self._reqs_to_send_lock = threading.Lock() # Or asyncio.Lock for async context\n\n    def _get_new_notifs(self) -> set[str]:\n        \"\"\"\n        Get req_ids which got a remote xfer message. When multiple consumers\n        are reading from the same producer (heterogeneous TP scenario), wait\n        for all consumers to be done pulling.\n        \"\"\"\n        notified_req_ids: set[str] = set()\n        for notifs in self.nixl_wrapper.get_new_notifs().values():\n            for notif in notifs:\n                req_id, tp_ratio = notif.decode(\"utf-8\").rsplit(\":\", 1)\n                self.consumer_notification_counts_by_req[req_id] += 1\n                # Wait all consumers (D) to be done reading before freeing.\n                if self.consumer_notification_counts_by_req[req_id] == int(\n                        tp_ratio):\n                    notified_req_ids.add(req_id)\n                    del self.consumer_notification_counts_by_req[req_id]\n                    with self._reqs_to_send_lock:\n                        del self._reqs_to_send[req_id]\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2157557197",
+    "pr_number": 19334,
+    "pr_file": "vllm/entrypoints/openai/serving_completion.py",
+    "created_at": "2025-06-19T19:28:04+00:00",
+    "commented_code": ") = self._maybe_get_adapters(request)\n \n             tokenizer = await self.engine_client.get_tokenizer(lora_request)\n+            self._set_tokenizer(tokenizer)",
+    "repo_full_name": "vllm-project/vllm",
+    "discussion_comments": [
+      {
+        "comment_id": "2157557197",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19334,
+        "pr_file": "vllm/entrypoints/openai/serving_completion.py",
+        "discussion_id": "2157557197",
+        "commented_code": "@@ -113,10 +113,10 @@ async def create_completion(\n             ) = self._maybe_get_adapters(request)\n \n             tokenizer = await self.engine_client.get_tokenizer(lora_request)\n+            self._set_tokenizer(tokenizer)",
+        "comment_created_at": "2025-06-19T19:28:04+00:00",
+        "comment_author": "njhill",
+        "comment_body": "@ztang2370 I don't think this is a safe way to do things. Execution of async tasks associated with different requests (which might use different tokenizers) can be interleaved.\r\n\r\nSo a different request might set a different tokenizer here before it's actually \"used\" in `_normalize_prompt_text_to_input`.\r\n\r\nInstead we'd probably need to maintain a tokenizer-indexed cache of `AsyncMicrobatchTokenizer`s.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2160245428",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19334,
+        "pr_file": "vllm/entrypoints/openai/serving_completion.py",
+        "discussion_id": "2157557197",
+        "commented_code": "@@ -113,10 +113,10 @@ async def create_completion(\n             ) = self._maybe_get_adapters(request)\n \n             tokenizer = await self.engine_client.get_tokenizer(lora_request)\n+            self._set_tokenizer(tokenizer)",
+        "comment_created_at": "2025-06-22T07:11:40+00:00",
+        "comment_author": "ztang2370",
+        "comment_body": "Thanks for the catch!\r\n\r\nI've updated and now we keep a `_async_tokenizer_pool: dict[AnyTokenizer, AsyncMicrobatchTokenizer]`, and on each call we look up the corresponding `AsyncMicrobatchTokenizer` with `tok = _async_tokenizer_pool.get(tokenizer)`. If none exists, a new one is created and stored in the pool. The request-bound tokenizer is then set via the `ContextVar`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2162621343",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19334,
+        "pr_file": "vllm/entrypoints/openai/serving_completion.py",
+        "discussion_id": "2157557197",
+        "commented_code": "@@ -113,10 +113,10 @@ async def create_completion(\n             ) = self._maybe_get_adapters(request)\n \n             tokenizer = await self.engine_client.get_tokenizer(lora_request)\n+            self._set_tokenizer(tokenizer)",
+        "comment_created_at": "2025-06-23T22:25:36+00:00",
+        "comment_author": "njhill",
+        "comment_body": "Thanks @ztang2370 I'm not sure that what you've changed addressees the problem though. We'll still need to pass the tokenizer through the call stack. And then resolve it to the corresponding async tokenizer where it's actually used.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2164157671",
+        "repo_full_name": "vllm-project/vllm",
+        "pr_number": 19334,
+        "pr_file": "vllm/entrypoints/openai/serving_completion.py",
+        "discussion_id": "2157557197",
+        "commented_code": "@@ -113,10 +113,10 @@ async def create_completion(\n             ) = self._maybe_get_adapters(request)\n \n             tokenizer = await self.engine_client.get_tokenizer(lora_request)\n+            self._set_tokenizer(tokenizer)",
+        "comment_created_at": "2025-06-24T14:18:25+00:00",
+        "comment_author": "ztang2370",
+        "comment_body": "@njhill You're right. Fixed now.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

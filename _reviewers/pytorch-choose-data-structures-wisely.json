@@ -1,0 +1,94 @@
+[
+  {
+    "discussion_id": "2178670324",
+    "pr_number": 157290,
+    "pr_file": "torch/nativert/executor/memory/AliasAnalyzer.h",
+    "created_at": "2025-07-01T22:39:49+00:00",
+    "commented_code": "// so that we don't free them before the graph output is copied\n   // back to the user (and we ignore them when creating a memory plan\n   // even if they aren't explicitly considered outputs)\n-  void maybe_extend_lifetimes(const Graph& graph);\n+  void maybe_extend_lifetimes(\n+      const c10::FastMap<const Value*, c10::FastSet<const Value*>>& aliases,\n+      const Graph& graph);\n+\n+  // in the event that we have aliases-of-aliases\n+  // we want to make sure that the 'sources'\n+  // are propagated\n+  //\n+  // e.g.,\n+  // %x0 = ...\n+  // %x1 = some_aliasing_op(x0)\n+  // %x2 = some_aliasing_op(x1)\n+  //\n+  // we want aliases_[x2] = x0\n+  // instead of aliases[x2] = x1\n+  //\n+  // the result is aliases_ will contain a\n+  // mapping from each alias to its backed\n+  // source (i.e., the value that owns its\n+  // associated dataptr)\n+  void squash_deep_aliases(\n+      c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases,",
+    "repo_full_name": "pytorch/pytorch",
+    "discussion_comments": [
+      {
+        "comment_id": "2178670324",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 157290,
+        "pr_file": "torch/nativert/executor/memory/AliasAnalyzer.h",
+        "discussion_id": "2178670324",
+        "commented_code": "@@ -70,16 +83,41 @@ class AliasAnalyzer {\n   // so that we don't free them before the graph output is copied\n   // back to the user (and we ignore them when creating a memory plan\n   // even if they aren't explicitly considered outputs)\n-  void maybe_extend_lifetimes(const Graph& graph);\n+  void maybe_extend_lifetimes(\n+      const c10::FastMap<const Value*, c10::FastSet<const Value*>>& aliases,\n+      const Graph& graph);\n+\n+  // in the event that we have aliases-of-aliases\n+  // we want to make sure that the 'sources'\n+  // are propagated\n+  //\n+  // e.g.,\n+  // %x0 = ...\n+  // %x1 = some_aliasing_op(x0)\n+  // %x2 = some_aliasing_op(x1)\n+  //\n+  // we want aliases_[x2] = x0\n+  // instead of aliases[x2] = x1\n+  //\n+  // the result is aliases_ will contain a\n+  // mapping from each alias to its backed\n+  // source (i.e., the value that owns its\n+  // associated dataptr)\n+  void squash_deep_aliases(\n+      c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases,",
+        "comment_created_at": "2025-07-01T22:39:49+00:00",
+        "comment_author": "SherlockNoMad",
+        "comment_body": "I am confused... \r\n\r\nI can understand alias is pair-wise relationship, that's why you have private member\r\nc10::FastMap<const Value*, const Value*> aliases_;\r\n\r\nbut why the alias here have a different type! what's the inner FastSet for? \r\nc10::FastMap<const Value*, c10::FastSet<const Value*>> aliases,",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2178753241",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 157290,
+        "pr_file": "torch/nativert/executor/memory/AliasAnalyzer.h",
+        "discussion_id": "2178670324",
+        "commented_code": "@@ -70,16 +83,41 @@ class AliasAnalyzer {\n   // so that we don't free them before the graph output is copied\n   // back to the user (and we ignore them when creating a memory plan\n   // even if they aren't explicitly considered outputs)\n-  void maybe_extend_lifetimes(const Graph& graph);\n+  void maybe_extend_lifetimes(\n+      const c10::FastMap<const Value*, c10::FastSet<const Value*>>& aliases,\n+      const Graph& graph);\n+\n+  // in the event that we have aliases-of-aliases\n+  // we want to make sure that the 'sources'\n+  // are propagated\n+  //\n+  // e.g.,\n+  // %x0 = ...\n+  // %x1 = some_aliasing_op(x0)\n+  // %x2 = some_aliasing_op(x1)\n+  //\n+  // we want aliases_[x2] = x0\n+  // instead of aliases[x2] = x1\n+  //\n+  // the result is aliases_ will contain a\n+  // mapping from each alias to its backed\n+  // source (i.e., the value that owns its\n+  // associated dataptr)\n+  void squash_deep_aliases(\n+      c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases,",
+        "comment_created_at": "2025-07-02T00:14:49+00:00",
+        "comment_author": "dolpm",
+        "comment_body": "i responded to why it is a set in the comment above, but this is indeed an issue.\r\n\r\nwhen i implemented the squashing, i forgot about the ambiguous cases (e.g., no schema). so even though in reality a tensor can only alias one source at a time, it may _be able_ to alias multiple. thus, the squashed datastructure needs to be a map from the alias to _the set of all possible sources_. in most cases, this will be a singleton set, but there are a few cases where it might not be, so we gotta support it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2180834312",
+    "pr_number": 157290,
+    "pr_file": "torch/nativert/executor/memory/AliasAnalyzer.h",
+    "created_at": "2025-07-02T19:35:06+00:00",
+    "commented_code": "// so that we don't free them before the graph output is copied\n   // back to the user (and we ignore them when creating a memory plan\n   // even if they aren't explicitly considered outputs)\n-  void maybe_extend_lifetimes(const Graph& graph);\n+  void maybe_extend_lifetimes(\n+      const c10::FastMap<const Value*, c10::FastSet<const Value*>>& aliases,\n+      const Graph& graph);\n+\n+  // in the event that we have aliases-of-aliases\n+  // we want to make sure that the 'sources'\n+  // are propagated\n+  //\n+  // e.g.,\n+  // %x0 = ...\n+  // %x1 = some_aliasing_op(x0)\n+  // %x2 = some_aliasing_op(x1)\n+  //\n+  // we want aliases_[x2] = x0\n+  // instead of aliases[x2] = x1\n+  //\n+  // the result is aliases_ will contain a\n+  // mapping from each alias to its backed\n+  // source (i.e., the value that owns its\n+  // associated dataptr)\n+  void squash_deep_aliases(\n+      c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases,\n+      const Graph& graph);\n \n   void log_state() const;\n \n-  // mapping from alias to the set of values that it aliases\n+  // mapping from alias to its source\n   c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases_;\n   c10::FastMap<const Value*, AllocationLifetime> lifetimes_;\n   // non-aliasing outputs or non-aliasing intermediates that are aliased by\n   // outputs\n   c10::FastSet<const Value*> values_associated_with_outputs_;\n+  // alive_values_at_time_[i] = values that are \"alive\" during the\n+  // computation of node i\n+  std::vector<std::vector<const Value*>> alive_values_at_time_;",
+    "repo_full_name": "pytorch/pytorch",
+    "discussion_comments": [
+      {
+        "comment_id": "2180834312",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 157290,
+        "pr_file": "torch/nativert/executor/memory/AliasAnalyzer.h",
+        "discussion_id": "2180834312",
+        "commented_code": "@@ -70,16 +84,41 @@ class AliasAnalyzer {\n   // so that we don't free them before the graph output is copied\n   // back to the user (and we ignore them when creating a memory plan\n   // even if they aren't explicitly considered outputs)\n-  void maybe_extend_lifetimes(const Graph& graph);\n+  void maybe_extend_lifetimes(\n+      const c10::FastMap<const Value*, c10::FastSet<const Value*>>& aliases,\n+      const Graph& graph);\n+\n+  // in the event that we have aliases-of-aliases\n+  // we want to make sure that the 'sources'\n+  // are propagated\n+  //\n+  // e.g.,\n+  // %x0 = ...\n+  // %x1 = some_aliasing_op(x0)\n+  // %x2 = some_aliasing_op(x1)\n+  //\n+  // we want aliases_[x2] = x0\n+  // instead of aliases[x2] = x1\n+  //\n+  // the result is aliases_ will contain a\n+  // mapping from each alias to its backed\n+  // source (i.e., the value that owns its\n+  // associated dataptr)\n+  void squash_deep_aliases(\n+      c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases,\n+      const Graph& graph);\n \n   void log_state() const;\n \n-  // mapping from alias to the set of values that it aliases\n+  // mapping from alias to its source\n   c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases_;\n   c10::FastMap<const Value*, AllocationLifetime> lifetimes_;\n   // non-aliasing outputs or non-aliasing intermediates that are aliased by\n   // outputs\n   c10::FastSet<const Value*> values_associated_with_outputs_;\n+  // alive_values_at_time_[i] = values that are \"alive\" during the\n+  // computation of node i\n+  std::vector<std::vector<const Value*>> alive_values_at_time_;",
+        "comment_created_at": "2025-07-02T19:35:06+00:00",
+        "comment_author": "SherlockNoMad",
+        "comment_body": "Just a reminder\r\n\r\nIt's accidental that in current sequential executor, node_id matchs the execution \"time\". \r\n\r\nExecution order might not follow graph node order, if we do some execution order optimization. \r\n\r\nI would suggest decouple \"node_id\" from \"program counter\" as a future runtime improvement.  ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2180848362",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 157290,
+        "pr_file": "torch/nativert/executor/memory/AliasAnalyzer.h",
+        "discussion_id": "2180834312",
+        "commented_code": "@@ -70,16 +84,41 @@ class AliasAnalyzer {\n   // so that we don't free them before the graph output is copied\n   // back to the user (and we ignore them when creating a memory plan\n   // even if they aren't explicitly considered outputs)\n-  void maybe_extend_lifetimes(const Graph& graph);\n+  void maybe_extend_lifetimes(\n+      const c10::FastMap<const Value*, c10::FastSet<const Value*>>& aliases,\n+      const Graph& graph);\n+\n+  // in the event that we have aliases-of-aliases\n+  // we want to make sure that the 'sources'\n+  // are propagated\n+  //\n+  // e.g.,\n+  // %x0 = ...\n+  // %x1 = some_aliasing_op(x0)\n+  // %x2 = some_aliasing_op(x1)\n+  //\n+  // we want aliases_[x2] = x0\n+  // instead of aliases[x2] = x1\n+  //\n+  // the result is aliases_ will contain a\n+  // mapping from each alias to its backed\n+  // source (i.e., the value that owns its\n+  // associated dataptr)\n+  void squash_deep_aliases(\n+      c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases,\n+      const Graph& graph);\n \n   void log_state() const;\n \n-  // mapping from alias to the set of values that it aliases\n+  // mapping from alias to its source\n   c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases_;\n   c10::FastMap<const Value*, AllocationLifetime> lifetimes_;\n   // non-aliasing outputs or non-aliasing intermediates that are aliased by\n   // outputs\n   c10::FastSet<const Value*> values_associated_with_outputs_;\n+  // alive_values_at_time_[i] = values that are \"alive\" during the\n+  // computation of node i\n+  std::vector<std::vector<const Value*>> alive_values_at_time_;",
+        "comment_created_at": "2025-07-02T19:44:35+00:00",
+        "comment_author": "dolpm",
+        "comment_body": "yes. unfortunately a ton of code depends on this invariant -- if execution ordering is not well defined (and/or nondeterministic) we will have major issues across the board. this is the main reason why inter-op won't work with memory planning.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2180850938",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 157290,
+        "pr_file": "torch/nativert/executor/memory/AliasAnalyzer.h",
+        "discussion_id": "2180834312",
+        "commented_code": "@@ -70,16 +84,41 @@ class AliasAnalyzer {\n   // so that we don't free them before the graph output is copied\n   // back to the user (and we ignore them when creating a memory plan\n   // even if they aren't explicitly considered outputs)\n-  void maybe_extend_lifetimes(const Graph& graph);\n+  void maybe_extend_lifetimes(\n+      const c10::FastMap<const Value*, c10::FastSet<const Value*>>& aliases,\n+      const Graph& graph);\n+\n+  // in the event that we have aliases-of-aliases\n+  // we want to make sure that the 'sources'\n+  // are propagated\n+  //\n+  // e.g.,\n+  // %x0 = ...\n+  // %x1 = some_aliasing_op(x0)\n+  // %x2 = some_aliasing_op(x1)\n+  //\n+  // we want aliases_[x2] = x0\n+  // instead of aliases[x2] = x1\n+  //\n+  // the result is aliases_ will contain a\n+  // mapping from each alias to its backed\n+  // source (i.e., the value that owns its\n+  // associated dataptr)\n+  void squash_deep_aliases(\n+      c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases,\n+      const Graph& graph);\n \n   void log_state() const;\n \n-  // mapping from alias to the set of values that it aliases\n+  // mapping from alias to its source\n   c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases_;\n   c10::FastMap<const Value*, AllocationLifetime> lifetimes_;\n   // non-aliasing outputs or non-aliasing intermediates that are aliased by\n   // outputs\n   c10::FastSet<const Value*> values_associated_with_outputs_;\n+  // alive_values_at_time_[i] = values that are \"alive\" during the\n+  // computation of node i\n+  std::vector<std::vector<const Value*>> alive_values_at_time_;",
+        "comment_created_at": "2025-07-02T19:46:17+00:00",
+        "comment_author": "dolpm",
+        "comment_body": "although, from my point of view, sequential execution should follow the graph node ordering. this is a pretty intuitive line of thinking IMO. if we want to do ordering optimizations, these mutations should be made to the graph before it is frozen.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2180852463",
+        "repo_full_name": "pytorch/pytorch",
+        "pr_number": 157290,
+        "pr_file": "torch/nativert/executor/memory/AliasAnalyzer.h",
+        "discussion_id": "2180834312",
+        "commented_code": "@@ -70,16 +84,41 @@ class AliasAnalyzer {\n   // so that we don't free them before the graph output is copied\n   // back to the user (and we ignore them when creating a memory plan\n   // even if they aren't explicitly considered outputs)\n-  void maybe_extend_lifetimes(const Graph& graph);\n+  void maybe_extend_lifetimes(\n+      const c10::FastMap<const Value*, c10::FastSet<const Value*>>& aliases,\n+      const Graph& graph);\n+\n+  // in the event that we have aliases-of-aliases\n+  // we want to make sure that the 'sources'\n+  // are propagated\n+  //\n+  // e.g.,\n+  // %x0 = ...\n+  // %x1 = some_aliasing_op(x0)\n+  // %x2 = some_aliasing_op(x1)\n+  //\n+  // we want aliases_[x2] = x0\n+  // instead of aliases[x2] = x1\n+  //\n+  // the result is aliases_ will contain a\n+  // mapping from each alias to its backed\n+  // source (i.e., the value that owns its\n+  // associated dataptr)\n+  void squash_deep_aliases(\n+      c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases,\n+      const Graph& graph);\n \n   void log_state() const;\n \n-  // mapping from alias to the set of values that it aliases\n+  // mapping from alias to its source\n   c10::FastMap<const Value*, c10::FastSet<const Value*>> aliases_;\n   c10::FastMap<const Value*, AllocationLifetime> lifetimes_;\n   // non-aliasing outputs or non-aliasing intermediates that are aliased by\n   // outputs\n   c10::FastSet<const Value*> values_associated_with_outputs_;\n+  // alive_values_at_time_[i] = values that are \"alive\" during the\n+  // computation of node i\n+  std::vector<std::vector<const Value*>> alive_values_at_time_;",
+        "comment_created_at": "2025-07-02T19:47:20+00:00",
+        "comment_author": "dolpm",
+        "comment_body": "the edge case here is there is some optimization that can only be reasoned at execution time (e.g., based on batch dim). can't think of one off the top of my head rn, though.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

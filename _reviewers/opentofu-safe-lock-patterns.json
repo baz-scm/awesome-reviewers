@@ -1,0 +1,242 @@
+[
+  {
+    "discussion_id": "2064864477",
+    "pr_number": 2731,
+    "pr_file": "internal/command/providers_lock.go",
+    "created_at": "2025-04-28T22:06:13+00:00",
+    "commented_code": "newLocks, err := installer.EnsureProviderVersions(ctx, oldLocks, reqs, providercache.InstallNewProvidersForce)\n \t\tif err != nil {\n-\t\t\tdiags = diags.Append(tfdiags.Sourceless(\n+\t\t\treturn selectedVersions, nil, tfdiags.Sourceless(\n \t\t\t\ttfdiags.Error,\n \t\t\t\t\"Could not retrieve providers for locking\",\n \t\t\t\tfmt.Sprintf(\"OpenTofu failed to fetch the requested providers for %s in order to calculate their checksums: %s.\", platform, err),\n-\t\t\t))\n-\t\t\tbreak\n+\t\t\t)\n+\t\t}\n+\n+\t\treturn selectedVersions, newLocks, nil\n+\t}\n+\n+\ttype lockResult struct {\n+\t\tplatform         getproviders.Platform\n+\t\tselectedVersions map[addrs.Provider]getproviders.Version\n+\t\tupdatedLocks     *depsfile.Locks\n+\t\tdiag             tfdiags.Diagnostic\n+\t}\n+\tlockResults := make(chan lockResult, len(platforms))\n+\tdefer close(lockResults)\n+\n+\tfor _, platform := range platforms {\n+\t\tgo func(platform getproviders.Platform) {\n+\t\t\tselectedVersions, updatedLocks, diag := doLock(platform)\n+\t\t\tlockResults <- lockResult{\n+\t\t\t\tplatform:         platform,\n+\t\t\t\tselectedVersions: selectedVersions,\n+\t\t\t\tupdatedLocks:     updatedLocks,\n+\t\t\t\tdiag:             diag,\n+\t\t\t}\n+\t\t}(platform)\n+\t}\n+\n+\tupdatedLocks := map[getproviders.Platform]*depsfile.Locks{}\n+\tselectedVersions := map[addrs.Provider]getproviders.Version{}\n+\n+\tfor range platforms {\n+\t\tresult := <-lockResults",
+    "repo_full_name": "opentofu/opentofu",
+    "discussion_comments": [
+      {
+        "comment_id": "2064864477",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 2731,
+        "pr_file": "internal/command/providers_lock.go",
+        "discussion_id": "2064864477",
+        "commented_code": "@@ -271,14 +250,74 @@ func (c *ProvidersLockCommand) Run(args []string) int {\n \n \t\tnewLocks, err := installer.EnsureProviderVersions(ctx, oldLocks, reqs, providercache.InstallNewProvidersForce)\n \t\tif err != nil {\n-\t\t\tdiags = diags.Append(tfdiags.Sourceless(\n+\t\t\treturn selectedVersions, nil, tfdiags.Sourceless(\n \t\t\t\ttfdiags.Error,\n \t\t\t\t\"Could not retrieve providers for locking\",\n \t\t\t\tfmt.Sprintf(\"OpenTofu failed to fetch the requested providers for %s in order to calculate their checksums: %s.\", platform, err),\n-\t\t\t))\n-\t\t\tbreak\n+\t\t\t)\n+\t\t}\n+\n+\t\treturn selectedVersions, newLocks, nil\n+\t}\n+\n+\ttype lockResult struct {\n+\t\tplatform         getproviders.Platform\n+\t\tselectedVersions map[addrs.Provider]getproviders.Version\n+\t\tupdatedLocks     *depsfile.Locks\n+\t\tdiag             tfdiags.Diagnostic\n+\t}\n+\tlockResults := make(chan lockResult, len(platforms))\n+\tdefer close(lockResults)\n+\n+\tfor _, platform := range platforms {\n+\t\tgo func(platform getproviders.Platform) {\n+\t\t\tselectedVersions, updatedLocks, diag := doLock(platform)\n+\t\t\tlockResults <- lockResult{\n+\t\t\t\tplatform:         platform,\n+\t\t\t\tselectedVersions: selectedVersions,\n+\t\t\t\tupdatedLocks:     updatedLocks,\n+\t\t\t\tdiag:             diag,\n+\t\t\t}\n+\t\t}(platform)\n+\t}\n+\n+\tupdatedLocks := map[getproviders.Platform]*depsfile.Locks{}\n+\tselectedVersions := map[addrs.Provider]getproviders.Version{}\n+\n+\tfor range platforms {\n+\t\tresult := <-lockResults",
+        "comment_created_at": "2025-04-28T22:06:13+00:00",
+        "comment_author": "apparentlymart",
+        "comment_body": "When I looked at this with you quickly earlier I didn't spot that this is effectively using the `lockResults` channel as a funny sort of concurrency-safe slice, relying on the first loop writing to the channel exactly the same amount of times as the second loop reads the channel because they are both iterating over the same collection.\r\n\r\nThis seems technically correct, but potentially confusing and at risk of being broken under future maintenance. I wonder if we could split the difference and use a wait group for the generation process and but a channel to consume what's being produced so that the consumer loop is directly synchronized with the producer loop.\r\n\r\nFor example:\r\n\r\n```go\r\nlockResults := make(chan lockResult, len(platforms))\r\ngo func() {\r\n    var wg sync.WaitGroup\r\n    for _, platform := range platforms {\r\n        wg.Add(1)\r\n        go func(platform getproviders.Platform) {\r\n            // just like before, except now ending with...\r\n            wg.Done()\r\n        })\r\n    }\r\n    wg.Wait()\r\n    close(lockResults)\r\n}()\r\n\r\nfor result := range lockResults {\r\n    // Exactly the same as your current \"for range platforms\" loop\r\n}\r\n```\r\n\r\nSlightly more machinery, but maybe makes the one-to-one relationship between iterations of these loops a little more explicit, and makes it harder for inconsistencies to creep in under future maintenance.\r\n\r\n---\r\n\r\nIt seems like the function for that outer goroutine could be turned into a generic helper function that we could reuse across many problems like this, though I'd personally wait to see how many more times this comes up before adding it since we don't really have a good place to dump a general-purpose thing like this. :grinning: \r\n\r\n```go\r\n// ConcurrentEach calls f concurrently for all elements of from,\r\n// waits until all calls have returned, and then closes into\r\n// to signal completion before returning.\r\nfunc ConcurrentEach[In, Out any](from []In, into chan<- Out, f func(item In, into chan<- Out)) {\r\n  var wg wg sync.WaitGroup\r\n  for _, item := range from {\r\n    wg.Add(1)\r\n    go func(item In) {\r\n      f(item, into)\r\n      wg.Done()\r\n    }(item)\r\n  }\r\n  wg.Wait()\r\n  close(into)\r\n}\r\n```\r\n\r\n```go\r\nlockResults := make(chan lockResult, len(platforms))\r\ngo ConcurrentEach(platforms, lockResults, func (platform getproviders.Platform, lockResults chan<- lockResult) {\r\n    // ...\r\n})\r\nfor result := range lockResults {\r\n    // ...\r\n}\r\n```\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2087997598",
+    "pr_number": 2798,
+    "pr_file": "internal/command/clistate/local_state.go",
+    "created_at": "2025-05-14T04:17:41+00:00",
+    "commented_code": "//\n // StateWriter impl.\n func (s *LocalState) WriteState(state *tofu.State) error {\n+\terr := s.writeState(state)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\n+\t// Sync after write\n+\treturn s.stateFileOut.Sync()",
+    "repo_full_name": "opentofu/opentofu",
+    "discussion_comments": [
+      {
+        "comment_id": "2087997598",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 2798,
+        "pr_file": "internal/command/clistate/local_state.go",
+        "discussion_id": "2087997598",
+        "commented_code": "@@ -68,6 +68,15 @@ func (s *LocalState) State() *tofu.State {\n //\n // StateWriter impl.\n func (s *LocalState) WriteState(state *tofu.State) error {\n+\terr := s.writeState(state)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\n+\t// Sync after write\n+\treturn s.stateFileOut.Sync()",
+        "comment_created_at": "2025-05-14T04:17:41+00:00",
+        "comment_author": "yottta",
+        "comment_body": "Shouldn't `Sync` be under the the mutex lock too? This PR is changing that behaviour. Is this on purpose?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2088644232",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 2798,
+        "pr_file": "internal/command/clistate/local_state.go",
+        "discussion_id": "2087997598",
+        "commented_code": "@@ -68,6 +68,15 @@ func (s *LocalState) State() *tofu.State {\n //\n // StateWriter impl.\n func (s *LocalState) WriteState(state *tofu.State) error {\n+\terr := s.writeState(state)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\n+\t// Sync after write\n+\treturn s.stateFileOut.Sync()",
+        "comment_created_at": "2025-05-14T10:45:25+00:00",
+        "comment_author": "cam72cam",
+        "comment_body": "Good catch! fixed in fb8afbff57",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2051118835",
+    "pr_number": 1878,
+    "pr_file": "internal/providercache/installer.go",
+    "created_at": "2025-04-18T21:04:12+00:00",
+    "commented_code": "}\n \n \t\tif i.globalCacheDir != nil {\n-\t\t\t// If our global cache already has this version available then\n+\t\t\t// Try to lock the provider's directory.\n+\t\t\tunlockProvider, err := i.globalCacheDir.Lock(ctx, provider, version)",
+    "repo_full_name": "opentofu/opentofu",
+    "discussion_comments": [
+      {
+        "comment_id": "2051118835",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 1878,
+        "pr_file": "internal/providercache/installer.go",
+        "discussion_id": "2051118835",
+        "commented_code": "@@ -466,7 +484,30 @@ func (i *Installer) ensureProviderVersionsInstall(\n \t\t}\n \n \t\tif i.globalCacheDir != nil {\n-\t\t\t// If our global cache already has this version available then\n+\t\t\t// Try to lock the provider's directory.\n+\t\t\tunlockProvider, err := i.globalCacheDir.Lock(ctx, provider, version)",
+        "comment_created_at": "2025-04-18T21:04:12+00:00",
+        "comment_author": "apparentlymart",
+        "comment_body": "This seems reasonable for solving exactly the problem as stated, but it seems like if we were to move this down to just before [line 568](https://github.com/opentofu/opentofu/blob/f653350af64ce92ed5c516690f6ae089e0802492/internal/providercache/installer.go#L568) then we could rely on some of the conditionals we already have in place for the global vs. local situation, and also get locking of the _local_ directory at the same time, which is not quite as popular a request but still something I've seen folks ask about before.\r\n\r\nSpecifically I'm thinking about adding something like the following just before the line I indicated:\r\n\r\n```go\r\nunlockInstallTo, err := installTo.Lock(ctx, provider, version)\r\n// (...error handling...)\r\nvar unlockLinkTo func()\r\nif linkTo != nil {\r\n    unlockLinkTo, err = linkTo.Lock(ctx, provider, version)\r\n    // (...error handling...)\r\n}\r\n```\r\n\r\n...and then unconditionally call `unlockInstallTo` and conditionally call `unlockLinkTo` afterwards.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2051150709",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 1878,
+        "pr_file": "internal/providercache/installer.go",
+        "discussion_id": "2051118835",
+        "commented_code": "@@ -466,7 +484,30 @@ func (i *Installer) ensureProviderVersionsInstall(\n \t\t}\n \n \t\tif i.globalCacheDir != nil {\n-\t\t\t// If our global cache already has this version available then\n+\t\t\t// Try to lock the provider's directory.\n+\t\t\tunlockProvider, err := i.globalCacheDir.Lock(ctx, provider, version)",
+        "comment_created_at": "2025-04-18T21:33:55+00:00",
+        "comment_author": "apparentlymart",
+        "comment_body": "I guess what I wrote above means that we'd be doing the `tryInstallPackageFromCacheDir` step without the lock held, which is okay as long as we're only trying to lock the global cache directory -- `tryInstallPackageFromCacheDir` only _reads_ from the global cache directory -- but would not protect the local cache directory. (Not that protecting the local cache directory was a requirement to begin with; just a \"would be nice\".)\r\n\r\nGiven that this locking strategy only applies to _writers_ to the cache directories anyway (concurrent readers can still observe partially-filled package directories), I'm now wondering instead about making `Dir.Lock` be unexported and calling it from the two methods in `dir_modify.go` as an implementation detail, which would help ensure that _all_ cache directory modifications can run concurrently and also address that concern about the various codepaths that neglect to call `unlock`, because `Dir.InstallPackage` can make sure to call `unlock` itself before returning.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2052736316",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 1878,
+        "pr_file": "internal/providercache/installer.go",
+        "discussion_id": "2051118835",
+        "commented_code": "@@ -466,7 +484,30 @@ func (i *Installer) ensureProviderVersionsInstall(\n \t\t}\n \n \t\tif i.globalCacheDir != nil {\n-\t\t\t// If our global cache already has this version available then\n+\t\t\t// Try to lock the provider's directory.\n+\t\t\tunlockProvider, err := i.globalCacheDir.Lock(ctx, provider, version)",
+        "comment_created_at": "2025-04-21T17:17:00+00:00",
+        "comment_author": "cam72cam",
+        "comment_body": "The reason I added the lock earlier was to help the terragrunt (and similar) scenarios.  I'm imagining a bunch of OpenTofu inits all being started from some parent tool, all pointed at the same cache directory.\r\n\r\nThe first one to acquire the lock downloads and installs the provider before linking it to the local directory and unlocking.\r\n\r\nEvery iteration after that is then able to detect and use the downloaded provider that's in the global cache.\r\n\r\nIf we move the lock further down, they would all fail the initial tryInstallPackageFromCacheDir check and be forced to download the provider and overwrite the global cache entry.\r\n\r\nRe-reading perhaps I should understand this instead as multiple smaller \"scoped\" locks where necessary?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2052838485",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 1878,
+        "pr_file": "internal/providercache/installer.go",
+        "discussion_id": "2051118835",
+        "commented_code": "@@ -466,7 +484,30 @@ func (i *Installer) ensureProviderVersionsInstall(\n \t\t}\n \n \t\tif i.globalCacheDir != nil {\n-\t\t\t// If our global cache already has this version available then\n+\t\t\t// Try to lock the provider's directory.\n+\t\t\tunlockProvider, err := i.globalCacheDir.Lock(ctx, provider, version)",
+        "comment_created_at": "2025-04-21T18:37:25+00:00",
+        "comment_author": "apparentlymart",
+        "comment_body": "You are right that if we delay acquiring the lock until we get inside `Dir.InstallPackage` then that function would also need to check (immediately after it acquires the lock) whether the desired package had been installed by another process in the meantime.\r\n\r\nFor `InstallPackage` I'm imagining something like this (just a pseudocode-ish sketch, not final code):\r\n\r\n```go\r\nfunc (d *Dir) InstallPackage(ctx context.Context, meta getproviders.PackageMeta, allowedHashes []getproviders.Hash) (*getproviders.PackageAuthenticationResult, error) {\r\n\tif meta.TargetPlatform != d.targetPlatform {\r\n\t\treturn nil, fmt.Errorf(\"can't install %s package into cache directory expecting %s\", meta.TargetPlatform, d.targetPlatform)\r\n\t}\r\n\tnewPath := getproviders.UnpackedDirectoryPathForPackage(\r\n\t\td.baseDir, meta.Provider, meta.Version, d.targetPlatform,\r\n\t)\r\n\r\n\tunlock, err := d.Lock(ctx, meta.Provider, meta.Version)\r\n\t// (...error handling...)\r\n\tdefer unlock()\r\n\r\n\tif existsAndIsDirOrSymlinkToDir(newPath) {\r\n\t\td.metaCache = nil // another process has modified the cache directory\r\n\t\tif cached, err := d.ProviderVersion(meta.Provider, meta.Version); err != nil && cached != nil {\r\n\t\t\tmatches, err := cached.MatchesAnyHash(allowedHashes)\r\n\t\t\tif err == nil && matches {\r\n\t\t\t\treturn someSuccessfulResult()\r\n\t\t\t}\r\n\t\t}\r\n\t}\r\n\r\n\t// Invalidate our metaCache so that subsequent read calls will re-scan to\r\n\t// incorporate any changes we make here.\r\n\td.metaCache = nil\r\n\r\n\tlog.Printf(\"[TRACE] providercache.Dir.InstallPackage: installing %s v%s from %s\", meta.Provider, meta.Version, meta.Location)\r\n\treturn meta.Location.InstallProviderPackage(ctx, meta, newPath, allowedHashes)\r\n}\r\n```\r\n\r\nThis does admittedly have an interesting implication: if we end up at the `return someSuccessfulResult` statement here then _this process_ will not have applied any package authentication rules (from `meta.Authentication`) to the directory, meaning that it's assuming that the other process did that correctly _and_ the \"some successful result\" would not be able to include any verified hashes beyond perhaps the ones that caused `MatchesAnyHash` to return true.\r\n\r\nI think that _does_ technically match the current treatment of cache entries -- `tryInstallPackageFromCacheDir` also only checks that the checksum matches -- but is admittedly quite a different guarantee than this method was previously providing. If that seems acceptable though, I wonder if there's enough overlap between \"is the package in that _other_ cache acceptable to use?\" and \"is the package in _this_ cache acceptable to use?\" that we could factor out the relevant subset of logic from `tryInstallPackageFromCacheDir` and use it from both places.\r\n\r\nOverall here my goal is to limit the time spent holding the lock and to keep the lock handling as an implementation detail of `Dir.InstallPackage`, rather than exposing it as a separate thing that callers need to remember to handle. (and acquire the lock in `Dir.LinkFromOtherCache` too, so that full installation can't race with linking at the same location if someone has a really weirdo configuration.)\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2060154466",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 1878,
+        "pr_file": "internal/providercache/installer.go",
+        "discussion_id": "2051118835",
+        "commented_code": "@@ -466,7 +484,30 @@ func (i *Installer) ensureProviderVersionsInstall(\n \t\t}\n \n \t\tif i.globalCacheDir != nil {\n-\t\t\t// If our global cache already has this version available then\n+\t\t\t// Try to lock the provider's directory.\n+\t\t\tunlockProvider, err := i.globalCacheDir.Lock(ctx, provider, version)",
+        "comment_created_at": "2025-04-25T12:30:30+00:00",
+        "comment_author": "cam72cam",
+        "comment_body": "This resulted in a subsequent PR that deals with refactoring this part of the codebase a bit more in depth.  https://github.com/opentofu/opentofu/pull/2708\r\n\r\nI'm going to merge this version as is, with the idea that we will merge or close 2708 next week.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2051128541",
+    "pr_number": 1878,
+    "pr_file": "internal/providercache/installer.go",
+    "created_at": "2025-04-18T21:10:34+00:00",
+    "commented_code": "}\n \t\t\tcontinue\n \t\t}\n+\n+\t\tif unlock != nil {\n+\t\t\t// Early unlock as the write to the globalCacheDir has completed\n+\t\t\tunlock()",
+    "repo_full_name": "opentofu/opentofu",
+    "discussion_comments": [
+      {
+        "comment_id": "2051128541",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 1878,
+        "pr_file": "internal/providercache/installer.go",
+        "discussion_id": "2051128541",
+        "commented_code": "@@ -534,6 +575,13 @@ func (i *Installer) ensureProviderVersionsInstall(\n \t\t\t}\n \t\t\tcontinue\n \t\t}\n+\n+\t\tif unlock != nil {\n+\t\t\t// Early unlock as the write to the globalCacheDir has completed\n+\t\t\tunlock()",
+        "comment_created_at": "2025-04-18T21:10:34+00:00",
+        "comment_author": "apparentlymart",
+        "comment_body": "It seems like there are a few places above where we end the iteration of the loop early without calling `unlock`, which I guess is probably not a huge deal since the process will eventually exit and implicitly release the lock, but it we did a little more work down the path I started in https://github.com/opentofu/opentofu/pull/2166 then we could perhaps factor the body of this loop out into a separate function and use `defer unlock()` to make sure it always gets called on every return path, so that we're not at risk of any quirky behavior in the uncommon cases where we terminate early without unlocking.\r\n\r\n(I don't think we should do that refactoring as part of this PR though, since that sort of thing is better reviewed on its own.)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2052727726",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 1878,
+        "pr_file": "internal/providercache/installer.go",
+        "discussion_id": "2051128541",
+        "commented_code": "@@ -534,6 +575,13 @@ func (i *Installer) ensureProviderVersionsInstall(\n \t\t\t}\n \t\t\tcontinue\n \t\t}\n+\n+\t\tif unlock != nil {\n+\t\t\t// Early unlock as the write to the globalCacheDir has completed\n+\t\t\tunlock()",
+        "comment_created_at": "2025-04-21T17:08:36+00:00",
+        "comment_author": "cam72cam",
+        "comment_body": "That is why I added a defer() at the top of this function to catch any stray early returns.  It's inelegant and I've left some breadcrumb comments above on why it's not being refactored in this PR.\r\n\r\nYour suggested refactoring would definitely make this much easier to parse (in a subsequent PR)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2052734123",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 1878,
+        "pr_file": "internal/providercache/installer.go",
+        "discussion_id": "2051128541",
+        "commented_code": "@@ -534,6 +575,13 @@ func (i *Installer) ensureProviderVersionsInstall(\n \t\t\t}\n \t\t\tcontinue\n \t\t}\n+\n+\t\tif unlock != nil {\n+\t\t\t// Early unlock as the write to the globalCacheDir has completed\n+\t\t\tunlock()",
+        "comment_created_at": "2025-04-21T17:14:58+00:00",
+        "comment_author": "apparentlymart",
+        "comment_body": "Oh, I see! I think I misunderstood this when I read it the first time because I didn't consider that (because this is running sequentially) there can only possibly be one outstanding `unlock` at a time, and so it's okay to use only a single `defer` to clean up only that one.\r\n\r\nFair enough!\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1956464926",
+    "pr_number": 2521,
+    "pr_file": "internal/backend/remote-state/s3/client.go",
+    "created_at": "2025-02-14T16:59:21+00:00",
+    "commented_code": "}\n \n func (c *RemoteClient) Lock(info *statemgr.LockInfo) (string, error) {\n+\ts3LockId, err := c.s3Lock(info)\n+\tif err != nil {\n+\t\treturn \"\", err\n+\t}\n+\tdynamoLockId, err := c.dynamoDbLock(info)\n+\tif err != nil {\n+\t\treturn \"\", err\n+\t}",
+    "repo_full_name": "opentofu/opentofu",
+    "discussion_comments": [
+      {
+        "comment_id": "1956464926",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 2521,
+        "pr_file": "internal/backend/remote-state/s3/client.go",
+        "discussion_id": "1956464926",
+        "commented_code": "@@ -272,10 +276,32 @@ func (c *RemoteClient) Delete() error {\n }\n \n func (c *RemoteClient) Lock(info *statemgr.LockInfo) (string, error) {\n+\ts3LockId, err := c.s3Lock(info)\n+\tif err != nil {\n+\t\treturn \"\", err\n+\t}\n+\tdynamoLockId, err := c.dynamoDbLock(info)\n+\tif err != nil {\n+\t\treturn \"\", err\n+\t}",
+        "comment_created_at": "2025-02-14T16:59:21+00:00",
+        "comment_author": "yottta",
+        "comment_body": "`note`\r\nThis locking specific order (s3 first, dynamo second) is done this way keep the feature parity. From the tests ran locally, terraform is also doing both in case locking is enabled for s3+dynamodb and is doing those in that specific order.\r\nTerraform flow from the [localstack](https://www.localstack.cloud/) logs:\r\n```\r\nlocalstack.request.aws     : AWS iam.GetUser => 200\r\nlocalstack.request.aws     : AWS s3.ListObjectsV2 => 200\r\nlocalstack.request.aws     : AWS s3.PutObject => 200 <- acquire s3 lock\r\nlocalstack.request.aws     : AWS dynamodb.PutItem => 200 <- acquire dynamo lock\r\nlocalstack.request.aws     : AWS s3.HeadObject => 200\r\nlocalstack.request.aws     : AWS s3.GetObject => 206\r\nlocalstack.request.aws     : AWS dynamodb.GetItem => 200\r\nlocalstack.request.aws     : AWS s3.HeadBucket => 200\r\n...\r\nlocalstack.request.aws     : AWS s3.HeadBucket => 200\r\nlocalstack.request.aws     : AWS s3.GetBucketTagging => 404 (NoSuchTagSet)\r\nlocalstack.request.aws     : AWS s3.GetObject => 200\r\nlocalstack.request.aws     : AWS s3.DeleteObject => 204 <- release s3 lock\r\nlocalstack.request.aws     : AWS dynamodb.GetItem => 200\r\nlocalstack.request.aws     : AWS dynamodb.DeleteItem => 200 <- release dynamo lock\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1961389452",
+    "pr_number": 2521,
+    "pr_file": "internal/backend/remote-state/s3/client.go",
+    "created_at": "2025-02-19T10:26:09+00:00",
+    "commented_code": "return lockInfo, nil\n }\n \n+func (c *RemoteClient) getLockInfoFromS3(ctx context.Context) (*statemgr.LockInfo, error) {\n+\tgetParams := &s3.GetObjectInput{\n+\t\tBucket: aws.String(c.bucketName),\n+\t\tKey:    aws.String(c.lockFilePath()),\n+\t}\n+\n+\tresp, err := c.s3Client.GetObject(ctx, getParams)\n+\tif err != nil {\n+\t\tvar nb *types.NoSuchBucket\n+\t\tif errors.As(err, &nb) {\n+\t\t\t//nolint:stylecheck // error message already used in multiple places. Not recommended to be updated\n+\t\t\treturn nil, fmt.Errorf(errS3NoSuchBucket, err)\n+\t\t}\n+\n+\t\tvar nk *types.NotFound\n+\t\tif errors.As(err, &nk) {\n+\t\t\treturn &statemgr.LockInfo{}, nil\n+\t\t}\n+\n+\t\treturn nil, err\n+\t}\n+\n+\tlockContent, err := io.ReadAll(resp.Body)\n+\tif err != nil {\n+\t\treturn nil, fmt.Errorf(\"could not read the content of the lock object: %w\", err)\n+\t}\n+\tif len(lockContent) == 0 {\n+\t\treturn nil, fmt.Errorf(\"no lock info found for %q in the s3 bucket: %s\", c.lockFilePath(), c.bucketName)\n+\t}\n+\n+\tlockInfo := &statemgr.LockInfo{}\n+\terr = json.Unmarshal(lockContent, lockInfo)\n+\tif err != nil {\n+\t\treturn nil, fmt.Errorf(\"unable to json parse the lock info %q from bucket %q: %w\", c.lockFilePath(), c.bucketName, err)\n+\t}\n+\n+\treturn lockInfo, nil\n+}\n+\n func (c *RemoteClient) Unlock(id string) error {\n+\t// Attempt to release the lock from both sources.\n+\t// We want to do so to be sure that we are leaving no locks unhandled\n+\ts3Err := c.s3Unlock(id)\n+\tdynamoDBErr := c.dynamoDBUnlock(id)\n+\tswitch {\n+\tcase s3Err != nil && dynamoDBErr != nil:\n+\t\ts3Err.Err = multierror.Append(s3Err.Err, dynamoDBErr.Err)\n+\t\treturn s3Err\n+\tcase s3Err != nil:\n+\t\treturn s3Err\n+\tcase dynamoDBErr != nil:\n+\t\treturn dynamoDBErr\n+\t}\n+\treturn nil\n+}\n+\n+func (c *RemoteClient) s3Unlock(id string) *statemgr.LockError {\n+\tif !c.useLockfile {\n+\t\treturn nil\n+\t}\n+\tlockErr := &statemgr.LockError{}\n+\tctx := context.TODO()",
+    "repo_full_name": "opentofu/opentofu",
+    "discussion_comments": [
+      {
+        "comment_id": "1961389452",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 2521,
+        "pr_file": "internal/backend/remote-state/s3/client.go",
+        "discussion_id": "1961389452",
+        "commented_code": "@@ -426,15 +483,104 @@ func (c *RemoteClient) getLockInfo(ctx context.Context) (*statemgr.LockInfo, err\n \treturn lockInfo, nil\n }\n \n+func (c *RemoteClient) getLockInfoFromS3(ctx context.Context) (*statemgr.LockInfo, error) {\n+\tgetParams := &s3.GetObjectInput{\n+\t\tBucket: aws.String(c.bucketName),\n+\t\tKey:    aws.String(c.lockFilePath()),\n+\t}\n+\n+\tresp, err := c.s3Client.GetObject(ctx, getParams)\n+\tif err != nil {\n+\t\tvar nb *types.NoSuchBucket\n+\t\tif errors.As(err, &nb) {\n+\t\t\t//nolint:stylecheck // error message already used in multiple places. Not recommended to be updated\n+\t\t\treturn nil, fmt.Errorf(errS3NoSuchBucket, err)\n+\t\t}\n+\n+\t\tvar nk *types.NotFound\n+\t\tif errors.As(err, &nk) {\n+\t\t\treturn &statemgr.LockInfo{}, nil\n+\t\t}\n+\n+\t\treturn nil, err\n+\t}\n+\n+\tlockContent, err := io.ReadAll(resp.Body)\n+\tif err != nil {\n+\t\treturn nil, fmt.Errorf(\"could not read the content of the lock object: %w\", err)\n+\t}\n+\tif len(lockContent) == 0 {\n+\t\treturn nil, fmt.Errorf(\"no lock info found for %q in the s3 bucket: %s\", c.lockFilePath(), c.bucketName)\n+\t}\n+\n+\tlockInfo := &statemgr.LockInfo{}\n+\terr = json.Unmarshal(lockContent, lockInfo)\n+\tif err != nil {\n+\t\treturn nil, fmt.Errorf(\"unable to json parse the lock info %q from bucket %q: %w\", c.lockFilePath(), c.bucketName, err)\n+\t}\n+\n+\treturn lockInfo, nil\n+}\n+\n func (c *RemoteClient) Unlock(id string) error {\n+\t// Attempt to release the lock from both sources.\n+\t// We want to do so to be sure that we are leaving no locks unhandled\n+\ts3Err := c.s3Unlock(id)\n+\tdynamoDBErr := c.dynamoDBUnlock(id)\n+\tswitch {\n+\tcase s3Err != nil && dynamoDBErr != nil:\n+\t\ts3Err.Err = multierror.Append(s3Err.Err, dynamoDBErr.Err)\n+\t\treturn s3Err\n+\tcase s3Err != nil:\n+\t\treturn s3Err\n+\tcase dynamoDBErr != nil:\n+\t\treturn dynamoDBErr\n+\t}\n+\treturn nil\n+}\n+\n+func (c *RemoteClient) s3Unlock(id string) *statemgr.LockError {\n+\tif !c.useLockfile {\n+\t\treturn nil\n+\t}\n+\tlockErr := &statemgr.LockError{}\n+\tctx := context.TODO()",
+        "comment_created_at": "2025-02-19T10:26:09+00:00",
+        "comment_author": "diofeher",
+        "comment_body": "Shouldn't we use a context with a timeout here?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1961398403",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 2521,
+        "pr_file": "internal/backend/remote-state/s3/client.go",
+        "discussion_id": "1961389452",
+        "commented_code": "@@ -426,15 +483,104 @@ func (c *RemoteClient) getLockInfo(ctx context.Context) (*statemgr.LockInfo, err\n \treturn lockInfo, nil\n }\n \n+func (c *RemoteClient) getLockInfoFromS3(ctx context.Context) (*statemgr.LockInfo, error) {\n+\tgetParams := &s3.GetObjectInput{\n+\t\tBucket: aws.String(c.bucketName),\n+\t\tKey:    aws.String(c.lockFilePath()),\n+\t}\n+\n+\tresp, err := c.s3Client.GetObject(ctx, getParams)\n+\tif err != nil {\n+\t\tvar nb *types.NoSuchBucket\n+\t\tif errors.As(err, &nb) {\n+\t\t\t//nolint:stylecheck // error message already used in multiple places. Not recommended to be updated\n+\t\t\treturn nil, fmt.Errorf(errS3NoSuchBucket, err)\n+\t\t}\n+\n+\t\tvar nk *types.NotFound\n+\t\tif errors.As(err, &nk) {\n+\t\t\treturn &statemgr.LockInfo{}, nil\n+\t\t}\n+\n+\t\treturn nil, err\n+\t}\n+\n+\tlockContent, err := io.ReadAll(resp.Body)\n+\tif err != nil {\n+\t\treturn nil, fmt.Errorf(\"could not read the content of the lock object: %w\", err)\n+\t}\n+\tif len(lockContent) == 0 {\n+\t\treturn nil, fmt.Errorf(\"no lock info found for %q in the s3 bucket: %s\", c.lockFilePath(), c.bucketName)\n+\t}\n+\n+\tlockInfo := &statemgr.LockInfo{}\n+\terr = json.Unmarshal(lockContent, lockInfo)\n+\tif err != nil {\n+\t\treturn nil, fmt.Errorf(\"unable to json parse the lock info %q from bucket %q: %w\", c.lockFilePath(), c.bucketName, err)\n+\t}\n+\n+\treturn lockInfo, nil\n+}\n+\n func (c *RemoteClient) Unlock(id string) error {\n+\t// Attempt to release the lock from both sources.\n+\t// We want to do so to be sure that we are leaving no locks unhandled\n+\ts3Err := c.s3Unlock(id)\n+\tdynamoDBErr := c.dynamoDBUnlock(id)\n+\tswitch {\n+\tcase s3Err != nil && dynamoDBErr != nil:\n+\t\ts3Err.Err = multierror.Append(s3Err.Err, dynamoDBErr.Err)\n+\t\treturn s3Err\n+\tcase s3Err != nil:\n+\t\treturn s3Err\n+\tcase dynamoDBErr != nil:\n+\t\treturn dynamoDBErr\n+\t}\n+\treturn nil\n+}\n+\n+func (c *RemoteClient) s3Unlock(id string) *statemgr.LockError {\n+\tif !c.useLockfile {\n+\t\treturn nil\n+\t}\n+\tlockErr := &statemgr.LockError{}\n+\tctx := context.TODO()",
+        "comment_created_at": "2025-02-19T10:31:34+00:00",
+        "comment_author": "yottta",
+        "comment_body": "Good question! I was asking myself the same thing, but I see that `context.TODO` is used everywhere in this package.\r\nI am not aware yet, but maybe there are some plans on tackling this. Any ideas @cam72cam?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1961588769",
+        "repo_full_name": "opentofu/opentofu",
+        "pr_number": 2521,
+        "pr_file": "internal/backend/remote-state/s3/client.go",
+        "discussion_id": "1961389452",
+        "commented_code": "@@ -426,15 +483,104 @@ func (c *RemoteClient) getLockInfo(ctx context.Context) (*statemgr.LockInfo, err\n \treturn lockInfo, nil\n }\n \n+func (c *RemoteClient) getLockInfoFromS3(ctx context.Context) (*statemgr.LockInfo, error) {\n+\tgetParams := &s3.GetObjectInput{\n+\t\tBucket: aws.String(c.bucketName),\n+\t\tKey:    aws.String(c.lockFilePath()),\n+\t}\n+\n+\tresp, err := c.s3Client.GetObject(ctx, getParams)\n+\tif err != nil {\n+\t\tvar nb *types.NoSuchBucket\n+\t\tif errors.As(err, &nb) {\n+\t\t\t//nolint:stylecheck // error message already used in multiple places. Not recommended to be updated\n+\t\t\treturn nil, fmt.Errorf(errS3NoSuchBucket, err)\n+\t\t}\n+\n+\t\tvar nk *types.NotFound\n+\t\tif errors.As(err, &nk) {\n+\t\t\treturn &statemgr.LockInfo{}, nil\n+\t\t}\n+\n+\t\treturn nil, err\n+\t}\n+\n+\tlockContent, err := io.ReadAll(resp.Body)\n+\tif err != nil {\n+\t\treturn nil, fmt.Errorf(\"could not read the content of the lock object: %w\", err)\n+\t}\n+\tif len(lockContent) == 0 {\n+\t\treturn nil, fmt.Errorf(\"no lock info found for %q in the s3 bucket: %s\", c.lockFilePath(), c.bucketName)\n+\t}\n+\n+\tlockInfo := &statemgr.LockInfo{}\n+\terr = json.Unmarshal(lockContent, lockInfo)\n+\tif err != nil {\n+\t\treturn nil, fmt.Errorf(\"unable to json parse the lock info %q from bucket %q: %w\", c.lockFilePath(), c.bucketName, err)\n+\t}\n+\n+\treturn lockInfo, nil\n+}\n+\n func (c *RemoteClient) Unlock(id string) error {\n+\t// Attempt to release the lock from both sources.\n+\t// We want to do so to be sure that we are leaving no locks unhandled\n+\ts3Err := c.s3Unlock(id)\n+\tdynamoDBErr := c.dynamoDBUnlock(id)\n+\tswitch {\n+\tcase s3Err != nil && dynamoDBErr != nil:\n+\t\ts3Err.Err = multierror.Append(s3Err.Err, dynamoDBErr.Err)\n+\t\treturn s3Err\n+\tcase s3Err != nil:\n+\t\treturn s3Err\n+\tcase dynamoDBErr != nil:\n+\t\treturn dynamoDBErr\n+\t}\n+\treturn nil\n+}\n+\n+func (c *RemoteClient) s3Unlock(id string) *statemgr.LockError {\n+\tif !c.useLockfile {\n+\t\treturn nil\n+\t}\n+\tlockErr := &statemgr.LockError{}\n+\tctx := context.TODO()",
+        "comment_created_at": "2025-02-19T12:26:26+00:00",
+        "comment_author": "cam72cam",
+        "comment_body": "For now, let's keep with the unfortunate convention of context.TODO().  Earlier on in the project, we tried to refactor a lot of the contexts to be functional throughout the codebase.  It broke quite a few things in really subtle ways.\r\n\r\nI think that using a proper context here is the right thing long term, but we will need to prioritize that separately from this work.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

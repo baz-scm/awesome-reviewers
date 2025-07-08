@@ -1,0 +1,82 @@
+[
+  {
+    "discussion_id": "2000547860",
+    "pr_number": 36709,
+    "pr_file": "internal/stacks/stackruntime/internal/stackeval/component_config.go",
+    "created_at": "2025-03-18T09:11:55+00:00",
+    "commented_code": "// We don't expose ComponentConfig in any scope outside of the validation\n \t// phase, so this is sufficient for all phases. (See [Component] for how\n \t// component results get calculated during the plan and apply phases.)\n+\n+\t// Validating this component after it was found in a reference here, so\n+\t// that we can detect cycles between components.",
+    "repo_full_name": "hashicorp/terraform",
+    "discussion_comments": [
+      {
+        "comment_id": "2000547860",
+        "repo_full_name": "hashicorp/terraform",
+        "pr_number": 36709,
+        "pr_file": "internal/stacks/stackruntime/internal/stackeval/component_config.go",
+        "discussion_id": "2000547860",
+        "commented_code": "@@ -258,6 +258,10 @@ func (c *ComponentConfig) ExprReferenceValue(ctx context.Context, phase EvalPhas\n \t// We don't expose ComponentConfig in any scope outside of the validation\n \t// phase, so this is sufficient for all phases. (See [Component] for how\n \t// component results get calculated during the plan and apply phases.)\n+\n+\t// Validating this component after it was found in a reference here, so\n+\t// that we can detect cycles between components.",
+        "comment_created_at": "2025-03-18T09:11:55+00:00",
+        "comment_author": "liamcervante",
+        "comment_body": "```suggestion\r\n\t// By calling `checkValid` on ourself here, we will cause a cycle error to be exposed if we ended\r\n\t// up within this function while executing c.checkValid initially. This just makes sure that there\r\n\t// are no cycles between components.\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1923775794",
+    "pr_number": 36300,
+    "pr_file": "internal/moduletest/graph/transform_test_run.go",
+    "created_at": "2025-01-21T13:56:52+00:00",
+    "commented_code": "+// Copyright (c) HashiCorp, Inc.\n+// SPDX-License-Identifier: BUSL-1.1\n+\n+package graph\n+\n+import (\n+\t\"fmt\"\n+\n+\t\"github.com/hashicorp/hcl/v2\"\n+\t\"github.com/hashicorp/terraform/internal/addrs\"\n+\t\"github.com/hashicorp/terraform/internal/backend/backendrun\"\n+\t\"github.com/hashicorp/terraform/internal/dag\"\n+\t\"github.com/hashicorp/terraform/internal/moduletest\"\n+\t\"github.com/hashicorp/terraform/internal/terraform\"\n+\t\"github.com/hashicorp/terraform/internal/tfdiags\"\n+)\n+\n+// TestRunTransformer is a GraphTransformer that adds all the test runs,\n+// and the variables defined in each run block, to the graph.\n+type TestRunTransformer struct {\n+\tFile       *moduletest.File\n+\tglobalVars map[string]backendrun.UnparsedVariableValue\n+}\n+\n+func (t *TestRunTransformer) Transform(g *terraform.Graph) error {\n+\t// Create and add nodes for each run\n+\tnodes := t.createNodes(g)\n+\n+\t// Connect nodes based on dependencies\n+\tif diags := t.connectDependencies(g, nodes); diags.HasErrors() {\n+\t\treturn tfdiags.NonFatalError{Diagnostics: diags}\n+\t}\n+\n+\t// Connect nodes with the same state key sequentially\n+\tt.connectStateKeyRuns(g, nodes)\n+\n+\treturn nil\n+}\n+\n+func (t *TestRunTransformer) createNodes(g *terraform.Graph) []*NodeTestRun {\n+\tvar nodes []*NodeTestRun\n+\tvar prev *NodeTestRun\n+\tfor _, run := range t.File.Runs {\n+\t\tnode := &NodeTestRun{run: run, file: t.File}\n+\t\tg.Add(node)\n+\t\tnodes = append(nodes, node)\n+\n+\t\tif prev != nil {\n+\t\t\tparallelized := prev.run.Config.Parallel && run.Config.Parallel\n+\t\t\t// we connect 2 sequential runs IF\n+\t\t\t// 1. at least one of them is NOT eligible for parallelization OR\n+\t\t\t// 2. they are both eligible for parallelization AND have the same state key\n+\t\t\tif !parallelized || (parallelized && prev.run.GetStateKey() == run.GetStateKey()) {\n+\t\t\t\tg.Connect(dag.BasicEdge(node, prev))\n+\t\t\t}\n+\t\t}\n+\t\tprev = node\n+\t}",
+    "repo_full_name": "hashicorp/terraform",
+    "discussion_comments": [
+      {
+        "comment_id": "1923775794",
+        "repo_full_name": "hashicorp/terraform",
+        "pr_number": 36300,
+        "pr_file": "internal/moduletest/graph/transform_test_run.go",
+        "discussion_id": "1923775794",
+        "commented_code": "@@ -0,0 +1,188 @@\n+// Copyright (c) HashiCorp, Inc.\n+// SPDX-License-Identifier: BUSL-1.1\n+\n+package graph\n+\n+import (\n+\t\"fmt\"\n+\n+\t\"github.com/hashicorp/hcl/v2\"\n+\t\"github.com/hashicorp/terraform/internal/addrs\"\n+\t\"github.com/hashicorp/terraform/internal/backend/backendrun\"\n+\t\"github.com/hashicorp/terraform/internal/dag\"\n+\t\"github.com/hashicorp/terraform/internal/moduletest\"\n+\t\"github.com/hashicorp/terraform/internal/terraform\"\n+\t\"github.com/hashicorp/terraform/internal/tfdiags\"\n+)\n+\n+// TestRunTransformer is a GraphTransformer that adds all the test runs,\n+// and the variables defined in each run block, to the graph.\n+type TestRunTransformer struct {\n+\tFile       *moduletest.File\n+\tglobalVars map[string]backendrun.UnparsedVariableValue\n+}\n+\n+func (t *TestRunTransformer) Transform(g *terraform.Graph) error {\n+\t// Create and add nodes for each run\n+\tnodes := t.createNodes(g)\n+\n+\t// Connect nodes based on dependencies\n+\tif diags := t.connectDependencies(g, nodes); diags.HasErrors() {\n+\t\treturn tfdiags.NonFatalError{Diagnostics: diags}\n+\t}\n+\n+\t// Connect nodes with the same state key sequentially\n+\tt.connectStateKeyRuns(g, nodes)\n+\n+\treturn nil\n+}\n+\n+func (t *TestRunTransformer) createNodes(g *terraform.Graph) []*NodeTestRun {\n+\tvar nodes []*NodeTestRun\n+\tvar prev *NodeTestRun\n+\tfor _, run := range t.File.Runs {\n+\t\tnode := &NodeTestRun{run: run, file: t.File}\n+\t\tg.Add(node)\n+\t\tnodes = append(nodes, node)\n+\n+\t\tif prev != nil {\n+\t\t\tparallelized := prev.run.Config.Parallel && run.Config.Parallel\n+\t\t\t// we connect 2 sequential runs IF\n+\t\t\t// 1. at least one of them is NOT eligible for parallelization OR\n+\t\t\t// 2. they are both eligible for parallelization AND have the same state key\n+\t\t\tif !parallelized || (parallelized && prev.run.GetStateKey() == run.GetStateKey()) {\n+\t\t\t\tg.Connect(dag.BasicEdge(node, prev))\n+\t\t\t}\n+\t\t}\n+\t\tprev = node\n+\t}",
+        "comment_created_at": "2025-01-21T13:56:52+00:00",
+        "comment_author": "liamcervante",
+        "comment_body": "I'd imagined this being a bit more complex than just checking the node immediately before it.\r\n\r\n```\r\nrun \"start\" {}\r\n\r\nrun \"test_a\" { state_key = \"a\", parallel = true }\r\nrun \"test_b\" { state_key = \"b\", parallel = true}\r\nrun \"test_c\" { state_key = \"c\", parallel = true}\r\n\r\nrun \"end\" {}\r\n```\r\n\r\nI'd imagined that in the above example we'd see the following: `start, [test_a, test_b, test_c], end`. The three in the middle all being parallelised together but bookended by the start and end.\r\n\r\nI think what we'd actually see is start and test_a running in sequence, test_c and end running in sequence, and test_b just running whenever it wants. I don't think we want that second behaviour? Instead, I'd make every non-parallel node should link to all previous parallel nodes, and all next parallel nodes. Does that make sense? What do you think? I think there should still be an implicit link between all non-parallel nodes that go before and after to enforce the general sequential ordering.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1925266316",
+        "repo_full_name": "hashicorp/terraform",
+        "pr_number": 36300,
+        "pr_file": "internal/moduletest/graph/transform_test_run.go",
+        "discussion_id": "1923775794",
+        "commented_code": "@@ -0,0 +1,188 @@\n+// Copyright (c) HashiCorp, Inc.\n+// SPDX-License-Identifier: BUSL-1.1\n+\n+package graph\n+\n+import (\n+\t\"fmt\"\n+\n+\t\"github.com/hashicorp/hcl/v2\"\n+\t\"github.com/hashicorp/terraform/internal/addrs\"\n+\t\"github.com/hashicorp/terraform/internal/backend/backendrun\"\n+\t\"github.com/hashicorp/terraform/internal/dag\"\n+\t\"github.com/hashicorp/terraform/internal/moduletest\"\n+\t\"github.com/hashicorp/terraform/internal/terraform\"\n+\t\"github.com/hashicorp/terraform/internal/tfdiags\"\n+)\n+\n+// TestRunTransformer is a GraphTransformer that adds all the test runs,\n+// and the variables defined in each run block, to the graph.\n+type TestRunTransformer struct {\n+\tFile       *moduletest.File\n+\tglobalVars map[string]backendrun.UnparsedVariableValue\n+}\n+\n+func (t *TestRunTransformer) Transform(g *terraform.Graph) error {\n+\t// Create and add nodes for each run\n+\tnodes := t.createNodes(g)\n+\n+\t// Connect nodes based on dependencies\n+\tif diags := t.connectDependencies(g, nodes); diags.HasErrors() {\n+\t\treturn tfdiags.NonFatalError{Diagnostics: diags}\n+\t}\n+\n+\t// Connect nodes with the same state key sequentially\n+\tt.connectStateKeyRuns(g, nodes)\n+\n+\treturn nil\n+}\n+\n+func (t *TestRunTransformer) createNodes(g *terraform.Graph) []*NodeTestRun {\n+\tvar nodes []*NodeTestRun\n+\tvar prev *NodeTestRun\n+\tfor _, run := range t.File.Runs {\n+\t\tnode := &NodeTestRun{run: run, file: t.File}\n+\t\tg.Add(node)\n+\t\tnodes = append(nodes, node)\n+\n+\t\tif prev != nil {\n+\t\t\tparallelized := prev.run.Config.Parallel && run.Config.Parallel\n+\t\t\t// we connect 2 sequential runs IF\n+\t\t\t// 1. at least one of them is NOT eligible for parallelization OR\n+\t\t\t// 2. they are both eligible for parallelization AND have the same state key\n+\t\t\tif !parallelized || (parallelized && prev.run.GetStateKey() == run.GetStateKey()) {\n+\t\t\t\tg.Connect(dag.BasicEdge(node, prev))\n+\t\t\t}\n+\t\t}\n+\t\tprev = node\n+\t}",
+        "comment_created_at": "2025-01-22T12:48:57+00:00",
+        "comment_author": "dsa0x",
+        "comment_body": "@liamcervante You are right. [Here it is](https://github.com/hashicorp/terraform/pull/36300/commits/de9aa6b3cfeaa7c164a773e69aed5039fde5a1e2#diff-cd7a3207d03a8d5ba512bdd0eaab7e36761800de75613f31b0a5ef3641d75e69R120-R140). While this first logic only connects sequential runs, in this following loop, we connect non-parallel nodes to all their preceding and subsequent runs, and that ensures that only test_a, test_b, test_c are parallel. I also have a [test](https://github.com/hashicorp/terraform/pull/36300/commits/de9aa6b3cfeaa7c164a773e69aed5039fde5a1e2#diff-e3b0ab6d6625fa91350e3dbf14c91da051e062fa8671f5122d8251175cd0ae37R528) that verified that in ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1925276422",
+        "repo_full_name": "hashicorp/terraform",
+        "pr_number": 36300,
+        "pr_file": "internal/moduletest/graph/transform_test_run.go",
+        "discussion_id": "1923775794",
+        "commented_code": "@@ -0,0 +1,188 @@\n+// Copyright (c) HashiCorp, Inc.\n+// SPDX-License-Identifier: BUSL-1.1\n+\n+package graph\n+\n+import (\n+\t\"fmt\"\n+\n+\t\"github.com/hashicorp/hcl/v2\"\n+\t\"github.com/hashicorp/terraform/internal/addrs\"\n+\t\"github.com/hashicorp/terraform/internal/backend/backendrun\"\n+\t\"github.com/hashicorp/terraform/internal/dag\"\n+\t\"github.com/hashicorp/terraform/internal/moduletest\"\n+\t\"github.com/hashicorp/terraform/internal/terraform\"\n+\t\"github.com/hashicorp/terraform/internal/tfdiags\"\n+)\n+\n+// TestRunTransformer is a GraphTransformer that adds all the test runs,\n+// and the variables defined in each run block, to the graph.\n+type TestRunTransformer struct {\n+\tFile       *moduletest.File\n+\tglobalVars map[string]backendrun.UnparsedVariableValue\n+}\n+\n+func (t *TestRunTransformer) Transform(g *terraform.Graph) error {\n+\t// Create and add nodes for each run\n+\tnodes := t.createNodes(g)\n+\n+\t// Connect nodes based on dependencies\n+\tif diags := t.connectDependencies(g, nodes); diags.HasErrors() {\n+\t\treturn tfdiags.NonFatalError{Diagnostics: diags}\n+\t}\n+\n+\t// Connect nodes with the same state key sequentially\n+\tt.connectStateKeyRuns(g, nodes)\n+\n+\treturn nil\n+}\n+\n+func (t *TestRunTransformer) createNodes(g *terraform.Graph) []*NodeTestRun {\n+\tvar nodes []*NodeTestRun\n+\tvar prev *NodeTestRun\n+\tfor _, run := range t.File.Runs {\n+\t\tnode := &NodeTestRun{run: run, file: t.File}\n+\t\tg.Add(node)\n+\t\tnodes = append(nodes, node)\n+\n+\t\tif prev != nil {\n+\t\t\tparallelized := prev.run.Config.Parallel && run.Config.Parallel\n+\t\t\t// we connect 2 sequential runs IF\n+\t\t\t// 1. at least one of them is NOT eligible for parallelization OR\n+\t\t\t// 2. they are both eligible for parallelization AND have the same state key\n+\t\t\tif !parallelized || (parallelized && prev.run.GetStateKey() == run.GetStateKey()) {\n+\t\t\t\tg.Connect(dag.BasicEdge(node, prev))\n+\t\t\t}\n+\t\t}\n+\t\tprev = node\n+\t}",
+        "comment_created_at": "2025-01-22T12:56:12+00:00",
+        "comment_author": "liamcervante",
+        "comment_body": "Nice! Perhaps just put a comment here (and in the other place) so they link to each other? That way just people will get the full picture of how run blocks are actually connected with each other.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1925307405",
+        "repo_full_name": "hashicorp/terraform",
+        "pr_number": 36300,
+        "pr_file": "internal/moduletest/graph/transform_test_run.go",
+        "discussion_id": "1923775794",
+        "commented_code": "@@ -0,0 +1,188 @@\n+// Copyright (c) HashiCorp, Inc.\n+// SPDX-License-Identifier: BUSL-1.1\n+\n+package graph\n+\n+import (\n+\t\"fmt\"\n+\n+\t\"github.com/hashicorp/hcl/v2\"\n+\t\"github.com/hashicorp/terraform/internal/addrs\"\n+\t\"github.com/hashicorp/terraform/internal/backend/backendrun\"\n+\t\"github.com/hashicorp/terraform/internal/dag\"\n+\t\"github.com/hashicorp/terraform/internal/moduletest\"\n+\t\"github.com/hashicorp/terraform/internal/terraform\"\n+\t\"github.com/hashicorp/terraform/internal/tfdiags\"\n+)\n+\n+// TestRunTransformer is a GraphTransformer that adds all the test runs,\n+// and the variables defined in each run block, to the graph.\n+type TestRunTransformer struct {\n+\tFile       *moduletest.File\n+\tglobalVars map[string]backendrun.UnparsedVariableValue\n+}\n+\n+func (t *TestRunTransformer) Transform(g *terraform.Graph) error {\n+\t// Create and add nodes for each run\n+\tnodes := t.createNodes(g)\n+\n+\t// Connect nodes based on dependencies\n+\tif diags := t.connectDependencies(g, nodes); diags.HasErrors() {\n+\t\treturn tfdiags.NonFatalError{Diagnostics: diags}\n+\t}\n+\n+\t// Connect nodes with the same state key sequentially\n+\tt.connectStateKeyRuns(g, nodes)\n+\n+\treturn nil\n+}\n+\n+func (t *TestRunTransformer) createNodes(g *terraform.Graph) []*NodeTestRun {\n+\tvar nodes []*NodeTestRun\n+\tvar prev *NodeTestRun\n+\tfor _, run := range t.File.Runs {\n+\t\tnode := &NodeTestRun{run: run, file: t.File}\n+\t\tg.Add(node)\n+\t\tnodes = append(nodes, node)\n+\n+\t\tif prev != nil {\n+\t\t\tparallelized := prev.run.Config.Parallel && run.Config.Parallel\n+\t\t\t// we connect 2 sequential runs IF\n+\t\t\t// 1. at least one of them is NOT eligible for parallelization OR\n+\t\t\t// 2. they are both eligible for parallelization AND have the same state key\n+\t\t\tif !parallelized || (parallelized && prev.run.GetStateKey() == run.GetStateKey()) {\n+\t\t\t\tg.Connect(dag.BasicEdge(node, prev))\n+\t\t\t}\n+\t\t}\n+\t\tprev = node\n+\t}",
+        "comment_created_at": "2025-01-22T13:17:51+00:00",
+        "comment_author": "dsa0x",
+        "comment_body": "I realized that the logic here is not needed. The loop that connects non-parallel nodes already takes care of the first case, and the loop that connects runs with same state key already takes care of the second case.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

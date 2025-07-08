@@ -1,0 +1,114 @@
+[
+  {
+    "discussion_id": "2128180765",
+    "pr_number": 37205,
+    "pr_file": "internal/moduletest/graph/transform_config.go",
+    "created_at": "2025-06-05T07:46:47+00:00",
+    "commented_code": "AliasRange: ref.InChild.AliasRange,\n \t\t\t\tConfig: &hcltest.ProviderConfig{\n \t\t\t\t\tOriginal:            testProvider.Config,\n-\t\t\t\t\tVariableCache:       ctx.VariableCache,\n+\t\t\t\t\tAvailableVariables:  ctx.Variables(),",
+    "repo_full_name": "hashicorp/terraform",
+    "discussion_comments": [
+      {
+        "comment_id": "2128180765",
+        "repo_full_name": "hashicorp/terraform",
+        "pr_number": 37205,
+        "pr_file": "internal/moduletest/graph/transform_config.go",
+        "discussion_id": "2128180765",
+        "commented_code": "@@ -88,7 +88,7 @@ func TransformConfigForRun(ctx *EvalContext, run *moduletest.Run, file *modulete\n \t\t\t\tAliasRange: ref.InChild.AliasRange,\n \t\t\t\tConfig: &hcltest.ProviderConfig{\n \t\t\t\t\tOriginal:            testProvider.Config,\n-\t\t\t\t\tVariableCache:       ctx.VariableCache,\n+\t\t\t\t\tAvailableVariables:  ctx.Variables(),",
+        "comment_created_at": "2025-06-05T07:46:47+00:00",
+        "comment_author": "dsa0x",
+        "comment_body": "I think this map may need some synchronization protection",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2128662570",
+        "repo_full_name": "hashicorp/terraform",
+        "pr_number": 37205,
+        "pr_file": "internal/moduletest/graph/transform_config.go",
+        "discussion_id": "2128180765",
+        "commented_code": "@@ -88,7 +88,7 @@ func TransformConfigForRun(ctx *EvalContext, run *moduletest.Run, file *modulete\n \t\t\t\tAliasRange: ref.InChild.AliasRange,\n \t\t\t\tConfig: &hcltest.ProviderConfig{\n \t\t\t\t\tOriginal:            testProvider.Config,\n-\t\t\t\t\tVariableCache:       ctx.VariableCache,\n+\t\t\t\t\tAvailableVariables:  ctx.Variables(),",
+        "comment_created_at": "2025-06-05T11:50:14+00:00",
+        "comment_author": "liamcervante",
+        "comment_body": "there is a lock inside the `Variables` function, and it returns a new map every time so I think this should be okay? This basically just gives it a snapshot of all available variables at the current point in time. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1995706154",
+    "pr_number": 36643,
+    "pr_file": "internal/communicator/ssh/communicator.go",
+    "created_at": "2025-03-14T14:40:34+00:00",
+    "commented_code": "return \"\", fmt.Errorf(\"Cannot quote shell command, target platform unknown: %s\", targetPlatform)\n \n }\n+\n+// ProxyCommandConnectFunc is a convenience method for returning a function\n+// that connects to a host using a proxy command.\n+func ProxyCommandConnectFunc(proxyCommand, addr string) func() (net.Conn, error) {\n+\treturn func() (net.Conn, error) {\n+\t\tlog.Printf(\"[DEBUG] Connecting to %s using proxy command: %s\", addr, proxyCommand)\n+\n+\t\t// Replace %h and %p in the proxy command with the host and port\n+\t\thost, port, err := net.SplitHostPort(addr)\n+\t\tif err != nil {\n+\t\t\treturn nil, fmt.Errorf(\"Error parsing address: %s\", err)\n+\t\t}\n+\n+\t\tcommand := strings.Replace(proxyCommand, \"%h\", host, -1)\n+\t\tcommand = strings.Replace(command, \"%p\", port, -1)\n+\n+\t\t// Split the command into command and args\n+\t\tcmdParts := strings.Fields(command)\n+\t\tif len(cmdParts) == 0 {\n+\t\t\treturn nil, fmt.Errorf(\"Invalid proxy command: %s\", proxyCommand)\n+\t\t}\n+\n+\t\t// Create a buffer to capture stderr\n+\t\tstderrBuf := new(bytes.Buffer)\n+\n+\t\t// Create proxy command\n+\t\tcmd := execCommand(cmdParts[0], cmdParts[1:]...)\n+\t\tcmd.Stderr = stderrBuf\n+\n+\t\t// Set up the command to run in its own process group\n+\t\tcmd.SysProcAttr = &syscall.SysProcAttr{\n+\t\t\tSetpgid: true, // Create a new process group\n+\t\t}\n+\n+\t\t// Start the command with pipes\n+\t\tstdin, err := cmd.StdinPipe()\n+\t\tif err != nil {\n+\t\t\treturn nil, fmt.Errorf(\"Error creating stdin pipe for proxy command: %s\", err)\n+\t\t}\n+\n+\t\tstdout, err := cmd.StdoutPipe()\n+\t\tif err != nil {\n+\t\t\tstdin.Close()\n+\t\t\treturn nil, fmt.Errorf(\"Error creating stdout pipe for proxy command: %s\", err)\n+\t\t}\n+\n+\t\tif err := cmd.Start(); err != nil {\n+\t\t\tstdin.Close()\n+\t\t\tstdout.Close()\n+\t\t\treturn nil, fmt.Errorf(\"Error starting proxy command: %s\", err)\n+\t\t}\n+\n+\t\t// Create a wrapper that manages the command and pipes\n+\t\tconn := &proxyCommandConn{\n+\t\t\tcmd:        cmd,\n+\t\t\tstderr:     stderrBuf,\n+\t\t\tstdinPipe:  stdin,\n+\t\t\tstdoutPipe: stdout,\n+\t\t}\n+\n+\t\treturn conn, nil\n+\t}\n+}\n+\n+type proxyCommandConn struct {\n+\tcmd        *exec.Cmd\n+\tstderr     *bytes.Buffer\n+\tstdinPipe  io.WriteCloser\n+\tstdoutPipe io.ReadCloser\n+\tclosed     bool\n+\tmutex      sync.Mutex\n+}\n+\n+// Read reads data from the connection (the command's stdout)\n+func (c *proxyCommandConn) Read(b []byte) (int, error) {\n+\tif c.closed {",
+    "repo_full_name": "hashicorp/terraform",
+    "discussion_comments": [
+      {
+        "comment_id": "1995706154",
+        "repo_full_name": "hashicorp/terraform",
+        "pr_number": 36643,
+        "pr_file": "internal/communicator/ssh/communicator.go",
+        "discussion_id": "1995706154",
+        "commented_code": "@@ -897,3 +918,164 @@ func quoteShell(args []string, targetPlatform string) (string, error) {\n \treturn \"\", fmt.Errorf(\"Cannot quote shell command, target platform unknown: %s\", targetPlatform)\n \n }\n+\n+// ProxyCommandConnectFunc is a convenience method for returning a function\n+// that connects to a host using a proxy command.\n+func ProxyCommandConnectFunc(proxyCommand, addr string) func() (net.Conn, error) {\n+\treturn func() (net.Conn, error) {\n+\t\tlog.Printf(\"[DEBUG] Connecting to %s using proxy command: %s\", addr, proxyCommand)\n+\n+\t\t// Replace %h and %p in the proxy command with the host and port\n+\t\thost, port, err := net.SplitHostPort(addr)\n+\t\tif err != nil {\n+\t\t\treturn nil, fmt.Errorf(\"Error parsing address: %s\", err)\n+\t\t}\n+\n+\t\tcommand := strings.Replace(proxyCommand, \"%h\", host, -1)\n+\t\tcommand = strings.Replace(command, \"%p\", port, -1)\n+\n+\t\t// Split the command into command and args\n+\t\tcmdParts := strings.Fields(command)\n+\t\tif len(cmdParts) == 0 {\n+\t\t\treturn nil, fmt.Errorf(\"Invalid proxy command: %s\", proxyCommand)\n+\t\t}\n+\n+\t\t// Create a buffer to capture stderr\n+\t\tstderrBuf := new(bytes.Buffer)\n+\n+\t\t// Create proxy command\n+\t\tcmd := execCommand(cmdParts[0], cmdParts[1:]...)\n+\t\tcmd.Stderr = stderrBuf\n+\n+\t\t// Set up the command to run in its own process group\n+\t\tcmd.SysProcAttr = &syscall.SysProcAttr{\n+\t\t\tSetpgid: true, // Create a new process group\n+\t\t}\n+\n+\t\t// Start the command with pipes\n+\t\tstdin, err := cmd.StdinPipe()\n+\t\tif err != nil {\n+\t\t\treturn nil, fmt.Errorf(\"Error creating stdin pipe for proxy command: %s\", err)\n+\t\t}\n+\n+\t\tstdout, err := cmd.StdoutPipe()\n+\t\tif err != nil {\n+\t\t\tstdin.Close()\n+\t\t\treturn nil, fmt.Errorf(\"Error creating stdout pipe for proxy command: %s\", err)\n+\t\t}\n+\n+\t\tif err := cmd.Start(); err != nil {\n+\t\t\tstdin.Close()\n+\t\t\tstdout.Close()\n+\t\t\treturn nil, fmt.Errorf(\"Error starting proxy command: %s\", err)\n+\t\t}\n+\n+\t\t// Create a wrapper that manages the command and pipes\n+\t\tconn := &proxyCommandConn{\n+\t\t\tcmd:        cmd,\n+\t\t\tstderr:     stderrBuf,\n+\t\t\tstdinPipe:  stdin,\n+\t\t\tstdoutPipe: stdout,\n+\t\t}\n+\n+\t\treturn conn, nil\n+\t}\n+}\n+\n+type proxyCommandConn struct {\n+\tcmd        *exec.Cmd\n+\tstderr     *bytes.Buffer\n+\tstdinPipe  io.WriteCloser\n+\tstdoutPipe io.ReadCloser\n+\tclosed     bool\n+\tmutex      sync.Mutex\n+}\n+\n+// Read reads data from the connection (the command's stdout)\n+func (c *proxyCommandConn) Read(b []byte) (int, error) {\n+\tif c.closed {",
+        "comment_created_at": "2025-03-14T14:40:34+00:00",
+        "comment_author": "jbardin",
+        "comment_body": "This is a data race, `closed` must always be protected under the same mutex. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2002690020",
+    "pr_number": 36482,
+    "pr_file": "internal/stacks/stackmigrate/load.go",
+    "created_at": "2025-03-19T08:09:57+00:00",
+    "commented_code": "+// Copyright (c) HashiCorp, Inc.\n+// SPDX-License-Identifier: BUSL-1.1\n+\n+package stackmigrate\n+\n+import (\n+\t\"fmt\"\n+\t\"os\"\n+\t\"path/filepath\"\n+\n+\t\"github.com/zclconf/go-cty/cty\"\n+\n+\t\"github.com/hashicorp/terraform-svchost/disco\"\n+\t\"github.com/hashicorp/terraform/internal/backend\"\n+\tbackendInit \"github.com/hashicorp/terraform/internal/backend/init\"\n+\t\"github.com/hashicorp/terraform/internal/backend/local\"\n+\t\"github.com/hashicorp/terraform/internal/backend/remote\"\n+\t\"github.com/hashicorp/terraform/internal/command\"\n+\t\"github.com/hashicorp/terraform/internal/command/clistate\"\n+\t\"github.com/hashicorp/terraform/internal/command/workdir\"\n+\t\"github.com/hashicorp/terraform/internal/states\"\n+\t\"github.com/hashicorp/terraform/internal/states/statemgr\"\n+\t\"github.com/hashicorp/terraform/internal/tfdiags\"\n+)\n+\n+type Loader struct {\n+\tDiscovery *disco.Disco\n+}\n+\n+var (\n+\tWorkspaceNameEnvVar = \"TF_WORKSPACE\"\n+)\n+\n+// LoadState loads a state from the given configPath. The configuration at configPath\n+// must have been initialized via `terraform init` before calling this function.\n+// The function returns an empty state even if there are errors.\n+func (l *Loader) LoadState(configPath string) (*states.State, tfdiags.Diagnostics) {\n+\tvar diags tfdiags.Diagnostics\n+\tstate := states.NewState()\n+\tworkingDirectory, workspace, err := l.loadWorkingDir(configPath)\n+\tif err != nil {\n+\t\treturn state, diags.Append(fmt.Errorf(\"error loading working directory: %s\", err))\n+\t}\n+\n+\tbackendInit.Init(l.Discovery)\n+\n+\t// First, we'll load the \"backend state\". This should have been initialised\n+\t// by the `terraform init` command, and contains the configuration for the\n+\t// backend that we're using.\n+\tvar backendState *workdir.BackendStateFile\n+\tbackendStatePath := filepath.Join(workingDirectory.DataDir(), \".terraform.tfstate\")\n+\tst := &clistate.LocalState{Path: backendStatePath}\n+\t// If the backend state file is not provided, RefreshState will\n+\t// return nil error and State will be empty.\n+\t// In this case, we assume that we're using a local backend.\n+\tif err := st.RefreshState(); err != nil {\n+\t\tdiags = diags.Append(fmt.Errorf(\"error loading backend state: %s\", err))\n+\t\treturn state, diags\n+\t}\n+\tbackendState = st.State()\n+\n+\t// Now that we have the backend state, we can initialise the backend itself\n+\t// based on what we had from the `terraform init` command.\n+\tvar backend backend.Backend\n+\tvar backendConfig cty.Value\n+\n+\t// the absence of backend state file indicates a local backend\n+\tif backendState == nil {\n+\t\tbackend = local.New()\n+\t\tbackendConfig = cty.ObjectVal(map[string]cty.Value{\n+\t\t\t\"path\":          cty.StringVal(fmt.Sprintf(\"%s/%s\", configPath, \"terraform.tfstate\")),\n+\t\t\t\"workspace_dir\": cty.StringVal(configPath),\n+\t\t})\n+\t} else {\n+\t\tinitFn := backendInit.Backend(backendState.Backend.Type)\n+\t\tif initFn == nil {\n+\t\t\tdiags = diags.Append(fmt.Errorf(\"unknown backend type %q\", backendState.Backend.Type))\n+\t\t\treturn state, diags\n+\t\t}\n+\n+\t\tbackend = initFn()\n+\t\tschema := backend.ConfigSchema()\n+\t\tconfig, err := backendState.Backend.Config(schema)\n+\t\tif err != nil {\n+\t\t\tdiags = diags.Append(tfdiags.Sourceless(\n+\t\t\t\ttfdiags.Error,\n+\t\t\t\t\"Failed to decode current backend config\",\n+\t\t\t\tfmt.Sprintf(\"The backend configuration created by the most recent run of \\\"terraform init\\\" could not be decoded: %s. The configuration may have been initialized by an earlier version that used an incompatible configuration structure. Run \\\"terraform init -reconfigure\\\" to force re-initialization of the backend.\", err),\n+\t\t\t))\n+\t\t\treturn state, diags\n+\t\t}\n+\n+\t\tvar moreDiags tfdiags.Diagnostics\n+\t\tbackendConfig, moreDiags = backend.PrepareConfig(config)\n+\t\tdiags = diags.Append(moreDiags)\n+\t\tif moreDiags.HasErrors() {\n+\t\t\treturn state, diags\n+\t\t}\n+\n+\t\t// it's safe to ignore terraform version conflict between the local and remote environments,\n+\t\t// as we are only reading the state\n+\t\tif backendR, ok := backend.(*remote.Remote); ok {\n+\t\t\tbackendR.IgnoreVersionConflict()\n+\t\t}\n+\t}\n+\n+\t// Now that we have the backend and its configuration, we can configure it.\n+\tmoreDiags := backend.Configure(backendConfig)\n+\tdiags = diags.Append(moreDiags)\n+\tif moreDiags.HasErrors() {\n+\t\treturn state, diags\n+\t}\n+\n+\t// The backend is initialised and configured, so now we can load the state\n+\t// from the backend.\n+\tstateManager, err := backend.StateMgr(workspace)\n+\tif err != nil {\n+\t\tdiags = diags.Append(fmt.Errorf(\"error loading state: %s\", err))\n+\t\treturn state, diags\n+\t}\n+\n+\t// We'll lock the backend here to ensure that we don't have any concurrent\n+\t// operations on the state. If this fails, we'll return an error and the\n+\t// user should retry the migration later when nothing is currently updating\n+\t// the state.\n+\tid, err := stateManager.Lock(statemgr.NewLockInfo())\n+\tif err != nil {\n+\t\tdiags = diags.Append(tfdiags.Sourceless(tfdiags.Error, \"Failed to lock state\", fmt.Sprintf(\"The state is currently locked by another operation: %s. Please retry the migration later.\", err)))\n+\t\treturn state, diags\n+\t}\n+\tif err := stateManager.RefreshState(); err != nil {\n+\t\tdiags = diags.Append(fmt.Errorf(\"error loading state: %s\", err))\n+\t\treturn state, diags\n+\t}\n+\tstate = stateManager.State()\n+\n+\t// Remember to unlock the state when we're done.\n+\tif err := stateManager.Unlock(id); err != nil {",
+    "repo_full_name": "hashicorp/terraform",
+    "discussion_comments": [
+      {
+        "comment_id": "2002690020",
+        "repo_full_name": "hashicorp/terraform",
+        "pr_number": 36482,
+        "pr_file": "internal/stacks/stackmigrate/load.go",
+        "discussion_id": "2002690020",
+        "commented_code": "@@ -0,0 +1,163 @@\n+// Copyright (c) HashiCorp, Inc.\n+// SPDX-License-Identifier: BUSL-1.1\n+\n+package stackmigrate\n+\n+import (\n+\t\"fmt\"\n+\t\"os\"\n+\t\"path/filepath\"\n+\n+\t\"github.com/zclconf/go-cty/cty\"\n+\n+\t\"github.com/hashicorp/terraform-svchost/disco\"\n+\t\"github.com/hashicorp/terraform/internal/backend\"\n+\tbackendInit \"github.com/hashicorp/terraform/internal/backend/init\"\n+\t\"github.com/hashicorp/terraform/internal/backend/local\"\n+\t\"github.com/hashicorp/terraform/internal/backend/remote\"\n+\t\"github.com/hashicorp/terraform/internal/command\"\n+\t\"github.com/hashicorp/terraform/internal/command/clistate\"\n+\t\"github.com/hashicorp/terraform/internal/command/workdir\"\n+\t\"github.com/hashicorp/terraform/internal/states\"\n+\t\"github.com/hashicorp/terraform/internal/states/statemgr\"\n+\t\"github.com/hashicorp/terraform/internal/tfdiags\"\n+)\n+\n+type Loader struct {\n+\tDiscovery *disco.Disco\n+}\n+\n+var (\n+\tWorkspaceNameEnvVar = \"TF_WORKSPACE\"\n+)\n+\n+// LoadState loads a state from the given configPath. The configuration at configPath\n+// must have been initialized via `terraform init` before calling this function.\n+// The function returns an empty state even if there are errors.\n+func (l *Loader) LoadState(configPath string) (*states.State, tfdiags.Diagnostics) {\n+\tvar diags tfdiags.Diagnostics\n+\tstate := states.NewState()\n+\tworkingDirectory, workspace, err := l.loadWorkingDir(configPath)\n+\tif err != nil {\n+\t\treturn state, diags.Append(fmt.Errorf(\"error loading working directory: %s\", err))\n+\t}\n+\n+\tbackendInit.Init(l.Discovery)\n+\n+\t// First, we'll load the \"backend state\". This should have been initialised\n+\t// by the `terraform init` command, and contains the configuration for the\n+\t// backend that we're using.\n+\tvar backendState *workdir.BackendStateFile\n+\tbackendStatePath := filepath.Join(workingDirectory.DataDir(), \".terraform.tfstate\")\n+\tst := &clistate.LocalState{Path: backendStatePath}\n+\t// If the backend state file is not provided, RefreshState will\n+\t// return nil error and State will be empty.\n+\t// In this case, we assume that we're using a local backend.\n+\tif err := st.RefreshState(); err != nil {\n+\t\tdiags = diags.Append(fmt.Errorf(\"error loading backend state: %s\", err))\n+\t\treturn state, diags\n+\t}\n+\tbackendState = st.State()\n+\n+\t// Now that we have the backend state, we can initialise the backend itself\n+\t// based on what we had from the `terraform init` command.\n+\tvar backend backend.Backend\n+\tvar backendConfig cty.Value\n+\n+\t// the absence of backend state file indicates a local backend\n+\tif backendState == nil {\n+\t\tbackend = local.New()\n+\t\tbackendConfig = cty.ObjectVal(map[string]cty.Value{\n+\t\t\t\"path\":          cty.StringVal(fmt.Sprintf(\"%s/%s\", configPath, \"terraform.tfstate\")),\n+\t\t\t\"workspace_dir\": cty.StringVal(configPath),\n+\t\t})\n+\t} else {\n+\t\tinitFn := backendInit.Backend(backendState.Backend.Type)\n+\t\tif initFn == nil {\n+\t\t\tdiags = diags.Append(fmt.Errorf(\"unknown backend type %q\", backendState.Backend.Type))\n+\t\t\treturn state, diags\n+\t\t}\n+\n+\t\tbackend = initFn()\n+\t\tschema := backend.ConfigSchema()\n+\t\tconfig, err := backendState.Backend.Config(schema)\n+\t\tif err != nil {\n+\t\t\tdiags = diags.Append(tfdiags.Sourceless(\n+\t\t\t\ttfdiags.Error,\n+\t\t\t\t\"Failed to decode current backend config\",\n+\t\t\t\tfmt.Sprintf(\"The backend configuration created by the most recent run of \\\"terraform init\\\" could not be decoded: %s. The configuration may have been initialized by an earlier version that used an incompatible configuration structure. Run \\\"terraform init -reconfigure\\\" to force re-initialization of the backend.\", err),\n+\t\t\t))\n+\t\t\treturn state, diags\n+\t\t}\n+\n+\t\tvar moreDiags tfdiags.Diagnostics\n+\t\tbackendConfig, moreDiags = backend.PrepareConfig(config)\n+\t\tdiags = diags.Append(moreDiags)\n+\t\tif moreDiags.HasErrors() {\n+\t\t\treturn state, diags\n+\t\t}\n+\n+\t\t// it's safe to ignore terraform version conflict between the local and remote environments,\n+\t\t// as we are only reading the state\n+\t\tif backendR, ok := backend.(*remote.Remote); ok {\n+\t\t\tbackendR.IgnoreVersionConflict()\n+\t\t}\n+\t}\n+\n+\t// Now that we have the backend and its configuration, we can configure it.\n+\tmoreDiags := backend.Configure(backendConfig)\n+\tdiags = diags.Append(moreDiags)\n+\tif moreDiags.HasErrors() {\n+\t\treturn state, diags\n+\t}\n+\n+\t// The backend is initialised and configured, so now we can load the state\n+\t// from the backend.\n+\tstateManager, err := backend.StateMgr(workspace)\n+\tif err != nil {\n+\t\tdiags = diags.Append(fmt.Errorf(\"error loading state: %s\", err))\n+\t\treturn state, diags\n+\t}\n+\n+\t// We'll lock the backend here to ensure that we don't have any concurrent\n+\t// operations on the state. If this fails, we'll return an error and the\n+\t// user should retry the migration later when nothing is currently updating\n+\t// the state.\n+\tid, err := stateManager.Lock(statemgr.NewLockInfo())\n+\tif err != nil {\n+\t\tdiags = diags.Append(tfdiags.Sourceless(tfdiags.Error, \"Failed to lock state\", fmt.Sprintf(\"The state is currently locked by another operation: %s. Please retry the migration later.\", err)))\n+\t\treturn state, diags\n+\t}\n+\tif err := stateManager.RefreshState(); err != nil {\n+\t\tdiags = diags.Append(fmt.Errorf(\"error loading state: %s\", err))\n+\t\treturn state, diags\n+\t}\n+\tstate = stateManager.State()\n+\n+\t// Remember to unlock the state when we're done.\n+\tif err := stateManager.Unlock(id); err != nil {",
+        "comment_created_at": "2025-03-19T08:09:57+00:00",
+        "comment_author": "liamcervante",
+        "comment_body": "I think this should be in a defer statement? For example, line 133 will return without unlocking the state.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1924904319",
+    "pr_number": 36300,
+    "pr_file": "internal/moduletest/file.go",
+    "created_at": "2025-01-22T08:35:15+00:00",
+    "commented_code": "Runs []*Run\n \n \tDiagnostics tfdiags.Diagnostics\n+\n+\tmu sync.Mutex",
+    "repo_full_name": "hashicorp/terraform",
+    "discussion_comments": [
+      {
+        "comment_id": "1924904319",
+        "repo_full_name": "hashicorp/terraform",
+        "pr_number": 36300,
+        "pr_file": "internal/moduletest/file.go",
+        "discussion_id": "1924904319",
+        "commented_code": "@@ -17,4 +19,26 @@ type File struct {\n \tRuns []*Run\n \n \tDiagnostics tfdiags.Diagnostics\n+\n+\tmu sync.Mutex",
+        "comment_created_at": "2025-01-22T08:35:15+00:00",
+        "comment_author": "liamcervante",
+        "comment_body": "You can just make the File itself implement the mutex:\r\n\r\n```\r\ntype File struct {\r\n  sync.Mutex\r\n\r\n  // other fields\r\n}\r\n```\r\n\r\nThat way you don't need to implement the additional `Lock` function, as the you can just call lock directly on the file. Kind of optional, but this just reduces the amount of boilerplate code we need to write.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1925742200",
+        "repo_full_name": "hashicorp/terraform",
+        "pr_number": 36300,
+        "pr_file": "internal/moduletest/file.go",
+        "discussion_id": "1924904319",
+        "commented_code": "@@ -17,4 +19,26 @@ type File struct {\n \tRuns []*Run\n \n \tDiagnostics tfdiags.Diagnostics\n+\n+\tmu sync.Mutex",
+        "comment_created_at": "2025-01-22T17:56:57+00:00",
+        "comment_author": "dsa0x",
+        "comment_body": "I generally don't embed sync.Mutex, because it then exports the `Mutex` object itself, but I do agree and it makes sense here, especially since this function is entirely internal to terraform.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

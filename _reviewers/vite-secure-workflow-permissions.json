@@ -1,0 +1,140 @@
+[
+  {
+    "discussion_id": "2000144452",
+    "pr_number": 19660,
+    "pr_file": ".github/workflows/issue-close-require.yml",
+    "created_at": "2025-03-18T03:51:12+00:00",
+    "commented_code": "schedule:\n     - cron: \"0 0 * * *\"\n \n+permissions: {}",
+    "repo_full_name": "vitejs/vite",
+    "discussion_comments": [
+      {
+        "comment_id": "2000144452",
+        "repo_full_name": "vitejs/vite",
+        "pr_number": 19660,
+        "pr_file": ".github/workflows/issue-close-require.yml",
+        "discussion_id": "2000144452",
+        "commented_code": "@@ -4,6 +4,8 @@ on:\n   schedule:\n     - cron: \"0 0 * * *\"\n \n+permissions: {}",
+        "comment_created_at": "2025-03-18T03:51:12+00:00",
+        "comment_author": "bluwy",
+        "comment_body": "Since this workflow closes issues, doesn't it need the `issues: write` permission?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2000185815",
+        "repo_full_name": "vitejs/vite",
+        "pr_number": 19660,
+        "pr_file": ".github/workflows/issue-close-require.yml",
+        "discussion_id": "2000144452",
+        "commented_code": "@@ -4,6 +4,8 @@ on:\n   schedule:\n     - cron: \"0 0 * * *\"\n \n+permissions: {}",
+        "comment_created_at": "2025-03-18T04:41:27+00:00",
+        "comment_author": "sapphi-red",
+        "comment_body": "Good catch \ud83d\ude4f ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1830313998",
+    "pr_number": 18525,
+    "pr_file": ".github/workflows/ecosystem-ci-trigger.yml",
+    "created_at": "2024-11-06T02:33:13+00:00",
+    "commented_code": "runs-on: ubuntu-latest\n     if: github.repository == 'vitejs/vite' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/ecosystem-ci run')\n     steps:\n-      - uses: actions/github-script@v7\n+      - name: Get PR Data\n+        uses: actions/github-script@v7\n+        id: get-pr-data\n+        with:\n+          script: |\n+            console.log(`Get PR info: ${context.repo.owner}/${context.repo.repo}#${context.issue.number}`)\n+            const { data: pr } = await github.rest.pulls.get({\n+              owner: context.repo.owner,\n+              repo: context.repo.repo,\n+              pull_number: context.issue.number\n+            })\n+            return {\n+              num: context.issue.number,\n+              branchName: pr.head.ref,\n+              commit: pr.head.sha,\n+              repo: pr.head.repo.full_name\n+            }\n+\n+      - name: Check Package Existence\n+        uses: actions/github-script@v7\n+        id: check-package\n+        with:\n+          script: |\n+            const prData = ${{ steps.get-pr-data.outputs.result }}\n+            const url = `https://pkg.pr.new/vite@${prData.commit}`\n+            const response = await fetch(url)\n+            console.log(`Package check URL: ${url}, Status: ${response.status}`)\n+\n+            // Add 'rocket' reaction to the issue comment\n+            if (response.status !== 404) {\n+              const reaction = await github.rest.reactions.createForIssueComment({\n+                owner: context.repo.owner,\n+                repo: context.repo.repo,\n+                comment_id: context.payload.comment.id, \n+                content: 'rocket',\n+              })\n+              return { exists: false, reaction: reaction.id }\n+            }\n+\n+            return { exists: true, reaction: null }\n+      - name: Generate Token\n+        id: generate-token\n+        uses: tibdex/github-app-token@v2\n+        with:\n+          app_id: ${{ secrets.ECOSYSTEM_CI_GITHUB_APP_ID }}\n+          installation_retrieval_payload: \"${{ github.repository_owner }}/vite-ecosystem-ci\"\n+          private_key: ${{ secrets.ECOSYSTEM_CI_GITHUB_APP_PRIVATE_KEY }}\n+\n+      - name: Trigger Preview Release (if Package Not Found)\n+        if: steps.check-package.outputs.exists == false\n+        uses: actions/github-script@v7\n+        id: trigger-preview-release\n+        with:\n+          github-token: ${{ steps.generate-token.outputs.token }}\n+          script: |\n+            const prData = ${{ steps.get-pr-data.outputs.result }}\n+            console.log('Package not found, triggering preview release...')\n+\n+            // Add label \"trigger: preview\" to the PR\n+            await github.rest.issues.addLabels({\n+              owner: context.repo.owner,\n+              repo: context.repo.repo,\n+              issue_number: prData.num,\n+              labels: ['trigger: preview']\n+            })\n+            console.log('Added \"trigger: preview\" label.')\n+\n+      - name: Wait for Preview Release Completion (if Package Not Found)\n+        if: steps.check-package.outputs.exists == false\n+        uses: actions/github-script@v7\n+        id: wait-preview-release\n+        with:\n+          script: |\n+            const prData = ${{ steps.get-pr-data.outputs.result }}\n+            const reaction = ${{ steps.check-package.outputs.reaction }}\n+            const workflowFileName = 'preview-release.yml'\n+            const workflow = await github.rest.actions.getWorkflow({\n+              owner: context.repo.owner,\n+              repo: context.repo.repo,\n+              workflow_id: workflowFileName,\n+            })\n+            const workflowId = workflow.data.id\n+            console.log(`Waiting for workflow ID ${workflowId} to complete...`)\n+\n+            const maxRetries = 60 // Wait up to 10 minutes\n+            const delay = 10000 // 10 seconds\n+            let completed = false\n+\n+            for (let i = 0; i < maxRetries; i++) {\n+              const runsData = await github.rest.actions.listWorkflowRuns({\n+                owner: context.repo.owner,\n+                repo: context.repo.repo,\n+                workflow_id: workflowId,\n+                per_page: 100,\n+                page: 1,\n+              })\n+\n+              const runs = runsData.data.workflow_runs.filter(\n+                run => run.head_sha === prData.commit\n+              )\n+\n+              if (runs.length > 0) {\n+                const latestRun = runs[0]\n+                console.log(`Latest run status: ${latestRun.status}, conclusion: ${latestRun.conclusion}`)\n+                if (latestRun.status === 'completed') {\n+                  if (latestRun.conclusion === 'success') {\n+                    console.log('Preview release workflow completed successfully.')\n+                    completed = true\n+                    break\n+                  } else {\n+                    throw new Error('Preview Release workflow failed.')\n+                  }\n+                }\n+              }\n+\n+              console.log(`Retrying... (${i + 1}/${maxRetries})`)\n+              await new Promise(resolve => setTimeout(resolve, delay))\n+            }\n+\n+            if (!completed) {\n+              throw new Error('Preview Release workflow did not complete in time.')\n+            }\n+\n+            // Remove the 'rocket' reaction\n+            if (reaction) {\n+              await github.rest.reactions.deleteForIssueComment({\n+                owner: context.repo.owner,\n+                repo: context.repo.repo,\n+                comment_id: context.payload.comment.id, \n+                reaction_id: reaction,\n+              })\n+              console.log('Removed \"rocket\" reaction.')\n+            }\n+\n+      - name: Check User Permissions",
+    "repo_full_name": "vitejs/vite",
+    "discussion_comments": [
+      {
+        "comment_id": "1830313998",
+        "repo_full_name": "vitejs/vite",
+        "pr_number": 18525,
+        "pr_file": ".github/workflows/ecosystem-ci-trigger.yml",
+        "discussion_id": "1830313998",
+        "commented_code": "@@ -9,7 +9,143 @@ jobs:\n     runs-on: ubuntu-latest\n     if: github.repository == 'vitejs/vite' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/ecosystem-ci run')\n     steps:\n-      - uses: actions/github-script@v7\n+      - name: Get PR Data\n+        uses: actions/github-script@v7\n+        id: get-pr-data\n+        with:\n+          script: |\n+            console.log(`Get PR info: ${context.repo.owner}/${context.repo.repo}#${context.issue.number}`)\n+            const { data: pr } = await github.rest.pulls.get({\n+              owner: context.repo.owner,\n+              repo: context.repo.repo,\n+              pull_number: context.issue.number\n+            })\n+            return {\n+              num: context.issue.number,\n+              branchName: pr.head.ref,\n+              commit: pr.head.sha,\n+              repo: pr.head.repo.full_name\n+            }\n+\n+      - name: Check Package Existence\n+        uses: actions/github-script@v7\n+        id: check-package\n+        with:\n+          script: |\n+            const prData = ${{ steps.get-pr-data.outputs.result }}\n+            const url = `https://pkg.pr.new/vite@${prData.commit}`\n+            const response = await fetch(url)\n+            console.log(`Package check URL: ${url}, Status: ${response.status}`)\n+\n+            // Add 'rocket' reaction to the issue comment\n+            if (response.status !== 404) {\n+              const reaction = await github.rest.reactions.createForIssueComment({\n+                owner: context.repo.owner,\n+                repo: context.repo.repo,\n+                comment_id: context.payload.comment.id, \n+                content: 'rocket',\n+              })\n+              return { exists: false, reaction: reaction.id }\n+            }\n+\n+            return { exists: true, reaction: null }\n+      - name: Generate Token\n+        id: generate-token\n+        uses: tibdex/github-app-token@v2\n+        with:\n+          app_id: ${{ secrets.ECOSYSTEM_CI_GITHUB_APP_ID }}\n+          installation_retrieval_payload: \"${{ github.repository_owner }}/vite-ecosystem-ci\"\n+          private_key: ${{ secrets.ECOSYSTEM_CI_GITHUB_APP_PRIVATE_KEY }}\n+\n+      - name: Trigger Preview Release (if Package Not Found)\n+        if: steps.check-package.outputs.exists == false\n+        uses: actions/github-script@v7\n+        id: trigger-preview-release\n+        with:\n+          github-token: ${{ steps.generate-token.outputs.token }}\n+          script: |\n+            const prData = ${{ steps.get-pr-data.outputs.result }}\n+            console.log('Package not found, triggering preview release...')\n+\n+            // Add label \"trigger: preview\" to the PR\n+            await github.rest.issues.addLabels({\n+              owner: context.repo.owner,\n+              repo: context.repo.repo,\n+              issue_number: prData.num,\n+              labels: ['trigger: preview']\n+            })\n+            console.log('Added \"trigger: preview\" label.')\n+\n+      - name: Wait for Preview Release Completion (if Package Not Found)\n+        if: steps.check-package.outputs.exists == false\n+        uses: actions/github-script@v7\n+        id: wait-preview-release\n+        with:\n+          script: |\n+            const prData = ${{ steps.get-pr-data.outputs.result }}\n+            const reaction = ${{ steps.check-package.outputs.reaction }}\n+            const workflowFileName = 'preview-release.yml'\n+            const workflow = await github.rest.actions.getWorkflow({\n+              owner: context.repo.owner,\n+              repo: context.repo.repo,\n+              workflow_id: workflowFileName,\n+            })\n+            const workflowId = workflow.data.id\n+            console.log(`Waiting for workflow ID ${workflowId} to complete...`)\n+\n+            const maxRetries = 60 // Wait up to 10 minutes\n+            const delay = 10000 // 10 seconds\n+            let completed = false\n+\n+            for (let i = 0; i < maxRetries; i++) {\n+              const runsData = await github.rest.actions.listWorkflowRuns({\n+                owner: context.repo.owner,\n+                repo: context.repo.repo,\n+                workflow_id: workflowId,\n+                per_page: 100,\n+                page: 1,\n+              })\n+\n+              const runs = runsData.data.workflow_runs.filter(\n+                run => run.head_sha === prData.commit\n+              )\n+\n+              if (runs.length > 0) {\n+                const latestRun = runs[0]\n+                console.log(`Latest run status: ${latestRun.status}, conclusion: ${latestRun.conclusion}`)\n+                if (latestRun.status === 'completed') {\n+                  if (latestRun.conclusion === 'success') {\n+                    console.log('Preview release workflow completed successfully.')\n+                    completed = true\n+                    break\n+                  } else {\n+                    throw new Error('Preview Release workflow failed.')\n+                  }\n+                }\n+              }\n+\n+              console.log(`Retrying... (${i + 1}/${maxRetries})`)\n+              await new Promise(resolve => setTimeout(resolve, delay))\n+            }\n+\n+            if (!completed) {\n+              throw new Error('Preview Release workflow did not complete in time.')\n+            }\n+\n+            // Remove the 'rocket' reaction\n+            if (reaction) {\n+              await github.rest.reactions.deleteForIssueComment({\n+                owner: context.repo.owner,\n+                repo: context.repo.repo,\n+                comment_id: context.payload.comment.id, \n+                reaction_id: reaction,\n+              })\n+              console.log('Removed \"rocket\" reaction.')\n+            }\n+\n+      - name: Check User Permissions",
+        "comment_created_at": "2024-11-06T02:33:13+00:00",
+        "comment_author": "sapphi-red",
+        "comment_body": "Let's move this step and the \"React Based on Permissions\" step to the top so that nothing other than the reaction would happen for users without permission.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1778196720",
+    "pr_number": 18211,
+    "pr_file": ".github/workflows/preview-comment.yml",
+    "created_at": "2024-09-27T07:58:32+00:00",
+    "commented_code": "})\n               throw new Error('not allowed')\n             }\n-\n-      - name: Checkout code\n-        uses: actions/checkout@v4\n-\n-      - name: Install pnpm\n-        uses: pnpm/action-setup@v4.0.0\n-\n-      - name: Install dependencies\n-        run: pnpm install\n-\n-      - name: Build\n-        working-directory: ./packages/vite\n-        run: pnpm build\n-\n-      - run: pnpm dlx pkg-pr-new@0.0 publish --compact --pnpm ./packages/vite\n+      - run: |\n+          gh issue edit ${{ github.event.issue.number }} --add-label \"pr: preview\" --repo ${{ github.repository }}\n+        env:\n+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    "repo_full_name": "vitejs/vite",
+    "discussion_comments": [
+      {
+        "comment_id": "1778196720",
+        "repo_full_name": "vitejs/vite",
+        "pr_number": 18211,
+        "pr_file": ".github/workflows/preview-comment.yml",
+        "discussion_id": "1778196720",
+        "commented_code": "@@ -54,18 +50,7 @@ jobs:\n               })\n               throw new Error('not allowed')\n             }\n-\n-      - name: Checkout code\n-        uses: actions/checkout@v4\n-\n-      - name: Install pnpm\n-        uses: pnpm/action-setup@v4.0.0\n-\n-      - name: Install dependencies\n-        run: pnpm install\n-\n-      - name: Build\n-        working-directory: ./packages/vite\n-        run: pnpm build\n-\n-      - run: pnpm dlx pkg-pr-new@0.0 publish --compact --pnpm ./packages/vite\n+      - run: |\n+          gh issue edit ${{ github.event.issue.number }} --add-label \"pr: preview\" --repo ${{ github.repository }}\n+        env:\n+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        "comment_created_at": "2024-09-27T07:58:32+00:00",
+        "comment_author": "hi-ogawa",
+        "comment_body": "Might this have an issue with the default token limitation @userquin was mentioning in https://github.com/vitest-dev/vitest/pull/6362#issuecomment-2376598561?\r\n\r\n> Actually, github actions can also add labels but labels added via their default bot cannot trigger other actions. \ud83e\udee0 That's why add it using separate user.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1778356318",
+        "repo_full_name": "vitejs/vite",
+        "pr_number": 18211,
+        "pr_file": ".github/workflows/preview-comment.yml",
+        "discussion_id": "1778196720",
+        "commented_code": "@@ -54,18 +50,7 @@ jobs:\n               })\n               throw new Error('not allowed')\n             }\n-\n-      - name: Checkout code\n-        uses: actions/checkout@v4\n-\n-      - name: Install pnpm\n-        uses: pnpm/action-setup@v4.0.0\n-\n-      - name: Install dependencies\n-        run: pnpm install\n-\n-      - name: Build\n-        working-directory: ./packages/vite\n-        run: pnpm build\n-\n-      - run: pnpm dlx pkg-pr-new@0.0 publish --compact --pnpm ./packages/vite\n+      - run: |\n+          gh issue edit ${{ github.event.issue.number }} --add-label \"pr: preview\" --repo ${{ github.repository }}\n+        env:\n+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        "comment_created_at": "2024-09-27T09:56:13+00:00",
+        "comment_author": "Aslemammad",
+        "comment_body": "Hmm, interesting, didn't know that! isn't there any workaround to this? \r\n\r\nbecause adding custom tokens might not feel that good! \r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1778357485",
+        "repo_full_name": "vitejs/vite",
+        "pr_number": 18211,
+        "pr_file": ".github/workflows/preview-comment.yml",
+        "discussion_id": "1778196720",
+        "commented_code": "@@ -54,18 +50,7 @@ jobs:\n               })\n               throw new Error('not allowed')\n             }\n-\n-      - name: Checkout code\n-        uses: actions/checkout@v4\n-\n-      - name: Install pnpm\n-        uses: pnpm/action-setup@v4.0.0\n-\n-      - name: Install dependencies\n-        run: pnpm install\n-\n-      - name: Build\n-        working-directory: ./packages/vite\n-        run: pnpm build\n-\n-      - run: pnpm dlx pkg-pr-new@0.0 publish --compact --pnpm ./packages/vite\n+      - run: |\n+          gh issue edit ${{ github.event.issue.number }} --add-label \"pr: preview\" --repo ${{ github.repository }}\n+        env:\n+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        "comment_created_at": "2024-09-27T09:57:01+00:00",
+        "comment_author": "Aslemammad",
+        "comment_body": "If there's no solution, maybe we can go with the manual label addition! \r\n\r\ncc @patak-dev ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1778386638",
+        "repo_full_name": "vitejs/vite",
+        "pr_number": 18211,
+        "pr_file": ".github/workflows/preview-comment.yml",
+        "discussion_id": "1778196720",
+        "commented_code": "@@ -54,18 +50,7 @@ jobs:\n               })\n               throw new Error('not allowed')\n             }\n-\n-      - name: Checkout code\n-        uses: actions/checkout@v4\n-\n-      - name: Install pnpm\n-        uses: pnpm/action-setup@v4.0.0\n-\n-      - name: Install dependencies\n-        run: pnpm install\n-\n-      - name: Build\n-        working-directory: ./packages/vite\n-        run: pnpm build\n-\n-      - run: pnpm dlx pkg-pr-new@0.0 publish --compact --pnpm ./packages/vite\n+      - run: |\n+          gh issue edit ${{ github.event.issue.number }} --add-label \"pr: preview\" --repo ${{ github.repository }}\n+        env:\n+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        "comment_created_at": "2024-09-27T10:16:37+00:00",
+        "comment_author": "patak-dev",
+        "comment_body": "Ya, I think the Vitest setup may work well for Vite too.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1778414540",
+        "repo_full_name": "vitejs/vite",
+        "pr_number": 18211,
+        "pr_file": ".github/workflows/preview-comment.yml",
+        "discussion_id": "1778196720",
+        "commented_code": "@@ -54,18 +50,7 @@ jobs:\n               })\n               throw new Error('not allowed')\n             }\n-\n-      - name: Checkout code\n-        uses: actions/checkout@v4\n-\n-      - name: Install pnpm\n-        uses: pnpm/action-setup@v4.0.0\n-\n-      - name: Install dependencies\n-        run: pnpm install\n-\n-      - name: Build\n-        working-directory: ./packages/vite\n-        run: pnpm build\n-\n-      - run: pnpm dlx pkg-pr-new@0.0 publish --compact --pnpm ./packages/vite\n+      - run: |\n+          gh issue edit ${{ github.event.issue.number }} --add-label \"pr: preview\" --repo ${{ github.repository }}\n+        env:\n+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        "comment_created_at": "2024-09-27T10:37:34+00:00",
+        "comment_author": "userquin",
+        "comment_body": "You can use a bot, check vitepress, ask @brc-dd ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1778605769",
+        "repo_full_name": "vitejs/vite",
+        "pr_number": 18211,
+        "pr_file": ".github/workflows/preview-comment.yml",
+        "discussion_id": "1778196720",
+        "commented_code": "@@ -54,18 +50,7 @@ jobs:\n               })\n               throw new Error('not allowed')\n             }\n-\n-      - name: Checkout code\n-        uses: actions/checkout@v4\n-\n-      - name: Install pnpm\n-        uses: pnpm/action-setup@v4.0.0\n-\n-      - name: Install dependencies\n-        run: pnpm install\n-\n-      - name: Build\n-        working-directory: ./packages/vite\n-        run: pnpm build\n-\n-      - run: pnpm dlx pkg-pr-new@0.0 publish --compact --pnpm ./packages/vite\n+      - run: |\n+          gh issue edit ${{ github.event.issue.number }} --add-label \"pr: preview\" --repo ${{ github.repository }}\n+        env:\n+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+        "comment_created_at": "2024-09-27T13:11:25+00:00",
+        "comment_author": "Aslemammad",
+        "comment_body": "just made the change! \r\n\r\n\"trigger: preview\" would cause a publish. Then that label would be removed for next time runs, so they'd be caused by adding the same label again.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

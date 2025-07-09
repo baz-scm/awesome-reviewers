@@ -1,0 +1,70 @@
+[
+  {
+    "discussion_id": "1904663443",
+    "pr_number": 17429,
+    "pr_file": "go/vt/vtctl/workflow/server.go",
+    "created_at": "2025-01-06T21:38:01+00:00",
+    "commented_code": "resp := &vtctldatapb.LookupVindexExternalizeResponse{}\n \n \tif vindex.Owner != \"\" {\n-\t\t// If there is an owner, we have to delete the streams. Once we externalize it\n+\t\t// If there is an owner, we have to stop the streams. Once we externalize it\n \t\t// the VTGate will now be responsible for keeping the lookup table up to date\n \t\t// with the owner table.\n-\t\tif _, derr := s.WorkflowDelete(ctx, &vtctldatapb.WorkflowDeleteRequest{\n-\t\t\tKeyspace:         req.TableKeyspace,\n-\t\t\tWorkflow:         req.Name,\n-\t\t\tKeepData:         true, // Not relevant\n-\t\t\tKeepRoutingRules: true, // Not relevant\n-\t\t}); derr != nil {\n-\t\t\treturn nil, vterrors.Errorf(vtrpcpb.Code_FAILED_PRECONDITION, \"failed to delete workflow %s: %v\", req.Name, derr)\n+\t\terr = forAllShards(targetShards, func(si *topo.ShardInfo) error {\n+\t\t\ttabletInfo, err := s.ts.GetTablet(ctx, si.PrimaryAlias)\n+\t\t\tif err != nil {\n+\t\t\t\treturn err\n+\t\t\t}\n+\t\t\t// Stop the workflow.\n+\t\t\t_, err = s.tmc.UpdateVReplicationWorkflow(ctx, tabletInfo.Tablet, &tabletmanagerdatapb.UpdateVReplicationWorkflowRequest{\n+\t\t\t\tWorkflow: req.Name,\n+\t\t\t\tState:    ptr.Of(binlogdatapb.VReplicationWorkflowState_Stopped),\n+\t\t\t})\n+\t\t\tif err != nil {\n+\t\t\t\treturn vterrors.Wrapf(err, \"failed to stop workflow %s on shard %s/%s\", req.Name, tabletInfo.Keyspace, tabletInfo.Shard)\n+\t\t\t}\n+\t\t\t// Mark workflow as frozen.\n+\t\t\tquery := fmt.Sprintf(SqlFreezeWorkflow, Frozen,\n+\t\t\t\tencodeString(tabletInfo.DbName()), encodeString(req.Name))\n+\t\t\t_, err = s.tmc.VReplicationExec(ctx, tabletInfo.Tablet, query)",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1904663443",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17429,
+        "pr_file": "go/vt/vtctl/workflow/server.go",
+        "discussion_id": "1904663443",
+        "commented_code": "@@ -669,23 +738,119 @@ func (s *Server) LookupVindexExternalize(ctx context.Context, req *vtctldatapb.L\n \tresp := &vtctldatapb.LookupVindexExternalizeResponse{}\n \n \tif vindex.Owner != \"\" {\n-\t\t// If there is an owner, we have to delete the streams. Once we externalize it\n+\t\t// If there is an owner, we have to stop the streams. Once we externalize it\n \t\t// the VTGate will now be responsible for keeping the lookup table up to date\n \t\t// with the owner table.\n-\t\tif _, derr := s.WorkflowDelete(ctx, &vtctldatapb.WorkflowDeleteRequest{\n-\t\t\tKeyspace:         req.TableKeyspace,\n-\t\t\tWorkflow:         req.Name,\n-\t\t\tKeepData:         true, // Not relevant\n-\t\t\tKeepRoutingRules: true, // Not relevant\n-\t\t}); derr != nil {\n-\t\t\treturn nil, vterrors.Errorf(vtrpcpb.Code_FAILED_PRECONDITION, \"failed to delete workflow %s: %v\", req.Name, derr)\n+\t\terr = forAllShards(targetShards, func(si *topo.ShardInfo) error {\n+\t\t\ttabletInfo, err := s.ts.GetTablet(ctx, si.PrimaryAlias)\n+\t\t\tif err != nil {\n+\t\t\t\treturn err\n+\t\t\t}\n+\t\t\t// Stop the workflow.\n+\t\t\t_, err = s.tmc.UpdateVReplicationWorkflow(ctx, tabletInfo.Tablet, &tabletmanagerdatapb.UpdateVReplicationWorkflowRequest{\n+\t\t\t\tWorkflow: req.Name,\n+\t\t\t\tState:    ptr.Of(binlogdatapb.VReplicationWorkflowState_Stopped),\n+\t\t\t})\n+\t\t\tif err != nil {\n+\t\t\t\treturn vterrors.Wrapf(err, \"failed to stop workflow %s on shard %s/%s\", req.Name, tabletInfo.Keyspace, tabletInfo.Shard)\n+\t\t\t}\n+\t\t\t// Mark workflow as frozen.\n+\t\t\tquery := fmt.Sprintf(SqlFreezeWorkflow, Frozen,\n+\t\t\t\tencodeString(tabletInfo.DbName()), encodeString(req.Name))\n+\t\t\t_, err = s.tmc.VReplicationExec(ctx, tabletInfo.Tablet, query)",
+        "comment_created_at": "2025-01-06T21:38:01+00:00",
+        "comment_author": "mattlord",
+        "comment_body": "I think that we should update the message in the `UpdateVReplicationWorkflow` call above, which means we'll have to add support for that to the RPC as an optional proto field.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1908437965",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17429,
+        "pr_file": "go/vt/vtctl/workflow/server.go",
+        "discussion_id": "1904663443",
+        "commented_code": "@@ -669,23 +738,119 @@ func (s *Server) LookupVindexExternalize(ctx context.Context, req *vtctldatapb.L\n \tresp := &vtctldatapb.LookupVindexExternalizeResponse{}\n \n \tif vindex.Owner != \"\" {\n-\t\t// If there is an owner, we have to delete the streams. Once we externalize it\n+\t\t// If there is an owner, we have to stop the streams. Once we externalize it\n \t\t// the VTGate will now be responsible for keeping the lookup table up to date\n \t\t// with the owner table.\n-\t\tif _, derr := s.WorkflowDelete(ctx, &vtctldatapb.WorkflowDeleteRequest{\n-\t\t\tKeyspace:         req.TableKeyspace,\n-\t\t\tWorkflow:         req.Name,\n-\t\t\tKeepData:         true, // Not relevant\n-\t\t\tKeepRoutingRules: true, // Not relevant\n-\t\t}); derr != nil {\n-\t\t\treturn nil, vterrors.Errorf(vtrpcpb.Code_FAILED_PRECONDITION, \"failed to delete workflow %s: %v\", req.Name, derr)\n+\t\terr = forAllShards(targetShards, func(si *topo.ShardInfo) error {\n+\t\t\ttabletInfo, err := s.ts.GetTablet(ctx, si.PrimaryAlias)\n+\t\t\tif err != nil {\n+\t\t\t\treturn err\n+\t\t\t}\n+\t\t\t// Stop the workflow.\n+\t\t\t_, err = s.tmc.UpdateVReplicationWorkflow(ctx, tabletInfo.Tablet, &tabletmanagerdatapb.UpdateVReplicationWorkflowRequest{\n+\t\t\t\tWorkflow: req.Name,\n+\t\t\t\tState:    ptr.Of(binlogdatapb.VReplicationWorkflowState_Stopped),\n+\t\t\t})\n+\t\t\tif err != nil {\n+\t\t\t\treturn vterrors.Wrapf(err, \"failed to stop workflow %s on shard %s/%s\", req.Name, tabletInfo.Keyspace, tabletInfo.Shard)\n+\t\t\t}\n+\t\t\t// Mark workflow as frozen.\n+\t\t\tquery := fmt.Sprintf(SqlFreezeWorkflow, Frozen,\n+\t\t\t\tencodeString(tabletInfo.DbName()), encodeString(req.Name))\n+\t\t\t_, err = s.tmc.VReplicationExec(ctx, tabletInfo.Tablet, query)",
+        "comment_created_at": "2025-01-09T09:37:07+00:00",
+        "comment_author": "beingnoble03",
+        "comment_body": "Done, thanks for this! This is much cleaner now.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1912322337",
+    "pr_number": 17429,
+    "pr_file": "go/cmd/vtctldclient/command/vreplication/lookupvindex/lookupvindex.go",
+    "created_at": "2025-01-12T00:15:03+00:00",
+    "commented_code": "RunE:                  commandCancel,\n \t}\n \n+\t// complete makes a LookupVindexComplete call to a vtctld.\n+\tcomplete = &cobra.Command{",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1912322337",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17429,
+        "pr_file": "go/cmd/vtctldclient/command/vreplication/lookupvindex/lookupvindex.go",
+        "discussion_id": "1912322337",
+        "commented_code": "@@ -142,6 +151,18 @@ var (\n \t\tRunE:                  commandCancel,\n \t}\n \n+\t// complete makes a LookupVindexComplete call to a vtctld.\n+\tcomplete = &cobra.Command{",
+        "comment_created_at": "2025-01-12T00:15:03+00:00",
+        "comment_author": "mattlord",
+        "comment_body": "I'm curious what the `complete` command gets us beyond what the `cancel` command does? Is it that `cancel` enforces that the vindex has NOT been externalized while `complete` enforces that it HAS been externalized? In either case, I would expect the command to delete the workflow if that check passes.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1914604797",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17429,
+        "pr_file": "go/cmd/vtctldclient/command/vreplication/lookupvindex/lookupvindex.go",
+        "discussion_id": "1912322337",
+        "commented_code": "@@ -142,6 +151,18 @@ var (\n \t\tRunE:                  commandCancel,\n \t}\n \n+\t// complete makes a LookupVindexComplete call to a vtctld.\n+\tcomplete = &cobra.Command{",
+        "comment_created_at": "2025-01-14T10:39:53+00:00",
+        "comment_author": "beingnoble03",
+        "comment_body": "Yes,  `complete` enforces that vindex has been externalized, but `cancel` simply deletes the workflow, regardless of whether vindex is externalized or internalized.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

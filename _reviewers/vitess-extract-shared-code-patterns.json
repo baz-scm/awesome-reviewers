@@ -1,0 +1,242 @@
+[
+  {
+    "discussion_id": "2019751865",
+    "pr_number": 18020,
+    "pr_file": "go/vt/vtctl/workflow/traffic_switcher.go",
+    "created_at": "2025-03-29T08:24:22+00:00",
+    "commented_code": "}\n \n func (ts *trafficSwitcher) removeTargetTables(ctx context.Context) error {\n-\terr := ts.ForAllTargets(func(target *MigrationTarget) error {\n-\t\tts.Logger().Infof(\"ForAllTargets: %+v\", target)\n-\t\tfor _, tableName := range ts.Tables() {\n-\t\t\tprimaryDbName, err := sqlescape.EnsureEscaped(target.GetPrimary().DbName())\n-\t\t\tif err != nil {\n-\t\t\t\treturn err\n+\tswitch ts.MigrationType() {\n+\tcase binlogdatapb.MigrationType_TABLES:\n+\t\terr := ts.ForAllTargets(func(target *MigrationTarget) error {\n+\t\t\tts.Logger().Infof(\"ForAllTargets: %+v\", target)\n+\t\t\tfor _, tableName := range ts.Tables() {\n+\t\t\t\tprimaryDbName, err := sqlescape.EnsureEscaped(target.GetPrimary().DbName())\n+\t\t\t\tif err != nil {\n+\t\t\t\t\treturn err\n+\t\t\t\t}\n+\t\t\t\ttableName, err := sqlescape.EnsureEscaped(tableName)\n+\t\t\t\tif err != nil {\n+\t\t\t\t\treturn err\n+\t\t\t\t}\n+\t\t\t\tquery := fmt.Sprintf(\"drop table %s.%s\", primaryDbName, tableName)\n+\t\t\t\tts.Logger().Infof(\"%s: Dropping table %s.%s\n\",\n+\t\t\t\t\ttopoproto.TabletAliasString(target.GetPrimary().GetAlias()), target.GetPrimary().DbName(), tableName)\n+\t\t\t\tres, err := ts.ws.tmc.ExecuteFetchAsDba(ctx, target.GetPrimary().Tablet, false, &tabletmanagerdatapb.ExecuteFetchAsDbaRequest{\n+\t\t\t\t\tQuery:                   []byte(query),\n+\t\t\t\t\tMaxRows:                 1,\n+\t\t\t\t\tReloadSchema:            true,\n+\t\t\t\t\tDisableForeignKeyChecks: true,\n+\t\t\t\t})\n+\t\t\t\tts.Logger().Infof(\"Removed target table with result: %+v\", res)\n+\t\t\t\tif err != nil {\n+\t\t\t\t\tif IsTableDidNotExistError(err) {\n+\t\t\t\t\t\t// The table was already gone, so we can ignore the error.\n+\t\t\t\t\t\tts.Logger().Warningf(\"%s: Table %s did not exist when attempting to remove it\", topoproto.TabletAliasString(target.GetPrimary().GetAlias()), tableName)\n+\t\t\t\t\t} else {\n+\t\t\t\t\t\tts.Logger().Errorf(\"%s: Error removing table %s: %v\", topoproto.TabletAliasString(target.GetPrimary().GetAlias()), tableName, err)\n+\t\t\t\t\t\treturn err\n+\t\t\t\t\t}\n+\t\t\t\t}\n+\t\t\t\tts.Logger().Infof(\"%s: Removed table %s.%s\n\",\n+\t\t\t\t\ttopoproto.TabletAliasString(target.GetPrimary().GetAlias()), target.GetPrimary().DbName(), tableName)\n+\n \t\t\t}\n-\t\t\ttableName, err := sqlescape.EnsureEscaped(tableName)\n+\t\t\treturn nil\n+\t\t})\n+\t\tif err != nil {\n+\t\t\treturn err\n+\t\t}\n+\n+\t\t// Remove the tables from the vschema.\n+\t\treturn ts.dropParticipatingTablesFromKeyspace(ctx, ts.TargetKeyspaceName())\n+\n+\tcase binlogdatapb.MigrationType_SHARDS:\n+\t\t// For reshard streams, do the following:\n+\t\t// * get the schema definition from one of the source primaries to\n+\t\t//   determine which tables to drop.\n+\t\t// * drop the tables on each of the target shard's primaries\n+\t\t// * do not remove the tables from the vschema\n+\t\toneSource := ts.SourceShards()[0].PrimaryAlias\n+\n+\t\t// Get the schema definition from the target primary. We only want to drop tables\n+\t\t// that match the vreplication filters.\n+\t\treq := &tabletmanagerdatapb.GetSchemaRequest{Tables: ts.Tables(), ExcludeTables: nil, IncludeViews: false}\n+\t\tsd, err := schematools.GetSchema(ctx, ts.TopoServer(), ts.ws.tmc, oneSource, req)\n+\t\tif err != nil {\n+\t\t\treturn err\n+\t\t}\n+\n+\t\terr = ts.ForAllTargets(func(target *MigrationTarget) error {\n+\t\t\tprimaryDbName, err := sqlescape.EnsureEscaped(target.GetPrimary().DbName())\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n-\t\t\tquery := fmt.Sprintf(\"drop table %s.%s\", primaryDbName, tableName)\n-\t\t\tts.Logger().Infof(\"%s: Dropping table %s.%s\n\",\n-\t\t\t\ttopoproto.TabletAliasString(target.GetPrimary().GetAlias()), target.GetPrimary().DbName(), tableName)\n-\t\t\tres, err := ts.ws.tmc.ExecuteFetchAsDba(ctx, target.GetPrimary().Tablet, false, &tabletmanagerdatapb.ExecuteFetchAsDbaRequest{\n-\t\t\t\tQuery:                   []byte(query),\n-\t\t\t\tMaxRows:                 1,\n-\t\t\t\tReloadSchema:            true,\n-\t\t\t\tDisableForeignKeyChecks: true,\n-\t\t\t})\n-\t\t\tts.Logger().Infof(\"Removed target table with result: %+v\", res)\n-\t\t\tif err != nil {\n-\t\t\t\tif IsTableDidNotExistError(err) {\n-\t\t\t\t\t// The table was already gone, so we can ignore the error.\n-\t\t\t\t\tts.Logger().Warningf(\"%s: Table %s did not exist when attempting to remove it\", topoproto.TabletAliasString(target.GetPrimary().GetAlias()), tableName)\n-\t\t\t\t} else {\n-\t\t\t\t\tts.Logger().Errorf(\"%s: Error removing table %s: %v\", topoproto.TabletAliasString(target.GetPrimary().GetAlias()), tableName, err)\n+\n+\t\t\tfor _, td := range sd.TableDefinitions {\n+\t\t\t\tif schema.IsInternalOperationTableName(td.Name) {\n+\t\t\t\t\tcontinue\n+\t\t\t\t}\n+\n+\t\t\t\ttableName, err := sqlescape.EnsureEscaped(td.Name)\n+\t\t\t\tif err != nil {\n \t\t\t\t\treturn err\n \t\t\t\t}\n+\n+\t\t\t\tvar query string\n+\n+\t\t\t\tif td.Type == tmutils.TableView {",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "2019751865",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 18020,
+        "pr_file": "go/vt/vtctl/workflow/traffic_switcher.go",
+        "discussion_id": "2019751865",
+        "commented_code": "@@ -1253,47 +1256,148 @@ func (ts *trafficSwitcher) dropSourceReverseVReplicationStreams(ctx context.Cont\n }\n \n func (ts *trafficSwitcher) removeTargetTables(ctx context.Context) error {\n-\terr := ts.ForAllTargets(func(target *MigrationTarget) error {\n-\t\tts.Logger().Infof(\"ForAllTargets: %+v\", target)\n-\t\tfor _, tableName := range ts.Tables() {\n-\t\t\tprimaryDbName, err := sqlescape.EnsureEscaped(target.GetPrimary().DbName())\n-\t\t\tif err != nil {\n-\t\t\t\treturn err\n+\tswitch ts.MigrationType() {\n+\tcase binlogdatapb.MigrationType_TABLES:\n+\t\terr := ts.ForAllTargets(func(target *MigrationTarget) error {\n+\t\t\tts.Logger().Infof(\"ForAllTargets: %+v\", target)\n+\t\t\tfor _, tableName := range ts.Tables() {\n+\t\t\t\tprimaryDbName, err := sqlescape.EnsureEscaped(target.GetPrimary().DbName())\n+\t\t\t\tif err != nil {\n+\t\t\t\t\treturn err\n+\t\t\t\t}\n+\t\t\t\ttableName, err := sqlescape.EnsureEscaped(tableName)\n+\t\t\t\tif err != nil {\n+\t\t\t\t\treturn err\n+\t\t\t\t}\n+\t\t\t\tquery := fmt.Sprintf(\"drop table %s.%s\", primaryDbName, tableName)\n+\t\t\t\tts.Logger().Infof(\"%s: Dropping table %s.%s\\n\",\n+\t\t\t\t\ttopoproto.TabletAliasString(target.GetPrimary().GetAlias()), target.GetPrimary().DbName(), tableName)\n+\t\t\t\tres, err := ts.ws.tmc.ExecuteFetchAsDba(ctx, target.GetPrimary().Tablet, false, &tabletmanagerdatapb.ExecuteFetchAsDbaRequest{\n+\t\t\t\t\tQuery:                   []byte(query),\n+\t\t\t\t\tMaxRows:                 1,\n+\t\t\t\t\tReloadSchema:            true,\n+\t\t\t\t\tDisableForeignKeyChecks: true,\n+\t\t\t\t})\n+\t\t\t\tts.Logger().Infof(\"Removed target table with result: %+v\", res)\n+\t\t\t\tif err != nil {\n+\t\t\t\t\tif IsTableDidNotExistError(err) {\n+\t\t\t\t\t\t// The table was already gone, so we can ignore the error.\n+\t\t\t\t\t\tts.Logger().Warningf(\"%s: Table %s did not exist when attempting to remove it\", topoproto.TabletAliasString(target.GetPrimary().GetAlias()), tableName)\n+\t\t\t\t\t} else {\n+\t\t\t\t\t\tts.Logger().Errorf(\"%s: Error removing table %s: %v\", topoproto.TabletAliasString(target.GetPrimary().GetAlias()), tableName, err)\n+\t\t\t\t\t\treturn err\n+\t\t\t\t\t}\n+\t\t\t\t}\n+\t\t\t\tts.Logger().Infof(\"%s: Removed table %s.%s\\n\",\n+\t\t\t\t\ttopoproto.TabletAliasString(target.GetPrimary().GetAlias()), target.GetPrimary().DbName(), tableName)\n+\n \t\t\t}\n-\t\t\ttableName, err := sqlescape.EnsureEscaped(tableName)\n+\t\t\treturn nil\n+\t\t})\n+\t\tif err != nil {\n+\t\t\treturn err\n+\t\t}\n+\n+\t\t// Remove the tables from the vschema.\n+\t\treturn ts.dropParticipatingTablesFromKeyspace(ctx, ts.TargetKeyspaceName())\n+\n+\tcase binlogdatapb.MigrationType_SHARDS:\n+\t\t// For reshard streams, do the following:\n+\t\t// * get the schema definition from one of the source primaries to\n+\t\t//   determine which tables to drop.\n+\t\t// * drop the tables on each of the target shard's primaries\n+\t\t// * do not remove the tables from the vschema\n+\t\toneSource := ts.SourceShards()[0].PrimaryAlias\n+\n+\t\t// Get the schema definition from the target primary. We only want to drop tables\n+\t\t// that match the vreplication filters.\n+\t\treq := &tabletmanagerdatapb.GetSchemaRequest{Tables: ts.Tables(), ExcludeTables: nil, IncludeViews: false}\n+\t\tsd, err := schematools.GetSchema(ctx, ts.TopoServer(), ts.ws.tmc, oneSource, req)\n+\t\tif err != nil {\n+\t\t\treturn err\n+\t\t}\n+\n+\t\terr = ts.ForAllTargets(func(target *MigrationTarget) error {\n+\t\t\tprimaryDbName, err := sqlescape.EnsureEscaped(target.GetPrimary().DbName())\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n-\t\t\tquery := fmt.Sprintf(\"drop table %s.%s\", primaryDbName, tableName)\n-\t\t\tts.Logger().Infof(\"%s: Dropping table %s.%s\\n\",\n-\t\t\t\ttopoproto.TabletAliasString(target.GetPrimary().GetAlias()), target.GetPrimary().DbName(), tableName)\n-\t\t\tres, err := ts.ws.tmc.ExecuteFetchAsDba(ctx, target.GetPrimary().Tablet, false, &tabletmanagerdatapb.ExecuteFetchAsDbaRequest{\n-\t\t\t\tQuery:                   []byte(query),\n-\t\t\t\tMaxRows:                 1,\n-\t\t\t\tReloadSchema:            true,\n-\t\t\t\tDisableForeignKeyChecks: true,\n-\t\t\t})\n-\t\t\tts.Logger().Infof(\"Removed target table with result: %+v\", res)\n-\t\t\tif err != nil {\n-\t\t\t\tif IsTableDidNotExistError(err) {\n-\t\t\t\t\t// The table was already gone, so we can ignore the error.\n-\t\t\t\t\tts.Logger().Warningf(\"%s: Table %s did not exist when attempting to remove it\", topoproto.TabletAliasString(target.GetPrimary().GetAlias()), tableName)\n-\t\t\t\t} else {\n-\t\t\t\t\tts.Logger().Errorf(\"%s: Error removing table %s: %v\", topoproto.TabletAliasString(target.GetPrimary().GetAlias()), tableName, err)\n+\n+\t\t\tfor _, td := range sd.TableDefinitions {\n+\t\t\t\tif schema.IsInternalOperationTableName(td.Name) {\n+\t\t\t\t\tcontinue\n+\t\t\t\t}\n+\n+\t\t\t\ttableName, err := sqlescape.EnsureEscaped(td.Name)\n+\t\t\t\tif err != nil {\n \t\t\t\t\treturn err\n \t\t\t\t}\n+\n+\t\t\t\tvar query string\n+\n+\t\t\t\tif td.Type == tmutils.TableView {",
+        "comment_created_at": "2025-03-29T08:24:22+00:00",
+        "comment_author": "rohit-nayak-ps",
+        "comment_body": "We can simplify the code by extracting the code from the two clauses here and the clause for MoveTables, into a common utility function,  since they are very similar. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2021741941",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 18020,
+        "pr_file": "go/vt/vtctl/workflow/traffic_switcher.go",
+        "discussion_id": "2019751865",
+        "commented_code": "@@ -1253,47 +1256,148 @@ func (ts *trafficSwitcher) dropSourceReverseVReplicationStreams(ctx context.Cont\n }\n \n func (ts *trafficSwitcher) removeTargetTables(ctx context.Context) error {\n-\terr := ts.ForAllTargets(func(target *MigrationTarget) error {\n-\t\tts.Logger().Infof(\"ForAllTargets: %+v\", target)\n-\t\tfor _, tableName := range ts.Tables() {\n-\t\t\tprimaryDbName, err := sqlescape.EnsureEscaped(target.GetPrimary().DbName())\n-\t\t\tif err != nil {\n-\t\t\t\treturn err\n+\tswitch ts.MigrationType() {\n+\tcase binlogdatapb.MigrationType_TABLES:\n+\t\terr := ts.ForAllTargets(func(target *MigrationTarget) error {\n+\t\t\tts.Logger().Infof(\"ForAllTargets: %+v\", target)\n+\t\t\tfor _, tableName := range ts.Tables() {\n+\t\t\t\tprimaryDbName, err := sqlescape.EnsureEscaped(target.GetPrimary().DbName())\n+\t\t\t\tif err != nil {\n+\t\t\t\t\treturn err\n+\t\t\t\t}\n+\t\t\t\ttableName, err := sqlescape.EnsureEscaped(tableName)\n+\t\t\t\tif err != nil {\n+\t\t\t\t\treturn err\n+\t\t\t\t}\n+\t\t\t\tquery := fmt.Sprintf(\"drop table %s.%s\", primaryDbName, tableName)\n+\t\t\t\tts.Logger().Infof(\"%s: Dropping table %s.%s\\n\",\n+\t\t\t\t\ttopoproto.TabletAliasString(target.GetPrimary().GetAlias()), target.GetPrimary().DbName(), tableName)\n+\t\t\t\tres, err := ts.ws.tmc.ExecuteFetchAsDba(ctx, target.GetPrimary().Tablet, false, &tabletmanagerdatapb.ExecuteFetchAsDbaRequest{\n+\t\t\t\t\tQuery:                   []byte(query),\n+\t\t\t\t\tMaxRows:                 1,\n+\t\t\t\t\tReloadSchema:            true,\n+\t\t\t\t\tDisableForeignKeyChecks: true,\n+\t\t\t\t})\n+\t\t\t\tts.Logger().Infof(\"Removed target table with result: %+v\", res)\n+\t\t\t\tif err != nil {\n+\t\t\t\t\tif IsTableDidNotExistError(err) {\n+\t\t\t\t\t\t// The table was already gone, so we can ignore the error.\n+\t\t\t\t\t\tts.Logger().Warningf(\"%s: Table %s did not exist when attempting to remove it\", topoproto.TabletAliasString(target.GetPrimary().GetAlias()), tableName)\n+\t\t\t\t\t} else {\n+\t\t\t\t\t\tts.Logger().Errorf(\"%s: Error removing table %s: %v\", topoproto.TabletAliasString(target.GetPrimary().GetAlias()), tableName, err)\n+\t\t\t\t\t\treturn err\n+\t\t\t\t\t}\n+\t\t\t\t}\n+\t\t\t\tts.Logger().Infof(\"%s: Removed table %s.%s\\n\",\n+\t\t\t\t\ttopoproto.TabletAliasString(target.GetPrimary().GetAlias()), target.GetPrimary().DbName(), tableName)\n+\n \t\t\t}\n-\t\t\ttableName, err := sqlescape.EnsureEscaped(tableName)\n+\t\t\treturn nil\n+\t\t})\n+\t\tif err != nil {\n+\t\t\treturn err\n+\t\t}\n+\n+\t\t// Remove the tables from the vschema.\n+\t\treturn ts.dropParticipatingTablesFromKeyspace(ctx, ts.TargetKeyspaceName())\n+\n+\tcase binlogdatapb.MigrationType_SHARDS:\n+\t\t// For reshard streams, do the following:\n+\t\t// * get the schema definition from one of the source primaries to\n+\t\t//   determine which tables to drop.\n+\t\t// * drop the tables on each of the target shard's primaries\n+\t\t// * do not remove the tables from the vschema\n+\t\toneSource := ts.SourceShards()[0].PrimaryAlias\n+\n+\t\t// Get the schema definition from the target primary. We only want to drop tables\n+\t\t// that match the vreplication filters.\n+\t\treq := &tabletmanagerdatapb.GetSchemaRequest{Tables: ts.Tables(), ExcludeTables: nil, IncludeViews: false}\n+\t\tsd, err := schematools.GetSchema(ctx, ts.TopoServer(), ts.ws.tmc, oneSource, req)\n+\t\tif err != nil {\n+\t\t\treturn err\n+\t\t}\n+\n+\t\terr = ts.ForAllTargets(func(target *MigrationTarget) error {\n+\t\t\tprimaryDbName, err := sqlescape.EnsureEscaped(target.GetPrimary().DbName())\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n-\t\t\tquery := fmt.Sprintf(\"drop table %s.%s\", primaryDbName, tableName)\n-\t\t\tts.Logger().Infof(\"%s: Dropping table %s.%s\\n\",\n-\t\t\t\ttopoproto.TabletAliasString(target.GetPrimary().GetAlias()), target.GetPrimary().DbName(), tableName)\n-\t\t\tres, err := ts.ws.tmc.ExecuteFetchAsDba(ctx, target.GetPrimary().Tablet, false, &tabletmanagerdatapb.ExecuteFetchAsDbaRequest{\n-\t\t\t\tQuery:                   []byte(query),\n-\t\t\t\tMaxRows:                 1,\n-\t\t\t\tReloadSchema:            true,\n-\t\t\t\tDisableForeignKeyChecks: true,\n-\t\t\t})\n-\t\t\tts.Logger().Infof(\"Removed target table with result: %+v\", res)\n-\t\t\tif err != nil {\n-\t\t\t\tif IsTableDidNotExistError(err) {\n-\t\t\t\t\t// The table was already gone, so we can ignore the error.\n-\t\t\t\t\tts.Logger().Warningf(\"%s: Table %s did not exist when attempting to remove it\", topoproto.TabletAliasString(target.GetPrimary().GetAlias()), tableName)\n-\t\t\t\t} else {\n-\t\t\t\t\tts.Logger().Errorf(\"%s: Error removing table %s: %v\", topoproto.TabletAliasString(target.GetPrimary().GetAlias()), tableName, err)\n+\n+\t\t\tfor _, td := range sd.TableDefinitions {\n+\t\t\t\tif schema.IsInternalOperationTableName(td.Name) {\n+\t\t\t\t\tcontinue\n+\t\t\t\t}\n+\n+\t\t\t\ttableName, err := sqlescape.EnsureEscaped(td.Name)\n+\t\t\t\tif err != nil {\n \t\t\t\t\treturn err\n \t\t\t\t}\n+\n+\t\t\t\tvar query string\n+\n+\t\t\t\tif td.Type == tmutils.TableView {",
+        "comment_created_at": "2025-03-31T20:45:12+00:00",
+        "comment_author": "rohit-nayak-ps",
+        "comment_body": "Going to merge it since we have a code freeze coming up. We can refactor later.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1995041663",
+    "pr_number": 17935,
+    "pr_file": "go/cmd/vtctldclient/command/onlineddl.go",
+    "created_at": "2025-03-14T07:53:23+00:00",
+    "commented_code": "}\n \tcli.FinishedParsing(cmd)\n \n+\tvar cid *vtrpcpb.CallerID",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1995041663",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17935,
+        "pr_file": "go/cmd/vtctldclient/command/onlineddl.go",
+        "discussion_id": "1995041663",
+        "commented_code": "@@ -174,9 +180,14 @@ func commandOnlineDDLCleanup(cmd *cobra.Command, args []string) error {\n \t}\n \tcli.FinishedParsing(cmd)\n \n+\tvar cid *vtrpcpb.CallerID",
+        "comment_created_at": "2025-03-14T07:53:23+00:00",
+        "comment_author": "systay",
+        "comment_body": "instead of copy pasting the same code, maybe we can change the `applySchemaOptions` variable to be a proper struct and give it a method we can call to get the callerID?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1996187360",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17935,
+        "pr_file": "go/cmd/vtctldclient/command/onlineddl.go",
+        "discussion_id": "1995041663",
+        "commented_code": "@@ -174,9 +180,14 @@ func commandOnlineDDLCleanup(cmd *cobra.Command, args []string) error {\n \t}\n \tcli.FinishedParsing(cmd)\n \n+\tvar cid *vtrpcpb.CallerID",
+        "comment_created_at": "2025-03-14T19:50:31+00:00",
+        "comment_author": "gopoto",
+        "comment_body": "Makes sense; refactored `applySchemaOptions` into its own struct and added a helper to return the `*vtrpcpb.CallerID`, so we can drop the repeated callerID blocks across the OnlineDDL subcommands.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1975886646",
+    "pr_number": 17872,
+    "pr_file": "go/vt/discovery/topology_watcher.go",
+    "created_at": "2025-02-28T18:59:41+00:00",
+    "commented_code": "tw.wg.Wait()\n }\n \n-func (tw *TopologyWatcher) loadTablets() {\n+func (tw *TopologyWatcher) loadTablets(keyspace string, shard string) {\n \tnewTablets := make(map[string]*tabletInfo)\n \tvar partialResult bool\n \n-\t// First get the list of all tablets.\n-\ttabletInfos, err := tw.getTablets()\n-\ttopologyWatcherOperations.Add(topologyWatcherOpListTablets, 1)\n-\tif err != nil {\n-\t\ttopologyWatcherErrors.Add(topologyWatcherOpListTablets, 1)\n-\t\t// If we get a partial result error, we just log it and process the tablets that we did manage to fetch.\n-\t\tif topo.IsErrType(err, topo.PartialResult) {\n-\t\t\tlog.Errorf(\"received partial result from getTablets for cell %v: %v\", tw.cell, err)\n-\t\t\tpartialResult = true\n-\t\t} else { // For all other errors, just return.\n-\t\t\tlog.Errorf(\"error getting tablets for cell: %v: %v\", tw.cell, err)\n+\tvar tabletInfos []*topo.TabletInfo\n+\tvar err error\n+\tif keyspace != \"\" && shard != \"\" {",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1975886646",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17872,
+        "pr_file": "go/vt/discovery/topology_watcher.go",
+        "discussion_id": "1975886646",
+        "commented_code": "@@ -136,23 +165,36 @@ func (tw *TopologyWatcher) Stop() {\n \ttw.wg.Wait()\n }\n \n-func (tw *TopologyWatcher) loadTablets() {\n+func (tw *TopologyWatcher) loadTablets(keyspace string, shard string) {\n \tnewTablets := make(map[string]*tabletInfo)\n \tvar partialResult bool\n \n-\t// First get the list of all tablets.\n-\ttabletInfos, err := tw.getTablets()\n-\ttopologyWatcherOperations.Add(topologyWatcherOpListTablets, 1)\n-\tif err != nil {\n-\t\ttopologyWatcherErrors.Add(topologyWatcherOpListTablets, 1)\n-\t\t// If we get a partial result error, we just log it and process the tablets that we did manage to fetch.\n-\t\tif topo.IsErrType(err, topo.PartialResult) {\n-\t\t\tlog.Errorf(\"received partial result from getTablets for cell %v: %v\", tw.cell, err)\n-\t\t\tpartialResult = true\n-\t\t} else { // For all other errors, just return.\n-\t\t\tlog.Errorf(\"error getting tablets for cell: %v: %v\", tw.cell, err)\n+\tvar tabletInfos []*topo.TabletInfo\n+\tvar err error\n+\tif keyspace != \"\" && shard != \"\" {",
+        "comment_created_at": "2025-02-28T18:59:41+00:00",
+        "comment_author": "deepthi",
+        "comment_body": "Since we only support loading either all tablets, or tablets for a keyspace/shard, we should make that obvious. There are a couple of options\r\n- at the beginning of the function we check that either both arguments are empty strings or both arguments are non-empty strings. otherwise log an error.\r\n- given that there's hardly any code shared between the two cases, leave `loadTablets` as-is and create a new `loadTabletsForKeyspaceShard` which only needs to validate that both args are not empty strings.\r\n\r\nI prefer the second option, motivated by the ugliness of changing all existing calls to `loadTablets` to `loadTablets(\"\", \"\")`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1977010812",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17872,
+        "pr_file": "go/vt/discovery/topology_watcher.go",
+        "discussion_id": "1975886646",
+        "commented_code": "@@ -136,23 +165,36 @@ func (tw *TopologyWatcher) Stop() {\n \ttw.wg.Wait()\n }\n \n-func (tw *TopologyWatcher) loadTablets() {\n+func (tw *TopologyWatcher) loadTablets(keyspace string, shard string) {\n \tnewTablets := make(map[string]*tabletInfo)\n \tvar partialResult bool\n \n-\t// First get the list of all tablets.\n-\ttabletInfos, err := tw.getTablets()\n-\ttopologyWatcherOperations.Add(topologyWatcherOpListTablets, 1)\n-\tif err != nil {\n-\t\ttopologyWatcherErrors.Add(topologyWatcherOpListTablets, 1)\n-\t\t// If we get a partial result error, we just log it and process the tablets that we did manage to fetch.\n-\t\tif topo.IsErrType(err, topo.PartialResult) {\n-\t\t\tlog.Errorf(\"received partial result from getTablets for cell %v: %v\", tw.cell, err)\n-\t\t\tpartialResult = true\n-\t\t} else { // For all other errors, just return.\n-\t\t\tlog.Errorf(\"error getting tablets for cell: %v: %v\", tw.cell, err)\n+\tvar tabletInfos []*topo.TabletInfo\n+\tvar err error\n+\tif keyspace != \"\" && shard != \"\" {",
+        "comment_created_at": "2025-03-03T07:40:56+00:00",
+        "comment_author": "GuptaManan100",
+        "comment_body": "Done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1901788142",
+    "pr_number": 17429,
+    "pr_file": "go/vt/vtctl/workflow/server.go",
+    "created_at": "2025-01-03T13:31:34+00:00",
+    "commented_code": "return ts, state, nil\n }\n \n+// LookupVindexComplete checks if the lookup vindex has been externalized,\n+// and if the vindex has an owner, it deletes the workflow.\n+func (s *Server) LookupVindexComplete(ctx context.Context, req *vtctldatapb.LookupVindexCompleteRequest) (*vtctldatapb.LookupVindexCompleteResponse, error) {\n+\tspan, ctx := trace.NewSpan(ctx, \"workflow.Server.LookupVindexInternalize\")\n+\tdefer span.Finish()\n+\n+\tspan.Annotate(\"keyspace\", req.Keyspace)\n+\tspan.Annotate(\"name\", req.Name)\n+\tspan.Annotate(\"table_keyspace\", req.TableKeyspace)\n+\n+\t// Find the lookup vindex by name.",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1901788142",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17429,
+        "pr_file": "go/vt/vtctl/workflow/server.go",
+        "discussion_id": "1901788142",
+        "commented_code": "@@ -554,6 +557,82 @@ func (s *Server) getWorkflowState(ctx context.Context, targetKeyspace, workflowN\n \treturn ts, state, nil\n }\n \n+// LookupVindexComplete checks if the lookup vindex has been externalized,\n+// and if the vindex has an owner, it deletes the workflow.\n+func (s *Server) LookupVindexComplete(ctx context.Context, req *vtctldatapb.LookupVindexCompleteRequest) (*vtctldatapb.LookupVindexCompleteResponse, error) {\n+\tspan, ctx := trace.NewSpan(ctx, \"workflow.Server.LookupVindexInternalize\")\n+\tdefer span.Finish()\n+\n+\tspan.Annotate(\"keyspace\", req.Keyspace)\n+\tspan.Annotate(\"name\", req.Name)\n+\tspan.Annotate(\"table_keyspace\", req.TableKeyspace)\n+\n+\t// Find the lookup vindex by name.",
+        "comment_created_at": "2025-01-03T13:31:34+00:00",
+        "comment_author": "rohit-nayak-ps",
+        "comment_body": "This code that gets the vindex  is common in externalize/internalize/complete. We can extract that into a helper.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1903289995",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17429,
+        "pr_file": "go/vt/vtctl/workflow/server.go",
+        "discussion_id": "1901788142",
+        "commented_code": "@@ -554,6 +557,82 @@ func (s *Server) getWorkflowState(ctx context.Context, targetKeyspace, workflowN\n \treturn ts, state, nil\n }\n \n+// LookupVindexComplete checks if the lookup vindex has been externalized,\n+// and if the vindex has an owner, it deletes the workflow.\n+func (s *Server) LookupVindexComplete(ctx context.Context, req *vtctldatapb.LookupVindexCompleteRequest) (*vtctldatapb.LookupVindexCompleteResponse, error) {\n+\tspan, ctx := trace.NewSpan(ctx, \"workflow.Server.LookupVindexInternalize\")\n+\tdefer span.Finish()\n+\n+\tspan.Annotate(\"keyspace\", req.Keyspace)\n+\tspan.Annotate(\"name\", req.Name)\n+\tspan.Annotate(\"table_keyspace\", req.TableKeyspace)\n+\n+\t// Find the lookup vindex by name.",
+        "comment_created_at": "2025-01-05T15:09:58+00:00",
+        "comment_author": "beingnoble03",
+        "comment_body": "Done.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1916765492",
+    "pr_number": 17535,
+    "pr_file": "go/vt/vttablet/onlineddl/executor.go",
+    "created_at": "2025-01-15T14:35:28+00:00",
+    "commented_code": "}\n \t}\n \tcapableOf := mysql.ServerVersionCapableOf(conn.ServerVersion)\n-\tcapable, err := capableOf(capabilities.PerformanceSchemaDataLocksTableCapability)\n-\tif err != nil {\n-\t\treturn err\n-\t}\n-\tif capable {\n-\t\t{\n-\t\t\t// Kill connections that have open transactions locking the table. These potentially (probably?) are not\n-\t\t\t// actively running a query on our table. They're doing other things while holding locks on our table.\n-\t\t\tquery, err := sqlparser.ParseAndBind(sqlProcessWithLocksOnTable, sqltypes.StringBindVariable(tableName))\n-\t\t\tif err != nil {\n-\t\t\t\treturn err\n-\t\t\t}\n-\t\t\trs, err := conn.Conn.ExecuteFetch(query, -1, true)\n-\t\t\tif err != nil {\n-\t\t\t\treturn vterrors.Wrapf(err, \"finding transactions locking table\")\n+\t{",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1916765492",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17535,
+        "pr_file": "go/vt/vttablet/onlineddl/executor.go",
+        "discussion_id": "1916765492",
+        "commented_code": "@@ -838,30 +838,64 @@ func (e *Executor) killTableLockHoldersAndAccessors(ctx context.Context, tableNa\n \t\t}\n \t}\n \tcapableOf := mysql.ServerVersionCapableOf(conn.ServerVersion)\n-\tcapable, err := capableOf(capabilities.PerformanceSchemaDataLocksTableCapability)\n-\tif err != nil {\n-\t\treturn err\n-\t}\n-\tif capable {\n-\t\t{\n-\t\t\t// Kill connections that have open transactions locking the table. These potentially (probably?) are not\n-\t\t\t// actively running a query on our table. They're doing other things while holding locks on our table.\n-\t\t\tquery, err := sqlparser.ParseAndBind(sqlProcessWithLocksOnTable, sqltypes.StringBindVariable(tableName))\n-\t\t\tif err != nil {\n-\t\t\t\treturn err\n-\t\t\t}\n-\t\t\trs, err := conn.Conn.ExecuteFetch(query, -1, true)\n-\t\t\tif err != nil {\n-\t\t\t\treturn vterrors.Wrapf(err, \"finding transactions locking table\")\n+\t{",
+        "comment_created_at": "2025-01-15T14:35:28+00:00",
+        "comment_author": "rohit-nayak-ps",
+        "comment_body": "Maybe extract out  into a common function and pass in the capability and query for the two cases?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1916797486",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17535,
+        "pr_file": "go/vt/vttablet/onlineddl/executor.go",
+        "discussion_id": "1916765492",
+        "commented_code": "@@ -838,30 +838,64 @@ func (e *Executor) killTableLockHoldersAndAccessors(ctx context.Context, tableNa\n \t\t}\n \t}\n \tcapableOf := mysql.ServerVersionCapableOf(conn.ServerVersion)\n-\tcapable, err := capableOf(capabilities.PerformanceSchemaDataLocksTableCapability)\n-\tif err != nil {\n-\t\treturn err\n-\t}\n-\tif capable {\n-\t\t{\n-\t\t\t// Kill connections that have open transactions locking the table. These potentially (probably?) are not\n-\t\t\t// actively running a query on our table. They're doing other things while holding locks on our table.\n-\t\t\tquery, err := sqlparser.ParseAndBind(sqlProcessWithLocksOnTable, sqltypes.StringBindVariable(tableName))\n-\t\t\tif err != nil {\n-\t\t\t\treturn err\n-\t\t\t}\n-\t\t\trs, err := conn.Conn.ExecuteFetch(query, -1, true)\n-\t\t\tif err != nil {\n-\t\t\t\treturn vterrors.Wrapf(err, \"finding transactions locking table\")\n+\t{",
+        "comment_created_at": "2025-01-15T14:53:00+00:00",
+        "comment_author": "mattlord",
+        "comment_body": "Agreed. They seem identical other than the capability and query so we could pass both into a function.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1916954723",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17535,
+        "pr_file": "go/vt/vttablet/onlineddl/executor.go",
+        "discussion_id": "1916765492",
+        "commented_code": "@@ -838,30 +838,64 @@ func (e *Executor) killTableLockHoldersAndAccessors(ctx context.Context, tableNa\n \t\t}\n \t}\n \tcapableOf := mysql.ServerVersionCapableOf(conn.ServerVersion)\n-\tcapable, err := capableOf(capabilities.PerformanceSchemaDataLocksTableCapability)\n-\tif err != nil {\n-\t\treturn err\n-\t}\n-\tif capable {\n-\t\t{\n-\t\t\t// Kill connections that have open transactions locking the table. These potentially (probably?) are not\n-\t\t\t// actively running a query on our table. They're doing other things while holding locks on our table.\n-\t\t\tquery, err := sqlparser.ParseAndBind(sqlProcessWithLocksOnTable, sqltypes.StringBindVariable(tableName))\n-\t\t\tif err != nil {\n-\t\t\t\treturn err\n-\t\t\t}\n-\t\t\trs, err := conn.Conn.ExecuteFetch(query, -1, true)\n-\t\t\tif err != nil {\n-\t\t\t\treturn vterrors.Wrapf(err, \"finding transactions locking table\")\n+\t{",
+        "comment_created_at": "2025-01-15T16:14:04+00:00",
+        "comment_author": "shlomi-noach",
+        "comment_body": "done.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1886943853",
+    "pr_number": 17242,
+    "pr_file": "go/vt/vtctl/workflow/lookup.go",
+    "created_at": "2024-12-16T14:46:10+00:00",
+    "commented_code": "+/*\n+Copyright 2024 The Vitess Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+\thttp://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package workflow\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"slices\"\n+\t\"strings\"\n+\n+\t\"golang.org/x/exp/maps\"\n+\t\"google.golang.org/protobuf/proto\"\n+\n+\t\"vitess.io/vitess/go/sqlescape\"\n+\t\"vitess.io/vitess/go/vt/logutil\"\n+\t\"vitess.io/vitess/go/vt/schema\"\n+\t\"vitess.io/vitess/go/vt/sqlparser\"\n+\t\"vitess.io/vitess/go/vt/topo\"\n+\t\"vitess.io/vitess/go/vt/vtctl/schematools\"\n+\t\"vitess.io/vitess/go/vt/vterrors\"\n+\t\"vitess.io/vitess/go/vt/vtgate/vindexes\"\n+\t\"vitess.io/vitess/go/vt/vttablet/tmclient\"\n+\n+\ttabletmanagerdatapb \"vitess.io/vitess/go/vt/proto/tabletmanagerdata\"\n+\tvschemapb \"vitess.io/vitess/go/vt/proto/vschema\"\n+\tvtctldatapb \"vitess.io/vitess/go/vt/proto/vtctldata\"\n+\tvtrpcpb \"vitess.io/vitess/go/vt/proto/vtrpc\"\n+)\n+\n+// lookup is responsible for performing actions related to lookup vindexes.\n+type lookup struct {",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1886943853",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17242,
+        "pr_file": "go/vt/vtctl/workflow/lookup.go",
+        "discussion_id": "1886943853",
+        "commented_code": "@@ -0,0 +1,536 @@\n+/*\n+Copyright 2024 The Vitess Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+\thttp://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package workflow\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"slices\"\n+\t\"strings\"\n+\n+\t\"golang.org/x/exp/maps\"\n+\t\"google.golang.org/protobuf/proto\"\n+\n+\t\"vitess.io/vitess/go/sqlescape\"\n+\t\"vitess.io/vitess/go/vt/logutil\"\n+\t\"vitess.io/vitess/go/vt/schema\"\n+\t\"vitess.io/vitess/go/vt/sqlparser\"\n+\t\"vitess.io/vitess/go/vt/topo\"\n+\t\"vitess.io/vitess/go/vt/vtctl/schematools\"\n+\t\"vitess.io/vitess/go/vt/vterrors\"\n+\t\"vitess.io/vitess/go/vt/vtgate/vindexes\"\n+\t\"vitess.io/vitess/go/vt/vttablet/tmclient\"\n+\n+\ttabletmanagerdatapb \"vitess.io/vitess/go/vt/proto/tabletmanagerdata\"\n+\tvschemapb \"vitess.io/vitess/go/vt/proto/vschema\"\n+\tvtctldatapb \"vitess.io/vitess/go/vt/proto/vtctldata\"\n+\tvtrpcpb \"vitess.io/vitess/go/vt/proto/vtrpc\"\n+)\n+\n+// lookup is responsible for performing actions related to lookup vindexes.\n+type lookup struct {",
+        "comment_created_at": "2024-12-16T14:46:10+00:00",
+        "comment_author": "mattlord",
+        "comment_body": "This is a new struct that has a subset of the workflow server's values, and it's not specific to lookup vindexes at all. Can you help me understand what value this provides? \r\n\r\nThe workflow server type being:\r\n```\r\ntype Server struct {\r\n\tts  *topo.Server\r\n\ttmc tmclient.TabletManagerClient\r\n\t// Limit the number of concurrent background goroutines if needed.\r\n\tsem     *semaphore.Weighted\r\n\tenv     *vtenv.Environment\r\n\toptions serverOptions\r\n}\r\n```\r\n\r\nOtherwise this LGTM. Thanks!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1888073506",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17242,
+        "pr_file": "go/vt/vtctl/workflow/lookup.go",
+        "discussion_id": "1886943853",
+        "commented_code": "@@ -0,0 +1,536 @@\n+/*\n+Copyright 2024 The Vitess Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+\thttp://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package workflow\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"slices\"\n+\t\"strings\"\n+\n+\t\"golang.org/x/exp/maps\"\n+\t\"google.golang.org/protobuf/proto\"\n+\n+\t\"vitess.io/vitess/go/sqlescape\"\n+\t\"vitess.io/vitess/go/vt/logutil\"\n+\t\"vitess.io/vitess/go/vt/schema\"\n+\t\"vitess.io/vitess/go/vt/sqlparser\"\n+\t\"vitess.io/vitess/go/vt/topo\"\n+\t\"vitess.io/vitess/go/vt/vtctl/schematools\"\n+\t\"vitess.io/vitess/go/vt/vterrors\"\n+\t\"vitess.io/vitess/go/vt/vtgate/vindexes\"\n+\t\"vitess.io/vitess/go/vt/vttablet/tmclient\"\n+\n+\ttabletmanagerdatapb \"vitess.io/vitess/go/vt/proto/tabletmanagerdata\"\n+\tvschemapb \"vitess.io/vitess/go/vt/proto/vschema\"\n+\tvtctldatapb \"vitess.io/vitess/go/vt/proto/vtctldata\"\n+\tvtrpcpb \"vitess.io/vitess/go/vt/proto/vtrpc\"\n+)\n+\n+// lookup is responsible for performing actions related to lookup vindexes.\n+type lookup struct {",
+        "comment_created_at": "2024-12-17T08:17:03+00:00",
+        "comment_author": "beingnoble03",
+        "comment_body": "Sure, the idea for defining `lookup` struct was to differentiate the helper functions related to `LookupVindex` from `Server` (as of now `lookup` just differentiates `LookupVindexCreate` helper functions in this PR), this is similar to what was done in #17092 by defining `workflowFetcher`. We can always include more functions (related to lookup vindexes) in follow-ups. Please let me know if you think this can be improved further. Thanks for the review!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1888659964",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17242,
+        "pr_file": "go/vt/vtctl/workflow/lookup.go",
+        "discussion_id": "1886943853",
+        "commented_code": "@@ -0,0 +1,536 @@\n+/*\n+Copyright 2024 The Vitess Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+\thttp://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package workflow\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"slices\"\n+\t\"strings\"\n+\n+\t\"golang.org/x/exp/maps\"\n+\t\"google.golang.org/protobuf/proto\"\n+\n+\t\"vitess.io/vitess/go/sqlescape\"\n+\t\"vitess.io/vitess/go/vt/logutil\"\n+\t\"vitess.io/vitess/go/vt/schema\"\n+\t\"vitess.io/vitess/go/vt/sqlparser\"\n+\t\"vitess.io/vitess/go/vt/topo\"\n+\t\"vitess.io/vitess/go/vt/vtctl/schematools\"\n+\t\"vitess.io/vitess/go/vt/vterrors\"\n+\t\"vitess.io/vitess/go/vt/vtgate/vindexes\"\n+\t\"vitess.io/vitess/go/vt/vttablet/tmclient\"\n+\n+\ttabletmanagerdatapb \"vitess.io/vitess/go/vt/proto/tabletmanagerdata\"\n+\tvschemapb \"vitess.io/vitess/go/vt/proto/vschema\"\n+\tvtctldatapb \"vitess.io/vitess/go/vt/proto/vtctldata\"\n+\tvtrpcpb \"vitess.io/vitess/go/vt/proto/vtrpc\"\n+)\n+\n+// lookup is responsible for performing actions related to lookup vindexes.\n+type lookup struct {",
+        "comment_created_at": "2024-12-17T14:58:27+00:00",
+        "comment_author": "mattlord",
+        "comment_body": "OK, so I take that to mean this is really for a human reader/developer to try and make the code easier to reason about and manage as lookup vindex related workflow code is in its own specific file and has its own specific method receiver.\r\n\r\nIn that case, IMO we should do this:\r\n 1. Go from workflow/lookup.go to workflow/lookup_vindex.go\r\n 2. Go from workflow.lookup.prepareCreateLookup to workflow.lookupVindex.prepareCreate (the type becomes lookupVindex and we don't need that lookupvindex context in the function name as its encapsulated in the receiver type\r\n\r\nLookup is a very generic term and it's not otherwise obvious to me how it adds distinction, separation, discoverability, and clarity specifically around the VReplication backfilling work for Lookup Vindexes via the LookupVindex client command and related RPCs. A [lookup vindex](https://vitess.io/docs/reference/features/vindexes/#lookup-vindex-types) is a specific concept in Vitess, and the client command we're processing in the workflow server is [`LookupVindex`](https://vitess.io/docs/21.0/reference/programs/vtctldclient/vtctldclient_lookupvindex/) (also [here](https://vitess.io/docs/21.0/user-guides/vschema-guide/backfill-vindexes/) and [here](https://vitess.io/docs/reference/vreplication/lookupvindex/)). Otherwise I would think that workflow/lookup was about code related to looking up workflows. Does this all make sense?\r\n\r\nThanks!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1890634369",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17242,
+        "pr_file": "go/vt/vtctl/workflow/lookup.go",
+        "discussion_id": "1886943853",
+        "commented_code": "@@ -0,0 +1,536 @@\n+/*\n+Copyright 2024 The Vitess Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+\thttp://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package workflow\n+\n+import (\n+\t\"context\"\n+\t\"fmt\"\n+\t\"slices\"\n+\t\"strings\"\n+\n+\t\"golang.org/x/exp/maps\"\n+\t\"google.golang.org/protobuf/proto\"\n+\n+\t\"vitess.io/vitess/go/sqlescape\"\n+\t\"vitess.io/vitess/go/vt/logutil\"\n+\t\"vitess.io/vitess/go/vt/schema\"\n+\t\"vitess.io/vitess/go/vt/sqlparser\"\n+\t\"vitess.io/vitess/go/vt/topo\"\n+\t\"vitess.io/vitess/go/vt/vtctl/schematools\"\n+\t\"vitess.io/vitess/go/vt/vterrors\"\n+\t\"vitess.io/vitess/go/vt/vtgate/vindexes\"\n+\t\"vitess.io/vitess/go/vt/vttablet/tmclient\"\n+\n+\ttabletmanagerdatapb \"vitess.io/vitess/go/vt/proto/tabletmanagerdata\"\n+\tvschemapb \"vitess.io/vitess/go/vt/proto/vschema\"\n+\tvtctldatapb \"vitess.io/vitess/go/vt/proto/vtctldata\"\n+\tvtrpcpb \"vitess.io/vitess/go/vt/proto/vtrpc\"\n+)\n+\n+// lookup is responsible for performing actions related to lookup vindexes.\n+type lookup struct {",
+        "comment_created_at": "2024-12-18T17:57:13+00:00",
+        "comment_author": "beingnoble03",
+        "comment_body": "that does make a lot of sense, improves the readability. thank you so much @mattlord!\r\n\r\npushed the changes, please have a look.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

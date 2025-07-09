@@ -1,0 +1,382 @@
+[
+  {
+    "discussion_id": "1974342550",
+    "pr_number": 17804,
+    "pr_file": "go/vt/vtctl/workflow/server.go",
+    "created_at": "2025-02-27T21:11:18+00:00",
+    "commented_code": "return mz.startStreams(ctx)\n }\n \n+// MaterializeAddTables adds specified tables to the existing workflow.\n+func (s *Server) MaterializeAddTables(ctx context.Context, req *vtctldatapb.MaterializeAddTablesRequest) error {\n+\tif len(req.TableSettings) == 0 {\n+\t\treturn vterrors.Errorf(vtrpcpb.Code_FAILED_PRECONDITION, \"no tables found in the request\")\n+\t}\n+\n+\ttargets, err := s.ts.FindAllShardsInKeyspace(ctx, req.Keyspace, nil)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\ttargetShardInfos := maps.Values(targets)\n+\n+\t// This will be helpful to find duplicate tables.\n+\ttableSet := sets.New[string]()\n+\tfor _, ts := range req.TableSettings {\n+\t\ttableSet.Insert(ts.TargetTable)\n+\t}\n+\n+\t// Store the ReadVReplicationWorkflow response for later use.\n+\treadVReplicationWorkflowResp := make(map[string]*tabletmanagerdatapb.ReadVReplicationWorkflowResponse)\n+\tvar (\n+\t\tmu             sync.Mutex\n+\t\tsourceKeyspace string\n+\t\tworkflowType   binlogdatapb.VReplicationWorkflowType\n+\t)\n+\n+\t// Validation for duplicate reference tables.\n+\terr = forAllShards(targetShardInfos, func(si *topo.ShardInfo) error {\n+\t\ttablet, err := s.ts.GetTablet(ctx, si.PrimaryAlias)\n+\t\tif err != nil {\n+\t\t\treturn err\n+\t\t}\n+\t\tres, err := s.tmc.ReadVReplicationWorkflow(ctx, tablet.Tablet, &tabletmanagerdatapb.ReadVReplicationWorkflowRequest{\n+\t\t\tWorkflow: req.Workflow,\n+\t\t})\n+\t\tif err != nil {\n+\t\t\treturn vterrors.Wrapf(err, \"failed to read workflow %s on shard %s/%s\", req.Workflow, req.Keyspace, tablet.Shard)\n+\t\t}\n+\n+\t\tmu.Lock()\n+\t\tif len(res.Streams) > 0 && sourceKeyspace == \"\" {\n+\t\t\tsourceKeyspace = res.Streams[0].Bls.Keyspace\n+\t\t}\n+\t\tworkflowType = res.WorkflowType\n+\t\treadVReplicationWorkflowResp[tablet.Shard] = res\n+\t\tmu.Unlock()",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1974342550",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17804,
+        "pr_file": "go/vt/vtctl/workflow/server.go",
+        "discussion_id": "1974342550",
+        "commented_code": "@@ -850,6 +852,207 @@ func (s *Server) Materialize(ctx context.Context, ms *vtctldatapb.MaterializeSet\n \treturn mz.startStreams(ctx)\n }\n \n+// MaterializeAddTables adds specified tables to the existing workflow.\n+func (s *Server) MaterializeAddTables(ctx context.Context, req *vtctldatapb.MaterializeAddTablesRequest) error {\n+\tif len(req.TableSettings) == 0 {\n+\t\treturn vterrors.Errorf(vtrpcpb.Code_FAILED_PRECONDITION, \"no tables found in the request\")\n+\t}\n+\n+\ttargets, err := s.ts.FindAllShardsInKeyspace(ctx, req.Keyspace, nil)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\ttargetShardInfos := maps.Values(targets)\n+\n+\t// This will be helpful to find duplicate tables.\n+\ttableSet := sets.New[string]()\n+\tfor _, ts := range req.TableSettings {\n+\t\ttableSet.Insert(ts.TargetTable)\n+\t}\n+\n+\t// Store the ReadVReplicationWorkflow response for later use.\n+\treadVReplicationWorkflowResp := make(map[string]*tabletmanagerdatapb.ReadVReplicationWorkflowResponse)\n+\tvar (\n+\t\tmu             sync.Mutex\n+\t\tsourceKeyspace string\n+\t\tworkflowType   binlogdatapb.VReplicationWorkflowType\n+\t)\n+\n+\t// Validation for duplicate reference tables.\n+\terr = forAllShards(targetShardInfos, func(si *topo.ShardInfo) error {\n+\t\ttablet, err := s.ts.GetTablet(ctx, si.PrimaryAlias)\n+\t\tif err != nil {\n+\t\t\treturn err\n+\t\t}\n+\t\tres, err := s.tmc.ReadVReplicationWorkflow(ctx, tablet.Tablet, &tabletmanagerdatapb.ReadVReplicationWorkflowRequest{\n+\t\t\tWorkflow: req.Workflow,\n+\t\t})\n+\t\tif err != nil {\n+\t\t\treturn vterrors.Wrapf(err, \"failed to read workflow %s on shard %s/%s\", req.Workflow, req.Keyspace, tablet.Shard)\n+\t\t}\n+\n+\t\tmu.Lock()\n+\t\tif len(res.Streams) > 0 && sourceKeyspace == \"\" {\n+\t\t\tsourceKeyspace = res.Streams[0].Bls.Keyspace\n+\t\t}\n+\t\tworkflowType = res.WorkflowType\n+\t\treadVReplicationWorkflowResp[tablet.Shard] = res\n+\t\tmu.Unlock()",
+        "comment_created_at": "2025-02-27T21:11:18+00:00",
+        "comment_author": "mattlord",
+        "comment_body": "Nit, but IMO it's worth using a closure here to be sure the mutex is unlocked using a defer (e.g. you get a panic between the lock and unlock, and that panic is recovered up the call stack, but then we don't unlock the mutex \u2014 although in this specific case it would be fine since this mutex would go out of scope in that case).\r\n```\r\n\t\tfunc() {\r\n\t\t\tmu.Lock()\r\n\t\t\tdefer mu.Unlock()\r\n\t\t\tif len(res.Streams) > 0 && sourceKeyspace == \"\" {\r\n\t\t\t\tsourceKeyspace = res.Streams[0].Bls.Keyspace\r\n\t\t\t}\r\n\t\t\tworkflowType = res.WorkflowType\r\n\t\t\treadVReplicationWorkflowResp[tablet.Shard] = res\r\n\t\t}()\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1975278984",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17804,
+        "pr_file": "go/vt/vtctl/workflow/server.go",
+        "discussion_id": "1974342550",
+        "commented_code": "@@ -850,6 +852,207 @@ func (s *Server) Materialize(ctx context.Context, ms *vtctldatapb.MaterializeSet\n \treturn mz.startStreams(ctx)\n }\n \n+// MaterializeAddTables adds specified tables to the existing workflow.\n+func (s *Server) MaterializeAddTables(ctx context.Context, req *vtctldatapb.MaterializeAddTablesRequest) error {\n+\tif len(req.TableSettings) == 0 {\n+\t\treturn vterrors.Errorf(vtrpcpb.Code_FAILED_PRECONDITION, \"no tables found in the request\")\n+\t}\n+\n+\ttargets, err := s.ts.FindAllShardsInKeyspace(ctx, req.Keyspace, nil)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\ttargetShardInfos := maps.Values(targets)\n+\n+\t// This will be helpful to find duplicate tables.\n+\ttableSet := sets.New[string]()\n+\tfor _, ts := range req.TableSettings {\n+\t\ttableSet.Insert(ts.TargetTable)\n+\t}\n+\n+\t// Store the ReadVReplicationWorkflow response for later use.\n+\treadVReplicationWorkflowResp := make(map[string]*tabletmanagerdatapb.ReadVReplicationWorkflowResponse)\n+\tvar (\n+\t\tmu             sync.Mutex\n+\t\tsourceKeyspace string\n+\t\tworkflowType   binlogdatapb.VReplicationWorkflowType\n+\t)\n+\n+\t// Validation for duplicate reference tables.\n+\terr = forAllShards(targetShardInfos, func(si *topo.ShardInfo) error {\n+\t\ttablet, err := s.ts.GetTablet(ctx, si.PrimaryAlias)\n+\t\tif err != nil {\n+\t\t\treturn err\n+\t\t}\n+\t\tres, err := s.tmc.ReadVReplicationWorkflow(ctx, tablet.Tablet, &tabletmanagerdatapb.ReadVReplicationWorkflowRequest{\n+\t\t\tWorkflow: req.Workflow,\n+\t\t})\n+\t\tif err != nil {\n+\t\t\treturn vterrors.Wrapf(err, \"failed to read workflow %s on shard %s/%s\", req.Workflow, req.Keyspace, tablet.Shard)\n+\t\t}\n+\n+\t\tmu.Lock()\n+\t\tif len(res.Streams) > 0 && sourceKeyspace == \"\" {\n+\t\t\tsourceKeyspace = res.Streams[0].Bls.Keyspace\n+\t\t}\n+\t\tworkflowType = res.WorkflowType\n+\t\treadVReplicationWorkflowResp[tablet.Shard] = res\n+\t\tmu.Unlock()",
+        "comment_created_at": "2025-02-28T11:47:44+00:00",
+        "comment_author": "beingnoble03",
+        "comment_body": "yeah, right! done.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1953843202",
+    "pr_number": 17772,
+    "pr_file": "go/vt/vttablet/tabletmanager/vreplication/vcopier_atomic.go",
+    "created_at": "2025-02-13T05:39:12+00:00",
+    "commented_code": "log.Infof(\"copying table %s with lastpk %v\", tableName, lastpkbv)\n \t\t// Prepare a vcopierCopyTask for the current batch of work.\n \t\tcurrCh := make(chan *vcopierCopyTaskResult, 1)\n-\t\tcurrT := newVCopierCopyTask(newVCopierCopyTaskArgs(resp.Rows, resp.Lastpk))\n+\n+\t\tresp2 := resp\n+\t\tif parallelism > 1 {\n+\t\t\tresp2 = resp.CloneVT()\n+\t\t}\n+\t\tcurrT := newVCopierCopyTask(newVCopierCopyTaskArgs(resp2.Rows, resp2.Lastpk))",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1953843202",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17772,
+        "pr_file": "go/vt/vttablet/tabletmanager/vreplication/vcopier_atomic.go",
+        "discussion_id": "1953843202",
+        "commented_code": "@@ -205,7 +200,12 @@ func (vc *vcopier) copyAll(ctx context.Context, settings binlogplayer.VRSettings\n \t\tlog.Infof(\"copying table %s with lastpk %v\", tableName, lastpkbv)\n \t\t// Prepare a vcopierCopyTask for the current batch of work.\n \t\tcurrCh := make(chan *vcopierCopyTaskResult, 1)\n-\t\tcurrT := newVCopierCopyTask(newVCopierCopyTaskArgs(resp.Rows, resp.Lastpk))\n+\n+\t\tresp2 := resp\n+\t\tif parallelism > 1 {\n+\t\t\tresp2 = resp.CloneVT()\n+\t\t}\n+\t\tcurrT := newVCopierCopyTask(newVCopierCopyTaskArgs(resp2.Rows, resp2.Lastpk))",
+        "comment_created_at": "2025-02-13T05:39:12+00:00",
+        "comment_author": "shlomi-noach",
+        "comment_body": "Now that we know this was the bug, we can simplify the code:\r\n```suggestion\r\n\t\tif parallelism > 1 {\r\n\t\t\tresp = resp.CloneVT()\r\n\t\t}\r\n\t\tcurrT := newVCopierCopyTask(newVCopierCopyTaskArgs(resp.Rows, resp.Lastpk))\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1893997998",
+    "pr_number": 17417,
+    "pr_file": "go/vt/vtgate/engine/semi_join.go",
+    "created_at": "2024-12-20T14:19:53+00:00",
+    "commented_code": "// TryStreamExecute performs a streaming exec.\n func (jn *SemiJoin) TryStreamExecute(ctx context.Context, vcursor VCursor, bindVars map[string]*querypb.BindVariable, wantfields bool, callback func(*sqltypes.Result) error) error {\n-\tjoinVars := make(map[string]*querypb.BindVariable)\n \terr := vcursor.StreamExecutePrimitive(ctx, jn.Left, bindVars, wantfields, func(lresult *sqltypes.Result) error {\n+\t\tjoinVars := make(map[string]*querypb.BindVariable)\n \t\tresult := &sqltypes.Result{Fields: lresult.Fields}\n \t\tfor _, lrow := range lresult.Rows {\n \t\t\tfor k, col := range jn.Vars {\n \t\t\t\tjoinVars[k] = sqltypes.ValueBindVariable(lrow[col])\n \t\t\t}\n-\t\t\trowAdded := false\n+\t\t\tvar rowAdded atomic.Bool\n \t\t\terr := vcursor.StreamExecutePrimitive(ctx, jn.Right, combineVars(bindVars, joinVars), false, func(rresult *sqltypes.Result) error {\n-\t\t\t\tif len(rresult.Rows) > 0 && !rowAdded {\n-\t\t\t\t\tresult.Rows = append(result.Rows, lrow)\n-\t\t\t\t\trowAdded = true\n+\t\t\t\tif len(rresult.Rows) > 0 {\n+\t\t\t\t\trowAdded.Store(true)\n \t\t\t\t}\n \t\t\t\treturn nil\n \t\t\t})\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n+\t\t\tif rowAdded.Load() {",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1893997998",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17417,
+        "pr_file": "go/vt/vtgate/engine/semi_join.go",
+        "discussion_id": "1893997998",
+        "commented_code": "@@ -62,24 +63,26 @@ func (jn *SemiJoin) TryExecute(ctx context.Context, vcursor VCursor, bindVars ma\n \n // TryStreamExecute performs a streaming exec.\n func (jn *SemiJoin) TryStreamExecute(ctx context.Context, vcursor VCursor, bindVars map[string]*querypb.BindVariable, wantfields bool, callback func(*sqltypes.Result) error) error {\n-\tjoinVars := make(map[string]*querypb.BindVariable)\n \terr := vcursor.StreamExecutePrimitive(ctx, jn.Left, bindVars, wantfields, func(lresult *sqltypes.Result) error {\n+\t\tjoinVars := make(map[string]*querypb.BindVariable)\n \t\tresult := &sqltypes.Result{Fields: lresult.Fields}\n \t\tfor _, lrow := range lresult.Rows {\n \t\t\tfor k, col := range jn.Vars {\n \t\t\t\tjoinVars[k] = sqltypes.ValueBindVariable(lrow[col])\n \t\t\t}\n-\t\t\trowAdded := false\n+\t\t\tvar rowAdded atomic.Bool\n \t\t\terr := vcursor.StreamExecutePrimitive(ctx, jn.Right, combineVars(bindVars, joinVars), false, func(rresult *sqltypes.Result) error {\n-\t\t\t\tif len(rresult.Rows) > 0 && !rowAdded {\n-\t\t\t\t\tresult.Rows = append(result.Rows, lrow)\n-\t\t\t\t\trowAdded = true\n+\t\t\t\tif len(rresult.Rows) > 0 {\n+\t\t\t\t\trowAdded.Store(true)\n \t\t\t\t}\n \t\t\t\treturn nil\n \t\t\t})\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n+\t\t\tif rowAdded.Load() {",
+        "comment_created_at": "2024-12-20T14:19:53+00:00",
+        "comment_author": "dbussink",
+        "comment_body": "Why is this one atomic? If this needs an atomic since it otherwise races, I imagine that the `append` on the next line also races and needs to be guarded with a lock then? \r\n\r\nIf this doesn't race, it doesn't need to be atomic? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1894103154",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17417,
+        "pr_file": "go/vt/vtgate/engine/semi_join.go",
+        "discussion_id": "1893997998",
+        "commented_code": "@@ -62,24 +63,26 @@ func (jn *SemiJoin) TryExecute(ctx context.Context, vcursor VCursor, bindVars ma\n \n // TryStreamExecute performs a streaming exec.\n func (jn *SemiJoin) TryStreamExecute(ctx context.Context, vcursor VCursor, bindVars map[string]*querypb.BindVariable, wantfields bool, callback func(*sqltypes.Result) error) error {\n-\tjoinVars := make(map[string]*querypb.BindVariable)\n \terr := vcursor.StreamExecutePrimitive(ctx, jn.Left, bindVars, wantfields, func(lresult *sqltypes.Result) error {\n+\t\tjoinVars := make(map[string]*querypb.BindVariable)\n \t\tresult := &sqltypes.Result{Fields: lresult.Fields}\n \t\tfor _, lrow := range lresult.Rows {\n \t\t\tfor k, col := range jn.Vars {\n \t\t\t\tjoinVars[k] = sqltypes.ValueBindVariable(lrow[col])\n \t\t\t}\n-\t\t\trowAdded := false\n+\t\t\tvar rowAdded atomic.Bool\n \t\t\terr := vcursor.StreamExecutePrimitive(ctx, jn.Right, combineVars(bindVars, joinVars), false, func(rresult *sqltypes.Result) error {\n-\t\t\t\tif len(rresult.Rows) > 0 && !rowAdded {\n-\t\t\t\t\tresult.Rows = append(result.Rows, lrow)\n-\t\t\t\t\trowAdded = true\n+\t\t\t\tif len(rresult.Rows) > 0 {\n+\t\t\t\t\trowAdded.Store(true)\n \t\t\t\t}\n \t\t\t\treturn nil\n \t\t\t})\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n+\t\t\tif rowAdded.Load() {",
+        "comment_created_at": "2024-12-20T15:54:09+00:00",
+        "comment_author": "GuptaManan100",
+        "comment_body": "Yes i know, I made the changes such that i could avoid using this atomic thing, but in the callback right above we are writing to it. We are only setting it to true but golang still complains in a `-race` test saying there is a concurrent write. So I had to make it atomic to avoid that. That being said, for strictly correctness purposes, we didn't need to make it atomic, but I couldn't figure out how to make the test work without making it atomic.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1895347473",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17417,
+        "pr_file": "go/vt/vtgate/engine/semi_join.go",
+        "discussion_id": "1893997998",
+        "commented_code": "@@ -62,24 +63,26 @@ func (jn *SemiJoin) TryExecute(ctx context.Context, vcursor VCursor, bindVars ma\n \n // TryStreamExecute performs a streaming exec.\n func (jn *SemiJoin) TryStreamExecute(ctx context.Context, vcursor VCursor, bindVars map[string]*querypb.BindVariable, wantfields bool, callback func(*sqltypes.Result) error) error {\n-\tjoinVars := make(map[string]*querypb.BindVariable)\n \terr := vcursor.StreamExecutePrimitive(ctx, jn.Left, bindVars, wantfields, func(lresult *sqltypes.Result) error {\n+\t\tjoinVars := make(map[string]*querypb.BindVariable)\n \t\tresult := &sqltypes.Result{Fields: lresult.Fields}\n \t\tfor _, lrow := range lresult.Rows {\n \t\t\tfor k, col := range jn.Vars {\n \t\t\t\tjoinVars[k] = sqltypes.ValueBindVariable(lrow[col])\n \t\t\t}\n-\t\t\trowAdded := false\n+\t\t\tvar rowAdded atomic.Bool\n \t\t\terr := vcursor.StreamExecutePrimitive(ctx, jn.Right, combineVars(bindVars, joinVars), false, func(rresult *sqltypes.Result) error {\n-\t\t\t\tif len(rresult.Rows) > 0 && !rowAdded {\n-\t\t\t\t\tresult.Rows = append(result.Rows, lrow)\n-\t\t\t\t\trowAdded = true\n+\t\t\t\tif len(rresult.Rows) > 0 {\n+\t\t\t\t\trowAdded.Store(true)\n \t\t\t\t}\n \t\t\t\treturn nil\n \t\t\t})\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n+\t\t\tif rowAdded.Load() {",
+        "comment_created_at": "2024-12-23T07:20:58+00:00",
+        "comment_author": "harshit-gangal",
+        "comment_body": "both are racy as the internal `StreamExecute` can do parallel execute to multiple shards",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1895475368",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17417,
+        "pr_file": "go/vt/vtgate/engine/semi_join.go",
+        "discussion_id": "1893997998",
+        "commented_code": "@@ -62,24 +63,26 @@ func (jn *SemiJoin) TryExecute(ctx context.Context, vcursor VCursor, bindVars ma\n \n // TryStreamExecute performs a streaming exec.\n func (jn *SemiJoin) TryStreamExecute(ctx context.Context, vcursor VCursor, bindVars map[string]*querypb.BindVariable, wantfields bool, callback func(*sqltypes.Result) error) error {\n-\tjoinVars := make(map[string]*querypb.BindVariable)\n \terr := vcursor.StreamExecutePrimitive(ctx, jn.Left, bindVars, wantfields, func(lresult *sqltypes.Result) error {\n+\t\tjoinVars := make(map[string]*querypb.BindVariable)\n \t\tresult := &sqltypes.Result{Fields: lresult.Fields}\n \t\tfor _, lrow := range lresult.Rows {\n \t\t\tfor k, col := range jn.Vars {\n \t\t\t\tjoinVars[k] = sqltypes.ValueBindVariable(lrow[col])\n \t\t\t}\n-\t\t\trowAdded := false\n+\t\t\tvar rowAdded atomic.Bool\n \t\t\terr := vcursor.StreamExecutePrimitive(ctx, jn.Right, combineVars(bindVars, joinVars), false, func(rresult *sqltypes.Result) error {\n-\t\t\t\tif len(rresult.Rows) > 0 && !rowAdded {\n-\t\t\t\t\tresult.Rows = append(result.Rows, lrow)\n-\t\t\t\t\trowAdded = true\n+\t\t\t\tif len(rresult.Rows) > 0 {\n+\t\t\t\t\trowAdded.Store(true)\n \t\t\t\t}\n \t\t\t\treturn nil\n \t\t\t})\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n+\t\t\tif rowAdded.Load() {",
+        "comment_created_at": "2024-12-23T08:43:30+00:00",
+        "comment_author": "dbussink",
+        "comment_body": "@harshit-gangal Right, so that means we need to guard the `append` too right? Or otherwise we lose data there potentially? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1897547008",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17417,
+        "pr_file": "go/vt/vtgate/engine/semi_join.go",
+        "discussion_id": "1893997998",
+        "commented_code": "@@ -62,24 +63,26 @@ func (jn *SemiJoin) TryExecute(ctx context.Context, vcursor VCursor, bindVars ma\n \n // TryStreamExecute performs a streaming exec.\n func (jn *SemiJoin) TryStreamExecute(ctx context.Context, vcursor VCursor, bindVars map[string]*querypb.BindVariable, wantfields bool, callback func(*sqltypes.Result) error) error {\n-\tjoinVars := make(map[string]*querypb.BindVariable)\n \terr := vcursor.StreamExecutePrimitive(ctx, jn.Left, bindVars, wantfields, func(lresult *sqltypes.Result) error {\n+\t\tjoinVars := make(map[string]*querypb.BindVariable)\n \t\tresult := &sqltypes.Result{Fields: lresult.Fields}\n \t\tfor _, lrow := range lresult.Rows {\n \t\t\tfor k, col := range jn.Vars {\n \t\t\t\tjoinVars[k] = sqltypes.ValueBindVariable(lrow[col])\n \t\t\t}\n-\t\t\trowAdded := false\n+\t\t\tvar rowAdded atomic.Bool\n \t\t\terr := vcursor.StreamExecutePrimitive(ctx, jn.Right, combineVars(bindVars, joinVars), false, func(rresult *sqltypes.Result) error {\n-\t\t\t\tif len(rresult.Rows) > 0 && !rowAdded {\n-\t\t\t\t\tresult.Rows = append(result.Rows, lrow)\n-\t\t\t\t\trowAdded = true\n+\t\t\t\tif len(rresult.Rows) > 0 {\n+\t\t\t\t\trowAdded.Store(true)\n \t\t\t\t}\n \t\t\t\treturn nil\n \t\t\t})\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n+\t\t\tif rowAdded.Load() {",
+        "comment_created_at": "2024-12-26T01:55:29+00:00",
+        "comment_author": "GuptaManan100",
+        "comment_body": "No we don't. The Result field is local to each outer StreamExecute call. Its initialized in the callback.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1897647267",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17417,
+        "pr_file": "go/vt/vtgate/engine/semi_join.go",
+        "discussion_id": "1893997998",
+        "commented_code": "@@ -62,24 +63,26 @@ func (jn *SemiJoin) TryExecute(ctx context.Context, vcursor VCursor, bindVars ma\n \n // TryStreamExecute performs a streaming exec.\n func (jn *SemiJoin) TryStreamExecute(ctx context.Context, vcursor VCursor, bindVars map[string]*querypb.BindVariable, wantfields bool, callback func(*sqltypes.Result) error) error {\n-\tjoinVars := make(map[string]*querypb.BindVariable)\n \terr := vcursor.StreamExecutePrimitive(ctx, jn.Left, bindVars, wantfields, func(lresult *sqltypes.Result) error {\n+\t\tjoinVars := make(map[string]*querypb.BindVariable)\n \t\tresult := &sqltypes.Result{Fields: lresult.Fields}\n \t\tfor _, lrow := range lresult.Rows {\n \t\t\tfor k, col := range jn.Vars {\n \t\t\t\tjoinVars[k] = sqltypes.ValueBindVariable(lrow[col])\n \t\t\t}\n-\t\t\trowAdded := false\n+\t\t\tvar rowAdded atomic.Bool\n \t\t\terr := vcursor.StreamExecutePrimitive(ctx, jn.Right, combineVars(bindVars, joinVars), false, func(rresult *sqltypes.Result) error {\n-\t\t\t\tif len(rresult.Rows) > 0 && !rowAdded {\n-\t\t\t\t\tresult.Rows = append(result.Rows, lrow)\n-\t\t\t\t\trowAdded = true\n+\t\t\t\tif len(rresult.Rows) > 0 {\n+\t\t\t\t\trowAdded.Store(true)\n \t\t\t\t}\n \t\t\t\treturn nil\n \t\t\t})\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n+\t\t\tif rowAdded.Load() {",
+        "comment_created_at": "2024-12-26T05:39:12+00:00",
+        "comment_author": "harshit-gangal",
+        "comment_body": "results is local to outer callback but append happens inside the second callback, which itself can execute in parallel causes race in append.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1897647690",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17417,
+        "pr_file": "go/vt/vtgate/engine/semi_join.go",
+        "discussion_id": "1893997998",
+        "commented_code": "@@ -62,24 +63,26 @@ func (jn *SemiJoin) TryExecute(ctx context.Context, vcursor VCursor, bindVars ma\n \n // TryStreamExecute performs a streaming exec.\n func (jn *SemiJoin) TryStreamExecute(ctx context.Context, vcursor VCursor, bindVars map[string]*querypb.BindVariable, wantfields bool, callback func(*sqltypes.Result) error) error {\n-\tjoinVars := make(map[string]*querypb.BindVariable)\n \terr := vcursor.StreamExecutePrimitive(ctx, jn.Left, bindVars, wantfields, func(lresult *sqltypes.Result) error {\n+\t\tjoinVars := make(map[string]*querypb.BindVariable)\n \t\tresult := &sqltypes.Result{Fields: lresult.Fields}\n \t\tfor _, lrow := range lresult.Rows {\n \t\t\tfor k, col := range jn.Vars {\n \t\t\t\tjoinVars[k] = sqltypes.ValueBindVariable(lrow[col])\n \t\t\t}\n-\t\t\trowAdded := false\n+\t\t\tvar rowAdded atomic.Bool\n \t\t\terr := vcursor.StreamExecutePrimitive(ctx, jn.Right, combineVars(bindVars, joinVars), false, func(rresult *sqltypes.Result) error {\n-\t\t\t\tif len(rresult.Rows) > 0 && !rowAdded {\n-\t\t\t\t\tresult.Rows = append(result.Rows, lrow)\n-\t\t\t\t\trowAdded = true\n+\t\t\t\tif len(rresult.Rows) > 0 {\n+\t\t\t\t\trowAdded.Store(true)\n \t\t\t\t}\n \t\t\t\treturn nil\n \t\t\t})\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n+\t\t\tif rowAdded.Load() {",
+        "comment_created_at": "2024-12-26T05:40:06+00:00",
+        "comment_author": "harshit-gangal",
+        "comment_body": "If you really want to test that, you would need a test that does scatter call for the inside stream execute (right side of semi-join)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1897658326",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17417,
+        "pr_file": "go/vt/vtgate/engine/semi_join.go",
+        "discussion_id": "1893997998",
+        "commented_code": "@@ -62,24 +63,26 @@ func (jn *SemiJoin) TryExecute(ctx context.Context, vcursor VCursor, bindVars ma\n \n // TryStreamExecute performs a streaming exec.\n func (jn *SemiJoin) TryStreamExecute(ctx context.Context, vcursor VCursor, bindVars map[string]*querypb.BindVariable, wantfields bool, callback func(*sqltypes.Result) error) error {\n-\tjoinVars := make(map[string]*querypb.BindVariable)\n \terr := vcursor.StreamExecutePrimitive(ctx, jn.Left, bindVars, wantfields, func(lresult *sqltypes.Result) error {\n+\t\tjoinVars := make(map[string]*querypb.BindVariable)\n \t\tresult := &sqltypes.Result{Fields: lresult.Fields}\n \t\tfor _, lrow := range lresult.Rows {\n \t\t\tfor k, col := range jn.Vars {\n \t\t\t\tjoinVars[k] = sqltypes.ValueBindVariable(lrow[col])\n \t\t\t}\n-\t\t\trowAdded := false\n+\t\t\tvar rowAdded atomic.Bool\n \t\t\terr := vcursor.StreamExecutePrimitive(ctx, jn.Right, combineVars(bindVars, joinVars), false, func(rresult *sqltypes.Result) error {\n-\t\t\t\tif len(rresult.Rows) > 0 && !rowAdded {\n-\t\t\t\t\tresult.Rows = append(result.Rows, lrow)\n-\t\t\t\t\trowAdded = true\n+\t\t\t\tif len(rresult.Rows) > 0 {\n+\t\t\t\t\trowAdded.Store(true)\n \t\t\t\t}\n \t\t\t\treturn nil\n \t\t\t})\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n+\t\t\tif rowAdded.Load() {",
+        "comment_created_at": "2024-12-26T06:01:30+00:00",
+        "comment_author": "GuptaManan100",
+        "comment_body": "Append is not inside the second callback. I moved it out. That is the entire point.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1897658652",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17417,
+        "pr_file": "go/vt/vtgate/engine/semi_join.go",
+        "discussion_id": "1893997998",
+        "commented_code": "@@ -62,24 +63,26 @@ func (jn *SemiJoin) TryExecute(ctx context.Context, vcursor VCursor, bindVars ma\n \n // TryStreamExecute performs a streaming exec.\n func (jn *SemiJoin) TryStreamExecute(ctx context.Context, vcursor VCursor, bindVars map[string]*querypb.BindVariable, wantfields bool, callback func(*sqltypes.Result) error) error {\n-\tjoinVars := make(map[string]*querypb.BindVariable)\n \terr := vcursor.StreamExecutePrimitive(ctx, jn.Left, bindVars, wantfields, func(lresult *sqltypes.Result) error {\n+\t\tjoinVars := make(map[string]*querypb.BindVariable)\n \t\tresult := &sqltypes.Result{Fields: lresult.Fields}\n \t\tfor _, lrow := range lresult.Rows {\n \t\t\tfor k, col := range jn.Vars {\n \t\t\t\tjoinVars[k] = sqltypes.ValueBindVariable(lrow[col])\n \t\t\t}\n-\t\t\trowAdded := false\n+\t\t\tvar rowAdded atomic.Bool\n \t\t\terr := vcursor.StreamExecutePrimitive(ctx, jn.Right, combineVars(bindVars, joinVars), false, func(rresult *sqltypes.Result) error {\n-\t\t\t\tif len(rresult.Rows) > 0 && !rowAdded {\n-\t\t\t\t\tresult.Rows = append(result.Rows, lrow)\n-\t\t\t\t\trowAdded = true\n+\t\t\t\tif len(rresult.Rows) > 0 {\n+\t\t\t\t\trowAdded.Store(true)\n \t\t\t\t}\n \t\t\t\treturn nil\n \t\t\t})\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n+\t\t\tif rowAdded.Load() {",
+        "comment_created_at": "2024-12-26T06:02:10+00:00",
+        "comment_author": "GuptaManan100",
+        "comment_body": "The test I added does a scatter for the inside primitive and the outside primitive too.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1897685294",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17417,
+        "pr_file": "go/vt/vtgate/engine/semi_join.go",
+        "discussion_id": "1893997998",
+        "commented_code": "@@ -62,24 +63,26 @@ func (jn *SemiJoin) TryExecute(ctx context.Context, vcursor VCursor, bindVars ma\n \n // TryStreamExecute performs a streaming exec.\n func (jn *SemiJoin) TryStreamExecute(ctx context.Context, vcursor VCursor, bindVars map[string]*querypb.BindVariable, wantfields bool, callback func(*sqltypes.Result) error) error {\n-\tjoinVars := make(map[string]*querypb.BindVariable)\n \terr := vcursor.StreamExecutePrimitive(ctx, jn.Left, bindVars, wantfields, func(lresult *sqltypes.Result) error {\n+\t\tjoinVars := make(map[string]*querypb.BindVariable)\n \t\tresult := &sqltypes.Result{Fields: lresult.Fields}\n \t\tfor _, lrow := range lresult.Rows {\n \t\t\tfor k, col := range jn.Vars {\n \t\t\t\tjoinVars[k] = sqltypes.ValueBindVariable(lrow[col])\n \t\t\t}\n-\t\t\trowAdded := false\n+\t\t\tvar rowAdded atomic.Bool\n \t\t\terr := vcursor.StreamExecutePrimitive(ctx, jn.Right, combineVars(bindVars, joinVars), false, func(rresult *sqltypes.Result) error {\n-\t\t\t\tif len(rresult.Rows) > 0 && !rowAdded {\n-\t\t\t\t\tresult.Rows = append(result.Rows, lrow)\n-\t\t\t\t\trowAdded = true\n+\t\t\t\tif len(rresult.Rows) > 0 {\n+\t\t\t\t\trowAdded.Store(true)\n \t\t\t\t}\n \t\t\t\treturn nil\n \t\t\t})\n \t\t\tif err != nil {\n \t\t\t\treturn err\n \t\t\t}\n+\t\t\tif rowAdded.Load() {",
+        "comment_created_at": "2024-12-26T06:49:34+00:00",
+        "comment_author": "harshit-gangal",
+        "comment_body": "This looks good.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1882848846",
+    "pr_number": 17387,
+    "pr_file": "go/vt/logutil/logger.go",
+    "created_at": "2024-12-12T20:34:10+00:00",
+    "commented_code": "ml.mu.Unlock()\n }\n \n+func (ml *MemoryLogger) LogEvents() []*logutilpb.Event {\n+\tml.mu.Lock()\n+\tdefer ml.mu.Unlock()\n+\treturn ml.Events",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1882848846",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17387,
+        "pr_file": "go/vt/logutil/logger.go",
+        "discussion_id": "1882848846",
+        "commented_code": "@@ -246,6 +246,12 @@ func (ml *MemoryLogger) Clear() {\n \tml.mu.Unlock()\n }\n \n+func (ml *MemoryLogger) LogEvents() []*logutilpb.Event {\n+\tml.mu.Lock()\n+\tdefer ml.mu.Unlock()\n+\treturn ml.Events",
+        "comment_created_at": "2024-12-12T20:34:10+00:00",
+        "comment_author": "mdlayher",
+        "comment_body": "If the slice can be mutated or cleared concurrently you may want to return `slices.Clone(ml.Events)` so that the returned backing array shares no data with the one owned by MemoryLogger.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1882850306",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17387,
+        "pr_file": "go/vt/logutil/logger.go",
+        "discussion_id": "1882848846",
+        "commented_code": "@@ -246,6 +246,12 @@ func (ml *MemoryLogger) Clear() {\n \tml.mu.Unlock()\n }\n \n+func (ml *MemoryLogger) LogEvents() []*logutilpb.Event {\n+\tml.mu.Lock()\n+\tdefer ml.mu.Unlock()\n+\treturn ml.Events",
+        "comment_created_at": "2024-12-12T20:35:20+00:00",
+        "comment_author": "dbussink",
+        "comment_body": "Ah yeah, would be safer here indeed. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1914435281",
+    "pr_number": 17356,
+    "pr_file": "go/cmd/vtbackup/cli/vtbackup.go",
+    "created_at": "2025-01-14T08:37:16+00:00",
+    "commented_code": "if err != nil {\n \t\treturn fmt.Errorf(\"failed to initialize mysql config: %v\", err)\n \t}\n+\tctx, cancelCtx := context.WithCancel(ctx)\n+\tbackgroundCtx, cancelbackgroundCtx := context.WithCancel(backgroundCtx)",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1914435281",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17356,
+        "pr_file": "go/cmd/vtbackup/cli/vtbackup.go",
+        "discussion_id": "1914435281",
+        "commented_code": "@@ -335,6 +340,14 @@ func takeBackup(ctx, backgroundCtx context.Context, topoServer *topo.Server, bac\n \tif err != nil {\n \t\treturn fmt.Errorf(\"failed to initialize mysql config: %v\", err)\n \t}\n+\tctx, cancelCtx := context.WithCancel(ctx)\n+\tbackgroundCtx, cancelbackgroundCtx := context.WithCancel(backgroundCtx)",
+        "comment_created_at": "2025-01-14T08:37:16+00:00",
+        "comment_author": "shlomi-noach",
+        "comment_body": "As Matt mentions below, the context should always be cancelled.\r\n```suggestion\r\n\tctx, cancelCtx := context.WithCancel(ctx)\r\n\tdefer cancelCtx()\r\n\tbackgroundCtx, cancelbackgroundCtx := context.WithCancel(backgroundCtx)\r\n\tdefer cancelbackgroundCtx()\r\n```\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1924314401",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17356,
+        "pr_file": "go/cmd/vtbackup/cli/vtbackup.go",
+        "discussion_id": "1914435281",
+        "commented_code": "@@ -335,6 +340,14 @@ func takeBackup(ctx, backgroundCtx context.Context, topoServer *topo.Server, bac\n \tif err != nil {\n \t\treturn fmt.Errorf(\"failed to initialize mysql config: %v\", err)\n \t}\n+\tctx, cancelCtx := context.WithCancel(ctx)\n+\tbackgroundCtx, cancelbackgroundCtx := context.WithCancel(backgroundCtx)",
+        "comment_created_at": "2025-01-21T20:18:06+00:00",
+        "comment_author": "frouioui",
+        "comment_body": "Fixed via 93d6c5273e0972f3ff56a942a30cadddca29fb6c",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1930706254",
+    "pr_number": 17632,
+    "pr_file": "go/vt/discovery/healthcheck.go",
+    "created_at": "2025-01-27T15:21:05+00:00",
+    "commented_code": "hc.subMu.Lock()\n \tdefer hc.subMu.Unlock()\n \tc := make(chan *TabletHealth, 2)\n-\thc.subscribers[c] = struct{}{}\n+\t// We create a message queue here because we want to\n+\t// be ensure that none of the updates from the health-check\n+\t// are missed by the consumers. Message queue has the semantics of an\n+\t// infinite capacity channel. We however, still want to return a channel\n+\t// to the consumers, because some of them rely on using a channel as part of a select statement.\n+\t// That is not something message queue can replicate.\n+\t// However, with this approach of a message queue that receives all the updates and then sends them\n+\t// on a channel in a goroutine gives us best of both worlds. The users still only see a channel, but internally\n+\t// the message queue is serving as an infinite buffer.\n+\tmq := concurrency.NewMessageQueue[*TabletHealth]()\n+\thc.subscribers[c] = mq\n+\tgo func() {\n+\t\tfor {\n+\t\t\t// Keep receiving updates on the message queue.\n+\t\t\tth, validRes := mq.Receive()\n+\t\t\tif validRes {\n+\t\t\t\tc <- th",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1930706254",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17632,
+        "pr_file": "go/vt/discovery/healthcheck.go",
+        "discussion_id": "1930706254",
+        "commented_code": "@@ -633,25 +634,52 @@ func (hc *HealthCheckImpl) Subscribe() chan *TabletHealth {\n \thc.subMu.Lock()\n \tdefer hc.subMu.Unlock()\n \tc := make(chan *TabletHealth, 2)\n-\thc.subscribers[c] = struct{}{}\n+\t// We create a message queue here because we want to\n+\t// be ensure that none of the updates from the health-check\n+\t// are missed by the consumers. Message queue has the semantics of an\n+\t// infinite capacity channel. We however, still want to return a channel\n+\t// to the consumers, because some of them rely on using a channel as part of a select statement.\n+\t// That is not something message queue can replicate.\n+\t// However, with this approach of a message queue that receives all the updates and then sends them\n+\t// on a channel in a goroutine gives us best of both worlds. The users still only see a channel, but internally\n+\t// the message queue is serving as an infinite buffer.\n+\tmq := concurrency.NewMessageQueue[*TabletHealth]()\n+\thc.subscribers[c] = mq\n+\tgo func() {\n+\t\tfor {\n+\t\t\t// Keep receiving updates on the message queue.\n+\t\t\tth, validRes := mq.Receive()\n+\t\t\tif validRes {\n+\t\t\t\tc <- th",
+        "comment_created_at": "2025-01-27T15:21:05+00:00",
+        "comment_author": "deepthi",
+        "comment_body": "This will block if channel is full, correct?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1930868158",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17632,
+        "pr_file": "go/vt/discovery/healthcheck.go",
+        "discussion_id": "1930706254",
+        "commented_code": "@@ -633,25 +634,52 @@ func (hc *HealthCheckImpl) Subscribe() chan *TabletHealth {\n \thc.subMu.Lock()\n \tdefer hc.subMu.Unlock()\n \tc := make(chan *TabletHealth, 2)\n-\thc.subscribers[c] = struct{}{}\n+\t// We create a message queue here because we want to\n+\t// be ensure that none of the updates from the health-check\n+\t// are missed by the consumers. Message queue has the semantics of an\n+\t// infinite capacity channel. We however, still want to return a channel\n+\t// to the consumers, because some of them rely on using a channel as part of a select statement.\n+\t// That is not something message queue can replicate.\n+\t// However, with this approach of a message queue that receives all the updates and then sends them\n+\t// on a channel in a goroutine gives us best of both worlds. The users still only see a channel, but internally\n+\t// the message queue is serving as an infinite buffer.\n+\tmq := concurrency.NewMessageQueue[*TabletHealth]()\n+\thc.subscribers[c] = mq\n+\tgo func() {\n+\t\tfor {\n+\t\t\t// Keep receiving updates on the message queue.\n+\t\t\tth, validRes := mq.Receive()\n+\t\t\tif validRes {\n+\t\t\t\tc <- th",
+        "comment_created_at": "2025-01-27T17:00:50+00:00",
+        "comment_author": "deepthi",
+        "comment_body": "Let us add a metric that exports the size of this queue.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1931566802",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17632,
+        "pr_file": "go/vt/discovery/healthcheck.go",
+        "discussion_id": "1930706254",
+        "commented_code": "@@ -633,25 +634,52 @@ func (hc *HealthCheckImpl) Subscribe() chan *TabletHealth {\n \thc.subMu.Lock()\n \tdefer hc.subMu.Unlock()\n \tc := make(chan *TabletHealth, 2)\n-\thc.subscribers[c] = struct{}{}\n+\t// We create a message queue here because we want to\n+\t// be ensure that none of the updates from the health-check\n+\t// are missed by the consumers. Message queue has the semantics of an\n+\t// infinite capacity channel. We however, still want to return a channel\n+\t// to the consumers, because some of them rely on using a channel as part of a select statement.\n+\t// That is not something message queue can replicate.\n+\t// However, with this approach of a message queue that receives all the updates and then sends them\n+\t// on a channel in a goroutine gives us best of both worlds. The users still only see a channel, but internally\n+\t// the message queue is serving as an infinite buffer.\n+\tmq := concurrency.NewMessageQueue[*TabletHealth]()\n+\thc.subscribers[c] = mq\n+\tgo func() {\n+\t\tfor {\n+\t\t\t// Keep receiving updates on the message queue.\n+\t\t\tth, validRes := mq.Receive()\n+\t\t\tif validRes {\n+\t\t\t\tc <- th",
+        "comment_created_at": "2025-01-28T05:57:16+00:00",
+        "comment_author": "GuptaManan100",
+        "comment_body": "Okay \ud83d\udc4d ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1954761079",
+    "pr_number": 17763,
+    "pr_file": "go/vt/vttablet/tabletserver/semisyncwatcher/watcher.go",
+    "created_at": "2025-02-13T15:44:24+00:00",
+    "commented_code": "+/*\n+Copyright 2025 The Vitess Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package semisyncwatcher\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"math\"\n+\t\"sync\"\n+\t\"time\"\n+\n+\t\"vitess.io/vitess/go/timer\"\n+\t\"vitess.io/vitess/go/vt/dbconnpool\"\n+\t\"vitess.io/vitess/go/vt/log\"\n+\t\"vitess.io/vitess/go/vt/mysqlctl\"\n+\t\"vitess.io/vitess/go/vt/vttablet/tabletserver/tabletenv\"\n+)\n+\n+const (\n+\tsemiSyncWaitSessionsRead = \"SHOW STATUS LIKE 'Rpl_semi_sync_%_wait_sessions'\"\n+\tsemiSyncRecoverWrite     = \"INSERT INTO semisync_recover (ts) VALUES (NOW())\"\n+\tsemiSyncRecoverClear     = \"DELETE FROM semisync_recover\"\n+)\n+\n+// Watcher is a watcher that checks if the primary tablet\n+// is blocked on a semi-sync ack from the replica.\n+// If the semi-sync ACK is lost in the network,\n+// it is possible that the primary is indefinitely stuck,\n+// blocking PRS. The watcher looks for this situation and manufactures a write\n+// periodically to unblock the primary.\n+type Watcher struct {\n+\t// env is used to get the connection parameters.\n+\tenv tabletenv.Env\n+\t// ticks is the ticker on which we'll check\n+\t// if the primary is blocked on semi-sync ACKs or not.\n+\tticks *timer.Timer\n+\t// clearTicks is the ticker to clear the data in\n+\t// the semisync_recover table.\n+\tclearTicks *timer.Timer\n+\n+\t// mu protects the fields below.\n+\tmu      sync.Mutex\n+\tappPool *dbconnpool.ConnectionPool\n+\tisOpen  bool\n+\t// isWriting stores if the watcher is currently writing to the DB.\n+\t// We don't want two different threads initiating writes, so we use this\n+\t// for synchronization.\n+\tisWriting bool\n+\t// isBlocked stores if the primary is blocked on semi-sync ack.\n+\tisBlocked bool\n+\t// waiters stores the list of waiters that are waiting for the primary to be unblocked.\n+\twaiters []chan any\n+}\n+\n+// NewWatcher creates a new Watcher.\n+func NewWatcher(env tabletenv.Env) *Watcher {\n+\t// TODO (@GuptaManan100): Parameterize the watch interval.\n+\twatchInterval := 30 * time.Second\n+\treturn &Watcher{\n+\t\tenv:   env,\n+\t\tticks: timer.NewTimer(watchInterval),\n+\t\t// We clear the data every day. We can make it configurable in the future,\n+\t\t// but this seams fine for now.\n+\t\tclearTicks: timer.NewTimer(24 * time.Hour),\n+\t\tappPool:    dbconnpool.NewConnectionPool(\"SemiSyncWatcherAppPool\", env.Exporter(), 20, mysqlctl.DbaIdleTimeout, 0, mysqlctl.PoolDynamicHostnameResolution),\n+\t\twaiters:    make([]chan any, 0),\n+\t}\n+}\n+\n+// Open starts the watcher.\n+func (w *Watcher) Open() {\n+\tw.mu.Lock()\n+\tdefer w.mu.Unlock()\n+\tif w.isOpen {\n+\t\t// If we are already open, then there is nothing to do\n+\t\treturn\n+\t}\n+\t// Set the watcher to be open.\n+\tw.isOpen = true\n+\tlog.Info(\"SemiSync Watcher: opening\")\n+\n+\t// This function could be running from within a unit test scope, in which case we use\n+\t// mock pools that are already open. This is why we test for the pool being open.\n+\tif !w.appPool.IsOpen() {\n+\t\tw.appPool.Open(w.env.Config().DB.AppWithDB())\n+\t}\n+\tw.clearTicks.Start(w.clearAllData)\n+\tw.ticks.Start(w.checkAndFixSemiSyncBlocked)\n+}\n+\n+// Close stops the watcher.\n+func (w *Watcher) Close() {\n+\tw.mu.Lock()\n+\tdefer w.mu.Unlock()\n+\tif !w.isOpen {\n+\t\t// If we are already closed, then there is nothing to do\n+\t\treturn\n+\t}\n+\tw.isOpen = false\n+\tlog.Info(\"SemiSync Watcher: closing\")\n+\tw.clearTicks.Stop()\n+\tw.ticks.Stop()\n+\tw.appPool.Close()\n+}\n+\n+// checkAndFixSemiSyncBlocked checks if the primary is blocked on semi-sync ack\n+// and manufactures a write to unblock the primary. This function is safe to\n+// be called multiple times in parallel.\n+func (w *Watcher) checkAndFixSemiSyncBlocked() {\n+\t// Check if semi-sync is blocked or not\n+\tisBlocked, err := w.isSemiSyncBlocked(context.Background())\n+\tif err != nil {\n+\t\t// If we are unable to determine whether the primary is blocked or not,\n+\t\t// then we can just abort the function and try again later.\n+\t\tlog.Errorf(\"SemiSync Watcher: failed to check if primary is blocked on semi-sync: %v\", err)\n+\t\treturn\n+\t}\n+\t// Set the isBlocked state.\n+\tw.setIsBlocked(isBlocked)\n+\tif isBlocked {\n+\t\t// If we are blocked, then we want to start the writes.\n+\t\t// That function is re-entrant. If we are already writing, then it will just return.\n+\t\tw.startWrites()\n+\t}\n+}\n+\n+// isSemiSyncBlocked checks if the primary is blocked on semi-sync.\n+func (w *Watcher) isSemiSyncBlocked(ctx context.Context) (bool, error) {\n+\t// Get a connection from the pool\n+\tconn, err := w.appPool.Get(ctx)\n+\tif err != nil {\n+\t\treturn false, err\n+\t}\n+\tdefer conn.Recycle()\n+\n+\t// Execute the query to check if the primary is blocked on semi-sync.\n+\tres, err := conn.Conn.ExecuteFetch(semiSyncWaitSessionsRead, 1, false)\n+\tif err != nil {\n+\t\treturn false, err\n+\t}\n+\t// If we have no rows, then the primary doesn't have semi-sync enabled.\n+\t// It then follows, that the primary isn't blocked :)\n+\tif len(res.Rows) == 0 {\n+\t\treturn false, nil\n+\t}\n+\n+\t// Read the status value and check if it is non-zero.\n+\tif len(res.Rows) != 1 || len(res.Rows[0]) != 2 {\n+\t\treturn false, errors.New(\"unexpected number of rows received\")\n+\t}\n+\tvalue, err := res.Rows[0][1].ToInt()\n+\treturn value != 0, err\n+}\n+\n+// waitUntilSemiSyncUnblocked waits until the primary is not blocked\n+// on semi-sync.\n+func (w *Watcher) waitUntilSemiSyncUnblocked() {\n+\t// run one iteration of checking if semi-sync is blocked or not.\n+\tw.checkAndFixSemiSyncBlocked()\n+\tif !w.stillBlocked() {\n+\t\t// If we find that the primary isn't blocked, we're good,\n+\t\t// we don't need to wait for anything.\n+\t\treturn\n+\t}\n+\t// The primary is blocked. We need to wait for it to be unblocked.\n+\tch := w.addWaiter()\n+\t<-ch\n+}\n+\n+// stillBlocked returns true if the watcher should continue writing to the DB\n+// because the watcher is still open, and the primary is still blocked.\n+func (w *Watcher) stillBlocked() bool {\n+\tw.mu.Lock()\n+\tdefer w.mu.Unlock()\n+\treturn w.isOpen && w.isBlocked\n+}\n+\n+// checkAndSetIsWriting checks if the watcher is already writing to the DB.\n+// If it is not, then it sets the isWriting field and signals the caller.\n+func (w *Watcher) checkAndSetIsWriting() bool {\n+\tw.mu.Lock()\n+\tdefer w.mu.Unlock()\n+\tif w.isWriting {\n+\t\treturn false\n+\t}\n+\tw.isWriting = true\n+\treturn true\n+}",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1954761079",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17763,
+        "pr_file": "go/vt/vttablet/tabletserver/semisyncwatcher/watcher.go",
+        "discussion_id": "1954761079",
+        "commented_code": "@@ -0,0 +1,282 @@\n+/*\n+Copyright 2025 The Vitess Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package semisyncwatcher\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"math\"\n+\t\"sync\"\n+\t\"time\"\n+\n+\t\"vitess.io/vitess/go/timer\"\n+\t\"vitess.io/vitess/go/vt/dbconnpool\"\n+\t\"vitess.io/vitess/go/vt/log\"\n+\t\"vitess.io/vitess/go/vt/mysqlctl\"\n+\t\"vitess.io/vitess/go/vt/vttablet/tabletserver/tabletenv\"\n+)\n+\n+const (\n+\tsemiSyncWaitSessionsRead = \"SHOW STATUS LIKE 'Rpl_semi_sync_%_wait_sessions'\"\n+\tsemiSyncRecoverWrite     = \"INSERT INTO semisync_recover (ts) VALUES (NOW())\"\n+\tsemiSyncRecoverClear     = \"DELETE FROM semisync_recover\"\n+)\n+\n+// Watcher is a watcher that checks if the primary tablet\n+// is blocked on a semi-sync ack from the replica.\n+// If the semi-sync ACK is lost in the network,\n+// it is possible that the primary is indefinitely stuck,\n+// blocking PRS. The watcher looks for this situation and manufactures a write\n+// periodically to unblock the primary.\n+type Watcher struct {\n+\t// env is used to get the connection parameters.\n+\tenv tabletenv.Env\n+\t// ticks is the ticker on which we'll check\n+\t// if the primary is blocked on semi-sync ACKs or not.\n+\tticks *timer.Timer\n+\t// clearTicks is the ticker to clear the data in\n+\t// the semisync_recover table.\n+\tclearTicks *timer.Timer\n+\n+\t// mu protects the fields below.\n+\tmu      sync.Mutex\n+\tappPool *dbconnpool.ConnectionPool\n+\tisOpen  bool\n+\t// isWriting stores if the watcher is currently writing to the DB.\n+\t// We don't want two different threads initiating writes, so we use this\n+\t// for synchronization.\n+\tisWriting bool\n+\t// isBlocked stores if the primary is blocked on semi-sync ack.\n+\tisBlocked bool\n+\t// waiters stores the list of waiters that are waiting for the primary to be unblocked.\n+\twaiters []chan any\n+}\n+\n+// NewWatcher creates a new Watcher.\n+func NewWatcher(env tabletenv.Env) *Watcher {\n+\t// TODO (@GuptaManan100): Parameterize the watch interval.\n+\twatchInterval := 30 * time.Second\n+\treturn &Watcher{\n+\t\tenv:   env,\n+\t\tticks: timer.NewTimer(watchInterval),\n+\t\t// We clear the data every day. We can make it configurable in the future,\n+\t\t// but this seams fine for now.\n+\t\tclearTicks: timer.NewTimer(24 * time.Hour),\n+\t\tappPool:    dbconnpool.NewConnectionPool(\"SemiSyncWatcherAppPool\", env.Exporter(), 20, mysqlctl.DbaIdleTimeout, 0, mysqlctl.PoolDynamicHostnameResolution),\n+\t\twaiters:    make([]chan any, 0),\n+\t}\n+}\n+\n+// Open starts the watcher.\n+func (w *Watcher) Open() {\n+\tw.mu.Lock()\n+\tdefer w.mu.Unlock()\n+\tif w.isOpen {\n+\t\t// If we are already open, then there is nothing to do\n+\t\treturn\n+\t}\n+\t// Set the watcher to be open.\n+\tw.isOpen = true\n+\tlog.Info(\"SemiSync Watcher: opening\")\n+\n+\t// This function could be running from within a unit test scope, in which case we use\n+\t// mock pools that are already open. This is why we test for the pool being open.\n+\tif !w.appPool.IsOpen() {\n+\t\tw.appPool.Open(w.env.Config().DB.AppWithDB())\n+\t}\n+\tw.clearTicks.Start(w.clearAllData)\n+\tw.ticks.Start(w.checkAndFixSemiSyncBlocked)\n+}\n+\n+// Close stops the watcher.\n+func (w *Watcher) Close() {\n+\tw.mu.Lock()\n+\tdefer w.mu.Unlock()\n+\tif !w.isOpen {\n+\t\t// If we are already closed, then there is nothing to do\n+\t\treturn\n+\t}\n+\tw.isOpen = false\n+\tlog.Info(\"SemiSync Watcher: closing\")\n+\tw.clearTicks.Stop()\n+\tw.ticks.Stop()\n+\tw.appPool.Close()\n+}\n+\n+// checkAndFixSemiSyncBlocked checks if the primary is blocked on semi-sync ack\n+// and manufactures a write to unblock the primary. This function is safe to\n+// be called multiple times in parallel.\n+func (w *Watcher) checkAndFixSemiSyncBlocked() {\n+\t// Check if semi-sync is blocked or not\n+\tisBlocked, err := w.isSemiSyncBlocked(context.Background())\n+\tif err != nil {\n+\t\t// If we are unable to determine whether the primary is blocked or not,\n+\t\t// then we can just abort the function and try again later.\n+\t\tlog.Errorf(\"SemiSync Watcher: failed to check if primary is blocked on semi-sync: %v\", err)\n+\t\treturn\n+\t}\n+\t// Set the isBlocked state.\n+\tw.setIsBlocked(isBlocked)\n+\tif isBlocked {\n+\t\t// If we are blocked, then we want to start the writes.\n+\t\t// That function is re-entrant. If we are already writing, then it will just return.\n+\t\tw.startWrites()\n+\t}\n+}\n+\n+// isSemiSyncBlocked checks if the primary is blocked on semi-sync.\n+func (w *Watcher) isSemiSyncBlocked(ctx context.Context) (bool, error) {\n+\t// Get a connection from the pool\n+\tconn, err := w.appPool.Get(ctx)\n+\tif err != nil {\n+\t\treturn false, err\n+\t}\n+\tdefer conn.Recycle()\n+\n+\t// Execute the query to check if the primary is blocked on semi-sync.\n+\tres, err := conn.Conn.ExecuteFetch(semiSyncWaitSessionsRead, 1, false)\n+\tif err != nil {\n+\t\treturn false, err\n+\t}\n+\t// If we have no rows, then the primary doesn't have semi-sync enabled.\n+\t// It then follows, that the primary isn't blocked :)\n+\tif len(res.Rows) == 0 {\n+\t\treturn false, nil\n+\t}\n+\n+\t// Read the status value and check if it is non-zero.\n+\tif len(res.Rows) != 1 || len(res.Rows[0]) != 2 {\n+\t\treturn false, errors.New(\"unexpected number of rows received\")\n+\t}\n+\tvalue, err := res.Rows[0][1].ToInt()\n+\treturn value != 0, err\n+}\n+\n+// waitUntilSemiSyncUnblocked waits until the primary is not blocked\n+// on semi-sync.\n+func (w *Watcher) waitUntilSemiSyncUnblocked() {\n+\t// run one iteration of checking if semi-sync is blocked or not.\n+\tw.checkAndFixSemiSyncBlocked()\n+\tif !w.stillBlocked() {\n+\t\t// If we find that the primary isn't blocked, we're good,\n+\t\t// we don't need to wait for anything.\n+\t\treturn\n+\t}\n+\t// The primary is blocked. We need to wait for it to be unblocked.\n+\tch := w.addWaiter()\n+\t<-ch\n+}\n+\n+// stillBlocked returns true if the watcher should continue writing to the DB\n+// because the watcher is still open, and the primary is still blocked.\n+func (w *Watcher) stillBlocked() bool {\n+\tw.mu.Lock()\n+\tdefer w.mu.Unlock()\n+\treturn w.isOpen && w.isBlocked\n+}\n+\n+// checkAndSetIsWriting checks if the watcher is already writing to the DB.\n+// If it is not, then it sets the isWriting field and signals the caller.\n+func (w *Watcher) checkAndSetIsWriting() bool {\n+\tw.mu.Lock()\n+\tdefer w.mu.Unlock()\n+\tif w.isWriting {\n+\t\treturn false\n+\t}\n+\tw.isWriting = true\n+\treturn true\n+}",
+        "comment_created_at": "2025-02-13T15:44:24+00:00",
+        "comment_author": "mattlord",
+        "comment_body": "I don't think this affects the query hot path, right? If it does, then it might be worth e.g. using 1 byte for the status and using bits in there for isWriting, isBlocked, isOpen etc. so that we can use atomics for reading them, CAS for optional changes, etc. If nothing else, it's probably worth moving these to atomic.Bool so that e.g. checkAndSetIsWriting can be one atomic call:\r\n```\r\n    return w.isWriting(false, true)\r\n```\r\n\r\nIt makes the code simpler, clearer, and less contentious / efficient. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1955858756",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17763,
+        "pr_file": "go/vt/vttablet/tabletserver/semisyncwatcher/watcher.go",
+        "discussion_id": "1954761079",
+        "commented_code": "@@ -0,0 +1,282 @@\n+/*\n+Copyright 2025 The Vitess Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package semisyncwatcher\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"math\"\n+\t\"sync\"\n+\t\"time\"\n+\n+\t\"vitess.io/vitess/go/timer\"\n+\t\"vitess.io/vitess/go/vt/dbconnpool\"\n+\t\"vitess.io/vitess/go/vt/log\"\n+\t\"vitess.io/vitess/go/vt/mysqlctl\"\n+\t\"vitess.io/vitess/go/vt/vttablet/tabletserver/tabletenv\"\n+)\n+\n+const (\n+\tsemiSyncWaitSessionsRead = \"SHOW STATUS LIKE 'Rpl_semi_sync_%_wait_sessions'\"\n+\tsemiSyncRecoverWrite     = \"INSERT INTO semisync_recover (ts) VALUES (NOW())\"\n+\tsemiSyncRecoverClear     = \"DELETE FROM semisync_recover\"\n+)\n+\n+// Watcher is a watcher that checks if the primary tablet\n+// is blocked on a semi-sync ack from the replica.\n+// If the semi-sync ACK is lost in the network,\n+// it is possible that the primary is indefinitely stuck,\n+// blocking PRS. The watcher looks for this situation and manufactures a write\n+// periodically to unblock the primary.\n+type Watcher struct {\n+\t// env is used to get the connection parameters.\n+\tenv tabletenv.Env\n+\t// ticks is the ticker on which we'll check\n+\t// if the primary is blocked on semi-sync ACKs or not.\n+\tticks *timer.Timer\n+\t// clearTicks is the ticker to clear the data in\n+\t// the semisync_recover table.\n+\tclearTicks *timer.Timer\n+\n+\t// mu protects the fields below.\n+\tmu      sync.Mutex\n+\tappPool *dbconnpool.ConnectionPool\n+\tisOpen  bool\n+\t// isWriting stores if the watcher is currently writing to the DB.\n+\t// We don't want two different threads initiating writes, so we use this\n+\t// for synchronization.\n+\tisWriting bool\n+\t// isBlocked stores if the primary is blocked on semi-sync ack.\n+\tisBlocked bool\n+\t// waiters stores the list of waiters that are waiting for the primary to be unblocked.\n+\twaiters []chan any\n+}\n+\n+// NewWatcher creates a new Watcher.\n+func NewWatcher(env tabletenv.Env) *Watcher {\n+\t// TODO (@GuptaManan100): Parameterize the watch interval.\n+\twatchInterval := 30 * time.Second\n+\treturn &Watcher{\n+\t\tenv:   env,\n+\t\tticks: timer.NewTimer(watchInterval),\n+\t\t// We clear the data every day. We can make it configurable in the future,\n+\t\t// but this seams fine for now.\n+\t\tclearTicks: timer.NewTimer(24 * time.Hour),\n+\t\tappPool:    dbconnpool.NewConnectionPool(\"SemiSyncWatcherAppPool\", env.Exporter(), 20, mysqlctl.DbaIdleTimeout, 0, mysqlctl.PoolDynamicHostnameResolution),\n+\t\twaiters:    make([]chan any, 0),\n+\t}\n+}\n+\n+// Open starts the watcher.\n+func (w *Watcher) Open() {\n+\tw.mu.Lock()\n+\tdefer w.mu.Unlock()\n+\tif w.isOpen {\n+\t\t// If we are already open, then there is nothing to do\n+\t\treturn\n+\t}\n+\t// Set the watcher to be open.\n+\tw.isOpen = true\n+\tlog.Info(\"SemiSync Watcher: opening\")\n+\n+\t// This function could be running from within a unit test scope, in which case we use\n+\t// mock pools that are already open. This is why we test for the pool being open.\n+\tif !w.appPool.IsOpen() {\n+\t\tw.appPool.Open(w.env.Config().DB.AppWithDB())\n+\t}\n+\tw.clearTicks.Start(w.clearAllData)\n+\tw.ticks.Start(w.checkAndFixSemiSyncBlocked)\n+}\n+\n+// Close stops the watcher.\n+func (w *Watcher) Close() {\n+\tw.mu.Lock()\n+\tdefer w.mu.Unlock()\n+\tif !w.isOpen {\n+\t\t// If we are already closed, then there is nothing to do\n+\t\treturn\n+\t}\n+\tw.isOpen = false\n+\tlog.Info(\"SemiSync Watcher: closing\")\n+\tw.clearTicks.Stop()\n+\tw.ticks.Stop()\n+\tw.appPool.Close()\n+}\n+\n+// checkAndFixSemiSyncBlocked checks if the primary is blocked on semi-sync ack\n+// and manufactures a write to unblock the primary. This function is safe to\n+// be called multiple times in parallel.\n+func (w *Watcher) checkAndFixSemiSyncBlocked() {\n+\t// Check if semi-sync is blocked or not\n+\tisBlocked, err := w.isSemiSyncBlocked(context.Background())\n+\tif err != nil {\n+\t\t// If we are unable to determine whether the primary is blocked or not,\n+\t\t// then we can just abort the function and try again later.\n+\t\tlog.Errorf(\"SemiSync Watcher: failed to check if primary is blocked on semi-sync: %v\", err)\n+\t\treturn\n+\t}\n+\t// Set the isBlocked state.\n+\tw.setIsBlocked(isBlocked)\n+\tif isBlocked {\n+\t\t// If we are blocked, then we want to start the writes.\n+\t\t// That function is re-entrant. If we are already writing, then it will just return.\n+\t\tw.startWrites()\n+\t}\n+}\n+\n+// isSemiSyncBlocked checks if the primary is blocked on semi-sync.\n+func (w *Watcher) isSemiSyncBlocked(ctx context.Context) (bool, error) {\n+\t// Get a connection from the pool\n+\tconn, err := w.appPool.Get(ctx)\n+\tif err != nil {\n+\t\treturn false, err\n+\t}\n+\tdefer conn.Recycle()\n+\n+\t// Execute the query to check if the primary is blocked on semi-sync.\n+\tres, err := conn.Conn.ExecuteFetch(semiSyncWaitSessionsRead, 1, false)\n+\tif err != nil {\n+\t\treturn false, err\n+\t}\n+\t// If we have no rows, then the primary doesn't have semi-sync enabled.\n+\t// It then follows, that the primary isn't blocked :)\n+\tif len(res.Rows) == 0 {\n+\t\treturn false, nil\n+\t}\n+\n+\t// Read the status value and check if it is non-zero.\n+\tif len(res.Rows) != 1 || len(res.Rows[0]) != 2 {\n+\t\treturn false, errors.New(\"unexpected number of rows received\")\n+\t}\n+\tvalue, err := res.Rows[0][1].ToInt()\n+\treturn value != 0, err\n+}\n+\n+// waitUntilSemiSyncUnblocked waits until the primary is not blocked\n+// on semi-sync.\n+func (w *Watcher) waitUntilSemiSyncUnblocked() {\n+\t// run one iteration of checking if semi-sync is blocked or not.\n+\tw.checkAndFixSemiSyncBlocked()\n+\tif !w.stillBlocked() {\n+\t\t// If we find that the primary isn't blocked, we're good,\n+\t\t// we don't need to wait for anything.\n+\t\treturn\n+\t}\n+\t// The primary is blocked. We need to wait for it to be unblocked.\n+\tch := w.addWaiter()\n+\t<-ch\n+}\n+\n+// stillBlocked returns true if the watcher should continue writing to the DB\n+// because the watcher is still open, and the primary is still blocked.\n+func (w *Watcher) stillBlocked() bool {\n+\tw.mu.Lock()\n+\tdefer w.mu.Unlock()\n+\treturn w.isOpen && w.isBlocked\n+}\n+\n+// checkAndSetIsWriting checks if the watcher is already writing to the DB.\n+// If it is not, then it sets the isWriting field and signals the caller.\n+func (w *Watcher) checkAndSetIsWriting() bool {\n+\tw.mu.Lock()\n+\tdefer w.mu.Unlock()\n+\tif w.isWriting {\n+\t\treturn false\n+\t}\n+\tw.isWriting = true\n+\treturn true\n+}",
+        "comment_created_at": "2025-02-14T09:49:20+00:00",
+        "comment_author": "GuptaManan100",
+        "comment_body": "I don't think performance is too much of a concern, but the usage of having multiple bool fields behind a mutex vs atomic.Bool I think becomes a matter of preference. I for one, like to have the former because that means that only one boolean value transitions at a point in time, but with atomic bool values it can change even when you've just read that value.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1894239600",
+    "pr_number": 17407,
+    "pr_file": "go/vt/topo/stats_conn_test.go",
+    "created_at": "2024-12-20T18:07:06+00:00",
+    "commented_code": "}\n \n // createTestReadSemaphoreContention simulates semaphore contention on the test read semaphore.\n-func createTestReadSemaphoreContention(ctx context.Context, duration time.Duration) {\n+func createTestReadSemaphoreContention(ctx context.Context, duration time.Duration, semAcquiredChan chan bool) {\n \tif err := testStatsConnReadSem.Acquire(ctx, 1); err != nil {\n \t\tpanic(err)\n \t}\n \tdefer testStatsConnReadSem.Release(1)\n+\tsemAcquiredChan <- true\n \ttime.Sleep(duration)\n }\n \n // TestStatsConnTopoListDir emits stats on ListDir\n func TestStatsConnTopoListDir(t *testing.T) {\n+\ttestStatsConnStatsReset()\n+\tdefer testStatsConnStatsReset()\n+\n \tconn := &fakeConn{}\n \tstatsConn := NewStatsConn(\"global\", conn, testStatsConnReadSem)\n \tctx := context.Background()\n \n-\tgo createTestReadSemaphoreContention(ctx, 100*time.Millisecond)\n+\tsemAcquiredChan := make(chan bool)",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1894239600",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17407,
+        "pr_file": "go/vt/topo/stats_conn_test.go",
+        "discussion_id": "1894239600",
+        "commented_code": "@@ -185,238 +195,216 @@ func (st *fakeConn) IsReadOnly() bool {\n }\n \n // createTestReadSemaphoreContention simulates semaphore contention on the test read semaphore.\n-func createTestReadSemaphoreContention(ctx context.Context, duration time.Duration) {\n+func createTestReadSemaphoreContention(ctx context.Context, duration time.Duration, semAcquiredChan chan bool) {\n \tif err := testStatsConnReadSem.Acquire(ctx, 1); err != nil {\n \t\tpanic(err)\n \t}\n \tdefer testStatsConnReadSem.Release(1)\n+\tsemAcquiredChan <- true\n \ttime.Sleep(duration)\n }\n \n // TestStatsConnTopoListDir emits stats on ListDir\n func TestStatsConnTopoListDir(t *testing.T) {\n+\ttestStatsConnStatsReset()\n+\tdefer testStatsConnStatsReset()\n+\n \tconn := &fakeConn{}\n \tstatsConn := NewStatsConn(\"global\", conn, testStatsConnReadSem)\n \tctx := context.Background()\n \n-\tgo createTestReadSemaphoreContention(ctx, 100*time.Millisecond)\n+\tsemAcquiredChan := make(chan bool)",
+        "comment_created_at": "2024-12-20T18:07:06+00:00",
+        "comment_author": "mattlord",
+        "comment_body": "Not that it really matters here, but when you don't care about the value being passed you can use an empty struct literal which is zero bytes:\r\n```\r\nsemAcquiredChan := make(chan struct{})\r\n\r\nsemAcquiredChan <- struct{}{}\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1910520443",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17407,
+        "pr_file": "go/vt/topo/stats_conn_test.go",
+        "discussion_id": "1894239600",
+        "commented_code": "@@ -185,238 +195,216 @@ func (st *fakeConn) IsReadOnly() bool {\n }\n \n // createTestReadSemaphoreContention simulates semaphore contention on the test read semaphore.\n-func createTestReadSemaphoreContention(ctx context.Context, duration time.Duration) {\n+func createTestReadSemaphoreContention(ctx context.Context, duration time.Duration, semAcquiredChan chan bool) {\n \tif err := testStatsConnReadSem.Acquire(ctx, 1); err != nil {\n \t\tpanic(err)\n \t}\n \tdefer testStatsConnReadSem.Release(1)\n+\tsemAcquiredChan <- true\n \ttime.Sleep(duration)\n }\n \n // TestStatsConnTopoListDir emits stats on ListDir\n func TestStatsConnTopoListDir(t *testing.T) {\n+\ttestStatsConnStatsReset()\n+\tdefer testStatsConnStatsReset()\n+\n \tconn := &fakeConn{}\n \tstatsConn := NewStatsConn(\"global\", conn, testStatsConnReadSem)\n \tctx := context.Background()\n \n-\tgo createTestReadSemaphoreContention(ctx, 100*time.Millisecond)\n+\tsemAcquiredChan := make(chan bool)",
+        "comment_created_at": "2025-01-10T15:19:29+00:00",
+        "comment_author": "deepthi",
+        "comment_body": "@timvaillancourt do you plan to make this change? either way is fine, but it's a good idea to propagate idiomatic go patterns so that the next person who's doing a copy paste does it better :)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1910570643",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17407,
+        "pr_file": "go/vt/topo/stats_conn_test.go",
+        "discussion_id": "1894239600",
+        "commented_code": "@@ -185,238 +195,216 @@ func (st *fakeConn) IsReadOnly() bool {\n }\n \n // createTestReadSemaphoreContention simulates semaphore contention on the test read semaphore.\n-func createTestReadSemaphoreContention(ctx context.Context, duration time.Duration) {\n+func createTestReadSemaphoreContention(ctx context.Context, duration time.Duration, semAcquiredChan chan bool) {\n \tif err := testStatsConnReadSem.Acquire(ctx, 1); err != nil {\n \t\tpanic(err)\n \t}\n \tdefer testStatsConnReadSem.Release(1)\n+\tsemAcquiredChan <- true\n \ttime.Sleep(duration)\n }\n \n // TestStatsConnTopoListDir emits stats on ListDir\n func TestStatsConnTopoListDir(t *testing.T) {\n+\ttestStatsConnStatsReset()\n+\tdefer testStatsConnStatsReset()\n+\n \tconn := &fakeConn{}\n \tstatsConn := NewStatsConn(\"global\", conn, testStatsConnReadSem)\n \tctx := context.Background()\n \n-\tgo createTestReadSemaphoreContention(ctx, 100*time.Millisecond)\n+\tsemAcquiredChan := make(chan bool)",
+        "comment_created_at": "2025-01-10T15:54:14+00:00",
+        "comment_author": "timvaillancourt",
+        "comment_body": "@deepthi good idea, I've made this update \ud83d\udc4d ",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

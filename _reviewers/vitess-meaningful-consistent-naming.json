@@ -1,0 +1,238 @@
+[
+  {
+    "discussion_id": "2191523035",
+    "pr_number": 18423,
+    "pr_file": "go/vt/vttablet/onlineddl/executor.go",
+    "created_at": "2025-07-08T05:37:20+00:00",
+    "commented_code": "// real production\n \n \t\te.updateMigrationStage(ctx, onlineDDL.UUID, \"locking tables\")\n-\t\tlockCtx, cancel := context.WithTimeout(ctx, onlineDDL.CutOverThreshold)\n-\t\tdefer cancel()\n+\t\tlockCtx, killWhileRenamingCancel := context.WithTimeout(ctx, onlineDDL.CutOverThreshold)\n+\t\tdefer killWhileRenamingCancel()\n \t\tlockTableQuery := sqlparser.BuildParsedQuery(sqlLockTwoTablesWrite, sentryTableName, onlineDDL.Table)\n \t\tif _, err := lockConn.Conn.Exec(lockCtx, lockTableQuery.Query, 1, false); err != nil {\n \t\t\treturn vterrors.Wrapf(err, \"failed locking tables\")\n \t\t}\n \n \t\te.updateMigrationStage(ctx, onlineDDL.UUID, \"renaming tables\")\n+\t\tkillWhileRenamingContext, killWhileRenamingCancel := context.WithCancel(ctx)\n+\t\tdefer killWhileRenamingCancel()\n+\t\t// We run the RENAME in a goroutine, so that we can wait for\n \t\tgo func() {\n \t\t\tdefer close(renameCompleteChan)\n \t\t\t_, err := renameConn.Conn.Exec(ctx, renameQuery.Query, 1, false)\n \t\t\trenameCompleteChan <- err\n+\t\t\tkillWhileRenamingCancel() // RENAME is done, no need to kill queries anymore",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "2191523035",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 18423,
+        "pr_file": "go/vt/vttablet/onlineddl/executor.go",
+        "discussion_id": "2191523035",
+        "commented_code": "@@ -1013,25 +1029,36 @@ func (e *Executor) cutOverVReplMigration(ctx context.Context, s *VReplStream, sh\n \t\t// real production\n \n \t\te.updateMigrationStage(ctx, onlineDDL.UUID, \"locking tables\")\n-\t\tlockCtx, cancel := context.WithTimeout(ctx, onlineDDL.CutOverThreshold)\n-\t\tdefer cancel()\n+\t\tlockCtx, killWhileRenamingCancel := context.WithTimeout(ctx, onlineDDL.CutOverThreshold)\n+\t\tdefer killWhileRenamingCancel()\n \t\tlockTableQuery := sqlparser.BuildParsedQuery(sqlLockTwoTablesWrite, sentryTableName, onlineDDL.Table)\n \t\tif _, err := lockConn.Conn.Exec(lockCtx, lockTableQuery.Query, 1, false); err != nil {\n \t\t\treturn vterrors.Wrapf(err, \"failed locking tables\")\n \t\t}\n \n \t\te.updateMigrationStage(ctx, onlineDDL.UUID, \"renaming tables\")\n+\t\tkillWhileRenamingContext, killWhileRenamingCancel := context.WithCancel(ctx)\n+\t\tdefer killWhileRenamingCancel()\n+\t\t// We run the RENAME in a goroutine, so that we can wait for\n \t\tgo func() {\n \t\t\tdefer close(renameCompleteChan)\n \t\t\t_, err := renameConn.Conn.Exec(ctx, renameQuery.Query, 1, false)\n \t\t\trenameCompleteChan <- err\n+\t\t\tkillWhileRenamingCancel() // RENAME is done, no need to kill queries anymore",
+        "comment_created_at": "2025-07-08T05:37:20+00:00",
+        "comment_author": "Copilot",
+        "comment_body": "The cancel function `killWhileRenamingCancel` is reused later for a different context, leading to shadowing. Rename these cancel functions (e.g., `lockTimeoutCancel` and `renameCancel`) to avoid confusion and ensure both contexts are properly cancelled.\n```suggestion\n\t\tlockCtx, lockTimeoutCancel := context.WithTimeout(ctx, onlineDDL.CutOverThreshold)\n\t\tdefer lockTimeoutCancel()\n\t\tlockTableQuery := sqlparser.BuildParsedQuery(sqlLockTwoTablesWrite, sentryTableName, onlineDDL.Table)\n\t\tif _, err := lockConn.Conn.Exec(lockCtx, lockTableQuery.Query, 1, false); err != nil {\n\t\t\treturn vterrors.Wrapf(err, \"failed locking tables\")\n\t\t}\n\n\t\te.updateMigrationStage(ctx, onlineDDL.UUID, \"renaming tables\")\n\t\tkillWhileRenamingContext, renameCancel := context.WithCancel(ctx)\n\t\tdefer renameCancel()\n\t\t// We run the RENAME in a goroutine, so that we can wait for\n\t\tgo func() {\n\t\t\tdefer close(renameCompleteChan)\n\t\t\t_, err := renameConn.Conn.Exec(ctx, renameQuery.Query, 1, false)\n\t\t\trenameCompleteChan <- err\n\t\t\trenameCancel() // RENAME is done, no need to kill queries anymore\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1911345752",
+    "pr_number": 17426,
+    "pr_file": "go/vt/schemadiff/partitioning_analysis.go",
+    "created_at": "2025-01-10T20:54:20+00:00",
+    "commented_code": "+/*\n+Copyright 2024 The Vitess Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package schemadiff\n+\n+import (\n+\t\"errors\"\n+\t\"fmt\"\n+\t\"math\"\n+\t\"strconv\"\n+\t\"strings\"\n+\t\"time\"\n+\n+\t\"vitess.io/vitess/go/mysql/capabilities\"\n+\t\"vitess.io/vitess/go/mysql/datetime\"\n+\t\"vitess.io/vitess/go/vt/sqlparser\"\n+)\n+\n+const (\n+\tWeekModeUndefined = math.MinInt\n+)\n+\n+// TemporalRangePartitioningAnalysis is the result of analyzing a table for temporal range partitioning.\n+type TemporalRangePartitioningAnalysis struct {\n+\tIsRangePartitioned         bool                           // Is the table at all partitioned by RANGE?\n+\tIsTemporalRangePartitioned bool                           // Is the table range partitioned using temporal values?\n+\tIsRangeColumns             bool                           // Is RANGE COLUMNS used?\n+\tMinimalInterval            datetime.IntervalType          // The minimal interval that the table is partitioned by (e.g. if partitioned by TO_DAYS, the minimal interval is 1 day)\n+\tCol                        *ColumnDefinitionEntity        // The column used in the RANGE expression\n+\tFuncExpr                   *sqlparser.FuncExpr            // The function used in the RANGE expression, if any\n+\tWeekMode                   int                            // The mode used in the WEEK function, if that's what's used\n+\tMaxvaluePartition          *sqlparser.PartitionDefinition // The partition that has MAXVALUE, if any",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1911345752",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17426,
+        "pr_file": "go/vt/schemadiff/partitioning_analysis.go",
+        "discussion_id": "1911345752",
+        "commented_code": "@@ -0,0 +1,731 @@\n+/*\n+Copyright 2024 The Vitess Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package schemadiff\n+\n+import (\n+\t\"errors\"\n+\t\"fmt\"\n+\t\"math\"\n+\t\"strconv\"\n+\t\"strings\"\n+\t\"time\"\n+\n+\t\"vitess.io/vitess/go/mysql/capabilities\"\n+\t\"vitess.io/vitess/go/mysql/datetime\"\n+\t\"vitess.io/vitess/go/vt/sqlparser\"\n+)\n+\n+const (\n+\tWeekModeUndefined = math.MinInt\n+)\n+\n+// TemporalRangePartitioningAnalysis is the result of analyzing a table for temporal range partitioning.\n+type TemporalRangePartitioningAnalysis struct {\n+\tIsRangePartitioned         bool                           // Is the table at all partitioned by RANGE?\n+\tIsTemporalRangePartitioned bool                           // Is the table range partitioned using temporal values?\n+\tIsRangeColumns             bool                           // Is RANGE COLUMNS used?\n+\tMinimalInterval            datetime.IntervalType          // The minimal interval that the table is partitioned by (e.g. if partitioned by TO_DAYS, the minimal interval is 1 day)\n+\tCol                        *ColumnDefinitionEntity        // The column used in the RANGE expression\n+\tFuncExpr                   *sqlparser.FuncExpr            // The function used in the RANGE expression, if any\n+\tWeekMode                   int                            // The mode used in the WEEK function, if that's what's used\n+\tMaxvaluePartition          *sqlparser.PartitionDefinition // The partition that has MAXVALUE, if any",
+        "comment_created_at": "2025-01-10T20:54:20+00:00",
+        "comment_author": "mattlord",
+        "comment_body": "Nit, but `MaxValuePartition` would match the standard (Pascal) case.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1912700618",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17426,
+        "pr_file": "go/vt/schemadiff/partitioning_analysis.go",
+        "discussion_id": "1911345752",
+        "commented_code": "@@ -0,0 +1,731 @@\n+/*\n+Copyright 2024 The Vitess Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package schemadiff\n+\n+import (\n+\t\"errors\"\n+\t\"fmt\"\n+\t\"math\"\n+\t\"strconv\"\n+\t\"strings\"\n+\t\"time\"\n+\n+\t\"vitess.io/vitess/go/mysql/capabilities\"\n+\t\"vitess.io/vitess/go/mysql/datetime\"\n+\t\"vitess.io/vitess/go/vt/sqlparser\"\n+)\n+\n+const (\n+\tWeekModeUndefined = math.MinInt\n+)\n+\n+// TemporalRangePartitioningAnalysis is the result of analyzing a table for temporal range partitioning.\n+type TemporalRangePartitioningAnalysis struct {\n+\tIsRangePartitioned         bool                           // Is the table at all partitioned by RANGE?\n+\tIsTemporalRangePartitioned bool                           // Is the table range partitioned using temporal values?\n+\tIsRangeColumns             bool                           // Is RANGE COLUMNS used?\n+\tMinimalInterval            datetime.IntervalType          // The minimal interval that the table is partitioned by (e.g. if partitioned by TO_DAYS, the minimal interval is 1 day)\n+\tCol                        *ColumnDefinitionEntity        // The column used in the RANGE expression\n+\tFuncExpr                   *sqlparser.FuncExpr            // The function used in the RANGE expression, if any\n+\tWeekMode                   int                            // The mode used in the WEEK function, if that's what's used\n+\tMaxvaluePartition          *sqlparser.PartitionDefinition // The partition that has MAXVALUE, if any",
+        "comment_created_at": "2025-01-13T06:18:18+00:00",
+        "comment_author": "shlomi-noach",
+        "comment_body": "done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1966350326",
+    "pr_number": 17846,
+    "pr_file": "go/vt/discovery/discovery_options.go",
+    "created_at": "2025-02-22T00:35:06+00:00",
+    "commented_code": "+/*\n+Copyright 2025 The Vitess Authors.\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\thttp://www.apache.org/licenses/LICENSE-2.0\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package discovery\n+\n+import (\n+\t\"vitess.io/vitess/go/vt/logutil\"\n+)\n+\n+// discoveryOptions configure a discovery components. discoveryOptions are set\n+// by the DiscoveryOption values passed to the component constructors.\n+type discoveryOptions struct {",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1966350326",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17846,
+        "pr_file": "go/vt/discovery/discovery_options.go",
+        "discussion_id": "1966350326",
+        "commented_code": "@@ -0,0 +1,67 @@\n+/*\n+Copyright 2025 The Vitess Authors.\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\thttp://www.apache.org/licenses/LICENSE-2.0\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package discovery\n+\n+import (\n+\t\"vitess.io/vitess/go/vt/logutil\"\n+)\n+\n+// discoveryOptions configure a discovery components. discoveryOptions are set\n+// by the DiscoveryOption values passed to the component constructors.\n+type discoveryOptions struct {",
+        "comment_created_at": "2025-02-22T00:35:06+00:00",
+        "comment_author": "deepthi",
+        "comment_body": "go style is that you don't prefix the struct name with the package name. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1963376719",
+    "pr_number": 17669,
+    "pr_file": "go/vt/vtgate/executorcontext/safe_session.go",
+    "created_at": "2025-02-20T11:12:26+00:00",
+    "commented_code": "return session.commitOrder\n }\n \n+func (session *SafeSession) SetTxErrorBlockNextQueries(enable bool) {\n+\tsession.mu.Lock()\n+\tdefer session.mu.Unlock()\n+\tsession.TxErrorBlockNextQueries = enable\n+}\n+\n+func (session *SafeSession) GetTxErrorBlockNextQueries() bool {\n+\tsession.mu.Lock()\n+\tdefer session.mu.Unlock()\n+\treturn session.Session.GetTxErrorBlockNextQueries()",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1963376719",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17669,
+        "pr_file": "go/vt/vtgate/executorcontext/safe_session.go",
+        "discussion_id": "1963376719",
+        "commented_code": "@@ -390,6 +390,18 @@ func (session *SafeSession) GetCommitOrder() vtgatepb.CommitOrder {\n \treturn session.commitOrder\n }\n \n+func (session *SafeSession) SetTxErrorBlockNextQueries(enable bool) {\n+\tsession.mu.Lock()\n+\tdefer session.mu.Unlock()\n+\tsession.TxErrorBlockNextQueries = enable\n+}\n+\n+func (session *SafeSession) GetTxErrorBlockNextQueries() bool {\n+\tsession.mu.Lock()\n+\tdefer session.mu.Unlock()\n+\treturn session.Session.GetTxErrorBlockNextQueries()",
+        "comment_created_at": "2025-02-20T11:12:26+00:00",
+        "comment_author": "harshit-gangal",
+        "comment_body": "nit: for boolean type, we can name the method with `Is`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1963817406",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17669,
+        "pr_file": "go/vt/vtgate/executorcontext/safe_session.go",
+        "discussion_id": "1963376719",
+        "commented_code": "@@ -390,6 +390,18 @@ func (session *SafeSession) GetCommitOrder() vtgatepb.CommitOrder {\n \treturn session.commitOrder\n }\n \n+func (session *SafeSession) SetTxErrorBlockNextQueries(enable bool) {\n+\tsession.mu.Lock()\n+\tdefer session.mu.Unlock()\n+\tsession.TxErrorBlockNextQueries = enable\n+}\n+\n+func (session *SafeSession) GetTxErrorBlockNextQueries() bool {\n+\tsession.mu.Lock()\n+\tdefer session.mu.Unlock()\n+\treturn session.Session.GetTxErrorBlockNextQueries()",
+        "comment_created_at": "2025-02-20T15:37:31+00:00",
+        "comment_author": "frouioui",
+        "comment_body": "Fixed via 812df8f0dd6",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1848060428",
+    "pr_number": 17250,
+    "pr_file": "go/vt/mysqlctl/mycnf_flag.go",
+    "created_at": "2024-11-19T10:20:01+00:00",
+    "commented_code": "func RegisterFlags() {\n \tservenv.OnParse(func(fs *pflag.FlagSet) {\n \t\tfs.IntVar(&flagServerID, \"mycnf_server_id\", flagServerID, \"mysql server id of the server (if specified, mycnf-file will be ignored)\")\n+\t\tfs.StringVar(&flagMysqlBindAddress, \"mycnf_mysql_bin_address\", flagMysqlBindAddress, \"address mysql binds on\")",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1848060428",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17250,
+        "pr_file": "go/vt/mysqlctl/mycnf_flag.go",
+        "discussion_id": "1848060428",
+        "commented_code": "@@ -63,6 +64,7 @@ const (\n func RegisterFlags() {\n \tservenv.OnParse(func(fs *pflag.FlagSet) {\n \t\tfs.IntVar(&flagServerID, \"mycnf_server_id\", flagServerID, \"mysql server id of the server (if specified, mycnf-file will be ignored)\")\n+\t\tfs.StringVar(&flagMysqlBindAddress, \"mycnf_mysql_bin_address\", flagMysqlBindAddress, \"address mysql binds on\")",
+        "comment_created_at": "2024-11-19T10:20:01+00:00",
+        "comment_author": "GuptaManan100",
+        "comment_body": "All the new flags we add, we use hyphens as separators instead of underscores. So the name should be `mycnf-mysql-bin-address`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1848348761",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17250,
+        "pr_file": "go/vt/mysqlctl/mycnf_flag.go",
+        "discussion_id": "1848060428",
+        "commented_code": "@@ -63,6 +64,7 @@ const (\n func RegisterFlags() {\n \tservenv.OnParse(func(fs *pflag.FlagSet) {\n \t\tfs.IntVar(&flagServerID, \"mycnf_server_id\", flagServerID, \"mysql server id of the server (if specified, mycnf-file will be ignored)\")\n+\t\tfs.StringVar(&flagMysqlBindAddress, \"mycnf_mysql_bin_address\", flagMysqlBindAddress, \"address mysql binds on\")",
+        "comment_created_at": "2024-11-19T13:20:34+00:00",
+        "comment_author": "gmpify",
+        "comment_body": "I've made all new flags use hyphens (see [7adb0a6](https://github.com/vitessio/vitess/pull/17250/commits/7adb0a6cc66c8f194f4aef4b7ffd64b769ee0390))",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1892672344",
+    "pr_number": 17342,
+    "pr_file": "go/test/endtoend/vtgate/plan_tests/main_test.go",
+    "created_at": "2024-12-19T16:31:07+00:00",
+    "commented_code": "}\n }\n \n+// parseSQL statements - querySQL may be a multi-line sql blob\n+func parseSQL(querySQL ...string) ([]string, error) {",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1892672344",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17342,
+        "pr_file": "go/test/endtoend/vtgate/plan_tests/main_test.go",
+        "discussion_id": "1892672344",
+        "commented_code": "@@ -128,6 +129,31 @@ func start(t *testing.T) (utils.MySQLCompare, func()) {\n \t}\n }\n \n+// parseSQL statements - querySQL may be a multi-line sql blob\n+func parseSQL(querySQL ...string) ([]string, error) {",
+        "comment_created_at": "2024-12-19T16:31:07+00:00",
+        "comment_author": "systay",
+        "comment_body": "in this code base, `parse` means something pretty specific, and this is not it :)\r\n\r\nmaybe call it `splitSQL` instead?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1892849976",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17342,
+        "pr_file": "go/test/endtoend/vtgate/plan_tests/main_test.go",
+        "discussion_id": "1892672344",
+        "commented_code": "@@ -128,6 +129,31 @@ func start(t *testing.T) (utils.MySQLCompare, func()) {\n \t}\n }\n \n+// parseSQL statements - querySQL may be a multi-line sql blob\n+func parseSQL(querySQL ...string) ([]string, error) {",
+        "comment_created_at": "2024-12-19T17:35:54+00:00",
+        "comment_author": "c-r-dev",
+        "comment_body": "thanks , renamed the function with 7ac0eb2c002e364991bcf3b9630ad58be407d16e",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1871594512",
+    "pr_number": 17271,
+    "pr_file": "go/vt/mysqlctl/builtinbackupengine.go",
+    "created_at": "2024-12-05T15:29:29+00:00",
+    "commented_code": "// ParentPath is an optional prefix to the Base path. If empty, it is ignored. Useful\n \t// for writing files in a temporary directory\n \tParentPath string\n+\n+\t// RetryNb specifies how many times we retried restoring/backing up this FileEntry.\n+\t// If we fail to restore/backup this FileEntry, we will retry up to maxRetriesPerFile times.\n+\t// Every time the builtin backup engine retries this file, we increment this field by 1.\n+\t// We don't care about adding this information to the MANIFEST and also to not cause any compatibility issue\n+\t// we are adding the - json tag to let Go know it can ignore the field.\n+\tRetryNb int `json:\"-\"`",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1871594512",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17271,
+        "pr_file": "go/vt/mysqlctl/builtinbackupengine.go",
+        "discussion_id": "1871594512",
+        "commented_code": "@@ -149,6 +151,13 @@ type FileEntry struct {\n \t// ParentPath is an optional prefix to the Base path. If empty, it is ignored. Useful\n \t// for writing files in a temporary directory\n \tParentPath string\n+\n+\t// RetryNb specifies how many times we retried restoring/backing up this FileEntry.\n+\t// If we fail to restore/backup this FileEntry, we will retry up to maxRetriesPerFile times.\n+\t// Every time the builtin backup engine retries this file, we increment this field by 1.\n+\t// We don't care about adding this information to the MANIFEST and also to not cause any compatibility issue\n+\t// we are adding the - json tag to let Go know it can ignore the field.\n+\tRetryNb int `json:\"-\"`",
+        "comment_created_at": "2024-12-05T15:29:29+00:00",
+        "comment_author": "mattlord",
+        "comment_body": "What's the `Nb` stand for? Number backup? If so, it would be a bit more clear if it was NB. Or maybe even just RetryNum or RetryCnt. Maybe Nb is short for number? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1872224004",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17271,
+        "pr_file": "go/vt/mysqlctl/builtinbackupengine.go",
+        "discussion_id": "1871594512",
+        "commented_code": "@@ -149,6 +151,13 @@ type FileEntry struct {\n \t// ParentPath is an optional prefix to the Base path. If empty, it is ignored. Useful\n \t// for writing files in a temporary directory\n \tParentPath string\n+\n+\t// RetryNb specifies how many times we retried restoring/backing up this FileEntry.\n+\t// If we fail to restore/backup this FileEntry, we will retry up to maxRetriesPerFile times.\n+\t// Every time the builtin backup engine retries this file, we increment this field by 1.\n+\t// We don't care about adding this information to the MANIFEST and also to not cause any compatibility issue\n+\t// we are adding the - json tag to let Go know it can ignore the field.\n+\tRetryNb int `json:\"-\"`",
+        "comment_created_at": "2024-12-05T22:09:10+00:00",
+        "comment_author": "frouioui",
+        "comment_body": "I changed it to `RetryCount` in 19d6e2866dc",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1869258392",
+    "pr_number": 17305,
+    "pr_file": "go/vt/vtgate/executorcontext/safe_session.go",
+    "created_at": "2024-12-04T11:09:59+00:00",
+    "commented_code": "return nil\n }\n \n+type myShardActionInfo interface {",
+    "repo_full_name": "vitessio/vitess",
+    "discussion_comments": [
+      {
+        "comment_id": "1869258392",
+        "repo_full_name": "vitessio/vitess",
+        "pr_number": 17305,
+        "pr_file": "go/vt/vtgate/executorcontext/safe_session.go",
+        "discussion_id": "1869258392",
+        "commented_code": "@@ -410,15 +468,22 @@ func (session *SafeSession) findSessionLocked(keyspace, shard string, tabletType\n \treturn nil\n }\n \n+type myShardActionInfo interface {",
+        "comment_created_at": "2024-12-04T11:09:59+00:00",
+        "comment_author": "GuptaManan100",
+        "comment_body": "myShardActionInfo doesn't sound like a great name. Why the `my`. Why not just `shardActionInfo`",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

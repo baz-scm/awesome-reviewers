@@ -1,0 +1,90 @@
+[
+  {
+    "discussion_id": "2013738276",
+    "pr_number": 376,
+    "pr_file": "apps/web/utils/actions/unsubscriber.ts",
+    "created_at": "2025-03-26T09:42:07+00:00",
+    "commented_code": "});\n   },\n );\n+\n+export const unsubscribeAction = withActionInstrumentation(\n+  \"unsubscribe\",\n+  async (options: { url: string }) => {\n+    const session = await auth();\n+    if (!session?.user.email) return { error: \"Not logged in\" };\n+\n+    const { url } = options;\n+\n+    const response = await fetch(\n+      `${env.UNSUBSCRIBER_API_URL}/unsubscribe?url=${url}&email=${session.user.email}`,\n+    );\n+",
+    "repo_full_name": "elie222/inbox-zero",
+    "discussion_comments": [
+      {
+        "comment_id": "2013738276",
+        "repo_full_name": "elie222/inbox-zero",
+        "pr_number": 376,
+        "pr_file": "apps/web/utils/actions/unsubscriber.ts",
+        "discussion_id": "2013738276",
+        "commented_code": "@@ -30,3 +31,23 @@ export const setNewsletterStatusAction = withActionInstrumentation(\n     });\n   },\n );\n+\n+export const unsubscribeAction = withActionInstrumentation(\n+  \"unsubscribe\",\n+  async (options: { url: string }) => {\n+    const session = await auth();\n+    if (!session?.user.email) return { error: \"Not logged in\" };\n+\n+    const { url } = options;\n+\n+    const response = await fetch(\n+      `${env.UNSUBSCRIBER_API_URL}/unsubscribe?url=${url}&email=${session.user.email}`,\n+    );\n+",
+        "comment_created_at": "2025-03-26T09:42:07+00:00",
+        "comment_author": "coderabbitai[bot]",
+        "comment_body": "_\u26a0\ufe0f Potential issue_\n\n**API endpoint inconsistency with server implementation.**\n\nThe server implementation in `apps/unsubscriber/src/server.ts` expects the URL and email in the request body, but this client is sending them as query parameters.\n\nThe request format should match what the server expects. The server is set up to parse the request body, not query parameters.\n\n<!-- This is an auto-generated comment by CodeRabbit -->",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2079890293",
+    "pr_number": 425,
+    "pr_file": "apps/web/app/api/stripe/generate-checkout/route.ts",
+    "created_at": "2025-05-08T14:56:11+00:00",
+    "commented_code": "+import { after, NextResponse } from \"next/server\";\n+import { getStripe } from \"@/ee/billing/stripe\";\n+import { env } from \"@/env\";\n+import { withAuth } from \"@/utils/middleware\";\n+import prisma from \"@/utils/prisma\";\n+import { createScopedLogger } from \"@/utils/logger\";\n+import { createPremiumForUser } from \"@/utils/premium/create-premium\";\n+import {\n+  trackStripeCheckoutCreated,\n+  trackStripeCustomerCreated,\n+} from \"@/utils/posthog\";\n+\n+const logger = createScopedLogger(\"stripe/generate-checkout\");\n+\n+export const GET = withAuth(async (request) => {\n+  const { userId } = request.auth;\n+  const stripe = getStripe();\n+\n+  const user = await prisma.user.findUnique({\n+    where: { id: userId },\n+    select: {\n+      email: true,\n+      premium: { select: { id: true, stripeCustomerId: true } },\n+    },\n+  });\n+  if (!user) {\n+    logger.error(\"User not found\", { userId });\n+    throw new Error(\"User not found\");\n+  }\n+\n+  // Get the stripeCustomerId from your KV store\n+  let stripeCustomerId = user.premium?.stripeCustomerId;\n+\n+  // Create a new Stripe customer if this user doesn't have one\n+  if (!stripeCustomerId) {\n+    const newCustomer = await stripe.customers.create(\n+      {\n+        email: user.email,\n+        metadata: { userId },\n+      },\n+      // prevent race conditions of creating 2 customers in stripe for on user\n+      // https://github.com/stripe/stripe-node/issues/476#issuecomment-402541143\n+      { idempotencyKey: userId },\n+    );\n+\n+    after(() => trackStripeCustomerCreated(user.email, newCustomer.id));\n+\n+    // Store the relation between userId and stripeCustomerId\n+    const premium = user.premium || (await createPremiumForUser({ userId }));\n+\n+    await prisma.premium.update({\n+      where: { id: premium.id },\n+      data: { stripeCustomerId },\n+    });\n+\n+    stripeCustomerId = newCustomer.id;\n+  }\n+\n+  // ALWAYS create a checkout with a stripeCustomerId\n+  const checkout = await stripe.checkout.sessions.create({\n+    customer: stripeCustomerId,\n+    success_url: `${env.NEXT_PUBLIC_BASE_URL}/api/stripe/success`,\n+  });",
+    "repo_full_name": "elie222/inbox-zero",
+    "discussion_comments": [
+      {
+        "comment_id": "2079890293",
+        "repo_full_name": "elie222/inbox-zero",
+        "pr_number": 425,
+        "pr_file": "apps/web/app/api/stripe/generate-checkout/route.ts",
+        "discussion_id": "2079890293",
+        "commented_code": "@@ -0,0 +1,68 @@\n+import { after, NextResponse } from \"next/server\";\n+import { getStripe } from \"@/ee/billing/stripe\";\n+import { env } from \"@/env\";\n+import { withAuth } from \"@/utils/middleware\";\n+import prisma from \"@/utils/prisma\";\n+import { createScopedLogger } from \"@/utils/logger\";\n+import { createPremiumForUser } from \"@/utils/premium/create-premium\";\n+import {\n+  trackStripeCheckoutCreated,\n+  trackStripeCustomerCreated,\n+} from \"@/utils/posthog\";\n+\n+const logger = createScopedLogger(\"stripe/generate-checkout\");\n+\n+export const GET = withAuth(async (request) => {\n+  const { userId } = request.auth;\n+  const stripe = getStripe();\n+\n+  const user = await prisma.user.findUnique({\n+    where: { id: userId },\n+    select: {\n+      email: true,\n+      premium: { select: { id: true, stripeCustomerId: true } },\n+    },\n+  });\n+  if (!user) {\n+    logger.error(\"User not found\", { userId });\n+    throw new Error(\"User not found\");\n+  }\n+\n+  // Get the stripeCustomerId from your KV store\n+  let stripeCustomerId = user.premium?.stripeCustomerId;\n+\n+  // Create a new Stripe customer if this user doesn't have one\n+  if (!stripeCustomerId) {\n+    const newCustomer = await stripe.customers.create(\n+      {\n+        email: user.email,\n+        metadata: { userId },\n+      },\n+      // prevent race conditions of creating 2 customers in stripe for on user\n+      // https://github.com/stripe/stripe-node/issues/476#issuecomment-402541143\n+      { idempotencyKey: userId },\n+    );\n+\n+    after(() => trackStripeCustomerCreated(user.email, newCustomer.id));\n+\n+    // Store the relation between userId and stripeCustomerId\n+    const premium = user.premium || (await createPremiumForUser({ userId }));\n+\n+    await prisma.premium.update({\n+      where: { id: premium.id },\n+      data: { stripeCustomerId },\n+    });\n+\n+    stripeCustomerId = newCustomer.id;\n+  }\n+\n+  // ALWAYS create a checkout with a stripeCustomerId\n+  const checkout = await stripe.checkout.sessions.create({\n+    customer: stripeCustomerId,\n+    success_url: `${env.NEXT_PUBLIC_BASE_URL}/api/stripe/success`,\n+  });",
+        "comment_created_at": "2025-05-08T14:56:11+00:00",
+        "comment_author": "coderabbitai[bot]",
+        "comment_body": "_\u26a0\ufe0f Potential issue_\n\n**Missing price/product information in checkout session creation.**\n\nThe Stripe checkout session is created without specifying any line items, prices, or products, which is required for a functional checkout. Stripe needs to know what the customer is purchasing.\n\n\nConsider adding line items with the appropriate price ID:\n\n```diff\nconst checkout = await stripe.checkout.sessions.create({\n  customer: stripeCustomerId,\n  success_url: `${env.NEXT_PUBLIC_BASE_URL}/api/stripe/success`,\n+  mode: \"subscription\",\n+  line_items: [\n+    {\n+      price: env.STRIPE_PRICE_ID, // Use appropriate price ID based on tier\n+      quantity: 1,\n+    },\n+  ],\n});\n```\n\n\n<!-- suggestion_start -->\n\n<details>\n<summary>\ud83d\udcdd Committable suggestion</summary>\n\n> \u203c\ufe0f **IMPORTANT**\n> Carefully review the code before committing. Ensure that it accurately replaces the highlighted code, contains no missing lines, and has no issues with indentation. Thoroughly test & benchmark the code to ensure it meets the requirements.\n\n`````suggestion\n  // ALWAYS create a checkout with a stripeCustomerId\n  const checkout = await stripe.checkout.sessions.create({\n    customer: stripeCustomerId,\n    success_url: `${env.NEXT_PUBLIC_BASE_URL}/api/stripe/success`,\n    mode: \"subscription\",\n    line_items: [\n      {\n        price: env.STRIPE_PRICE_ID, // Use appropriate price ID based on tier\n        quantity: 1,\n      },\n    ],\n  });\n`````\n\n</details>\n\n<!-- suggestion_end -->\n\n---\n\n_\ud83d\udee0\ufe0f Refactor suggestion_\n\n**Improve checkout session configuration.**\n\nThe current configuration is minimal. Consider adding more options to enhance the checkout experience.\n\n\nEnhance checkout configuration with:\n\n```diff\nconst checkout = await stripe.checkout.sessions.create({\n  customer: stripeCustomerId,\n  success_url: `${env.NEXT_PUBLIC_BASE_URL}/api/stripe/success`,\n+  cancel_url: `${env.NEXT_PUBLIC_BASE_URL}/premium`,\n+  payment_method_types: [\"card\"],\n+  billing_address_collection: \"auto\",\n+  metadata: {\n+    userId,\n+  },\n});\n```\n\n\n<!-- suggestion_start -->\n\n<details>\n<summary>\ud83d\udcdd Committable suggestion</summary>\n\n> \u203c\ufe0f **IMPORTANT**\n> Carefully review the code before committing. Ensure that it accurately replaces the highlighted code, contains no missing lines, and has no issues with indentation. Thoroughly test & benchmark the code to ensure it meets the requirements.\n\n`````suggestion\n  // ALWAYS create a checkout with a stripeCustomerId\n  const checkout = await stripe.checkout.sessions.create({\n    customer: stripeCustomerId,\n    success_url: `${env.NEXT_PUBLIC_BASE_URL}/api/stripe/success`,\n    cancel_url: `${env.NEXT_PUBLIC_BASE_URL}/premium`,\n    payment_method_types: [\"card\"],\n    billing_address_collection: \"auto\",\n    metadata: {\n      userId,\n    },\n  });\n`````\n\n</details>\n\n<!-- suggestion_end -->\n\n<!-- This is an auto-generated comment by CodeRabbit -->",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1975471255",
+    "pr_number": 364,
+    "pr_file": "apps/web/app/api/v1/openapi/route.ts",
+    "created_at": "2025-02-28T14:05:49+00:00",
+    "commented_code": "},\n });\n \n+registry.registerPath({\n+  method: \"get\",\n+  path: \"/reply-tracker\",\n+  description: \"Get emails that need a reply\",\n+  security: [{ ApiKeyAuth: [] }],\n+  request: {\n+    query: replyTrackerQuerySchema,\n+  },\n+  responses: {\n+    200: {\n+      description: \"Successful response\",\n+      content: {\n+        \"application/json\": {\n+          schema: replyTrackerResponseSchema,\n+        },\n+      },\n+    },\n+  },\n+});",
+    "repo_full_name": "elie222/inbox-zero",
+    "discussion_comments": [
+      {
+        "comment_id": "1975471255",
+        "repo_full_name": "elie222/inbox-zero",
+        "pr_number": 364,
+        "pr_file": "apps/web/app/api/v1/openapi/route.ts",
+        "discussion_id": "1975471255",
+        "commented_code": "@@ -47,6 +51,26 @@ registry.registerPath({\n   },\n });\n \n+registry.registerPath({\n+  method: \"get\",\n+  path: \"/reply-tracker\",\n+  description: \"Get emails that need a reply\",\n+  security: [{ ApiKeyAuth: [] }],\n+  request: {\n+    query: replyTrackerQuerySchema,\n+  },\n+  responses: {\n+    200: {\n+      description: \"Successful response\",\n+      content: {\n+        \"application/json\": {\n+          schema: replyTrackerResponseSchema,\n+        },\n+      },\n+    },\n+  },\n+});",
+        "comment_created_at": "2025-02-28T14:05:49+00:00",
+        "comment_author": "coderabbitai[bot]",
+        "comment_body": "_\ud83d\udca1 Verification agent_\n\n<details>\n<summary>\ud83e\udde9 Analysis chain</summary>\n\n**Well-structured OpenAPI definition for the new reply-tracker endpoint**\n\nThe OpenAPI registration for the new endpoint follows the existing patterns in the codebase and includes all necessary components: method, path, description, security requirements, and response schema.\n\n\nHowever, there's a potential inconsistency between the API_KEY_HEADER constant defined in api-auth.ts (\"API-Key\") and the name used in the security scheme registration on line 24 (\"API-Key\"). Consider using the constant for better maintainability.\n\n---\n\n\ud83c\udfc1 Script executed:\n\n```shell\n#!/bin/bash\n# Check if the API key header name is consistent across the codebase\necho \"Checking API key header name in OpenAPI security scheme...\"\ngrep -n \"name:\" apps/web/app/api/v1/openapi/route.ts | grep -i \"api-key\"\n\necho \"Checking API key header constant definition...\"\ngrep -n \"API_KEY_HEADER\" apps/web/utils/api-auth.ts\n```\n\nLength of output: 467\n\n---\n\n\n\n</details>\n\n**Improvement: Reference the API_KEY_HEADER Constant for Better Maintainability**\n\nThe reply-tracker endpoint implementation is well structured and functionally correct. Our verification confirms that the literal string `\"API-Key\"` in the OpenAPI registration (line 24 in `apps/web/app/api/v1/openapi/route.ts`) exactly matches the `API_KEY_HEADER` constant defined in `apps/web/utils/api-auth.ts`. For enhanced maintainability and to prevent potential discrepancies in the future, please consider importing and using the `API_KEY_HEADER` constant in the OpenAPI registration instead of the hard-coded string.\n\n- **Location to update:**  \n  - `apps/web/app/api/v1/openapi/route.ts` (line 24)\n\n<!-- This is an auto-generated comment by CodeRabbit -->",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1948246651",
+    "pr_number": 330,
+    "pr_file": "apps/web/app/api/ai/reply/nudge/route.ts",
+    "created_at": "2025-02-09T21:44:45+00:00",
+    "commented_code": "+import { z } from \"zod\";\n+import { NextResponse } from \"next/server\";\n+import { auth } from \"@/app/api/auth/[...nextauth]/auth\";\n+import { withError } from \"@/utils/middleware\";\n+import { aiGenerateNudge } from \"@/utils/ai/reply/generate-nudge\";\n+import { getAiUserByEmail } from \"@/utils/user/get\";\n+\n+const messageSchema = z\n+  .object({\n+    from: z.string(),\n+    to: z.string(),\n+    subject: z.string(),\n+    textPlain: z.string().optional(),\n+    textHtml: z.string().optional(),\n+    date: z.string(),\n+  })\n+  .refine((data) => data.textPlain || data.textHtml, {\n+    message: \"At least one of textPlain or textHtml is required\",\n+  });\n+\n+const generateReplyBody = z.object({\n+  messages: z.array(messageSchema),\n+});\n+\n+export const POST = withError(async (request: Request) => {\n+  const session = await auth();\n+  if (!session?.user.email)\n+    return NextResponse.json({ error: \"Not authenticated\" });",
+    "repo_full_name": "elie222/inbox-zero",
+    "discussion_comments": [
+      {
+        "comment_id": "1948246651",
+        "repo_full_name": "elie222/inbox-zero",
+        "pr_number": 330,
+        "pr_file": "apps/web/app/api/ai/reply/nudge/route.ts",
+        "discussion_id": "1948246651",
+        "commented_code": "@@ -0,0 +1,48 @@\n+import { z } from \"zod\";\n+import { NextResponse } from \"next/server\";\n+import { auth } from \"@/app/api/auth/[...nextauth]/auth\";\n+import { withError } from \"@/utils/middleware\";\n+import { aiGenerateNudge } from \"@/utils/ai/reply/generate-nudge\";\n+import { getAiUserByEmail } from \"@/utils/user/get\";\n+\n+const messageSchema = z\n+  .object({\n+    from: z.string(),\n+    to: z.string(),\n+    subject: z.string(),\n+    textPlain: z.string().optional(),\n+    textHtml: z.string().optional(),\n+    date: z.string(),\n+  })\n+  .refine((data) => data.textPlain || data.textHtml, {\n+    message: \"At least one of textPlain or textHtml is required\",\n+  });\n+\n+const generateReplyBody = z.object({\n+  messages: z.array(messageSchema),\n+});\n+\n+export const POST = withError(async (request: Request) => {\n+  const session = await auth();\n+  if (!session?.user.email)\n+    return NextResponse.json({ error: \"Not authenticated\" });",
+        "comment_created_at": "2025-02-09T21:44:45+00:00",
+        "comment_author": "coderabbitai[bot]",
+        "comment_body": "_:hammer_and_wrench: Refactor suggestion_\n\n**Return proper HTTP status codes for errors.**  \nReturning JSON with an \u201cerror\u201d field and defaulting to HTTP 200 can confuse clients expecting 401 for unauthorized or 404 for user-not-found. Consider adding status codes to give a precise indication of the failure reason.\n\n<!-- This is an auto-generated comment by CodeRabbit -->",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

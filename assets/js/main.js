@@ -24,13 +24,30 @@ openBtn && openBtn.addEventListener('click', () => {
 form && form.addEventListener('submit', async e => {
   e.preventDefault();
   feedbackEl.textContent = '';
-  const url = document.getElementById('repo-url-input').value.trim();
+  
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const urlInput = document.getElementById('repo-url-input');
+  const originalButtonText = submitBtn.textContent;
+  
+  // Set loading state
+  submitBtn.disabled = true;
+  urlInput.disabled = true;
+  submitBtn.textContent = 'Adding...';
+  feedbackEl.textContent = '';
+  feedbackEl.className = 'modal__feedback';
+  
+  const url = urlInput.value.trim();
   const m = url.match(/github\.com\/([^/]+\/[^/]+)(?:\/|$)/);
   if (!m) {
     feedbackEl.textContent = 'Repo not valid';
     feedbackEl.className = 'modal__feedback invalid';
+    // Reset loading state
+    submitBtn.disabled = false;
+    urlInput.disabled = false;
+    submitBtn.textContent = originalButtonText;
     return;
   }
+  
   const repo = encodeURIComponent(m[1]);
   try {
     let res;
@@ -77,5 +94,10 @@ form && form.addEventListener('submit', async e => {
   } catch (err) {
     feedbackEl.textContent = 'Repo not valid';
     feedbackEl.className = 'modal__feedback invalid';
+  } finally {
+    // Reset loading state
+    submitBtn.disabled = false;
+    urlInput.disabled = false;
+    submitBtn.textContent = originalButtonText;
   }
 });

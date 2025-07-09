@@ -1,0 +1,92 @@
+[
+  {
+    "discussion_id": "2177733368",
+    "pr_number": 12176,
+    "pr_file": "pgxn/neon/neon_ddl_handler.c",
+    "created_at": "2025-07-01T14:19:07+00:00",
+    "commented_code": "}\n }\n \n+static void\n+InitCurrentDdlTableIfNeeded()\n+{\n+\t/* Lazy construction of DllHashTable chain */\n+\twhile (SubtransDdlLevel != 0)\n+\t{\n+\t\tDdlHashTable *new_table = MemoryContextAlloc(TopTransactionContext, sizeof(DdlHashTable));\n+\t\tnew_table->prev_table = CurrentDdlTable;\n+\t\tnew_table->role_table = NULL;\n+\t\tnew_table->db_table = NULL;\n+\t\tCurrentDdlTable = new_table;\n+\t\tSubtransDdlLevel -= 1;",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2177733368",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12176,
+        "pr_file": "pgxn/neon/neon_ddl_handler.c",
+        "discussion_id": "2177733368",
+        "commented_code": "@@ -332,9 +333,25 @@ SendDeltasToControlPlane()\n \t}\n }\n \n+static void\n+InitCurrentDdlTableIfNeeded()\n+{\n+\t/* Lazy construction of DllHashTable chain */\n+\twhile (SubtransDdlLevel != 0)\n+\t{\n+\t\tDdlHashTable *new_table = MemoryContextAlloc(TopTransactionContext, sizeof(DdlHashTable));\n+\t\tnew_table->prev_table = CurrentDdlTable;\n+\t\tnew_table->role_table = NULL;\n+\t\tnew_table->db_table = NULL;\n+\t\tCurrentDdlTable = new_table;\n+\t\tSubtransDdlLevel -= 1;",
+        "comment_created_at": "2025-07-01T14:19:07+00:00",
+        "comment_author": "MMeent",
+        "comment_body": "Suggestion: Why don't we store subxact depth in DdlHashTable, and maintain a SubtransLevel counter that we can check the DdlHashTable against?\r\n\r\nWe know we won't have to create a new DdlHashTable for level=1 when CurrentLevel=2, unless level 2's subxact is rolled back to level 1.\r\n\r\nSo the stack (of sorts) would look like `SubXactLevel=130; CurrentDHT = DHT (level=100) -> DHT (level=99) -> DHT (level=40) -> DHT (level=21) -> DHT (RootTable)` instead of `SubXactLevel=30; DHT 100 -> DHT 99 -> .. -> DHT 1 -> DHT RootTable`.\r\n\r\nWDYT?\r\n\r\nAs you can see, that will reduce the memory usage required for 1000 subxacts followed by one with DDL from 1000 DdlHashTables to just 1.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2178989192",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12176,
+        "pr_file": "pgxn/neon/neon_ddl_handler.c",
+        "discussion_id": "2177733368",
+        "commented_code": "@@ -332,9 +333,25 @@ SendDeltasToControlPlane()\n \t}\n }\n \n+static void\n+InitCurrentDdlTableIfNeeded()\n+{\n+\t/* Lazy construction of DllHashTable chain */\n+\twhile (SubtransDdlLevel != 0)\n+\t{\n+\t\tDdlHashTable *new_table = MemoryContextAlloc(TopTransactionContext, sizeof(DdlHashTable));\n+\t\tnew_table->prev_table = CurrentDdlTable;\n+\t\tnew_table->role_table = NULL;\n+\t\tnew_table->db_table = NULL;\n+\t\tCurrentDdlTable = new_table;\n+\t\tSubtransDdlLevel -= 1;",
+        "comment_created_at": "2025-07-02T04:15:28+00:00",
+        "comment_author": "knizhnik",
+        "comment_body": "I thought about it but preferred simpler implementation.\r\nBut after tbhinging for a while, I come to the conclusion that storing counter in `DdlHashTable` can even simplify things:\r\n1. We do not need to create all chain of `DdlHashTable`.\r\n2. We can allocate `DdlHashTable` in CurTransactionContext and do not worry about it's deallocation.\r\nSo thank you for the advice - I implemented this approach.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2182814202",
+    "pr_number": 12176,
+    "pr_file": "pgxn/neon/neon_ddl_handler.c",
+    "created_at": "2025-07-03T13:34:20+00:00",
+    "commented_code": "static void\n PopTable()\n {\n-\t/*\n-\t * Current table gets freed because it is allocated in aborted\n-\t * subtransaction's memory context.\n-\t */\n-\tCurrentDdlTable = CurrentDdlTable->prev_table;\n+\tif (SubtransDdlLevel != 0)\n+\t{\n+\t\tSubtransDdlLevel -= 1;\n+\t}\n+\telse\n+\t{\n+\t\t/*\n+\t\t * Current table gets freed because it is allocated in aborted\n+\t\t * subtransaction's memory context.\n+\t\t */\n+\t\tSubtransDdlLevel = CurrentDdlTable->subtrans_level;",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2182814202",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12176,
+        "pr_file": "pgxn/neon/neon_ddl_handler.c",
+        "discussion_id": "2182814202",
+        "commented_code": "@@ -476,11 +499,19 @@ MergeTable()\n static void\n PopTable()\n {\n-\t/*\n-\t * Current table gets freed because it is allocated in aborted\n-\t * subtransaction's memory context.\n-\t */\n-\tCurrentDdlTable = CurrentDdlTable->prev_table;\n+\tif (SubtransDdlLevel != 0)\n+\t{\n+\t\tSubtransDdlLevel -= 1;\n+\t}\n+\telse\n+\t{\n+\t\t/*\n+\t\t * Current table gets freed because it is allocated in aborted\n+\t\t * subtransaction's memory context.\n+\t\t */\n+\t\tSubtransDdlLevel = CurrentDdlTable->subtrans_level;",
+        "comment_created_at": "2025-07-03T13:34:20+00:00",
+        "comment_author": "MMeent",
+        "comment_body": "Does this not have off-by-one issues? I'd prefer keeping a single counter, rather than one reset every time you push a table: you can't have more than 2^31 subxacts in one transaction, as you'd run out of XIDs.\r\n\r\nAnd in that case, you can change the table `if (CurrentDdlTable->subtrans_level > --SubtransDdlLevel)`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2183014620",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12176,
+        "pr_file": "pgxn/neon/neon_ddl_handler.c",
+        "discussion_id": "2182814202",
+        "commented_code": "@@ -476,11 +499,19 @@ MergeTable()\n static void\n PopTable()\n {\n-\t/*\n-\t * Current table gets freed because it is allocated in aborted\n-\t * subtransaction's memory context.\n-\t */\n-\tCurrentDdlTable = CurrentDdlTable->prev_table;\n+\tif (SubtransDdlLevel != 0)\n+\t{\n+\t\tSubtransDdlLevel -= 1;\n+\t}\n+\telse\n+\t{\n+\t\t/*\n+\t\t * Current table gets freed because it is allocated in aborted\n+\t\t * subtransaction's memory context.\n+\t\t */\n+\t\tSubtransDdlLevel = CurrentDdlTable->subtrans_level;",
+        "comment_created_at": "2025-07-03T14:59:48+00:00",
+        "comment_author": "knizhnik",
+        "comment_body": "> Does this not have off-by-one issues? I\r\n\r\nOne is subtracted when `subtrans_level` is assigned:\r\n```\r\nnew_table->subtrans_level = SubtransDdlLevel - 1;\r\n```\r\n\r\n> I'd prefer keeping a single counter, rather than one reset every time you push a table:\r\n\r\nOk, it seems to be more clear and straightforward. Will change.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2132291485",
+    "pr_number": 12129,
+    "pr_file": "pgxn/neon/walproposer_pg.c",
+    "created_at": "2025-06-06T14:19:50+00:00",
+    "commented_code": "return n_safekeepers;\n }\n \n+static char *split_off_safekeepers_generation(char *safekeepers_list, uint32 *generation)\n+{\n+\tchar\t   *endptr;\n+\n+\tif (strncmp(safekeepers_list, \"g#\", 2) != 0)",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2132291485",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12129,
+        "pr_file": "pgxn/neon/walproposer_pg.c",
+        "discussion_id": "2132291485",
+        "commented_code": "@@ -272,6 +272,30 @@ split_safekeepers_list(char *safekeepers_list, char *safekeepers[])\n \treturn n_safekeepers;\n }\n \n+static char *split_off_safekeepers_generation(char *safekeepers_list, uint32 *generation)\n+{\n+\tchar\t   *endptr;\n+\n+\tif (strncmp(safekeepers_list, \"g#\", 2) != 0)",
+        "comment_created_at": "2025-06-06T14:19:50+00:00",
+        "comment_author": "knizhnik",
+        "comment_body": "it can be done simpler using sscanf:\r\n```\r\nint pos;\r\nif (sscanf(safekeepers_list, \"g#%u:%n\", generation, &pos) == 1) { \r\n     return safekeepers_list + pos;\r\n} else {\r\n     return safekeepers_list;\r\n}\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

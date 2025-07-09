@@ -1,0 +1,158 @@
+[
+  {
+    "discussion_id": "2174818197",
+    "pr_number": 12320,
+    "pr_file": "storage_controller/src/service.rs",
+    "created_at": "2025-06-30T11:08:40+00:00",
+    "commented_code": "Ok(())\n     }\n \n+    pub(crate) async fn delete_node(\n+        self: &Arc<Self>,\n+        node_id: NodeId,\n+        last_policy: NodeSchedulingPolicy,\n+        cancel: CancellationToken,\n+    ) -> Result<(), OperationError> {\n+        const SECONDARY_WARMUP_TIMEOUT: Duration = Duration::from_secs(30);\n+        const SECONDARY_DOWNLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);\n+        let reconciler_config = ReconcilerConfigBuilder::new(ReconcilerPriority::Normal)\n+            .secondary_warmup_timeout(SECONDARY_WARMUP_TIMEOUT)\n+            .secondary_download_request_timeout(SECONDARY_DOWNLOAD_REQUEST_TIMEOUT)\n+            .build();\n+\n+        let mut waiters: Vec<ReconcilerWaiter> = Vec::new();\n+\n+        let mut tid_iter = self.create_tenant_shard_iterator().await;\n+\n+        while !tid_iter.finished() {\n+            if cancel.is_cancelled() {\n+                match self.node_configure(node_id, None, Some(last_policy)).await {\n+                    Ok(()) => return Err(OperationError::Cancelled),\n+                    Err(err) => {\n+                        return Err(OperationError::FinalizeError(\n+                            format!(\n+                                \"Failed to finalise delete cancel of {} by setting scheduling policy to {}: {}\",\n+                                node_id, String::from(last_policy), err\n+                            )\n+                            .into(),\n+                        ));\n+                    }\n+                }\n+            }\n+\n+            operation_utils::validate_node_state(\n+                &node_id,\n+                self.inner.read().unwrap().nodes.clone(),\n+                NodeSchedulingPolicy::Deleting,\n+            )?;\n+\n+            while waiters.len() < MAX_RECONCILES_PER_OPERATION {\n+                let tid = match tid_iter.next() {\n+                    Some(tid) => tid,\n+                    None => {\n+                        break;\n+                    }\n+                };\n+\n+                let mut locked = self.inner.write().unwrap();\n+                let (nodes, tenants, scheduler) = locked.parts_mut();\n+\n+                let tenant_shard = match tenants.get_mut(&tid) {\n+                    Some(tenant_shard) => tenant_shard,\n+                    None => {\n+                        tracing::warn!(\"Skip tenant shard {} during delete\", tid);\n+                        continue;\n+                    }\n+                };\n+\n+                match tenant_shard.get_scheduling_policy() {\n+                    ShardSchedulingPolicy::Active | ShardSchedulingPolicy::Essential => {\n+                        // A migration during drain is classed as 'essential' because it is required to\n+                        // uphold our availability goals for the tenant: this shard is elegible for migration.\n+                    }\n+                    ShardSchedulingPolicy::Pause | ShardSchedulingPolicy::Stop => {\n+                        // If we have been asked to avoid rescheduling this shard, then do not migrate it during a drain",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2174818197",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12320,
+        "pr_file": "storage_controller/src/service.rs",
+        "discussion_id": "2174818197",
+        "commented_code": "@@ -7085,6 +7088,170 @@ impl Service {\n         Ok(())\n     }\n \n+    pub(crate) async fn delete_node(\n+        self: &Arc<Self>,\n+        node_id: NodeId,\n+        last_policy: NodeSchedulingPolicy,\n+        cancel: CancellationToken,\n+    ) -> Result<(), OperationError> {\n+        const SECONDARY_WARMUP_TIMEOUT: Duration = Duration::from_secs(30);\n+        const SECONDARY_DOWNLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);\n+        let reconciler_config = ReconcilerConfigBuilder::new(ReconcilerPriority::Normal)\n+            .secondary_warmup_timeout(SECONDARY_WARMUP_TIMEOUT)\n+            .secondary_download_request_timeout(SECONDARY_DOWNLOAD_REQUEST_TIMEOUT)\n+            .build();\n+\n+        let mut waiters: Vec<ReconcilerWaiter> = Vec::new();\n+\n+        let mut tid_iter = self.create_tenant_shard_iterator().await;\n+\n+        while !tid_iter.finished() {\n+            if cancel.is_cancelled() {\n+                match self.node_configure(node_id, None, Some(last_policy)).await {\n+                    Ok(()) => return Err(OperationError::Cancelled),\n+                    Err(err) => {\n+                        return Err(OperationError::FinalizeError(\n+                            format!(\n+                                \"Failed to finalise delete cancel of {} by setting scheduling policy to {}: {}\",\n+                                node_id, String::from(last_policy), err\n+                            )\n+                            .into(),\n+                        ));\n+                    }\n+                }\n+            }\n+\n+            operation_utils::validate_node_state(\n+                &node_id,\n+                self.inner.read().unwrap().nodes.clone(),\n+                NodeSchedulingPolicy::Deleting,\n+            )?;\n+\n+            while waiters.len() < MAX_RECONCILES_PER_OPERATION {\n+                let tid = match tid_iter.next() {\n+                    Some(tid) => tid,\n+                    None => {\n+                        break;\n+                    }\n+                };\n+\n+                let mut locked = self.inner.write().unwrap();\n+                let (nodes, tenants, scheduler) = locked.parts_mut();\n+\n+                let tenant_shard = match tenants.get_mut(&tid) {\n+                    Some(tenant_shard) => tenant_shard,\n+                    None => {\n+                        tracing::warn!(\"Skip tenant shard {} during delete\", tid);\n+                        continue;\n+                    }\n+                };\n+\n+                match tenant_shard.get_scheduling_policy() {\n+                    ShardSchedulingPolicy::Active | ShardSchedulingPolicy::Essential => {\n+                        // A migration during drain is classed as 'essential' because it is required to\n+                        // uphold our availability goals for the tenant: this shard is elegible for migration.\n+                    }\n+                    ShardSchedulingPolicy::Pause | ShardSchedulingPolicy::Stop => {\n+                        // If we have been asked to avoid rescheduling this shard, then do not migrate it during a drain",
+        "comment_created_at": "2025-06-30T11:08:40+00:00",
+        "comment_author": "VladLazar",
+        "comment_body": "Let's log a warning here. It's not that big of a deal for draining since we expect the node to come back, but here we're removing it. Also, these comments mention draining. Can you update them to avoid confusion?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2166812912",
+    "pr_number": 12342,
+    "pr_file": "pageserver/src/basebackup_cache.rs",
+    "created_at": "2025-06-25T14:07:05+00:00",
+    "commented_code": "};\n             runtime_handle.spawn(background.run(prepare_receiver));\n         }\n+    }\n \n-        cache\n+    /// Send a basebackup prepare request to the background task.\n+    /// The basebackup will be prepared asynchronously, it does not block the caller.\n+    /// The request will be skipped if any cache limits are exceeded.\n+    pub fn send_prepare(&self, tenant_shard_id: TenantShardId, timeline_id: TimelineId, lsn: Lsn) {\n+        let req = BasebackupPrepareRequest {\n+            tenant_shard_id,\n+            timeline_id,\n+            lsn,\n+        };\n+\n+        BASEBACKUP_CACHE_PREPARE_QUEUE_SIZE.inc();\n+        let res = self.prepare_sender.try_send(req);\n+\n+        if let Err(e) = res {\n+            BASEBACKUP_CACHE_PREPARE_QUEUE_SIZE.dec();\n+            self.prepare_skip_count.inc();\n+            match e {\n+                TrySendError::Full(_) => {\n+                    // Basebackup prepares are pretty rare, normally we should not hit this.\n+                    tracing::warn!(",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2166812912",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12342,
+        "pr_file": "pageserver/src/basebackup_cache.rs",
+        "discussion_id": "2166812912",
+        "commented_code": "@@ -109,8 +134,45 @@ impl BasebackupCache {\n             };\n             runtime_handle.spawn(background.run(prepare_receiver));\n         }\n+    }\n \n-        cache\n+    /// Send a basebackup prepare request to the background task.\n+    /// The basebackup will be prepared asynchronously, it does not block the caller.\n+    /// The request will be skipped if any cache limits are exceeded.\n+    pub fn send_prepare(&self, tenant_shard_id: TenantShardId, timeline_id: TimelineId, lsn: Lsn) {\n+        let req = BasebackupPrepareRequest {\n+            tenant_shard_id,\n+            timeline_id,\n+            lsn,\n+        };\n+\n+        BASEBACKUP_CACHE_PREPARE_QUEUE_SIZE.inc();\n+        let res = self.prepare_sender.try_send(req);\n+\n+        if let Err(e) = res {\n+            BASEBACKUP_CACHE_PREPARE_QUEUE_SIZE.dec();\n+            self.prepare_skip_count.inc();\n+            match e {\n+                TrySendError::Full(_) => {\n+                    // Basebackup prepares are pretty rare, normally we should not hit this.\n+                    tracing::warn!(",
+        "comment_created_at": "2025-06-25T14:07:05+00:00",
+        "comment_author": "arpad-m",
+        "comment_body": "Is this warn level worthy? I'd put it as info instead.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2158686783",
+    "pr_number": 12290,
+    "pr_file": "pageserver/src/tenant/timeline.rs",
+    "created_at": "2025-06-20T10:59:08+00:00",
+    "commented_code": "// 3. it doesn't need to be retained for 'retain_lsns';\n         // 4. it does not need to be kept for LSNs holding valid leases.\n         // 5. newer on-disk image layers cover the layer's whole key range\n-        //\n-        // TODO holding a write lock is too agressive and avoidable\n-        let mut guard = self\n-            .layers\n-            .write(LayerManagerLockHolder::GarbageCollection)\n-            .await;\n-        let layers = guard.layer_map()?;\n-        'outer: for l in layers.iter_historic_layers() {\n-            result.layers_total += 1;\n+        let layers_to_remove = {\n+            let mut layers_to_remove = Vec::new();\n \n-            // 1. Is it newer than GC horizon cutoff point?\n-            if l.get_lsn_range().end > space_cutoff {\n-                info!(\n-                    \"keeping {} because it's newer than space_cutoff {}\",\n-                    l.layer_name(),\n-                    space_cutoff,\n-                );\n-                result.layers_needed_by_cutoff += 1;\n-                continue 'outer;\n-            }\n-\n-            // 2. It is newer than PiTR cutoff point?\n-            if l.get_lsn_range().end > time_cutoff {\n-                info!(\n-                    \"keeping {} because it's newer than time_cutoff {}\",\n-                    l.layer_name(),\n-                    time_cutoff,\n-                );\n-                result.layers_needed_by_pitr += 1;\n-                continue 'outer;\n-            }\n+            let guard = self\n+                .layers\n+                .read(LayerManagerLockHolder::GarbageCollection)\n+                .await;\n+            let layers = guard.layer_map()?;\n+            'outer: for l in layers.iter_historic_layers() {\n+                result.layers_total += 1;\n \n-            // 3. Is it needed by a child branch?\n-            // NOTE With that we would keep data that\n-            // might be referenced by child branches forever.\n-            // We can track this in child timeline GC and delete parent layers when\n-            // they are no longer needed. This might be complicated with long inheritance chains.\n-            //\n-            // TODO Vec is not a great choice for `retain_lsns`\n-            for retain_lsn in &retain_lsns {\n-                // start_lsn is inclusive\n-                if &l.get_lsn_range().start <= retain_lsn {\n-                    info!(\n-                        \"keeping {} because it's still might be referenced by child branch forked at {} is_dropped: xx is_incremental: {}\",\n+                // 1. Is it newer than GC horizon cutoff point?\n+                if l.get_lsn_range().end > space_cutoff {\n+                    debug!(",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2158686783",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12290,
+        "pr_file": "pageserver/src/tenant/timeline.rs",
+        "discussion_id": "2158686783",
+        "commented_code": "@@ -6553,108 +6553,110 @@ impl Timeline {\n         // 3. it doesn't need to be retained for 'retain_lsns';\n         // 4. it does not need to be kept for LSNs holding valid leases.\n         // 5. newer on-disk image layers cover the layer's whole key range\n-        //\n-        // TODO holding a write lock is too agressive and avoidable\n-        let mut guard = self\n-            .layers\n-            .write(LayerManagerLockHolder::GarbageCollection)\n-            .await;\n-        let layers = guard.layer_map()?;\n-        'outer: for l in layers.iter_historic_layers() {\n-            result.layers_total += 1;\n+        let layers_to_remove = {\n+            let mut layers_to_remove = Vec::new();\n \n-            // 1. Is it newer than GC horizon cutoff point?\n-            if l.get_lsn_range().end > space_cutoff {\n-                info!(\n-                    \"keeping {} because it's newer than space_cutoff {}\",\n-                    l.layer_name(),\n-                    space_cutoff,\n-                );\n-                result.layers_needed_by_cutoff += 1;\n-                continue 'outer;\n-            }\n-\n-            // 2. It is newer than PiTR cutoff point?\n-            if l.get_lsn_range().end > time_cutoff {\n-                info!(\n-                    \"keeping {} because it's newer than time_cutoff {}\",\n-                    l.layer_name(),\n-                    time_cutoff,\n-                );\n-                result.layers_needed_by_pitr += 1;\n-                continue 'outer;\n-            }\n+            let guard = self\n+                .layers\n+                .read(LayerManagerLockHolder::GarbageCollection)\n+                .await;\n+            let layers = guard.layer_map()?;\n+            'outer: for l in layers.iter_historic_layers() {\n+                result.layers_total += 1;\n \n-            // 3. Is it needed by a child branch?\n-            // NOTE With that we would keep data that\n-            // might be referenced by child branches forever.\n-            // We can track this in child timeline GC and delete parent layers when\n-            // they are no longer needed. This might be complicated with long inheritance chains.\n-            //\n-            // TODO Vec is not a great choice for `retain_lsns`\n-            for retain_lsn in &retain_lsns {\n-                // start_lsn is inclusive\n-                if &l.get_lsn_range().start <= retain_lsn {\n-                    info!(\n-                        \"keeping {} because it's still might be referenced by child branch forked at {} is_dropped: xx is_incremental: {}\",\n+                // 1. Is it newer than GC horizon cutoff point?\n+                if l.get_lsn_range().end > space_cutoff {\n+                    debug!(",
+        "comment_created_at": "2025-06-20T10:59:08+00:00",
+        "comment_author": "arpad-m",
+        "comment_body": "why change these to debug log level?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2158695052",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12290,
+        "pr_file": "pageserver/src/tenant/timeline.rs",
+        "discussion_id": "2158686783",
+        "commented_code": "@@ -6553,108 +6553,110 @@ impl Timeline {\n         // 3. it doesn't need to be retained for 'retain_lsns';\n         // 4. it does not need to be kept for LSNs holding valid leases.\n         // 5. newer on-disk image layers cover the layer's whole key range\n-        //\n-        // TODO holding a write lock is too agressive and avoidable\n-        let mut guard = self\n-            .layers\n-            .write(LayerManagerLockHolder::GarbageCollection)\n-            .await;\n-        let layers = guard.layer_map()?;\n-        'outer: for l in layers.iter_historic_layers() {\n-            result.layers_total += 1;\n+        let layers_to_remove = {\n+            let mut layers_to_remove = Vec::new();\n \n-            // 1. Is it newer than GC horizon cutoff point?\n-            if l.get_lsn_range().end > space_cutoff {\n-                info!(\n-                    \"keeping {} because it's newer than space_cutoff {}\",\n-                    l.layer_name(),\n-                    space_cutoff,\n-                );\n-                result.layers_needed_by_cutoff += 1;\n-                continue 'outer;\n-            }\n-\n-            // 2. It is newer than PiTR cutoff point?\n-            if l.get_lsn_range().end > time_cutoff {\n-                info!(\n-                    \"keeping {} because it's newer than time_cutoff {}\",\n-                    l.layer_name(),\n-                    time_cutoff,\n-                );\n-                result.layers_needed_by_pitr += 1;\n-                continue 'outer;\n-            }\n+            let guard = self\n+                .layers\n+                .read(LayerManagerLockHolder::GarbageCollection)\n+                .await;\n+            let layers = guard.layer_map()?;\n+            'outer: for l in layers.iter_historic_layers() {\n+                result.layers_total += 1;\n \n-            // 3. Is it needed by a child branch?\n-            // NOTE With that we would keep data that\n-            // might be referenced by child branches forever.\n-            // We can track this in child timeline GC and delete parent layers when\n-            // they are no longer needed. This might be complicated with long inheritance chains.\n-            //\n-            // TODO Vec is not a great choice for `retain_lsns`\n-            for retain_lsn in &retain_lsns {\n-                // start_lsn is inclusive\n-                if &l.get_lsn_range().start <= retain_lsn {\n-                    info!(\n-                        \"keeping {} because it's still might be referenced by child branch forked at {} is_dropped: xx is_incremental: {}\",\n+                // 1. Is it newer than GC horizon cutoff point?\n+                if l.get_lsn_range().end > space_cutoff {\n+                    debug!(",
+        "comment_created_at": "2025-06-20T11:03:44+00:00",
+        "comment_author": "VladLazar",
+        "comment_body": "Don't think it's useful to log thousands of layers that we are keeping. We log removed layers somewhere else - that's what could actually be useful. Could also contribute to the loop taking longer than it should.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2154201033",
+    "pr_number": 12153,
+    "pr_file": "compute_tools/src/compute.rs",
+    "created_at": "2025-06-18T10:01:17+00:00",
+    "commented_code": "Ok(())\n }\n \n-pub fn forward_termination_signal() {\n+pub fn forward_termination_signal(dev_mode: bool) {\n     let ss_pid = SYNC_SAFEKEEPERS_PID.load(Ordering::SeqCst);\n     if ss_pid != 0 {\n         let ss_pid = nix::unistd::Pid::from_raw(ss_pid as i32);\n         kill(ss_pid, Signal::SIGTERM).ok();\n     }\n+\n+    if !dev_mode {\n+        info!(\"not in dev mode, terminating pgbouncer\");",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2154201033",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12153,
+        "pr_file": "compute_tools/src/compute.rs",
+        "discussion_id": "2154201033",
+        "commented_code": "@@ -2251,12 +2253,68 @@ pub async fn installed_extensions(conf: tokio_postgres::Config) -> Result<()> {\n     Ok(())\n }\n \n-pub fn forward_termination_signal() {\n+pub fn forward_termination_signal(dev_mode: bool) {\n     let ss_pid = SYNC_SAFEKEEPERS_PID.load(Ordering::SeqCst);\n     if ss_pid != 0 {\n         let ss_pid = nix::unistd::Pid::from_raw(ss_pid as i32);\n         kill(ss_pid, Signal::SIGTERM).ok();\n     }\n+\n+    if !dev_mode {\n+        info!(\"not in dev mode, terminating pgbouncer\");",
+        "comment_created_at": "2025-06-18T10:01:17+00:00",
+        "comment_author": "ololobus",
+        "comment_body": "NIT: I'd reverse this and instead log 'Skipping pgbouncer and local_proxy termination because in dev mode' when dev_mode is true. Otherwise, we log this in real envs, but it doesn't make any sense as we log separate line when we actually send signals",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2155585483",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12153,
+        "pr_file": "compute_tools/src/compute.rs",
+        "discussion_id": "2154201033",
+        "commented_code": "@@ -2251,12 +2253,68 @@ pub async fn installed_extensions(conf: tokio_postgres::Config) -> Result<()> {\n     Ok(())\n }\n \n-pub fn forward_termination_signal() {\n+pub fn forward_termination_signal(dev_mode: bool) {\n     let ss_pid = SYNC_SAFEKEEPERS_PID.load(Ordering::SeqCst);\n     if ss_pid != 0 {\n         let ss_pid = nix::unistd::Pid::from_raw(ss_pid as i32);\n         kill(ss_pid, Signal::SIGTERM).ok();\n     }\n+\n+    if !dev_mode {\n+        info!(\"not in dev mode, terminating pgbouncer\");",
+        "comment_created_at": "2025-06-18T22:08:27+00:00",
+        "comment_author": "thesuhas",
+        "comment_body": "Opened a follow-up PR to address: https://github.com/neondatabase/neon/pull/12284",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2123422395",
+    "pr_number": 12096,
+    "pr_file": "storage_controller/src/service.rs",
+    "created_at": "2025-06-03T10:41:08+00:00",
+    "commented_code": "// 2. Actually delete the node from the database and from in-memory state\n         tracing::info!(\"Deleting node from database\");",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2123422395",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12096,
+        "pr_file": "storage_controller/src/service.rs",
+        "discussion_id": "2123422395",
+        "commented_code": "@@ -7035,7 +7035,7 @@ impl Service {\n \n         // 2. Actually delete the node from the database and from in-memory state\n         tracing::info!(\"Deleting node from database\");",
+        "comment_created_at": "2025-06-03T10:41:08+00:00",
+        "comment_author": "VladLazar",
+        "comment_body": "Please update this log line and comment to mention that we place a tombstone instead of deleting.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2087384478",
+    "pr_number": 11893,
+    "pr_file": "pageserver/src/tenant/timeline/compaction.rs",
+    "created_at": "2025-05-13T18:10:10+00:00",
+    "commented_code": "{\n                             critical!(\"missing key during compaction: {err:?}\");\n                         }\n-                    })?;\n-\n-                self.last_image_layer_creation_status\n-                    .store(Arc::new(outcome.clone()));\n-\n-                self.upload_new_image_layers(image_layers)?;\n-                if let LastImageLayerCreationStatus::Incomplete { .. } = outcome {\n-                    // Yield and do not do any other kind of compaction.\n-                    info!(\n-                        \"skipping shard ancestor compaction due to pending image layer generation tasks (preempted by L0 compaction).\"\n-                    );\n-                    return Ok(CompactionOutcome::YieldForL0);\n-                }\n-            }\n+                    });\n \n-            Ok(_) => {\n-                info!(\"skipping repartitioning due to image compaction LSN being below GC cutoff\");\n+                match res {\n+                    Ok((image_layers, outcome)) => {\n+                        self.last_image_layer_creation_status\n+                            .store(Arc::new(outcome.clone()));\n+\n+                        self.upload_new_image_layers(image_layers)?;\n+                        if let LastImageLayerCreationStatus::Incomplete { .. } = outcome {\n+                            // Yield and do not do any other kind of compaction.\n+                            info!(\n+                                \"skipping shard ancestor compaction due to pending image layer generation tasks (preempted by L0 compaction).\"\n+                            );\n+                            return Ok(CompactionOutcome::YieldForL0);\n+                        }\n+                        // Fall through to shard ancestor compaction\n+                    }\n+                    Err(err) if lsn <= gc_cutoff => {\n+                        if let CreateImageLayersError::GetVectoredError(_) = err {\n+                            warn!(\n+                                \"could not create image layers due to {}; this is not critical because the requested image LSN is below the GC curoff\",\n+                                err\n+                            );",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2087384478",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 11893,
+        "pr_file": "pageserver/src/tenant/timeline/compaction.rs",
+        "discussion_id": "2087384478",
+        "commented_code": "@@ -1328,23 +1334,41 @@ impl Timeline {\n                         {\n                             critical!(\"missing key during compaction: {err:?}\");\n                         }\n-                    })?;\n-\n-                self.last_image_layer_creation_status\n-                    .store(Arc::new(outcome.clone()));\n-\n-                self.upload_new_image_layers(image_layers)?;\n-                if let LastImageLayerCreationStatus::Incomplete { .. } = outcome {\n-                    // Yield and do not do any other kind of compaction.\n-                    info!(\n-                        \"skipping shard ancestor compaction due to pending image layer generation tasks (preempted by L0 compaction).\"\n-                    );\n-                    return Ok(CompactionOutcome::YieldForL0);\n-                }\n-            }\n+                    });\n \n-            Ok(_) => {\n-                info!(\"skipping repartitioning due to image compaction LSN being below GC cutoff\");\n+                match res {\n+                    Ok((image_layers, outcome)) => {\n+                        self.last_image_layer_creation_status\n+                            .store(Arc::new(outcome.clone()));\n+\n+                        self.upload_new_image_layers(image_layers)?;\n+                        if let LastImageLayerCreationStatus::Incomplete { .. } = outcome {\n+                            // Yield and do not do any other kind of compaction.\n+                            info!(\n+                                \"skipping shard ancestor compaction due to pending image layer generation tasks (preempted by L0 compaction).\"\n+                            );\n+                            return Ok(CompactionOutcome::YieldForL0);\n+                        }\n+                        // Fall through to shard ancestor compaction\n+                    }\n+                    Err(err) if lsn <= gc_cutoff => {\n+                        if let CreateImageLayersError::GetVectoredError(_) = err {\n+                            warn!(\n+                                \"could not create image layers due to {}; this is not critical because the requested image LSN is below the GC curoff\",\n+                                err\n+                            );",
+        "comment_created_at": "2025-05-13T18:10:10+00:00",
+        "comment_author": "problame",
+        "comment_body": "I would advise against moving errors in the middle, it makes sense in code with the format specifier +syntax highlighting but it's just word mash when printed at runtime\n\n```suggestion\n                            warn!(\n                                \"failed to create image layers but lsn is <= gc_cutoff, therefore this can happen: lsn={lsn} gc_cutoff={gc_cutoff}: {err}\",\n                            );\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

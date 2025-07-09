@@ -1,0 +1,94 @@
+[
+  {
+    "discussion_id": "2121134215",
+    "pr_number": 12090,
+    "pr_file": "pgxn/neon/walproposer.h",
+    "created_at": "2025-06-02T13:20:02+00:00",
+    "commented_code": "/* last feedback from each shard */\n \tPageserverFeedback shard_ps_feedback[MAX_SHARDS];\n \tint\t\t\tnum_shards;\n+\tbool\t\treplica_promote;",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2121134215",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12090,
+        "pr_file": "pgxn/neon/walproposer.h",
+        "discussion_id": "2121134215",
+        "commented_code": "@@ -391,6 +391,7 @@ typedef struct WalproposerShmemState\n \t/* last feedback from each shard */\n \tPageserverFeedback shard_ps_feedback[MAX_SHARDS];\n \tint\t\t\tnum_shards;\n+\tbool\t\treplica_promote;",
+        "comment_created_at": "2025-06-02T13:20:02+00:00",
+        "comment_author": "MMeent",
+        "comment_body": "Why does it matter whether this is a promoted replica or not? I see you use it in `walproposer.c`, but that seems like a workaround and bypass of a valid check, not a correct solution to an issue.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2121244707",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12090,
+        "pr_file": "pgxn/neon/walproposer.h",
+        "discussion_id": "2121134215",
+        "commented_code": "@@ -391,6 +391,7 @@ typedef struct WalproposerShmemState\n \t/* last feedback from each shard */\n \tPageserverFeedback shard_ps_feedback[MAX_SHARDS];\n \tint\t\t\tnum_shards;\n+\tbool\t\treplica_promote;",
+        "comment_created_at": "2025-06-02T14:00:41+00:00",
+        "comment_author": "knizhnik",
+        "comment_body": "The `replica_promote` flag is used only to disarm this check:\r\n```\r\n\t\t/*\r\n\t\t * Basebackup LSN always points to the beginning of the record (not\r\n\t\t * the page), as StartupXLOG most probably wants it this way.\r\n\t\t * Safekeepers don't skip header as they need continious stream of\r\n\t\t * data, so correct LSN for comparison.\r\n\t\t */\r\n\t\tif (SkipXLogPageHeader(wp, wp->propTermStartLsn) != wp->api.get_redo_start_lsn(wp))\r\n```\r\n\r\nIn our case redo_restart corresponds to old redo_restart LSN of replica.\r\nMy first attempt to fix the problem was to explicitly set this restart LSN using `SetRedoStartLsn()`\r\nBut it is not available in PG14.\r\nSo I decided just to disarm this check.\r\nI will be pleased if you can propose better solution.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2121252781",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12090,
+        "pr_file": "pgxn/neon/walproposer.h",
+        "discussion_id": "2121134215",
+        "commented_code": "@@ -391,6 +391,7 @@ typedef struct WalproposerShmemState\n \t/* last feedback from each shard */\n \tPageserverFeedback shard_ps_feedback[MAX_SHARDS];\n \tint\t\t\tnum_shards;\n+\tbool\t\treplica_promote;",
+        "comment_created_at": "2025-06-02T14:04:01+00:00",
+        "comment_author": "knizhnik",
+        "comment_body": "May be this check is failed because I disabled recovery:\r\n```\r\n\t/*\r\n\t * Consider whether we need to assign a new timeline ID.\r\n\t *\r\n\t * If we did archive recovery, we always assign a new ID.  This handles a\r\n\t * couple of issues.  If we stopped short of the end of WAL during\r\n\t * recovery, then we are clearly generating a new timeline and must assign\r\n\t * it a unique new ID.  Even if we ran to the end, modifying the current\r\n\t * last segment is problematic because it may result in trying to\r\n\t * overwrite an already-archived copy of that segment, and we encourage\r\n\t * DBAs to make their archive_commands reject that.  We can dodge the\r\n\t * problem by making the new active segment have a new timeline ID.\r\n\t *\r\n\t * In a normal crash recovery, we can just extend the timeline we were in.\r\n\t */\r\n\tnewTLI = endOfRecoveryInfo->lastRecTLI;\r\n-\tif (ArchiveRecoveryRequested)\r\n+\tif (ArchiveRecoveryRequested && !ZenithRecoveryRequested)\r\n```\r\nbut then we should somehow address the problem with timelines.\r\nI am not fan of this hack with adding ` !ZenithRecoveryRequested` - if there some better solution I will be glad to implement it.  But still not sure that bumping timeline on replica promotion=node restart is good idea.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2090934103",
+    "pr_number": 11815,
+    "pr_file": "pageserver/page_api/proto/page_service.proto",
+    "created_at": "2025-05-15T11:16:40+00:00",
+    "commented_code": "+// Page service, presented by pageservers for computes.\n+//\n+// This is the compute read path. It primarily serves page versions at given\n+// LSNs, but also base backups, SLRU segments, and relation metadata.\n+//\n+// EXPERIMENTAL: this is still under development and subject to change.\n+//\n+// Request metadata headers:\n+// - authorization: JWT token (\"Bearer <token>\"), if auth is enabled\n+// - neon-tenant-id: tenant ID (\"7c4a1f9e3bd6470c8f3e21a65bd2e980\")\n+// - neon-shard-id: shard ID, as <number><count> in hex (\"0b10\" = shard 11 of 16, 0-based)\n+// - neon-timeline-id: timeline ID (\"f08c4e9a2d5f76b1e3a7c2d8910f4b3e\")\n+// - neon-compute-mode: compute mode (\"primary\", \"static\", \"replica\")",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2090934103",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 11815,
+        "pr_file": "pageserver/page_api/proto/page_service.proto",
+        "discussion_id": "2090934103",
+        "commented_code": "@@ -0,0 +1,212 @@\n+// Page service, presented by pageservers for computes.\n+//\n+// This is the compute read path. It primarily serves page versions at given\n+// LSNs, but also base backups, SLRU segments, and relation metadata.\n+//\n+// EXPERIMENTAL: this is still under development and subject to change.\n+//\n+// Request metadata headers:\n+// - authorization: JWT token (\"Bearer <token>\"), if auth is enabled\n+// - neon-tenant-id: tenant ID (\"7c4a1f9e3bd6470c8f3e21a65bd2e980\")\n+// - neon-shard-id: shard ID, as <number><count> in hex (\"0b10\" = shard 11 of 16, 0-based)\n+// - neon-timeline-id: timeline ID (\"f08c4e9a2d5f76b1e3a7c2d8910f4b3e\")\n+// - neon-compute-mode: compute mode (\"primary\", \"static\", \"replica\")",
+        "comment_created_at": "2025-05-15T11:16:40+00:00",
+        "comment_author": "hlinnaka",
+        "comment_body": "A 'replica' can promoted to a 'primary'. What's the implication of that? Do we to start new streams when that happens?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2090993434",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 11815,
+        "pr_file": "pageserver/page_api/proto/page_service.proto",
+        "discussion_id": "2090934103",
+        "commented_code": "@@ -0,0 +1,212 @@\n+// Page service, presented by pageservers for computes.\n+//\n+// This is the compute read path. It primarily serves page versions at given\n+// LSNs, but also base backups, SLRU segments, and relation metadata.\n+//\n+// EXPERIMENTAL: this is still under development and subject to change.\n+//\n+// Request metadata headers:\n+// - authorization: JWT token (\"Bearer <token>\"), if auth is enabled\n+// - neon-tenant-id: tenant ID (\"7c4a1f9e3bd6470c8f3e21a65bd2e980\")\n+// - neon-shard-id: shard ID, as <number><count> in hex (\"0b10\" = shard 11 of 16, 0-based)\n+// - neon-timeline-id: timeline ID (\"f08c4e9a2d5f76b1e3a7c2d8910f4b3e\")\n+// - neon-compute-mode: compute mode (\"primary\", \"static\", \"replica\")",
+        "comment_created_at": "2025-05-15T11:51:13+00:00",
+        "comment_author": "erikgrinaker",
+        "comment_body": "I think we should, yeah -- it may not be strictly necessary depending on what we use them for, but it's also a bit of a footgun if we don't.\n\n@VladLazar Do we have a concrete need for these to justify the cost/complexity of re-establishing all streams when promoted?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2095107679",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 11815,
+        "pr_file": "pageserver/page_api/proto/page_service.proto",
+        "discussion_id": "2090934103",
+        "commented_code": "@@ -0,0 +1,212 @@\n+// Page service, presented by pageservers for computes.\n+//\n+// This is the compute read path. It primarily serves page versions at given\n+// LSNs, but also base backups, SLRU segments, and relation metadata.\n+//\n+// EXPERIMENTAL: this is still under development and subject to change.\n+//\n+// Request metadata headers:\n+// - authorization: JWT token (\"Bearer <token>\"), if auth is enabled\n+// - neon-tenant-id: tenant ID (\"7c4a1f9e3bd6470c8f3e21a65bd2e980\")\n+// - neon-shard-id: shard ID, as <number><count> in hex (\"0b10\" = shard 11 of 16, 0-based)\n+// - neon-timeline-id: timeline ID (\"f08c4e9a2d5f76b1e3a7c2d8910f4b3e\")\n+// - neon-compute-mode: compute mode (\"primary\", \"static\", \"replica\")",
+        "comment_created_at": "2025-05-19T08:08:05+00:00",
+        "comment_author": "erikgrinaker",
+        "comment_body": "I changed this to a TODO to unblock the PR. We can add it later if we have a compelling need for it.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

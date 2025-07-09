@@ -1,0 +1,142 @@
+[
+  {
+    "discussion_id": "2190093579",
+    "pr_number": 12371,
+    "pr_file": "pgxn/neon/communicator.c",
+    "created_at": "2025-07-07T13:21:50+00:00",
+    "commented_code": "shard_no = 0;\n \t}\n \n-\tdo\n+\tconsume_prefetch_responses();",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2190093579",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12371,
+        "pr_file": "pgxn/neon/communicator.c",
+        "discussion_id": "2190093579",
+        "commented_code": "@@ -1384,40 +1447,37 @@ page_server_request(void const *req)\n \t\tshard_no = 0;\n \t}\n \n-\tdo\n+\tconsume_prefetch_responses();",
+        "comment_created_at": "2025-07-07T13:21:50+00:00",
+        "comment_author": "MMeent",
+        "comment_body": "Note that moving this call to _before_ `page_server->send() || page_server->flush()` will cause requests sent by `page_server_request` to not be pipelined with getpage requests already in the connection, and so this may have 2 RTT latency, instead of 1 RTT: 1 RTT to finish all open GetPage requests, and 1 RTT for the actual NeonRequest.\r\n\r\nIt doesn't look like the behaviour here is very different, so why not put it immediately before the `page_server->receive()` call?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2190188887",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12371,
+        "pr_file": "pgxn/neon/communicator.c",
+        "discussion_id": "2190093579",
+        "commented_code": "@@ -1384,40 +1447,37 @@ page_server_request(void const *req)\n \t\tshard_no = 0;\n \t}\n \n-\tdo\n+\tconsume_prefetch_responses();",
+        "comment_created_at": "2025-07-07T13:52:40+00:00",
+        "comment_author": "knizhnik",
+        "comment_body": "I do not think that pipelining of non-get page requests and get page request is really important. There are only two other frequent requests: exists and nblocks, but both should be eliminated in most cases  by resize cache.\r\n\r\nIs it absolutely necessary to move `consume_prefetch_responses` before sending new non-get page request?\r\nNo, it is not. If we can enforce that in case of error:\r\n1. Connection is dropped\r\n2. Prefetch ring state it reset\r\nthan it is not needed. The original error I have found is that this code calls `page_server->disconnect` which is not resetting prefetch state. My first attempt to fix it was just to add call of `prefetch_on_ps_disconnect()` here.\r\nBut then I thought that it will be safer to consume prefetch responses before sending new request.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2190198047",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12371,
+        "pr_file": "pgxn/neon/communicator.c",
+        "discussion_id": "2190093579",
+        "commented_code": "@@ -1384,40 +1447,37 @@ page_server_request(void const *req)\n \t\tshard_no = 0;\n \t}\n \n-\tdo\n+\tconsume_prefetch_responses();",
+        "comment_created_at": "2025-07-07T13:56:16+00:00",
+        "comment_author": "knizhnik",
+        "comment_body": "Just to clarify: I wanted to separate prefetch state (when there are some inflight `getpage` requests) and non-prefetch state (when we do classical server request-response call).\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192330655",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12371,
+        "pr_file": "pgxn/neon/communicator.c",
+        "discussion_id": "2190093579",
+        "commented_code": "@@ -1384,40 +1447,37 @@ page_server_request(void const *req)\n \t\tshard_no = 0;\n \t}\n \n-\tdo\n+\tconsume_prefetch_responses();",
+        "comment_created_at": "2025-07-08T12:07:02+00:00",
+        "comment_author": "MMeent",
+        "comment_body": "OK, I think I got it. \r\nIf a connection is dropped during consume_prefetch_responses, then that signal is not carried on to the synchronous request path that requested `consume_prefetch_responses`, so putting consume_prefetch_responses between `page_server->sync()` and `page_server->receive()` could cause the connection to get stuck waiting on a newly created empty connection.\r\n\r\nIf we update `consume_prefetch_responses` to return the output of wait_for(), then we can use that to determine connection state, and continue handling everything correctly.\r\n\r\n```\r\nstatic bool\r\nconsume_prefetch_responses(void)\r\n{\r\n\tif (MyPState->ring_receive < MyPState->ring_unused)\r\n\t\treturn prefetch_wait_for(MyPState->ring_unused - 1);\r\n\treturn true;\r\n}\r\n```\r\n\r\n\r\nand then, in sync request paths, you'd do the following, inside a PG_TRY block to make sure to drop connections when the request gets cancelled:\r\n\r\n```\r\n\t\twhile (!page_server->send(shard_no, &request.hdr)\r\n\t\t\t\t|| !page_server->flush(shard_no)\r\n\t\t\t\t|| !consume_prefetch_responses())\r\n\t\t{\r\n\t\t\t/*\r\n\t\t\t * Loop until we've successfully\r\n\t\t\t *  1.) Written the request into the shard's connection,\r\n\t\t\t *  2.) Flushed that request to the network, and\r\n\t\t\t *  3.) Consumed all open prefetch requests still on the line.\r\n\t\t\t */\r\n\t\t};\r\n```\r\n\r\n(the sync request path in page_server_request and communicator_read_slru_segment)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192581142",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12371,
+        "pr_file": "pgxn/neon/communicator.c",
+        "discussion_id": "2190093579",
+        "commented_code": "@@ -1384,40 +1447,37 @@ page_server_request(void const *req)\n \t\tshard_no = 0;\n \t}\n \n-\tdo\n+\tconsume_prefetch_responses();",
+        "comment_created_at": "2025-07-08T13:45:12+00:00",
+        "comment_author": "knizhnik",
+        "comment_body": "Sorry, I do not fully agree with your analysis (or at least do not completely understand it).\r\nHow `page_server->receive() ` can got stuck waiting for new connection?\r\n`pageserver_receive` is not waiting for connection. It immediately returns NULL id state is not `PS_Connected`.\r\n\r\nThe problem I have reported is different. Assume that there is some pending interrupt - i.e. statement timeout.\r\nAnd it is invoked from `CHECK_FOR_INTERRUPTS` places in one of the functions called in TRY block in `page_server_request`. Inn this case CATCH block calls `page_server->disconnect(shard_no);`. But it actually calls `pageserver_disconnect_shard` which drop connection but doesn't reset prefetch state (doesn't call `prefetch_on_ps_disconnect`).\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192596799",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 12371,
+        "pr_file": "pgxn/neon/communicator.c",
+        "discussion_id": "2190093579",
+        "commented_code": "@@ -1384,40 +1447,37 @@ page_server_request(void const *req)\n \t\tshard_no = 0;\n \t}\n \n-\tdo\n+\tconsume_prefetch_responses();",
+        "comment_created_at": "2025-07-08T13:51:47+00:00",
+        "comment_author": "MMeent",
+        "comment_body": "Hmm, ok.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2081754282",
+    "pr_number": 11880,
+    "pr_file": "pgxn/neon/libpagestore.c",
+    "created_at": "2025-05-09T13:58:36+00:00",
+    "commented_code": "/*\n \t\t * If we did other tasks between reconnect attempts, then we won't\n \t\t * need to wait as long as a full delay.\n+\t\t *\n+\t\t * This is a loop to protect against interrupted sleeps.\n \t\t */\n-\t\tif (us_since_last_attempt < shard->delay_us)\n+\t\twhile (us_since_last_attempt < shard->delay_us)\n \t\t{\n \t\t\tpg_usleep(shard->delay_us - us_since_last_attempt);\n+\n+\t\t\t/* At least we should handle cancellations here */\n+\t\t\tCHECK_FOR_INTERRUPTS();\n+\n+\t\t\tnow = GetCurrentTimestamp();\n+\t\t\tus_since_last_attempt = (int64) (now - shard->last_reconnect_time);",
+    "repo_full_name": "neondatabase/neon",
+    "discussion_comments": [
+      {
+        "comment_id": "2081754282",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 11880,
+        "pr_file": "pgxn/neon/libpagestore.c",
+        "discussion_id": "2081754282",
+        "commented_code": "@@ -447,10 +447,18 @@ pageserver_connect(shardno_t shard_no, int elevel)\n \t\t/*\n \t\t * If we did other tasks between reconnect attempts, then we won't\n \t\t * need to wait as long as a full delay.\n+\t\t *\n+\t\t * This is a loop to protect against interrupted sleeps.\n \t\t */\n-\t\tif (us_since_last_attempt < shard->delay_us)\n+\t\twhile (us_since_last_attempt < shard->delay_us)\n \t\t{\n \t\t\tpg_usleep(shard->delay_us - us_since_last_attempt);\n+\n+\t\t\t/* At least we should handle cancellations here */\n+\t\t\tCHECK_FOR_INTERRUPTS();\n+\n+\t\t\tnow = GetCurrentTimestamp();\n+\t\t\tus_since_last_attempt = (int64) (now - shard->last_reconnect_time);",
+        "comment_created_at": "2025-05-09T13:58:36+00:00",
+        "comment_author": "erikgrinaker",
+        "comment_body": "Above, we're setting `shard->last_reconnect_time = now`. So this will measure the time since we started the connection attempt, not the time since the previous reconnection attempt, effectively increasing the delay when connection failures are slow.\r\n\r\nIf we move that below this loop, it should do the right thing.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2081761459",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 11880,
+        "pr_file": "pgxn/neon/libpagestore.c",
+        "discussion_id": "2081754282",
+        "commented_code": "@@ -447,10 +447,18 @@ pageserver_connect(shardno_t shard_no, int elevel)\n \t\t/*\n \t\t * If we did other tasks between reconnect attempts, then we won't\n \t\t * need to wait as long as a full delay.\n+\t\t *\n+\t\t * This is a loop to protect against interrupted sleeps.\n \t\t */\n-\t\tif (us_since_last_attempt < shard->delay_us)\n+\t\twhile (us_since_last_attempt < shard->delay_us)\n \t\t{\n \t\t\tpg_usleep(shard->delay_us - us_since_last_attempt);\n+\n+\t\t\t/* At least we should handle cancellations here */\n+\t\t\tCHECK_FOR_INTERRUPTS();\n+\n+\t\t\tnow = GetCurrentTimestamp();\n+\t\t\tus_since_last_attempt = (int64) (now - shard->last_reconnect_time);",
+        "comment_created_at": "2025-05-09T14:02:53+00:00",
+        "comment_author": "erikgrinaker",
+        "comment_body": "Hm, I think that's actually a pre-existing bug, since it includes the previous backoff delay in the next iteration's delay, effectively reducing the delay by 50%. That also means that once it hits the 1 second max, the next attempt will have no backoff.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2081754282",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 11880,
+        "pr_file": "pgxn/neon/libpagestore.c",
+        "discussion_id": "2081754282",
+        "commented_code": "@@ -447,10 +447,18 @@ pageserver_connect(shardno_t shard_no, int elevel)\n \t\t/*\n \t\t * If we did other tasks between reconnect attempts, then we won't\n \t\t * need to wait as long as a full delay.\n+\t\t *\n+\t\t * This is a loop to protect against interrupted sleeps.\n \t\t */\n-\t\tif (us_since_last_attempt < shard->delay_us)\n+\t\twhile (us_since_last_attempt < shard->delay_us)\n \t\t{\n \t\t\tpg_usleep(shard->delay_us - us_since_last_attempt);\n+\n+\t\t\t/* At least we should handle cancellations here */\n+\t\t\tCHECK_FOR_INTERRUPTS();\n+\n+\t\t\tnow = GetCurrentTimestamp();\n+\t\t\tus_since_last_attempt = (int64) (now - shard->last_reconnect_time);",
+        "comment_created_at": "2025-05-09T13:58:36+00:00",
+        "comment_author": "erikgrinaker",
+        "comment_body": "Above, we're setting `shard->last_reconnect_time = now`. So this will measure the time since we started the connection attempt, not the time since the previous reconnection attempt, effectively increasing the delay when connection failures are slow.\r\n\r\nIf we move that below this loop, it should do the right thing.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2081761459",
+        "repo_full_name": "neondatabase/neon",
+        "pr_number": 11880,
+        "pr_file": "pgxn/neon/libpagestore.c",
+        "discussion_id": "2081754282",
+        "commented_code": "@@ -447,10 +447,18 @@ pageserver_connect(shardno_t shard_no, int elevel)\n \t\t/*\n \t\t * If we did other tasks between reconnect attempts, then we won't\n \t\t * need to wait as long as a full delay.\n+\t\t *\n+\t\t * This is a loop to protect against interrupted sleeps.\n \t\t */\n-\t\tif (us_since_last_attempt < shard->delay_us)\n+\t\twhile (us_since_last_attempt < shard->delay_us)\n \t\t{\n \t\t\tpg_usleep(shard->delay_us - us_since_last_attempt);\n+\n+\t\t\t/* At least we should handle cancellations here */\n+\t\t\tCHECK_FOR_INTERRUPTS();\n+\n+\t\t\tnow = GetCurrentTimestamp();\n+\t\t\tus_since_last_attempt = (int64) (now - shard->last_reconnect_time);",
+        "comment_created_at": "2025-05-09T14:02:53+00:00",
+        "comment_author": "erikgrinaker",
+        "comment_body": "Hm, I think that's actually a pre-existing bug, since it includes the previous backoff delay in the next iteration's delay, effectively reducing the delay by 50%. That also means that once it hits the 1 second max, the next attempt will have no backoff.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

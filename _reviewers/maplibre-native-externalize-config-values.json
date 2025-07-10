@@ -1,0 +1,104 @@
+[
+  {
+    "discussion_id": "1690266198",
+    "pr_number": 2564,
+    "pr_file": "src/mbgl/vulkan/context.cpp",
+    "created_at": "2024-07-24T18:34:44+00:00",
+    "commented_code": "+#include <mbgl/vulkan/context.hpp>\n+\n+#include <mbgl/gfx/shader_registry.hpp>\n+#include <mbgl/programs/program_parameters.hpp>\n+#include <mbgl/renderer/paint_parameters.hpp>\n+#include <mbgl/renderer/render_static_data.hpp>\n+#include <mbgl/renderer/render_target.hpp>\n+#include <mbgl/vulkan/command_encoder.hpp>\n+#include <mbgl/vulkan/drawable_builder.hpp>\n+#include <mbgl/vulkan/offscreen_texture.hpp>\n+#include <mbgl/vulkan/layer_group.hpp>\n+#include <mbgl/vulkan/tile_layer_group.hpp>\n+#include <mbgl/vulkan/renderable_resource.hpp>\n+#include <mbgl/vulkan/render_pass.hpp>\n+#include <mbgl/vulkan/texture2d.hpp>\n+#include <mbgl/vulkan/vertex_attribute.hpp>\n+#include <mbgl/shaders/vulkan/shader_program.hpp>\n+#include <mbgl/shaders/vulkan/clipping_mask.hpp>\n+#include <mbgl/util/traits.hpp>\n+#include <mbgl/util/std.hpp>\n+#include <mbgl/util/logging.hpp>\n+#include <mbgl/util/thread_pool.hpp>\n+#include <mbgl/util/hash.hpp>\n+\n+#include <glslang/Public/ShaderLang.h>\n+\n+#include <algorithm>\n+#include <cstring>\n+\n+namespace mbgl {\n+namespace vulkan {\n+\n+// Maximum number of vertex attributes, per vertex descriptor\n+// 32 on most devices (~30% Android use 16),\n+// per https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxVertexInputBindings\n+// this can be queried at runtime (VkPhysicalDeviceLimits.maxVertexInputBindings)\n+constexpr uint32_t maximumVertexBindingCount = 16;\n+\n+Context::Context(RendererBackend& backend_)\n+    : gfx::Context(vulkan::maximumVertexBindingCount),\n+      backend(backend_) {\n+    glslang::InitializeProcess();\n+\n+    initFrameResources();\n+}\n+\n+Context::~Context() noexcept {\n+    backend.getThreadPool().runRenderJobs(true /* closeQueue */);\n+\n+    destroyResources();\n+\n+    glslang::FinalizeProcess();\n+}\n+\n+void Context::initFrameResources() {\n+    const auto& device = backend.getDevice();\n+    const auto frameCount = backend.getMaxFrames();\n+\n+    // command buffers\n+    const vk::CommandBufferAllocateInfo allocateInfo(\n+        backend.getCommandPool().get(), vk::CommandBufferLevel::ePrimary, frameCount);\n+\n+    auto commandBuffers = backend.getDevice()->allocateCommandBuffersUnique(allocateInfo);\n+\n+    // descriptor pool info\n+    const std::vector<vk::DescriptorPoolSize> poolSizes = {\n+        {vk::DescriptorType::eUniformBuffer, 10000},\n+        {vk::DescriptorType::eCombinedImageSampler, 5000},\n+    };\n+\n+    const auto descriptorPoolInfo = vk::DescriptorPoolCreateInfo().setPoolSizes(poolSizes).setMaxSets(100000);",
+    "repo_full_name": "maplibre/maplibre-native",
+    "discussion_comments": [
+      {
+        "comment_id": "1690266198",
+        "repo_full_name": "maplibre/maplibre-native",
+        "pr_number": 2564,
+        "pr_file": "src/mbgl/vulkan/context.cpp",
+        "discussion_id": "1690266198",
+        "commented_code": "@@ -0,0 +1,537 @@\n+#include <mbgl/vulkan/context.hpp>\n+\n+#include <mbgl/gfx/shader_registry.hpp>\n+#include <mbgl/programs/program_parameters.hpp>\n+#include <mbgl/renderer/paint_parameters.hpp>\n+#include <mbgl/renderer/render_static_data.hpp>\n+#include <mbgl/renderer/render_target.hpp>\n+#include <mbgl/vulkan/command_encoder.hpp>\n+#include <mbgl/vulkan/drawable_builder.hpp>\n+#include <mbgl/vulkan/offscreen_texture.hpp>\n+#include <mbgl/vulkan/layer_group.hpp>\n+#include <mbgl/vulkan/tile_layer_group.hpp>\n+#include <mbgl/vulkan/renderable_resource.hpp>\n+#include <mbgl/vulkan/render_pass.hpp>\n+#include <mbgl/vulkan/texture2d.hpp>\n+#include <mbgl/vulkan/vertex_attribute.hpp>\n+#include <mbgl/shaders/vulkan/shader_program.hpp>\n+#include <mbgl/shaders/vulkan/clipping_mask.hpp>\n+#include <mbgl/util/traits.hpp>\n+#include <mbgl/util/std.hpp>\n+#include <mbgl/util/logging.hpp>\n+#include <mbgl/util/thread_pool.hpp>\n+#include <mbgl/util/hash.hpp>\n+\n+#include <glslang/Public/ShaderLang.h>\n+\n+#include <algorithm>\n+#include <cstring>\n+\n+namespace mbgl {\n+namespace vulkan {\n+\n+// Maximum number of vertex attributes, per vertex descriptor\n+// 32 on most devices (~30% Android use 16),\n+// per https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxVertexInputBindings\n+// this can be queried at runtime (VkPhysicalDeviceLimits.maxVertexInputBindings)\n+constexpr uint32_t maximumVertexBindingCount = 16;\n+\n+Context::Context(RendererBackend& backend_)\n+    : gfx::Context(vulkan::maximumVertexBindingCount),\n+      backend(backend_) {\n+    glslang::InitializeProcess();\n+\n+    initFrameResources();\n+}\n+\n+Context::~Context() noexcept {\n+    backend.getThreadPool().runRenderJobs(true /* closeQueue */);\n+\n+    destroyResources();\n+\n+    glslang::FinalizeProcess();\n+}\n+\n+void Context::initFrameResources() {\n+    const auto& device = backend.getDevice();\n+    const auto frameCount = backend.getMaxFrames();\n+\n+    // command buffers\n+    const vk::CommandBufferAllocateInfo allocateInfo(\n+        backend.getCommandPool().get(), vk::CommandBufferLevel::ePrimary, frameCount);\n+\n+    auto commandBuffers = backend.getDevice()->allocateCommandBuffersUnique(allocateInfo);\n+\n+    // descriptor pool info\n+    const std::vector<vk::DescriptorPoolSize> poolSizes = {\n+        {vk::DescriptorType::eUniformBuffer, 10000},\n+        {vk::DescriptorType::eCombinedImageSampler, 5000},\n+    };\n+\n+    const auto descriptorPoolInfo = vk::DescriptorPoolCreateInfo().setPoolSizes(poolSizes).setMaxSets(100000);",
+        "comment_created_at": "2024-07-24T18:34:44+00:00",
+        "comment_author": "mwilsnd",
+        "comment_body": "Should these limits be configurable at all? They could be set via build flags/preprocessor values.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1694362361",
+        "repo_full_name": "maplibre/maplibre-native",
+        "pr_number": 2564,
+        "pr_file": "src/mbgl/vulkan/context.cpp",
+        "discussion_id": "1690266198",
+        "commented_code": "@@ -0,0 +1,537 @@\n+#include <mbgl/vulkan/context.hpp>\n+\n+#include <mbgl/gfx/shader_registry.hpp>\n+#include <mbgl/programs/program_parameters.hpp>\n+#include <mbgl/renderer/paint_parameters.hpp>\n+#include <mbgl/renderer/render_static_data.hpp>\n+#include <mbgl/renderer/render_target.hpp>\n+#include <mbgl/vulkan/command_encoder.hpp>\n+#include <mbgl/vulkan/drawable_builder.hpp>\n+#include <mbgl/vulkan/offscreen_texture.hpp>\n+#include <mbgl/vulkan/layer_group.hpp>\n+#include <mbgl/vulkan/tile_layer_group.hpp>\n+#include <mbgl/vulkan/renderable_resource.hpp>\n+#include <mbgl/vulkan/render_pass.hpp>\n+#include <mbgl/vulkan/texture2d.hpp>\n+#include <mbgl/vulkan/vertex_attribute.hpp>\n+#include <mbgl/shaders/vulkan/shader_program.hpp>\n+#include <mbgl/shaders/vulkan/clipping_mask.hpp>\n+#include <mbgl/util/traits.hpp>\n+#include <mbgl/util/std.hpp>\n+#include <mbgl/util/logging.hpp>\n+#include <mbgl/util/thread_pool.hpp>\n+#include <mbgl/util/hash.hpp>\n+\n+#include <glslang/Public/ShaderLang.h>\n+\n+#include <algorithm>\n+#include <cstring>\n+\n+namespace mbgl {\n+namespace vulkan {\n+\n+// Maximum number of vertex attributes, per vertex descriptor\n+// 32 on most devices (~30% Android use 16),\n+// per https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxVertexInputBindings\n+// this can be queried at runtime (VkPhysicalDeviceLimits.maxVertexInputBindings)\n+constexpr uint32_t maximumVertexBindingCount = 16;\n+\n+Context::Context(RendererBackend& backend_)\n+    : gfx::Context(vulkan::maximumVertexBindingCount),\n+      backend(backend_) {\n+    glslang::InitializeProcess();\n+\n+    initFrameResources();\n+}\n+\n+Context::~Context() noexcept {\n+    backend.getThreadPool().runRenderJobs(true /* closeQueue */);\n+\n+    destroyResources();\n+\n+    glslang::FinalizeProcess();\n+}\n+\n+void Context::initFrameResources() {\n+    const auto& device = backend.getDevice();\n+    const auto frameCount = backend.getMaxFrames();\n+\n+    // command buffers\n+    const vk::CommandBufferAllocateInfo allocateInfo(\n+        backend.getCommandPool().get(), vk::CommandBufferLevel::ePrimary, frameCount);\n+\n+    auto commandBuffers = backend.getDevice()->allocateCommandBuffersUnique(allocateInfo);\n+\n+    // descriptor pool info\n+    const std::vector<vk::DescriptorPoolSize> poolSizes = {\n+        {vk::DescriptorType::eUniformBuffer, 10000},\n+        {vk::DescriptorType::eCombinedImageSampler, 5000},\n+    };\n+\n+    const auto descriptorPoolInfo = vk::DescriptorPoolCreateInfo().setPoolSizes(poolSizes).setMaxSets(100000);",
+        "comment_created_at": "2024-07-28T23:49:00+00:00",
+        "comment_author": "louwers",
+        "comment_body": "In any case getting rid of the magic number would be good.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1695663985",
+        "repo_full_name": "maplibre/maplibre-native",
+        "pr_number": 2564,
+        "pr_file": "src/mbgl/vulkan/context.cpp",
+        "discussion_id": "1690266198",
+        "commented_code": "@@ -0,0 +1,537 @@\n+#include <mbgl/vulkan/context.hpp>\n+\n+#include <mbgl/gfx/shader_registry.hpp>\n+#include <mbgl/programs/program_parameters.hpp>\n+#include <mbgl/renderer/paint_parameters.hpp>\n+#include <mbgl/renderer/render_static_data.hpp>\n+#include <mbgl/renderer/render_target.hpp>\n+#include <mbgl/vulkan/command_encoder.hpp>\n+#include <mbgl/vulkan/drawable_builder.hpp>\n+#include <mbgl/vulkan/offscreen_texture.hpp>\n+#include <mbgl/vulkan/layer_group.hpp>\n+#include <mbgl/vulkan/tile_layer_group.hpp>\n+#include <mbgl/vulkan/renderable_resource.hpp>\n+#include <mbgl/vulkan/render_pass.hpp>\n+#include <mbgl/vulkan/texture2d.hpp>\n+#include <mbgl/vulkan/vertex_attribute.hpp>\n+#include <mbgl/shaders/vulkan/shader_program.hpp>\n+#include <mbgl/shaders/vulkan/clipping_mask.hpp>\n+#include <mbgl/util/traits.hpp>\n+#include <mbgl/util/std.hpp>\n+#include <mbgl/util/logging.hpp>\n+#include <mbgl/util/thread_pool.hpp>\n+#include <mbgl/util/hash.hpp>\n+\n+#include <glslang/Public/ShaderLang.h>\n+\n+#include <algorithm>\n+#include <cstring>\n+\n+namespace mbgl {\n+namespace vulkan {\n+\n+// Maximum number of vertex attributes, per vertex descriptor\n+// 32 on most devices (~30% Android use 16),\n+// per https://vulkan.gpuinfo.org/displaydevicelimit.php?name=maxVertexInputBindings\n+// this can be queried at runtime (VkPhysicalDeviceLimits.maxVertexInputBindings)\n+constexpr uint32_t maximumVertexBindingCount = 16;\n+\n+Context::Context(RendererBackend& backend_)\n+    : gfx::Context(vulkan::maximumVertexBindingCount),\n+      backend(backend_) {\n+    glslang::InitializeProcess();\n+\n+    initFrameResources();\n+}\n+\n+Context::~Context() noexcept {\n+    backend.getThreadPool().runRenderJobs(true /* closeQueue */);\n+\n+    destroyResources();\n+\n+    glslang::FinalizeProcess();\n+}\n+\n+void Context::initFrameResources() {\n+    const auto& device = backend.getDevice();\n+    const auto frameCount = backend.getMaxFrames();\n+\n+    // command buffers\n+    const vk::CommandBufferAllocateInfo allocateInfo(\n+        backend.getCommandPool().get(), vk::CommandBufferLevel::ePrimary, frameCount);\n+\n+    auto commandBuffers = backend.getDevice()->allocateCommandBuffersUnique(allocateInfo);\n+\n+    // descriptor pool info\n+    const std::vector<vk::DescriptorPoolSize> poolSizes = {\n+        {vk::DescriptorType::eUniformBuffer, 10000},\n+        {vk::DescriptorType::eCombinedImageSampler, 5000},\n+    };\n+\n+    const auto descriptorPoolInfo = vk::DescriptorPoolCreateInfo().setPoolSizes(poolSizes).setMaxSets(100000);",
+        "comment_created_at": "2024-07-29T18:12:38+00:00",
+        "comment_author": "adrian-cojocaru",
+        "comment_body": "Added MLN_VULKAN_DESCRIPTOR_POOL_SIZE that can be changed at build time",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1610062402",
+    "pr_number": 2417,
+    "pr_file": "src/mbgl/gl/context.cpp",
+    "created_at": "2024-05-22T14:15:03+00:00",
+    "commented_code": "if (!(renderer.find(\"ANGLE\") != std::string::npos && renderer.find(\"Direct3D\") != std::string::npos)) {\n             debugging = std::make_unique<extension::Debugging>(fn);\n         }\n+\n+        extension::loadTimeStampQueryExtension(fn);",
+    "repo_full_name": "maplibre/maplibre-native",
+    "discussion_comments": [
+      {
+        "comment_id": "1610062402",
+        "repo_full_name": "maplibre/maplibre-native",
+        "pr_number": 2417,
+        "pr_file": "src/mbgl/gl/context.cpp",
+        "discussion_id": "1610062402",
+        "commented_code": "@@ -143,7 +151,10 @@ void Context::initializeExtensions(const std::function<gl::ProcAddress(const cha\n         if (!(renderer.find(\"ANGLE\") != std::string::npos && renderer.find(\"Direct3D\") != std::string::npos)) {\n             debugging = std::make_unique<extension::Debugging>(fn);\n         }\n+\n+        extension::loadTimeStampQueryExtension(fn);",
+        "comment_created_at": "2024-05-22T14:15:03+00:00",
+        "comment_author": "mwilsnd",
+        "comment_body": "Can this be guarded by `#ifdef MLN_USE_TRACY `? We shouldn't try and load this extension unless we're building for instrumentation with Tracy",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1610789347",
+        "repo_full_name": "maplibre/maplibre-native",
+        "pr_number": 2417,
+        "pr_file": "src/mbgl/gl/context.cpp",
+        "discussion_id": "1610062402",
+        "commented_code": "@@ -143,7 +151,10 @@ void Context::initializeExtensions(const std::function<gl::ProcAddress(const cha\n         if (!(renderer.find(\"ANGLE\") != std::string::npos && renderer.find(\"Direct3D\") != std::string::npos)) {\n             debugging = std::make_unique<extension::Debugging>(fn);\n         }\n+\n+        extension::loadTimeStampQueryExtension(fn);",
+        "comment_created_at": "2024-05-22T23:39:34+00:00",
+        "comment_author": "alasram",
+        "comment_body": "Done. Code in this PR should now run/compile only if Tracy is enabled",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1454674675",
+    "pr_number": 2029,
+    "pr_file": "test/util/image.test.cpp",
+    "created_at": "2024-01-17T06:10:53+00:00",
+    "commented_code": "EXPECT_EQ(256u, image.size.height);\n }\n \n+TEST(Image, WebPTile) {",
+    "repo_full_name": "maplibre/maplibre-native",
+    "discussion_comments": [
+      {
+        "comment_id": "1454674675",
+        "repo_full_name": "maplibre/maplibre-native",
+        "pr_number": 2029,
+        "pr_file": "test/util/image.test.cpp",
+        "discussion_id": "1454674675",
+        "commented_code": "@@ -78,6 +78,12 @@ TEST(Image, JPEGTile) {\n     EXPECT_EQ(256u, image.size.height);\n }\n \n+TEST(Image, WebPTile) {",
+        "comment_created_at": "2024-01-17T06:10:53+00:00",
+        "comment_author": "ntadej",
+        "comment_body": "@acalcutt, just disable this one for Qt with `#if !defined(__QT__)`.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

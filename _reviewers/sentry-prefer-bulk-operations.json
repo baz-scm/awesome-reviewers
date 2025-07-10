@@ -1,0 +1,92 @@
+[
+  {
+    "discussion_id": "2152238602",
+    "pr_number": 93669,
+    "pr_file": "src/sentry/replays/endpoints/project_replay_summarize_breadcrumbs.py",
+    "created_at": "2025-06-17T13:10:46+00:00",
+    "commented_code": "):\n             return self.respond(status=404)\n \n+        filter_params = self.get_filter_params(request, project)\n+\n         return self.paginate(\n             request=request,\n             paginator_cls=GenericOffsetPaginator,\n             data_fn=functools.partial(fetch_segments_metadata, project.id, replay_id),\n-            on_results=analyze_recording_segments,\n+            on_results=functools.partial(\n+                analyze_recording_segments, project, replay_id, request, filter_params\n+            ),\n         )\n \n \n+def fetch_error_details(project_id: int, error_ids: list[str]) -> list[dict[str, Any]]:\n+    \"\"\"Fetch error details given error IDs.\"\"\"\n+    error_details = []\n+    for error_id in error_ids:\n+        try:\n+            event = eventstore.get_event_by_id(project_id, error_id)",
+    "repo_full_name": "getsentry/sentry",
+    "discussion_comments": [
+      {
+        "comment_id": "2152238602",
+        "repo_full_name": "getsentry/sentry",
+        "pr_number": 93669,
+        "pr_file": "src/sentry/replays/endpoints/project_replay_summarize_breadcrumbs.py",
+        "discussion_id": "2152238602",
+        "commented_code": "@@ -50,17 +52,103 @@ def get(self, request: Request, project, replay_id: str) -> Response:\n         ):\n             return self.respond(status=404)\n \n+        filter_params = self.get_filter_params(request, project)\n+\n         return self.paginate(\n             request=request,\n             paginator_cls=GenericOffsetPaginator,\n             data_fn=functools.partial(fetch_segments_metadata, project.id, replay_id),\n-            on_results=analyze_recording_segments,\n+            on_results=functools.partial(\n+                analyze_recording_segments, project, replay_id, request, filter_params\n+            ),\n         )\n \n \n+def fetch_error_details(project_id: int, error_ids: list[str]) -> list[dict[str, Any]]:\n+    \"\"\"Fetch error details given error IDs.\"\"\"\n+    error_details = []\n+    for error_id in error_ids:\n+        try:\n+            event = eventstore.get_event_by_id(project_id, error_id)",
+        "comment_created_at": "2025-06-17T13:10:46+00:00",
+        "comment_author": "cmanallen",
+        "comment_body": "What is this method doing and what are the performance implications of calling this method in a loop?  Does this need to be called in a threadpool?  Can we issue a single bulk request?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2153087683",
+    "pr_number": 93669,
+    "pr_file": "src/sentry/replays/endpoints/project_replay_summarize_breadcrumbs.py",
+    "created_at": "2025-06-17T20:13:13+00:00",
+    "commented_code": "):\n             return self.respond(status=404)\n \n+        filter_params = self.get_filter_params(request, project)\n+\n+        # Fetch the replay's error IDs from the replay_id.\n+        snuba_response = query_replay_instance(\n+            project_id=project.id,\n+            replay_id=replay_id,\n+            start=filter_params[\"start\"],\n+            end=filter_params[\"end\"],\n+            organization=project.organization,\n+            request_user_id=request.user.id,\n+        )\n+\n+        response = process_raw_response(\n+            snuba_response,\n+            fields=request.query_params.getlist(\"field\"),\n+        )\n+\n+        error_ids = response[0].get(\"error_ids\", []) if response else []\n+        error_events = fetch_error_details(project_id=project.id, error_ids=error_ids)",
+    "repo_full_name": "getsentry/sentry",
+    "discussion_comments": [
+      {
+        "comment_id": "2153087683",
+        "repo_full_name": "getsentry/sentry",
+        "pr_number": 93669,
+        "pr_file": "src/sentry/replays/endpoints/project_replay_summarize_breadcrumbs.py",
+        "discussion_id": "2153087683",
+        "commented_code": "@@ -50,17 +54,108 @@ def get(self, request: Request, project, replay_id: str) -> Response:\n         ):\n             return self.respond(status=404)\n \n+        filter_params = self.get_filter_params(request, project)\n+\n+        # Fetch the replay's error IDs from the replay_id.\n+        snuba_response = query_replay_instance(\n+            project_id=project.id,\n+            replay_id=replay_id,\n+            start=filter_params[\"start\"],\n+            end=filter_params[\"end\"],\n+            organization=project.organization,\n+            request_user_id=request.user.id,\n+        )\n+\n+        response = process_raw_response(\n+            snuba_response,\n+            fields=request.query_params.getlist(\"field\"),\n+        )\n+\n+        error_ids = response[0].get(\"error_ids\", []) if response else []\n+        error_events = fetch_error_details(project_id=project.id, error_ids=error_ids)",
+        "comment_created_at": "2025-06-17T20:13:13+00:00",
+        "comment_author": "billyvg",
+        "comment_body": "Any concerns here with the # of error events we could have to process here @cmanallen ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2153097948",
+        "repo_full_name": "getsentry/sentry",
+        "pr_number": 93669,
+        "pr_file": "src/sentry/replays/endpoints/project_replay_summarize_breadcrumbs.py",
+        "discussion_id": "2153087683",
+        "commented_code": "@@ -50,17 +54,108 @@ def get(self, request: Request, project, replay_id: str) -> Response:\n         ):\n             return self.respond(status=404)\n \n+        filter_params = self.get_filter_params(request, project)\n+\n+        # Fetch the replay's error IDs from the replay_id.\n+        snuba_response = query_replay_instance(\n+            project_id=project.id,\n+            replay_id=replay_id,\n+            start=filter_params[\"start\"],\n+            end=filter_params[\"end\"],\n+            organization=project.organization,\n+            request_user_id=request.user.id,\n+        )\n+\n+        response = process_raw_response(\n+            snuba_response,\n+            fields=request.query_params.getlist(\"field\"),\n+        )\n+\n+        error_ids = response[0].get(\"error_ids\", []) if response else []\n+        error_events = fetch_error_details(project_id=project.id, error_ids=error_ids)",
+        "comment_created_at": "2025-06-17T20:18:44+00:00",
+        "comment_author": "cmanallen",
+        "comment_body": "It could have a significant impact on AI processing speed if you have lots of errors.  So general advice applies.  Use a low pagination value and increase the page size until you start seeing slow downs.\r\n\r\nMy biggest fear with the error change specifically is with the `message` field.  If its large its going to consume a lot of time in the AI.  Maybe the `title` is more focused but I don't know the data model.\r\n\r\nWe can also ignore lower value event types too.  We don't have to log everything.  That will also speed things up.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2145791465",
+    "pr_number": 93461,
+    "pr_file": "src/sentry/api/endpoints/organization_feedback_summary.py",
+    "created_at": "2025-06-13T18:24:04+00:00",
+    "commented_code": "if groups.count() < MIN_FEEDBACKS_TO_SUMMARIZE:\n             logger.error(\"Too few feedbacks to summarize\")\n-            return Response({\"summary\": None, \"success\": False, \"num_feedbacks_used\": 0})\n+            return Response(\n+                {\n+                    \"summary\": None,\n+                    \"success\": False,\n+                    \"num_feedbacks_used\": 0,\n+                }\n+            )\n+\n+        project_ids = [str(project.id) for project in projects]\n+        hashed_project_ids = hash_from_values(project_ids)\n+\n+        # Cache key should be the filters that were selected by the user, and the cache should time out after 1 hour\n+        # For date range, only use year, month, and day since including the time would make the cache useless\n+        summary_cache_key = f\"feedback_summary:{organization.id}:{start.strftime('%Y-%m-%d')}:{end.strftime('%Y-%m-%d')}:{hashed_project_ids}\"\n+        summary_cache = cache.get(summary_cache_key)\n+        if summary_cache:\n+            return Response(\n+                {\n+                    \"summary\": summary_cache[\"summary\"],\n+                    \"success\": True,\n+                    \"num_feedbacks_used\": summary_cache[\"num_feedbacks_used\"],\n+                }\n+            )",
+    "repo_full_name": "getsentry/sentry",
+    "discussion_comments": [
+      {
+        "comment_id": "2145791465",
+        "repo_full_name": "getsentry/sentry",
+        "pr_number": 93461,
+        "pr_file": "src/sentry/api/endpoints/organization_feedback_summary.py",
+        "discussion_id": "2145791465",
+        "commented_code": "@@ -77,7 +81,29 @@ def get(self, request: Request, organization: Organization) -> Response:\n \n         if groups.count() < MIN_FEEDBACKS_TO_SUMMARIZE:\n             logger.error(\"Too few feedbacks to summarize\")\n-            return Response({\"summary\": None, \"success\": False, \"num_feedbacks_used\": 0})\n+            return Response(\n+                {\n+                    \"summary\": None,\n+                    \"success\": False,\n+                    \"num_feedbacks_used\": 0,\n+                }\n+            )\n+\n+        project_ids = [str(project.id) for project in projects]\n+        hashed_project_ids = hash_from_values(project_ids)\n+\n+        # Cache key should be the filters that were selected by the user, and the cache should time out after 1 hour\n+        # For date range, only use year, month, and day since including the time would make the cache useless\n+        summary_cache_key = f\"feedback_summary:{organization.id}:{start.strftime('%Y-%m-%d')}:{end.strftime('%Y-%m-%d')}:{hashed_project_ids}\"\n+        summary_cache = cache.get(summary_cache_key)\n+        if summary_cache:\n+            return Response(\n+                {\n+                    \"summary\": summary_cache[\"summary\"],\n+                    \"success\": True,\n+                    \"num_feedbacks_used\": summary_cache[\"num_feedbacks_used\"],\n+                }\n+            )",
+        "comment_created_at": "2025-06-13T18:24:04+00:00",
+        "comment_author": "aliu39",
+        "comment_body": "could the cache lookup be moved before the group query, to save time if it's a hit?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2146038637",
+        "repo_full_name": "getsentry/sentry",
+        "pr_number": 93461,
+        "pr_file": "src/sentry/api/endpoints/organization_feedback_summary.py",
+        "discussion_id": "2145791465",
+        "commented_code": "@@ -77,7 +81,29 @@ def get(self, request: Request, organization: Organization) -> Response:\n \n         if groups.count() < MIN_FEEDBACKS_TO_SUMMARIZE:\n             logger.error(\"Too few feedbacks to summarize\")\n-            return Response({\"summary\": None, \"success\": False, \"num_feedbacks_used\": 0})\n+            return Response(\n+                {\n+                    \"summary\": None,\n+                    \"success\": False,\n+                    \"num_feedbacks_used\": 0,\n+                }\n+            )\n+\n+        project_ids = [str(project.id) for project in projects]\n+        hashed_project_ids = hash_from_values(project_ids)\n+\n+        # Cache key should be the filters that were selected by the user, and the cache should time out after 1 hour\n+        # For date range, only use year, month, and day since including the time would make the cache useless\n+        summary_cache_key = f\"feedback_summary:{organization.id}:{start.strftime('%Y-%m-%d')}:{end.strftime('%Y-%m-%d')}:{hashed_project_ids}\"\n+        summary_cache = cache.get(summary_cache_key)\n+        if summary_cache:\n+            return Response(\n+                {\n+                    \"summary\": summary_cache[\"summary\"],\n+                    \"success\": True,\n+                    \"num_feedbacks_used\": summary_cache[\"num_feedbacks_used\"],\n+                }\n+            )",
+        "comment_created_at": "2025-06-13T20:26:34+00:00",
+        "comment_author": "vishnupsatish",
+        "comment_body": "oops, yes, that's a good idea",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,94 @@
+[
+  {
+    "discussion_id": "2159164149",
+    "pr_number": 93864,
+    "pr_file": "src/sentry/replays/tasks.py",
+    "created_at": "2025-06-20T14:54:50+00:00",
+    "commented_code": "storage_kv.delete(filename)\n     except NotFound:\n         pass\n+\n+\n+@instrumented_task(\n+    name=\"sentry.replays.tasks.run_bulk_replay_delete_job\",\n+    queue=\"replays.delete_replay\",\n+    default_retry_delay=5,\n+    max_retries=5,\n+    silo_mode=SiloMode.REGION,\n+    taskworker_config=TaskworkerConfig(namespace=replays_tasks, retry=Retry(times=5)),\n+)\n+def run_bulk_replay_delete_job(replay_delete_job_id: int, offset: int, limit: int = 100) -> None:\n+    \"\"\"Replay bulk deletion task.\n+\n+    We specify retry behavior in the task definition. However, if the task fails more than 5 times\n+    the process will stop and the task has permanently failed. We checkpoint our offset position\n+    in the model. Restarting the task will use the offset passed by the caller. If you want to\n+    restart the task from the previous checkpoint you must pass the checkpoint explicitly.\n+    \"\"\"\n+    job = ReplayDeletionJobModel.objects.get(id=replay_delete_job_id)\n+\n+    # If this is the first run of the task we set the model to in-progress.\n+    if offset == 0:\n+        job.status = \"in-progress\"\n+        job.save()\n+\n+    # Delete the replays within a limited range. If more replays exist an incremented offset value\n+    # is returned.\n+    results = fetch_rows_matching_pattern(\n+        project_id=job.project_id,\n+        start=job.range_start,\n+        end=job.range_end,\n+        query=job.query,\n+        environment=job.environments,\n+        limit=limit,\n+        offset=offset,\n+    )\n+\n+    # Delete the matched rows if any rows were returned.\n+    if len(results[\"rows\"]) > 0:\n+        delete_matched_rows(job.project_id, results[\"rows\"])\n+\n+    # Compute the next offset to start from. If no further processing is required then this serves\n+    # as a count of replays deleted.\n+    next_offset = offset + len(results[\"rows\"])\n+\n+    if results[\"has_more\"]:\n+        # Checkpoint before continuing.\n+        job.offset = next_offset\n+        job.save()\n+\n+        run_bulk_replay_delete_job.delay(job.id, next_offset)\n+        return None\n+    else:\n+        # If we've finished deleting all the replays for the selection. We can move the status to\n+        # completed and exit the call chain.\n+        job.offset = next_offset\n+        job.status = \"completed\"\n+        job.save()\n+        return None\n+\n+\n+@instrumented_task(",
+    "repo_full_name": "getsentry/sentry",
+    "discussion_comments": [
+      {
+        "comment_id": "2159164149",
+        "repo_full_name": "getsentry/sentry",
+        "pr_number": 93864,
+        "pr_file": "src/sentry/replays/tasks.py",
+        "discussion_id": "2159164149",
+        "commented_code": "@@ -168,3 +169,91 @@ def _delete_if_exists(filename: str) -> None:\n         storage_kv.delete(filename)\n     except NotFound:\n         pass\n+\n+\n+@instrumented_task(\n+    name=\"sentry.replays.tasks.run_bulk_replay_delete_job\",\n+    queue=\"replays.delete_replay\",\n+    default_retry_delay=5,\n+    max_retries=5,\n+    silo_mode=SiloMode.REGION,\n+    taskworker_config=TaskworkerConfig(namespace=replays_tasks, retry=Retry(times=5)),\n+)\n+def run_bulk_replay_delete_job(replay_delete_job_id: int, offset: int, limit: int = 100) -> None:\n+    \"\"\"Replay bulk deletion task.\n+\n+    We specify retry behavior in the task definition. However, if the task fails more than 5 times\n+    the process will stop and the task has permanently failed. We checkpoint our offset position\n+    in the model. Restarting the task will use the offset passed by the caller. If you want to\n+    restart the task from the previous checkpoint you must pass the checkpoint explicitly.\n+    \"\"\"\n+    job = ReplayDeletionJobModel.objects.get(id=replay_delete_job_id)\n+\n+    # If this is the first run of the task we set the model to in-progress.\n+    if offset == 0:\n+        job.status = \"in-progress\"\n+        job.save()\n+\n+    # Delete the replays within a limited range. If more replays exist an incremented offset value\n+    # is returned.\n+    results = fetch_rows_matching_pattern(\n+        project_id=job.project_id,\n+        start=job.range_start,\n+        end=job.range_end,\n+        query=job.query,\n+        environment=job.environments,\n+        limit=limit,\n+        offset=offset,\n+    )\n+\n+    # Delete the matched rows if any rows were returned.\n+    if len(results[\"rows\"]) > 0:\n+        delete_matched_rows(job.project_id, results[\"rows\"])\n+\n+    # Compute the next offset to start from. If no further processing is required then this serves\n+    # as a count of replays deleted.\n+    next_offset = offset + len(results[\"rows\"])\n+\n+    if results[\"has_more\"]:\n+        # Checkpoint before continuing.\n+        job.offset = next_offset\n+        job.save()\n+\n+        run_bulk_replay_delete_job.delay(job.id, next_offset)\n+        return None\n+    else:\n+        # If we've finished deleting all the replays for the selection. We can move the status to\n+        # completed and exit the call chain.\n+        job.offset = next_offset\n+        job.status = \"completed\"\n+        job.save()\n+        return None\n+\n+\n+@instrumented_task(",
+        "comment_created_at": "2025-06-20T14:54:50+00:00",
+        "comment_author": "JoshFerge",
+        "comment_body": "you may want to consider adding `acks_late=True` here. we were having issues with our seer backfill and these chained tasks, as a deploy will kill the task and it won't restart by default. https://github.com/getsentry/sentry/blob/31b8a0c441d69fd8a9dd57c13b2e7f63a2a082df/src/sentry/tasks/embeddings_grouping/backfill_seer_grouping_records_for_project.py#L50",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2159179811",
+        "repo_full_name": "getsentry/sentry",
+        "pr_number": 93864,
+        "pr_file": "src/sentry/replays/tasks.py",
+        "discussion_id": "2159164149",
+        "commented_code": "@@ -168,3 +169,91 @@ def _delete_if_exists(filename: str) -> None:\n         storage_kv.delete(filename)\n     except NotFound:\n         pass\n+\n+\n+@instrumented_task(\n+    name=\"sentry.replays.tasks.run_bulk_replay_delete_job\",\n+    queue=\"replays.delete_replay\",\n+    default_retry_delay=5,\n+    max_retries=5,\n+    silo_mode=SiloMode.REGION,\n+    taskworker_config=TaskworkerConfig(namespace=replays_tasks, retry=Retry(times=5)),\n+)\n+def run_bulk_replay_delete_job(replay_delete_job_id: int, offset: int, limit: int = 100) -> None:\n+    \"\"\"Replay bulk deletion task.\n+\n+    We specify retry behavior in the task definition. However, if the task fails more than 5 times\n+    the process will stop and the task has permanently failed. We checkpoint our offset position\n+    in the model. Restarting the task will use the offset passed by the caller. If you want to\n+    restart the task from the previous checkpoint you must pass the checkpoint explicitly.\n+    \"\"\"\n+    job = ReplayDeletionJobModel.objects.get(id=replay_delete_job_id)\n+\n+    # If this is the first run of the task we set the model to in-progress.\n+    if offset == 0:\n+        job.status = \"in-progress\"\n+        job.save()\n+\n+    # Delete the replays within a limited range. If more replays exist an incremented offset value\n+    # is returned.\n+    results = fetch_rows_matching_pattern(\n+        project_id=job.project_id,\n+        start=job.range_start,\n+        end=job.range_end,\n+        query=job.query,\n+        environment=job.environments,\n+        limit=limit,\n+        offset=offset,\n+    )\n+\n+    # Delete the matched rows if any rows were returned.\n+    if len(results[\"rows\"]) > 0:\n+        delete_matched_rows(job.project_id, results[\"rows\"])\n+\n+    # Compute the next offset to start from. If no further processing is required then this serves\n+    # as a count of replays deleted.\n+    next_offset = offset + len(results[\"rows\"])\n+\n+    if results[\"has_more\"]:\n+        # Checkpoint before continuing.\n+        job.offset = next_offset\n+        job.save()\n+\n+        run_bulk_replay_delete_job.delay(job.id, next_offset)\n+        return None\n+    else:\n+        # If we've finished deleting all the replays for the selection. We can move the status to\n+        # completed and exit the call chain.\n+        job.offset = next_offset\n+        job.status = \"completed\"\n+        job.save()\n+        return None\n+\n+\n+@instrumented_task(",
+        "comment_created_at": "2025-06-20T15:04:19+00:00",
+        "comment_author": "cmanallen",
+        "comment_body": "Thank you for catching!  I thought this was default behavior.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2146238860",
+    "pr_number": 93553,
+    "pr_file": "src/sentry/workflow_engine/tasks.py",
+    "created_at": "2025-06-13T22:48:53+00:00",
+    "commented_code": "+from sentry.issues.status_change_consumer import group_status_update_registry\n+from sentry.issues.status_change_message import StatusChangeMessageData\n+from sentry.models.activity import Activity\n+from sentry.models.group import Group\n+from sentry.silo.base import SiloMode\n+from sentry.tasks.base import instrumented_task\n+from sentry.taskworker import config, namespaces, retry\n+from sentry.types.activity import ActivityType\n+from sentry.utils import metrics\n+\n+SUPPORTED_ACTIVITIES = [ActivityType.SET_RESOLVED]\n+\n+\n+@instrumented_task(\n+    name=\"sentry.workflow_engine.processors.process_workflow_task\",\n+    queue=\"process_workflows\",\n+    default_retry_delay=5,\n+    max_retries=5,\n+    soft_time_limit=50,\n+    time_limit=60,\n+    silo_mode=SiloMode.REGION,\n+    taskworker_config=config.TaskworkerConfig(\n+        namespace=namespaces.workflow_engine_tasks,\n+        processing_deadline_duration=60,\n+        retry=retry.Retry(\n+            times=3,\n+            delay=5,",
+    "repo_full_name": "getsentry/sentry",
+    "discussion_comments": [
+      {
+        "comment_id": "2146238860",
+        "repo_full_name": "getsentry/sentry",
+        "pr_number": 93553,
+        "pr_file": "src/sentry/workflow_engine/tasks.py",
+        "discussion_id": "2146238860",
+        "commented_code": "@@ -0,0 +1,73 @@\n+from sentry.issues.status_change_consumer import group_status_update_registry\n+from sentry.issues.status_change_message import StatusChangeMessageData\n+from sentry.models.activity import Activity\n+from sentry.models.group import Group\n+from sentry.silo.base import SiloMode\n+from sentry.tasks.base import instrumented_task\n+from sentry.taskworker import config, namespaces, retry\n+from sentry.types.activity import ActivityType\n+from sentry.utils import metrics\n+\n+SUPPORTED_ACTIVITIES = [ActivityType.SET_RESOLVED]\n+\n+\n+@instrumented_task(\n+    name=\"sentry.workflow_engine.processors.process_workflow_task\",\n+    queue=\"process_workflows\",\n+    default_retry_delay=5,\n+    max_retries=5,\n+    soft_time_limit=50,\n+    time_limit=60,\n+    silo_mode=SiloMode.REGION,\n+    taskworker_config=config.TaskworkerConfig(\n+        namespace=namespaces.workflow_engine_tasks,\n+        processing_deadline_duration=60,\n+        retry=retry.Retry(\n+            times=3,\n+            delay=5,",
+        "comment_created_at": "2025-06-13T22:48:53+00:00",
+        "comment_author": "saponifi3d",
+        "comment_body": "Anyone have any thoughts on what these values for retry / limits should be? just using what we have been.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2152604820",
+        "repo_full_name": "getsentry/sentry",
+        "pr_number": 93553,
+        "pr_file": "src/sentry/workflow_engine/tasks.py",
+        "discussion_id": "2146238860",
+        "commented_code": "@@ -0,0 +1,73 @@\n+from sentry.issues.status_change_consumer import group_status_update_registry\n+from sentry.issues.status_change_message import StatusChangeMessageData\n+from sentry.models.activity import Activity\n+from sentry.models.group import Group\n+from sentry.silo.base import SiloMode\n+from sentry.tasks.base import instrumented_task\n+from sentry.taskworker import config, namespaces, retry\n+from sentry.types.activity import ActivityType\n+from sentry.utils import metrics\n+\n+SUPPORTED_ACTIVITIES = [ActivityType.SET_RESOLVED]\n+\n+\n+@instrumented_task(\n+    name=\"sentry.workflow_engine.processors.process_workflow_task\",\n+    queue=\"process_workflows\",\n+    default_retry_delay=5,\n+    max_retries=5,\n+    soft_time_limit=50,\n+    time_limit=60,\n+    silo_mode=SiloMode.REGION,\n+    taskworker_config=config.TaskworkerConfig(\n+        namespace=namespaces.workflow_engine_tasks,\n+        processing_deadline_duration=60,\n+        retry=retry.Retry(\n+            times=3,\n+            delay=5,",
+        "comment_created_at": "2025-06-17T15:45:00+00:00",
+        "comment_author": "markstory",
+        "comment_body": "There isn't any right/wrong answer here. However, if you are going to define `Retry` you should also define on which exceptions that retrys should be performed. Without that retries will only be automatically performed for `TimeoutError` or an explicit `RetryError`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2153061429",
+        "repo_full_name": "getsentry/sentry",
+        "pr_number": 93553,
+        "pr_file": "src/sentry/workflow_engine/tasks.py",
+        "discussion_id": "2146238860",
+        "commented_code": "@@ -0,0 +1,73 @@\n+from sentry.issues.status_change_consumer import group_status_update_registry\n+from sentry.issues.status_change_message import StatusChangeMessageData\n+from sentry.models.activity import Activity\n+from sentry.models.group import Group\n+from sentry.silo.base import SiloMode\n+from sentry.tasks.base import instrumented_task\n+from sentry.taskworker import config, namespaces, retry\n+from sentry.types.activity import ActivityType\n+from sentry.utils import metrics\n+\n+SUPPORTED_ACTIVITIES = [ActivityType.SET_RESOLVED]\n+\n+\n+@instrumented_task(\n+    name=\"sentry.workflow_engine.processors.process_workflow_task\",\n+    queue=\"process_workflows\",\n+    default_retry_delay=5,\n+    max_retries=5,\n+    soft_time_limit=50,\n+    time_limit=60,\n+    silo_mode=SiloMode.REGION,\n+    taskworker_config=config.TaskworkerConfig(\n+        namespace=namespaces.workflow_engine_tasks,\n+        processing_deadline_duration=60,\n+        retry=retry.Retry(\n+            times=3,\n+            delay=5,",
+        "comment_created_at": "2025-06-17T19:58:34+00:00",
+        "comment_author": "saponifi3d",
+        "comment_body": "\ud83d\udc4d thanks for the additional info -- seems like a number we can fudge around with in the future then, and we can use the same configuration as we are with issue alert processing (that's where i pulled these initial numbers from)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2153291181",
+        "repo_full_name": "getsentry/sentry",
+        "pr_number": 93553,
+        "pr_file": "src/sentry/workflow_engine/tasks.py",
+        "discussion_id": "2146238860",
+        "commented_code": "@@ -0,0 +1,73 @@\n+from sentry.issues.status_change_consumer import group_status_update_registry\n+from sentry.issues.status_change_message import StatusChangeMessageData\n+from sentry.models.activity import Activity\n+from sentry.models.group import Group\n+from sentry.silo.base import SiloMode\n+from sentry.tasks.base import instrumented_task\n+from sentry.taskworker import config, namespaces, retry\n+from sentry.types.activity import ActivityType\n+from sentry.utils import metrics\n+\n+SUPPORTED_ACTIVITIES = [ActivityType.SET_RESOLVED]\n+\n+\n+@instrumented_task(\n+    name=\"sentry.workflow_engine.processors.process_workflow_task\",\n+    queue=\"process_workflows\",\n+    default_retry_delay=5,\n+    max_retries=5,\n+    soft_time_limit=50,\n+    time_limit=60,\n+    silo_mode=SiloMode.REGION,\n+    taskworker_config=config.TaskworkerConfig(\n+        namespace=namespaces.workflow_engine_tasks,\n+        processing_deadline_duration=60,\n+        retry=retry.Retry(\n+            times=3,\n+            delay=5,",
+        "comment_created_at": "2025-06-17T22:47:40+00:00",
+        "comment_author": "kcons",
+        "comment_body": "when would we _not_ want to go with `acks_late=True`  in cases where we'd rather double process than drop one?",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

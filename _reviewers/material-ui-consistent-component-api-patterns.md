@@ -18,19 +18,21 @@ When evolving APIs, provide clear migration paths and documentation to minimize 
 ```jsx
 // When migrating from specific props to slotProps pattern
 // Support both patterns temporarily
+{% raw %}
 <Autocomplete
-  renderInput={(params) => (
-    <TextField 
-      {...params} 
-      // New pattern
-      slotProps={{
-        input: { ...params.slotProps.input, ref },
-      }}
-      // Legacy pattern (deprecated but supported)
-      InputProps={{ ...params.InputProps, ref }}
-    />
-  )}
+    renderInput={(params) => (
+        <TextField
+            {...params}
+            // New pattern
+            slotProps={{
+                input: {...params.slotProps.input, ref},
+            }}
+            // Legacy pattern (deprecated but supported)
+            InputProps={{...params.InputProps, ref}}
+        />
+    )}
 />
+{% endraw %}
 ```
 
 For function parameters in component APIs, ensure they match their intended use and are properly typed. Use dedicated comparison functions rather than repurposing other APIs:

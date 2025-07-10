@@ -18,8 +18,8 @@ For example:
 <!-- Using <nav> with aria-labelledby provides better semantic structure for screen readers -->
 <!-- Visually hidden heading allows screen reader navigation via headers while remaining invisible -->
 <nav class="paginator" aria-labelledby="pagination">
-  <h2 id="pagination" class="visually-hidden">{% blocktranslate with name=opts.verbose_name %}Pagination {{ name }} entries{% endblocktranslate %}</h2>
-  <!-- Pagination content... -->
+    <h2 id="pagination" class="visually-hidden">{%raw%}{% blocktranslate with name=opts.verbose_name %}Pagination {{ name }} entries{% endblocktranslate %}{%endraw%}</h2>
+    <!-- Pagination content... -->
 </nav>
 
 <!-- Using title and aria-label attributes to provide full text content to all users -->

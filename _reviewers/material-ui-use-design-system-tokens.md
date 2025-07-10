@@ -14,6 +14,7 @@ Always use design system tokens (theme values, breakpoints, spacing units) inste
 
 Bad:
 ```tsx
+{% raw %}
 <Grid sx={{ 
   width: '44px',
   fontWeight: 'bold',
@@ -21,10 +22,12 @@ Bad:
     // ...
   }
 }} />
+{% endraw %}
 ```
 
 Good:
 ```tsx
+{% raw %}
 <Grid sx={{ 
   width: theme.spacing(5.5), // or appropriate token
   fontWeight: theme.typography.fontWeightBold,
@@ -32,6 +35,7 @@ Good:
     // ...
   }
 }} />
+{% endraw %}
 ```
 
 This practice:

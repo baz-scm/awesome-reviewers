@@ -1,0 +1,472 @@
+[
+  {
+    "discussion_id": "1939262166",
+    "pr_number": 18627,
+    "pr_file": "django/tasks/signal_handlers.py",
+    "created_at": "2025-02-03T12:01:02+00:00",
+    "commented_code": "+import logging\n+\n+from asgiref.local import Local\n+\n+from django.core.signals import setting_changed\n+from django.dispatch import receiver\n+\n+from .signals import task_enqueued, task_finished\n+from .task import ResultStatus\n+\n+logger = logging.getLogger(\"django.tasks\")\n+\n+\n+@receiver(setting_changed)\n+def clear_tasks_handlers(*, setting: str, **kwargs: dict) -> None:\n+    \"\"\"\n+    Reset the connection handler whenever the settings change\n+    \"\"\"\n+    if setting == \"TASKS\":\n+        from django.tasks import tasks\n+\n+        tasks._settings = tasks.settings = tasks.configure_settings(None)\n+        tasks._connections = Local()\n+\n+\n+@receiver(task_enqueued)\n+def log_task_enqueued(sender, task_result, **kwargs):\n+    logger.debug(\n+        \"Task id=%s path=%s enqueued backend=%s\",\n+        task_result.id,\n+        task_result.task.module_path,\n+        task_result.backend,\n+    )\n+\n+\n+@receiver(task_finished)\n+def log_task_finished(sender, task_result, **kwargs):\n+    if task_result.status == ResultStatus.FAILED:\n+        # Use `.exception` to integrate with error monitoring tools (eg Sentry)\n+        log_method = logger.exception",
+    "repo_full_name": "django/django",
+    "discussion_comments": [
+      {
+        "comment_id": "1939262166",
+        "repo_full_name": "django/django",
+        "pr_number": 18627,
+        "pr_file": "django/tasks/signal_handlers.py",
+        "discussion_id": "1939262166",
+        "commented_code": "@@ -0,0 +1,49 @@\n+import logging\n+\n+from asgiref.local import Local\n+\n+from django.core.signals import setting_changed\n+from django.dispatch import receiver\n+\n+from .signals import task_enqueued, task_finished\n+from .task import ResultStatus\n+\n+logger = logging.getLogger(\"django.tasks\")\n+\n+\n+@receiver(setting_changed)\n+def clear_tasks_handlers(*, setting: str, **kwargs: dict) -> None:\n+    \"\"\"\n+    Reset the connection handler whenever the settings change\n+    \"\"\"\n+    if setting == \"TASKS\":\n+        from django.tasks import tasks\n+\n+        tasks._settings = tasks.settings = tasks.configure_settings(None)\n+        tasks._connections = Local()\n+\n+\n+@receiver(task_enqueued)\n+def log_task_enqueued(sender, task_result, **kwargs):\n+    logger.debug(\n+        \"Task id=%s path=%s enqueued backend=%s\",\n+        task_result.id,\n+        task_result.task.module_path,\n+        task_result.backend,\n+    )\n+\n+\n+@receiver(task_finished)\n+def log_task_finished(sender, task_result, **kwargs):\n+    if task_result.status == ResultStatus.FAILED:\n+        # Use `.exception` to integrate with error monitoring tools (eg Sentry)\n+        log_method = logger.exception",
+        "comment_created_at": "2025-02-03T12:01:02+00:00",
+        "comment_author": "bluetech",
+        "comment_body": "`logger.exception` is same as `logger.error` with `exc_info=` set to the current exception. Since there is no current exception here, it should not be used.\r\n\r\nAlso, I find it slightly nicer to use `logger.log(log_level, ...)` and make the level conditional instead of making the method conditional.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2172338868",
+        "repo_full_name": "django/django",
+        "pr_number": 18627,
+        "pr_file": "django/tasks/signal_handlers.py",
+        "discussion_id": "1939262166",
+        "commented_code": "@@ -0,0 +1,49 @@\n+import logging\n+\n+from asgiref.local import Local\n+\n+from django.core.signals import setting_changed\n+from django.dispatch import receiver\n+\n+from .signals import task_enqueued, task_finished\n+from .task import ResultStatus\n+\n+logger = logging.getLogger(\"django.tasks\")\n+\n+\n+@receiver(setting_changed)\n+def clear_tasks_handlers(*, setting: str, **kwargs: dict) -> None:\n+    \"\"\"\n+    Reset the connection handler whenever the settings change\n+    \"\"\"\n+    if setting == \"TASKS\":\n+        from django.tasks import tasks\n+\n+        tasks._settings = tasks.settings = tasks.configure_settings(None)\n+        tasks._connections = Local()\n+\n+\n+@receiver(task_enqueued)\n+def log_task_enqueued(sender, task_result, **kwargs):\n+    logger.debug(\n+        \"Task id=%s path=%s enqueued backend=%s\",\n+        task_result.id,\n+        task_result.task.module_path,\n+        task_result.backend,\n+    )\n+\n+\n+@receiver(task_finished)\n+def log_task_finished(sender, task_result, **kwargs):\n+    if task_result.status == ResultStatus.FAILED:\n+        # Use `.exception` to integrate with error monitoring tools (eg Sentry)\n+        log_method = logger.exception",
+        "comment_created_at": "2025-06-27T15:59:15+00:00",
+        "comment_author": "RealOrangeOne",
+        "comment_body": "`.exception` is still useful here. Whilst there's no exception in scope, the signal is fired in the context of the tasks `except` block, so the exception will still be included in the logging.\r\n\r\nIf it wasn't for that, I'd port to `logger.log`, but it gets more complex with the need for `exc_info`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2117128559",
+    "pr_number": 19512,
+    "pr_file": "django/db/backends/utils.py",
+    "created_at": "2025-05-31T03:10:25+00:00",
+    "commented_code": "return self.cursor.executemany(sql, param_list)\n \n \n+def _log_query(connection, start, stop, sql, params=None):\n+    duration = stop - start\n+    connection.queries_log.append(\n+        {\n+            \"sql\": \"%s\" % sql,\n+            \"time\": \"%.3f\" % duration,\n+        }\n+    )\n+    extra = {\n+        \"duration\": duration,\n+        \"sql\": sql,\n+        \"params\": params,\n+        \"alias\": connection.alias,\n+        \"format_sql\": connection.ops.format_debug_sql,\n+    }\n+    logger.debug(\n+        \"(%(duration).3f) %(sql)s; args=%(params)s; alias=%(alias)s\",\n+        extra,",
+    "repo_full_name": "django/django",
+    "discussion_comments": [
+      {
+        "comment_id": "2117128559",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/db/backends/utils.py",
+        "discussion_id": "2117128559",
+        "commented_code": "@@ -114,6 +114,28 @@ def _executemany(self, sql, param_list, *ignored_wrapper_args):\n             return self.cursor.executemany(sql, param_list)\n \n \n+def _log_query(connection, start, stop, sql, params=None):\n+    duration = stop - start\n+    connection.queries_log.append(\n+        {\n+            \"sql\": \"%s\" % sql,\n+            \"time\": \"%.3f\" % duration,\n+        }\n+    )\n+    extra = {\n+        \"duration\": duration,\n+        \"sql\": sql,\n+        \"params\": params,\n+        \"alias\": connection.alias,\n+        \"format_sql\": connection.ops.format_debug_sql,\n+    }\n+    logger.debug(\n+        \"(%(duration).3f) %(sql)s; args=%(params)s; alias=%(alias)s\",\n+        extra,",
+        "comment_created_at": "2025-05-31T03:10:25+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "Passing a dict here is tempting, but I worry it would unnecessarily break projects with a custom `Formatter` drilling into `record.args[0]` now that `record.args` is a dict. (But I can be convinced that's too paranoid.)\r\n\r\nAlso, does `format_sql` belong in args if it doesn't make its way into the message? It's just an _extra_ attribute we stash for another use.\r\n\r\nWere you planning on segregating this cleanup into a different commit? We could have the second one then  replace `self.db.ops.format_debug_sql(sql)`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2123635522",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/db/backends/utils.py",
+        "discussion_id": "2117128559",
+        "commented_code": "@@ -114,6 +114,28 @@ def _executemany(self, sql, param_list, *ignored_wrapper_args):\n             return self.cursor.executemany(sql, param_list)\n \n \n+def _log_query(connection, start, stop, sql, params=None):\n+    duration = stop - start\n+    connection.queries_log.append(\n+        {\n+            \"sql\": \"%s\" % sql,\n+            \"time\": \"%.3f\" % duration,\n+        }\n+    )\n+    extra = {\n+        \"duration\": duration,\n+        \"sql\": sql,\n+        \"params\": params,\n+        \"alias\": connection.alias,\n+        \"format_sql\": connection.ops.format_debug_sql,\n+    }\n+    logger.debug(\n+        \"(%(duration).3f) %(sql)s; args=%(params)s; alias=%(alias)s\",\n+        extra,",
+        "comment_created_at": "2025-06-03T12:15:01+00:00",
+        "comment_author": "nessita",
+        "comment_body": "I'm happy to revert the `args` change, now that we have all isolated in the debug test runner, I think we can make it work more isolated-ly and cleanly.\r\n\r\nYes, I was planning on separating this into a different commit. And in fact, looking at this a week after, I wonder if we should add to the `extra` dict something more generic than the SQL formatter. I was thinking adding the connection to the `extra`, but I guess this would be a decision in the opposite direction regarding your comment of holding a reference to the `ops` instance.\r\n\r\nDo you have any suggestion?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2123730651",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/db/backends/utils.py",
+        "discussion_id": "2117128559",
+        "commented_code": "@@ -114,6 +114,28 @@ def _executemany(self, sql, param_list, *ignored_wrapper_args):\n             return self.cursor.executemany(sql, param_list)\n \n \n+def _log_query(connection, start, stop, sql, params=None):\n+    duration = stop - start\n+    connection.queries_log.append(\n+        {\n+            \"sql\": \"%s\" % sql,\n+            \"time\": \"%.3f\" % duration,\n+        }\n+    )\n+    extra = {\n+        \"duration\": duration,\n+        \"sql\": sql,\n+        \"params\": params,\n+        \"alias\": connection.alias,\n+        \"format_sql\": connection.ops.format_debug_sql,\n+    }\n+    logger.debug(\n+        \"(%(duration).3f) %(sql)s; args=%(params)s; alias=%(alias)s\",\n+        extra,",
+        "comment_created_at": "2025-06-03T12:55:28+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "Memory might be less of a concern with `DEBUG=True`, but ticket-34865 as I understand it was about avoiding holding strong references to the Connection object, so I just didn't want to regress here and do something similar with Ops.\r\n\r\nSince we're including `alias`, that should be enough information to get dotted class names from `DATABASES` if a custom formatter wants it. I think that's enough?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2124085705",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/db/backends/utils.py",
+        "discussion_id": "2117128559",
+        "commented_code": "@@ -114,6 +114,28 @@ def _executemany(self, sql, param_list, *ignored_wrapper_args):\n             return self.cursor.executemany(sql, param_list)\n \n \n+def _log_query(connection, start, stop, sql, params=None):\n+    duration = stop - start\n+    connection.queries_log.append(\n+        {\n+            \"sql\": \"%s\" % sql,\n+            \"time\": \"%.3f\" % duration,\n+        }\n+    )\n+    extra = {\n+        \"duration\": duration,\n+        \"sql\": sql,\n+        \"params\": params,\n+        \"alias\": connection.alias,\n+        \"format_sql\": connection.ops.format_debug_sql,\n+    }\n+    logger.debug(\n+        \"(%(duration).3f) %(sql)s; args=%(params)s; alias=%(alias)s\",\n+        extra,",
+        "comment_created_at": "2025-06-03T14:43:10+00:00",
+        "comment_author": "nessita",
+        "comment_body": "> `alias`, that should be enough information to get dotted class names from `DATABASES`\r\n\r\nCan you expand on this a bit, when you can?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2124124480",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/db/backends/utils.py",
+        "discussion_id": "2117128559",
+        "commented_code": "@@ -114,6 +114,28 @@ def _executemany(self, sql, param_list, *ignored_wrapper_args):\n             return self.cursor.executemany(sql, param_list)\n \n \n+def _log_query(connection, start, stop, sql, params=None):\n+    duration = stop - start\n+    connection.queries_log.append(\n+        {\n+            \"sql\": \"%s\" % sql,\n+            \"time\": \"%.3f\" % duration,\n+        }\n+    )\n+    extra = {\n+        \"duration\": duration,\n+        \"sql\": sql,\n+        \"params\": params,\n+        \"alias\": connection.alias,\n+        \"format_sql\": connection.ops.format_debug_sql,\n+    }\n+    logger.debug(\n+        \"(%(duration).3f) %(sql)s; args=%(params)s; alias=%(alias)s\",\n+        extra,",
+        "comment_created_at": "2025-06-03T14:54:16+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "Sorry, I meant dotted module name. All I meant was that if the custom formatter needed to cope with multiple backend connections, they could look up the value of `alias` from the log record, e.g. `other` in `settings.DATABASES[\"other\"][\"engine\"]`, giving `django.contrib.gis.db.backends.postgis`, and be able to import whatever methods they need from that module to do additional formatting. (Looking again,  that's probably too roundabout, they could just do the lookup from `django.db.connections`.\r\n\r\ntl;dr, I'm not sure what more context is needed besides alias? \ud83e\udd14 ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2124717896",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/db/backends/utils.py",
+        "discussion_id": "2117128559",
+        "commented_code": "@@ -114,6 +114,28 @@ def _executemany(self, sql, param_list, *ignored_wrapper_args):\n             return self.cursor.executemany(sql, param_list)\n \n \n+def _log_query(connection, start, stop, sql, params=None):\n+    duration = stop - start\n+    connection.queries_log.append(\n+        {\n+            \"sql\": \"%s\" % sql,\n+            \"time\": \"%.3f\" % duration,\n+        }\n+    )\n+    extra = {\n+        \"duration\": duration,\n+        \"sql\": sql,\n+        \"params\": params,\n+        \"alias\": connection.alias,\n+        \"format_sql\": connection.ops.format_debug_sql,\n+    }\n+    logger.debug(\n+        \"(%(duration).3f) %(sql)s; args=%(params)s; alias=%(alias)s\",\n+        extra,",
+        "comment_created_at": "2025-06-03T19:18:27+00:00",
+        "comment_author": "nessita",
+        "comment_body": "@jacobtylerwalls That makes perfect sense and I have made use of that. I have avoided passing the formatter or ops altogether, getting the proper sql formatter method in the test debug log formatter. I'm starting to add tests, see the many placeholder, I will add the tests contents tomorrow after the security release.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2117147654",
+    "pr_number": 19512,
+    "pr_file": "django/test/runner.py",
+    "created_at": "2025-05-31T03:20:15+00:00",
+    "commented_code": "tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        try:\n+            sql = record.args.get(\"sql\")\n+        except AttributeError:\n+            sql = None",
+    "repo_full_name": "django/django",
+    "discussion_comments": [
+      {
+        "comment_id": "2117147654",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/test/runner.py",
+        "discussion_id": "2117147654",
+        "commented_code": "@@ -41,52 +40,63 @@\n     tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        try:\n+            sql = record.args.get(\"sql\")\n+        except AttributeError:\n+            sql = None",
+        "comment_created_at": "2025-05-31T03:20:15+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "This isn't covered, but if you still want the safety maybe `get(\"sql\", None)`?\r\n\r\nOr this is moot if you preserve args as a tuple, e.g.:\r\n```py\r\n        record.args = (\r\n            record.args[0],\r\n            record.format_sql(record.args[1]),\r\n            *record.args[2:],\r\n        )\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2123636710",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/test/runner.py",
+        "discussion_id": "2117147654",
+        "commented_code": "@@ -41,52 +40,63 @@\n     tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        try:\n+            sql = record.args.get(\"sql\")\n+        except AttributeError:\n+            sql = None",
+        "comment_created_at": "2025-06-03T12:15:38+00:00",
+        "comment_author": "nessita",
+        "comment_body": "Right, I think we should go down this path to make the less disruptive change possible.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2123728202",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/test/runner.py",
+        "discussion_id": "2117147654",
+        "commented_code": "@@ -41,52 +40,63 @@\n     tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        try:\n+            sql = record.args.get(\"sql\")\n+        except AttributeError:\n+            sql = None",
+        "comment_created_at": "2025-06-03T12:54:34+00:00",
+        "comment_author": "nessita",
+        "comment_body": "This is my formatter now:\r\n```python\r\nclass QueryFormatter(logging.Formatter):\r\n    def format(self, record):\r\n        if (format_sql := getattr(record, \"format_sql\", None)):\r\n            if isinstance(record.args, tuple) and len(record.args) > 1:\r\n                record.args[1] = format_sql(record.args[1])\r\n            elif isinstance(record.args, dict) and \"sql\" in record.args:\r\n                record.args[\"sql\"] = format_sql(record.args[\"sql\"])\r\n        return super().format(record)\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2123768909",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/test/runner.py",
+        "discussion_id": "2117147654",
+        "commented_code": "@@ -41,52 +40,63 @@\n     tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        try:\n+            sql = record.args.get(\"sql\")\n+        except AttributeError:\n+            sql = None",
+        "comment_created_at": "2025-06-03T13:11:23+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "Terrific.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2124088271",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/test/runner.py",
+        "discussion_id": "2117147654",
+        "commented_code": "@@ -41,52 +40,63 @@\n     tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        try:\n+            sql = record.args.get(\"sql\")\n+        except AttributeError:\n+            sql = None",
+        "comment_created_at": "2025-06-03T14:43:48+00:00",
+        "comment_author": "nessita",
+        "comment_body": "I will incorporate this new version, and I will revert the args change to dict in the backends code. I will ensure this is properly tested and covered.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2146931982",
+    "pr_number": 19512,
+    "pr_file": "django/test/runner.py",
+    "created_at": "2025-06-14T12:54:57+00:00",
+    "commented_code": "tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        if (alias := getattr(record, \"alias\", None)) in connections:\n+            format_sql = connections[alias].ops.format_debug_sql\n+\n+            if args := record.args:\n+                if isinstance(args, tuple) and len(args) > 1 and (sql := args[1]):\n+                    record.args = (args[0], format_sql(sql), *args[2:])\n+                elif isinstance(record.args, dict) and (sql := record.args.get(\"sql\")):\n+                    record.args[\"sql\"] = format_sql(sql)",
+    "repo_full_name": "django/django",
+    "discussion_comments": [
+      {
+        "comment_id": "2146931982",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/test/runner.py",
+        "discussion_id": "2146931982",
+        "commented_code": "@@ -41,52 +40,69 @@\n     tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        if (alias := getattr(record, \"alias\", None)) in connections:\n+            format_sql = connections[alias].ops.format_debug_sql\n+\n+            if args := record.args:\n+                if isinstance(args, tuple) and len(args) > 1 and (sql := args[1]):\n+                    record.args = (args[0], format_sql(sql), *args[2:])\n+                elif isinstance(record.args, dict) and (sql := record.args.get(\"sql\")):\n+                    record.args[\"sql\"] = format_sql(sql)",
+        "comment_created_at": "2025-06-14T12:54:57+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "This repeats the formatting operation, since `sql` comes in via both `args` and `extra`. There are still some performance issues in `sqlparse` that might make this worth avoiding.\r\n\r\nI'm not sure we need the portion dealing with args. I think the reason the logging call includes `extra` is in case a user wants to configure a `Formatter` without the burden of drilling into args, which is the situation we find ourselves in now with `DebugSqlTextTestResult`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2147403696",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/test/runner.py",
+        "discussion_id": "2146931982",
+        "commented_code": "@@ -41,52 +40,69 @@\n     tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        if (alias := getattr(record, \"alias\", None)) in connections:\n+            format_sql = connections[alias].ops.format_debug_sql\n+\n+            if args := record.args:\n+                if isinstance(args, tuple) and len(args) > 1 and (sql := args[1]):\n+                    record.args = (args[0], format_sql(sql), *args[2:])\n+                elif isinstance(record.args, dict) and (sql := record.args.get(\"sql\")):\n+                    record.args[\"sql\"] = format_sql(sql)",
+        "comment_created_at": "2025-06-15T02:25:23+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "> I'm not sure we need the portion dealing with args.\r\n\r\nAh forget that: keeping the args handling is more future-proof \ud83d\udc4d . Only question here is on the double-format.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2150526399",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/test/runner.py",
+        "discussion_id": "2146931982",
+        "commented_code": "@@ -41,52 +40,69 @@\n     tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        if (alias := getattr(record, \"alias\", None)) in connections:\n+            format_sql = connections[alias].ops.format_debug_sql\n+\n+            if args := record.args:\n+                if isinstance(args, tuple) and len(args) > 1 and (sql := args[1]):\n+                    record.args = (args[0], format_sql(sql), *args[2:])\n+                elif isinstance(record.args, dict) and (sql := record.args.get(\"sql\")):\n+                    record.args[\"sql\"] = format_sql(sql)",
+        "comment_created_at": "2025-06-16T17:42:30+00:00",
+        "comment_author": "nessita",
+        "comment_body": "What would be the specific concern about the double-formatting? I understand that `sqlparse` can be slow, but the formatting is now isolated to the test runner and only triggered via `--debug-sql`, which should keep the impact minimal.\r\n\r\nThat said, I see two valid approaches here. One is to keep the `SQLFormatter` as-is: flexible and robust enough to plug into any handler with the formatter style of your choice. That makes it broadly reusable and keeps the logic centralized.\r\n\r\nThe other is to take a more minimal approach and only handle exactly what's needed for the current `--debug-sql` use case. That would keep the formatter lean, and leave any extended logic (like formatting extra fields) to be implemented by consumers as needed.\r\n\r\nI'm happy to go either way depending on what we value more here: generality or minimalism, though I have a slight preference for the former.\r\n\r\nThoughts?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2150569467",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/test/runner.py",
+        "discussion_id": "2146931982",
+        "commented_code": "@@ -41,52 +40,69 @@\n     tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        if (alias := getattr(record, \"alias\", None)) in connections:\n+            format_sql = connections[alias].ops.format_debug_sql\n+\n+            if args := record.args:\n+                if isinstance(args, tuple) and len(args) > 1 and (sql := args[1]):\n+                    record.args = (args[0], format_sql(sql), *args[2:])\n+                elif isinstance(record.args, dict) and (sql := record.args.get(\"sql\")):\n+                    record.args[\"sql\"] = format_sql(sql)",
+        "comment_created_at": "2025-06-16T18:08:14+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "I like how flexible this is. When I saw this last I was just wondering if it was worth adding a quick something like\r\n\r\n```\r\nif args_sql == record_sql:\r\n    record.sql = formatted_sql  # reuse it\r\nelse:\r\n    record.sql = format_debug_sql(...\r\n```\r\n\r\n, but I agree this is at most nice to have and at worst a little special-case-y. I'm good with this in its current form.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2150589962",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/test/runner.py",
+        "discussion_id": "2146931982",
+        "commented_code": "@@ -41,52 +40,69 @@\n     tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        if (alias := getattr(record, \"alias\", None)) in connections:\n+            format_sql = connections[alias].ops.format_debug_sql\n+\n+            if args := record.args:\n+                if isinstance(args, tuple) and len(args) > 1 and (sql := args[1]):\n+                    record.args = (args[0], format_sql(sql), *args[2:])\n+                elif isinstance(record.args, dict) and (sql := record.args.get(\"sql\")):\n+                    record.args[\"sql\"] = format_sql(sql)",
+        "comment_created_at": "2025-06-16T18:21:36+00:00",
+        "comment_author": "nessita",
+        "comment_body": "I like your proposal though, will ponder a bit about that.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2150651010",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/test/runner.py",
+        "discussion_id": "2146931982",
+        "commented_code": "@@ -41,52 +40,69 @@\n     tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        if (alias := getattr(record, \"alias\", None)) in connections:\n+            format_sql = connections[alias].ops.format_debug_sql\n+\n+            if args := record.args:\n+                if isinstance(args, tuple) and len(args) > 1 and (sql := args[1]):\n+                    record.args = (args[0], format_sql(sql), *args[2:])\n+                elif isinstance(record.args, dict) and (sql := record.args.get(\"sql\")):\n+                    record.args[\"sql\"] = format_sql(sql)",
+        "comment_created_at": "2025-06-16T18:53:53+00:00",
+        "comment_author": "nessita",
+        "comment_body": "@jacobtylerwalls pushed and squashed these bits:\r\n```diff\r\ndiff --git a/django/test/runner.py b/django/test/runner.py\r\nindex 00130bc809..3e5c319ade 100644\r\n--- a/django/test/runner.py\r\n+++ b/django/test/runner.py\r\n@@ -45,14 +45,19 @@ class QueryFormatter(logging.Formatter):\r\n         if (alias := getattr(record, \"alias\", None)) in connections:\r\n             format_sql = connections[alias].ops.format_debug_sql\r\n \r\n+            sql = None\r\n+            formatted_sql = None\r\n             if args := record.args:\r\n                 if isinstance(args, tuple) and len(args) > 1 and (sql := args[1]):\r\n-                    record.args = (args[0], format_sql(sql), *args[2:])\r\n+                    record.args = (args[0], formatted_sql := format_sql(sql), *args[2:])\r\n                 elif isinstance(record.args, dict) and (sql := record.args.get(\"sql\")):\r\n-                    record.args[\"sql\"] = format_sql(sql)\r\n+                    record.args[\"sql\"] = formatted_sql = format_sql(sql)\r\n \r\n-            if sql := getattr(record, \"sql\", None):\r\n-                record.sql = format_sql(sql)\r\n+            if extra_sql := getattr(record, \"sql\", None):\r\n+                if extra_sql == sql:\r\n+                    record.sql = formatted_sql\r\n+                else:\r\n+                    record.sql = format_sql(extra_sql)\r\n \r\n         return super().format(record)\r\n \r\ndiff --git a/tests/test_runner/test_debug_sql.py b/tests/test_runner/test_debug_sql.py\r\nindex 158cb2b6df..73f61f1c89 100644\r\n--- a/tests/test_runner/test_debug_sql.py\r\n+++ b/tests/test_runner/test_debug_sql.py\r\n@@ -55,8 +55,8 @@ class QueryFormatterTests(unittest.TestCase):\r\n         handler.stream.seek(0)\r\n         self.assertEqual(handler.stream.read().strip(), expected)\r\n \r\n-    def assertSQLFormatted(self, handler, sql):\r\n-        self.assertEqual(len(self.format_sql_calls), 1)\r\n+    def assertSQLFormatted(self, handler, sql, total_calls=1):\r\n+        self.assertEqual(len(self.format_sql_calls), total_calls)\r\n         formatted_sql = self.format_sql_calls[0][sql]\r\n         expected = f\"=> Executing query duration=3.142 sql={formatted_sql}\"\r\n         self.assertLogRecord(handler, expected)\r\n@@ -97,6 +97,25 @@ class QueryFormatterTests(unittest.TestCase):\r\n         self.do_log(msg, 3.1416, sql)\r\n         self.assertSQLFormatted(handler, sql)\r\n \r\n+    def test_formats_sql_multiple_matching_sql(self):\r\n+        handler = self.make_handler()\r\n+        msg = \"=> Executing query duration=%.3f sql=%s\"\r\n+        sql = \"select * from foo\"\r\n+\r\n+        self.do_log(msg, 3.1416, sql, extra={\"duration\": 3.1416, \"sql\": sql})\r\n+        self.assertSQLFormatted(handler, sql)\r\n+\r\n+    def test_formats_sql_multiple_non_matching_sql(self):\r\n+        handler = self.make_handler()\r\n+        msg = \"=> Executing query duration=%.3f sql=%s\"\r\n+        sql1 = \"select * from foo\"\r\n+        sql2 = \"select * from other\"\r\n+\r\n+        self.do_log(msg, 3.1416, sql1, extra={\"duration\": 3.1416, \"sql\": sql2})\r\n+        self.assertSQLFormatted(handler, sql1, total_calls=2)\r\n+        # Second format call is triggered since the sql are different.\r\n+        self.assertEqual(list(self.format_sql_calls[1].keys()), [sql2])\r\n+\r\n     def test_log_record_no_args(self):\r\n         handler = self.make_handler()\r\n         msg = \"=> Executing query no args\"\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2150691199",
+        "repo_full_name": "django/django",
+        "pr_number": 19512,
+        "pr_file": "django/test/runner.py",
+        "discussion_id": "2146931982",
+        "commented_code": "@@ -41,52 +40,69 @@\n     tblib = None\n \n \n+class QueryFormatter(logging.Formatter):\n+    def format(self, record):\n+        if (alias := getattr(record, \"alias\", None)) in connections:\n+            format_sql = connections[alias].ops.format_debug_sql\n+\n+            if args := record.args:\n+                if isinstance(args, tuple) and len(args) > 1 and (sql := args[1]):\n+                    record.args = (args[0], format_sql(sql), *args[2:])\n+                elif isinstance(record.args, dict) and (sql := record.args.get(\"sql\")):\n+                    record.args[\"sql\"] = format_sql(sql)",
+        "comment_created_at": "2025-06-16T19:17:21+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "fantastic \ud83d\udc4f ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2112075460",
+    "pr_number": 19508,
+    "pr_file": "django/utils/log.py",
+    "created_at": "2025-05-28T14:33:50+00:00",
+    "commented_code": "\"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+    "repo_full_name": "django/django",
+    "discussion_comments": [
+      {
+        "comment_id": "2112075460",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T14:33:50+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "We'll need to doc this in the release notes so that people who want to keep/opt-in query formatting in their custom query loggers know to make this change.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112086610",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T14:38:56+00:00",
+        "comment_author": "timgraham",
+        "comment_body": "This is one of my reservations / uncertainties. The [documentation says](\r\nhttps://docs.djangoproject.com/en/dev/topics/logging/#configuring-logging), \"By default, the [LOGGING](https://docs.djangoproject.com/en/dev/ref/settings/#std-setting-LOGGING) setting is merged with [Django\u2019s default logging configuration](https://docs.djangoproject.com/en/dev/ref/logging/#default-logging-configuration) using the following scheme. ...\"\r\n\r\nI'm unsure about the particular circumstances where a user's `LOGGING` config may interfere with the behavior of `--debug-sql`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112105807",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T14:47:26+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "I also struggled with the \"merged\" wording. My understanding of what happens is that keys under \"loggers\", e.g. \"django.db.backends\", or \"my_project\", are OR'd with `DEFAULT_LOGGING`, meaning that if a project has already overridden `django.db.backends` in order to enable query logging, that config takes effect and they won't get the benefit of the changes to `DEFAULT_LOGGING` (neither in their query logs nor with `--debug-sql`).\r\n\r\nIn the same way, users without any custom logging config will get the benefit of this change for `--debug-sql`, but because the severity is set to `ERROR`, won't see any changes to their logs (with the exception of one [edge case](https://github.com/django/django/pull/19508#discussion_r2111941291))\r\n\r\nMaybe `DebugSQLTextTestResult` should have its own logger instead of using the `django.db.backends` one.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112182499",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T15:22:44+00:00",
+        "comment_author": "nessita",
+        "comment_body": "@jacobtylerwalls I got the same hunch as you, to have/use a dedicated logger for `DebugSQLTextTestResult`. But the thing is that we need to attach to the logs emitted from the `django.db.backends` logger, since the log originates there. Unless you are suggesting that we emit the log twice, in two different loggers :thinking: ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112225023",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T15:43:36+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "I wondered about just making no changes to `DEFAULT_LOGGING` and instead during `DebugSQLTextTestResult.startTest` attaching a query_formatter to the django.db.backends logger (similar to how we're changing the warning level in startTest()`. I'm just wondering if that's any better or worse.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112258200",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T16:01:15+00:00",
+        "comment_author": "nessita",
+        "comment_body": "The main issue is to allow for customization. How would the, for exmaple, mongodb based Django project hook a different SQL formatter for running tests if we built the config by hand in `DebugSQLTextTestResult`?\r\n\r\nI thought about a setting... perhaps a \"sql formatter\" entry in the DATABASES dict... but not convinced at all.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112285158",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T16:15:56+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "If we *only* attached an sql-formatter in startTest if the django.db.backends logger was *not* a more specific subclass of `logging.Formatter` (or some more robust check than that), then any customizations would still flow through, I think. (I also think Tim's idea was that we wouldn't expect projects to customize formatting per database, they'd delegate db-specific formatting that to the `format_debug_sql()` hook on the database backend.)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112301903",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T16:24:56+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "I know that sounds fiddly, but it would allows to have three cakes and eat them too:\r\n- no changes to default logging\r\n- custom logging config flows through to debug-sql\r\n- naive use of --debug-sql without any logging config still does \"nice\" formatting",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112355930",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T16:54:55+00:00",
+        "comment_author": "nessita",
+        "comment_body": "I'm a little lost understanding the proposal, would you have a few minutes to show in pseudo code what you mean? It does not need to be perfect, a rough idea suffices :-)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112392240",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T17:17:09+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "Sure thing, I was considering something like this:\r\n```diff\r\ndiff --git a/django/test/runner.py b/django/test/runner.py\r\nindex ed87e3f493..820073d610 100644\r\n--- a/django/test/runner.py\r\n+++ b/django/test/runner.py\r\n@@ -56,15 +56,24 @@ class DebugSQLTextTestResult(unittest.TextTestResult):\r\n         self.logger = logging.getLogger(\"django.db.backends\")\r\n         self.logger.setLevel(logging.DEBUG)\r\n         self.handler = None\r\n+        self.original_formatter = None\r\n         super().__init__(stream, descriptions, verbosity)\r\n \r\n     def startTest(self, test):\r\n         self.handler = _get_handler(self.logger)\r\n         self.logger.addHandler(self.handler)\r\n+        if type(self.handler.formatter) == logging.Formatter:\r\n+            # Unless the user provided their own custom formatter,\r\n+            # use one that formats SQL via format_debug_sql().\r\n+            self.original_formatter = self.handler.formatter\r\n+            self.logger.setFormatter(QueryFormatter())\r\n         super().startTest(test)\r\n \r\n     def stopTest(self, test):\r\n         super().stopTest(test)\r\n+        if self.original_formatter:\r\n+            self.handler.setFormatter(self.original_formatter)\r\n+            self.original_formatter = None\r\n         self.logger.removeHandler(self.handler)\r\n         if self.showAll:\r\n             self.handler.stream.seek(0)\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112395912",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T17:19:25+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "(We could make the check more robust instead of only comparing on type, we could compare on style and fmt to catch other simple customizations that don't require a subclass ...)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112415180",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T17:29:32+00:00",
+        "comment_author": "nessita",
+        "comment_body": "To confirm: with this approach, we would be removing all the custom config from `DEFAULT_LOGGING`, correct?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112461522",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T17:57:58+00:00",
+        "comment_author": "jacobtylerwalls",
+        "comment_body": "Yes, that's my hope.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2112468329",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-28T18:02:13+00:00",
+        "comment_author": "nessita",
+        "comment_body": "@jacobtylerwalls @timgraham Your feedback inspired this much, much simplified approach (`MementoHandler` and `SQLOnlyFilter` should be moved to `django.utils.log`):\r\nhttps://github.com/django/django/compare/main...nessita:django:ticket-36380-take-2?expand=1",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2113832745",
+        "repo_full_name": "django/django",
+        "pr_number": 19508,
+        "pr_file": "django/utils/log.py",
+        "discussion_id": "2112075460",
+        "commented_code": "@@ -60,6 +72,11 @@\n             \"level\": \"INFO\",\n             \"propagate\": False,\n         },\n+        \"django.db.backends\": {",
+        "comment_created_at": "2025-05-29T12:20:54+00:00",
+        "comment_author": "nessita",
+        "comment_body": "After sleeping on it, made a new PR with the proposal above: https://github.com/django/django/pull/19512",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

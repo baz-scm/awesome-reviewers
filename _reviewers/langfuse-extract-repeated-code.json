@@ -1,0 +1,178 @@
+[
+  {
+    "discussion_id": "2194823694",
+    "pr_number": 7768,
+    "pr_file": "packages/shared/src/server/llm/fetchLLMCompletion.ts",
+    "created_at": "2025-07-09T11:53:36+00:00",
+    "commented_code": "let finalMessages: BaseMessage[];\n   // VertexAI requires at least 1 user message\n   if (modelParams.adapter === LLMAdapter.VertexAI && messages.length === 1) {\n-    finalMessages = [new HumanMessage(messages[0].content)];\n+    const safeContent =",
+    "repo_full_name": "langfuse/langfuse",
+    "discussion_comments": [
+      {
+        "comment_id": "2194823694",
+        "repo_full_name": "langfuse/langfuse",
+        "pr_number": 7768,
+        "pr_file": "packages/shared/src/server/llm/fetchLLMCompletion.ts",
+        "discussion_id": "2194823694",
+        "commented_code": "@@ -161,25 +161,35 @@ export async function fetchLLMCompletion(\n   let finalMessages: BaseMessage[];\n   // VertexAI requires at least 1 user message\n   if (modelParams.adapter === LLMAdapter.VertexAI && messages.length === 1) {\n-    finalMessages = [new HumanMessage(messages[0].content)];\n+    const safeContent =",
+        "comment_created_at": "2025-07-09T11:53:36+00:00",
+        "comment_author": "ellipsis-dev[bot]",
+        "comment_body": "The safeContent conversion logic is duplicated (in the VertexAI block and the general map). Consider extracting it into a helper to DRY the code.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2159591556",
+    "pr_number": 7012,
+    "pr_file": "web/src/features/automations/server/router.ts",
+    "created_at": "2025-06-20T20:00:50+00:00",
+    "commented_code": "+import { createTRPCRouter } from \"@/src/server/api/trpc\";\n+import { protectedProjectProcedure } from \"@/src/server/api/trpc\";\n+import { z } from \"zod/v4\";\n+import {\n+  ActionConfigSchema,\n+  ActionType,\n+  JobConfigState,\n+} from \"@langfuse/shared\";\n+import { throwIfNoProjectAccess } from \"@/src/features/rbac/utils/checkProjectAccess\";\n+import { v4 } from \"uuid\";\n+import { getActiveAutomations } from \"@langfuse/shared/src/server\";\n+\n+export const CreateAutomationInputSchema = z.object({\n+  projectId: z.string(),\n+  name: z.string().min(1, \"Name is required\"),\n+  eventSource: z.string(),\n+  eventAction: z.array(z.string()),\n+  filter: z.array(z.any()).nullable(),\n+  status: z.nativeEnum(JobConfigState).default(JobConfigState.ACTIVE),\n+  // Action fields\n+  actionType: z.nativeEnum(ActionType),\n+  actionConfig: ActionConfigSchema,\n+});\n+\n+export const UpdateAutomationInputSchema = CreateAutomationInputSchema.extend({\n+  triggerId: z.string(),\n+  actionId: z.string(),\n+});\n+\n+export const automationsRouter = createTRPCRouter({\n+  getAutomations: protectedProjectProcedure\n+    .input(z.object({ projectId: z.string() }))\n+    .query(async ({ ctx, input }) => {\n+      // Check if user has at least read access to automations\n+      throwIfNoProjectAccess({\n+        session: ctx.session,\n+        projectId: input.projectId,\n+        scope: \"automations:read\",\n+      });\n+\n+      return getActiveAutomations({\n+        projectId: input.projectId,\n+      });\n+    }),\n+\n+  // Get a single automation by trigger and action ID\n+  getAutomation: protectedProjectProcedure\n+    .input(\n+      z.object({\n+        projectId: z.string(),\n+        triggerId: z.string(),\n+        actionId: z.string(),\n+      }),\n+    )\n+    .query(async ({ ctx, input }) => {\n+      // Check if user has at least read access to automations\n+      throwIfNoProjectAccess({\n+        session: ctx.session,\n+        projectId: input.projectId,\n+        scope: \"automations:read\",\n+      });\n+\n+      const automations = await getActiveAutomations({\n+        projectId: input.projectId,\n+        triggerId: input.triggerId,\n+        actionId: input.actionId,\n+      });\n+\n+      if (automations.length === 0) {\n+        throw new Error(\"Automation not found\");\n+      }\n+\n+      return automations[0];\n+    }),\n+\n+  // Get execution history for an automation\n+  getAutomationExecutions: protectedProjectProcedure\n+    .input(\n+      z.object({\n+        projectId: z.string(),\n+        triggerId: z.string(),\n+        actionId: z.string(),\n+        page: z.number().min(0).default(0),\n+        limit: z.number().min(1).max(1000).default(50),\n+      }),\n+    )\n+    .query(async ({ ctx, input }) => {\n+      // Check if user has at least read access to automations\n+      throwIfNoProjectAccess({\n+        session: ctx.session,\n+        projectId: input.projectId,\n+        scope: \"automations:read\",\n+      });\n+\n+      const executions = await ctx.prisma.actionExecution.findMany({\n+        where: {\n+          projectId: ctx.session.projectId,\n+          triggerId: input.triggerId,\n+          actionId: input.actionId,\n+        },\n+        orderBy: {\n+          createdAt: \"desc\",\n+        },\n+        skip: input.page * input.limit,\n+        take: input.limit,\n+      });\n+\n+      const totalCount = await ctx.prisma.actionExecution.count({\n+        where: {\n+          projectId: ctx.session.projectId,\n+          triggerId: input.triggerId,\n+          actionId: input.actionId,\n+        },\n+      });\n+\n+      return {\n+        executions,\n+        totalCount,\n+      };\n+    }),\n+\n+  // Combined route that creates both an action and a trigger\n+  createAutomation: protectedProjectProcedure\n+    .input(CreateAutomationInputSchema)\n+    .mutation(async ({ ctx, input }) => {\n+      // Check if user has create/update/delete access to automations\n+      throwIfNoProjectAccess({\n+        session: ctx.session,\n+        projectId: input.projectId,\n+        scope: \"automations:CUD\",\n+      });\n+\n+      const triggerId = v4();\n+      const actionId = v4();\n+\n+      // Add default headers for webhook actions",
+    "repo_full_name": "langfuse/langfuse",
+    "discussion_comments": [
+      {
+        "comment_id": "2159591556",
+        "repo_full_name": "langfuse/langfuse",
+        "pr_number": 7012,
+        "pr_file": "web/src/features/automations/server/router.ts",
+        "discussion_id": "2159591556",
+        "commented_code": "@@ -0,0 +1,309 @@\n+import { createTRPCRouter } from \"@/src/server/api/trpc\";\n+import { protectedProjectProcedure } from \"@/src/server/api/trpc\";\n+import { z } from \"zod/v4\";\n+import {\n+  ActionConfigSchema,\n+  ActionType,\n+  JobConfigState,\n+} from \"@langfuse/shared\";\n+import { throwIfNoProjectAccess } from \"@/src/features/rbac/utils/checkProjectAccess\";\n+import { v4 } from \"uuid\";\n+import { getActiveAutomations } from \"@langfuse/shared/src/server\";\n+\n+export const CreateAutomationInputSchema = z.object({\n+  projectId: z.string(),\n+  name: z.string().min(1, \"Name is required\"),\n+  eventSource: z.string(),\n+  eventAction: z.array(z.string()),\n+  filter: z.array(z.any()).nullable(),\n+  status: z.nativeEnum(JobConfigState).default(JobConfigState.ACTIVE),\n+  // Action fields\n+  actionType: z.nativeEnum(ActionType),\n+  actionConfig: ActionConfigSchema,\n+});\n+\n+export const UpdateAutomationInputSchema = CreateAutomationInputSchema.extend({\n+  triggerId: z.string(),\n+  actionId: z.string(),\n+});\n+\n+export const automationsRouter = createTRPCRouter({\n+  getAutomations: protectedProjectProcedure\n+    .input(z.object({ projectId: z.string() }))\n+    .query(async ({ ctx, input }) => {\n+      // Check if user has at least read access to automations\n+      throwIfNoProjectAccess({\n+        session: ctx.session,\n+        projectId: input.projectId,\n+        scope: \"automations:read\",\n+      });\n+\n+      return getActiveAutomations({\n+        projectId: input.projectId,\n+      });\n+    }),\n+\n+  // Get a single automation by trigger and action ID\n+  getAutomation: protectedProjectProcedure\n+    .input(\n+      z.object({\n+        projectId: z.string(),\n+        triggerId: z.string(),\n+        actionId: z.string(),\n+      }),\n+    )\n+    .query(async ({ ctx, input }) => {\n+      // Check if user has at least read access to automations\n+      throwIfNoProjectAccess({\n+        session: ctx.session,\n+        projectId: input.projectId,\n+        scope: \"automations:read\",\n+      });\n+\n+      const automations = await getActiveAutomations({\n+        projectId: input.projectId,\n+        triggerId: input.triggerId,\n+        actionId: input.actionId,\n+      });\n+\n+      if (automations.length === 0) {\n+        throw new Error(\"Automation not found\");\n+      }\n+\n+      return automations[0];\n+    }),\n+\n+  // Get execution history for an automation\n+  getAutomationExecutions: protectedProjectProcedure\n+    .input(\n+      z.object({\n+        projectId: z.string(),\n+        triggerId: z.string(),\n+        actionId: z.string(),\n+        page: z.number().min(0).default(0),\n+        limit: z.number().min(1).max(1000).default(50),\n+      }),\n+    )\n+    .query(async ({ ctx, input }) => {\n+      // Check if user has at least read access to automations\n+      throwIfNoProjectAccess({\n+        session: ctx.session,\n+        projectId: input.projectId,\n+        scope: \"automations:read\",\n+      });\n+\n+      const executions = await ctx.prisma.actionExecution.findMany({\n+        where: {\n+          projectId: ctx.session.projectId,\n+          triggerId: input.triggerId,\n+          actionId: input.actionId,\n+        },\n+        orderBy: {\n+          createdAt: \"desc\",\n+        },\n+        skip: input.page * input.limit,\n+        take: input.limit,\n+      });\n+\n+      const totalCount = await ctx.prisma.actionExecution.count({\n+        where: {\n+          projectId: ctx.session.projectId,\n+          triggerId: input.triggerId,\n+          actionId: input.actionId,\n+        },\n+      });\n+\n+      return {\n+        executions,\n+        totalCount,\n+      };\n+    }),\n+\n+  // Combined route that creates both an action and a trigger\n+  createAutomation: protectedProjectProcedure\n+    .input(CreateAutomationInputSchema)\n+    .mutation(async ({ ctx, input }) => {\n+      // Check if user has create/update/delete access to automations\n+      throwIfNoProjectAccess({\n+        session: ctx.session,\n+        projectId: input.projectId,\n+        scope: \"automations:CUD\",\n+      });\n+\n+      const triggerId = v4();\n+      const actionId = v4();\n+\n+      // Add default headers for webhook actions",
+        "comment_created_at": "2025-06-20T20:00:50+00:00",
+        "comment_author": "ellipsis-dev[bot]",
+        "comment_body": "The default header merging logic for webhook actions is duplicated in both createAutomation and updateAutomation mutations. Extract this logic into a helper to reduce duplication and ease maintenance.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2179560138",
+    "pr_number": 7615,
+    "pr_file": "worker/src/__tests__/experimentsService.test.ts",
+    "created_at": "2025-07-02T09:19:18+00:00",
+    "commented_code": "}, 10_000);\n });\n \n+describe(\"create experiment jobs with placeholders\", () => {",
+    "repo_full_name": "langfuse/langfuse",
+    "discussion_comments": [
+      {
+        "comment_id": "2179560138",
+        "repo_full_name": "langfuse/langfuse",
+        "pr_number": 7615,
+        "pr_file": "worker/src/__tests__/experimentsService.test.ts",
+        "discussion_id": "2179560138",
+        "commented_code": "@@ -313,6 +326,301 @@ describe(\"create experiment jobs\", () => {\n   }, 10_000);\n });\n \n+describe(\"create experiment jobs with placeholders\", () => {",
+        "comment_created_at": "2025-07-02T09:19:18+00:00",
+        "comment_author": "ellipsis-dev[bot]",
+        "comment_body": "The setup for API keys, dataset runs, and dataset item creation in the placeholder tests is repeated. Consider extracting helper functions to reduce duplication and improve maintainability.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2056105572",
+    "pr_number": 6570,
+    "pr_file": "packages/shared/src/server/clickhouse/client.ts",
+    "created_at": "2025-04-23T13:49:02+00:00",
+    "commented_code": "});\n };\n \n+/**\n+ * Creates a ClickHouse client for the secondary instance if configured\n+ */\n+export const clickhouseSecondaryClient = (",
+    "repo_full_name": "langfuse/langfuse",
+    "discussion_comments": [
+      {
+        "comment_id": "2056105572",
+        "repo_full_name": "langfuse/langfuse",
+        "pr_number": 6570,
+        "pr_file": "packages/shared/src/server/clickhouse/client.ts",
+        "discussion_id": "2056105572",
+        "commented_code": "@@ -44,6 +45,105 @@ export const clickhouseClient = (\n   });\n };\n \n+/**\n+ * Creates a ClickHouse client for the secondary instance if configured\n+ */\n+export const clickhouseSecondaryClient = (",
+        "comment_created_at": "2025-04-23T13:49:02+00:00",
+        "comment_author": "ellipsis-dev[bot]",
+        "comment_body": "This is duplicating the core client creation logic. Consider refactoring to use a single function with an `isSecondary` parameter to handle both cases.\n\n- function `clickhouseClient` ([client.ts](https://github.com/langfuse/langfuse/blob/e5e9cc00b77093053ea7b7b7840640880ea91860/packages/shared/src/server/clickhouse/client.ts#L10-L46))\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2057738552",
+    "pr_number": 6584,
+    "pr_file": "packages/shared/src/server/repositories/clickhouse.ts",
+    "created_at": "2025-04-24T07:30:50+00:00",
+    "commented_code": "},\n           ],\n           format: \"JSONEachRow\",\n+          clickhouse_settings: {\n+            log_comment: JSON.stringify(opts.tags ?? {}),",
+    "repo_full_name": "langfuse/langfuse",
+    "discussion_comments": [
+      {
+        "comment_id": "2057738552",
+        "repo_full_name": "langfuse/langfuse",
+        "pr_number": 6584,
+        "pr_file": "packages/shared/src/server/repositories/clickhouse.ts",
+        "discussion_id": "2057738552",
+        "commented_code": "@@ -75,6 +73,9 @@ export async function upsertClickhouse<\n             },\n           ],\n           format: \"JSONEachRow\",\n+          clickhouse_settings: {\n+            log_comment: JSON.stringify(opts.tags ?? {}),",
+        "comment_created_at": "2025-04-24T07:30:50+00:00",
+        "comment_author": "ellipsis-dev[bot]",
+        "comment_body": "Several insert and query calls now include a `log_comment` property (using `JSON.stringify(opts.tags ?? {})`) inside `clickhouse_settings`. Consider abstracting this repeated logic into a helper to reduce duplication and ensure consistency.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2054429458",
+    "pr_number": 6555,
+    "pr_file": "packages/shared/src/server/repositories/traces.ts",
+    "created_at": "2025-04-22T16:09:04+00:00",
+    "commented_code": "timestamp?: Date;\n   fromTimestamp?: Date;\n }) => {\n-  const query = `\n-    SELECT * \n-    FROM traces\n-    WHERE id = {traceId: String} \n-    AND project_id = {projectId: String}\n-    ${timestamp ? `AND toDate(timestamp) = toDate({timestamp: DateTime64(3)})` : \"\"} \n-    ${fromTimestamp ? `AND timestamp >= {fromTimestamp: DateTime64(3)}` : \"\"} \n-    ORDER BY event_ts DESC \n-    LIMIT 1\n-  `;\n-\n-  const records = await queryClickhouse<TraceRecordReadType>({\n-    query,\n+  const getQuery = (timestamp?: Date, fromTimestamp?: Date) => {\n+    return `\n+      SELECT * \n+      FROM traces\n+      WHERE id = {traceId: String} \n+      AND project_id = {projectId: String}\n+      ${timestamp ? `AND toDate(timestamp) = toDate({timestamp: DateTime64(3)})` : \"\"} \n+      ${fromTimestamp ? `AND timestamp >= {fromTimestamp: DateTime64(3)}` : \"\"} \n+      ORDER BY event_ts DESC \n+      LIMIT 1\n+    `;\n+  };\n+\n+  const hasTimestampFilter = Boolean(timestamp) || Boolean(fromTimestamp);\n+\n+  const tags = {\n+    feature: \"tracing\",\n+    type: \"trace\",\n+    kind: \"byId\",\n+    projectId,\n+  };\n+\n+  // If no fromTimestamp or timestamp is provided, use a 7-day lookback for a faster query",
+    "repo_full_name": "langfuse/langfuse",
+    "discussion_comments": [
+      {
+        "comment_id": "2054429458",
+        "repo_full_name": "langfuse/langfuse",
+        "pr_number": 6555,
+        "pr_file": "packages/shared/src/server/repositories/traces.ts",
+        "discussion_id": "2054429458",
+        "commented_code": "@@ -316,40 +321,89 @@ export const getTraceById = async ({\n   timestamp?: Date;\n   fromTimestamp?: Date;\n }) => {\n-  const query = `\n-    SELECT * \n-    FROM traces\n-    WHERE id = {traceId: String} \n-    AND project_id = {projectId: String}\n-    ${timestamp ? `AND toDate(timestamp) = toDate({timestamp: DateTime64(3)})` : \"\"} \n-    ${fromTimestamp ? `AND timestamp >= {fromTimestamp: DateTime64(3)}` : \"\"} \n-    ORDER BY event_ts DESC \n-    LIMIT 1\n-  `;\n-\n-  const records = await queryClickhouse<TraceRecordReadType>({\n-    query,\n+  const getQuery = (timestamp?: Date, fromTimestamp?: Date) => {\n+    return `\n+      SELECT * \n+      FROM traces\n+      WHERE id = {traceId: String} \n+      AND project_id = {projectId: String}\n+      ${timestamp ? `AND toDate(timestamp) = toDate({timestamp: DateTime64(3)})` : \"\"} \n+      ${fromTimestamp ? `AND timestamp >= {fromTimestamp: DateTime64(3)}` : \"\"} \n+      ORDER BY event_ts DESC \n+      LIMIT 1\n+    `;\n+  };\n+\n+  const hasTimestampFilter = Boolean(timestamp) || Boolean(fromTimestamp);\n+\n+  const tags = {\n+    feature: \"tracing\",\n+    type: \"trace\",\n+    kind: \"byId\",\n+    projectId,\n+  };\n+\n+  // If no fromTimestamp or timestamp is provided, use a 7-day lookback for a faster query",
+        "comment_created_at": "2025-04-22T16:09:04+00:00",
+        "comment_author": "ellipsis-dev[bot]",
+        "comment_body": "Both `getTraceById` and `getObservationByIdInternal` share almost identical racing logic with a fallback 7\u2010day lookback filter. Extracting this common pattern into a helper function could reduce duplication and simplify future maintenance.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2018939552",
+    "pr_number": 6269,
+    "pr_file": "packages/shared/src/server/services/StorageService.ts",
+    "created_at": "2025-03-28T16:00:38+00:00",
+    "commented_code": "return url;\n   }\n }\n+\n+class GoogleCloudStorageService implements StorageService {\n+  private storage: Storage;\n+  private bucket: Bucket;\n+  private externalEndpoint: string | undefined;\n+\n+  constructor(params: {\n+    accessKeyId: string | undefined;\n+    secretAccessKey: string | undefined;\n+    bucketName: string;\n+    endpoint: string | undefined;\n+    externalEndpoint?: string | undefined;\n+    region: string | undefined;\n+    forcePathStyle: boolean;\n+    googleCloudCredentials?: string;\n+  }) {\n+    this.externalEndpoint = params.externalEndpoint;\n+\n+    // Initialize Google Cloud Storage client\n+    if (params.googleCloudCredentials) {\n+      try {\n+        // Check if the credentials are a JSON string or a path to a file\n+        if (params.googleCloudCredentials.startsWith(\"{\")) {\n+          // It's a JSON string\n+          this.storage = new Storage({\n+            credentials: JSON.parse(params.googleCloudCredentials),\n+          });\n+        } else {\n+          // It's a path to a credentials file\n+          this.storage = new Storage({\n+            keyFilename: params.googleCloudCredentials,\n+          });\n+        }\n+      } catch (err) {\n+        logger.error(\"Failed to parse Google Cloud Storage credentials\", err);\n+        throw new Error(\"Failed to initialize Google Cloud Storage\");\n+      }\n+    } else {\n+      // Use default authentication (environment variables or instance metadata)\n+      this.storage = new Storage();\n+    }\n+\n+    this.bucket = this.storage.bucket(params.bucketName);\n+  }\n+\n+  public async uploadFile({\n+    fileName,\n+    fileType,\n+    data,\n+    expiresInSeconds,\n+  }: UploadFile): Promise<{ signedUrl: string }> {\n+    try {\n+      const file = this.bucket.file(fileName);\n+      const options = {\n+        contentType: fileType,\n+        resumable: false,\n+      };\n+\n+      if (typeof data === \"string\") {\n+        await file.save(data, options);\n+        const signedUrl = await this.getSignedUrl(fileName, expiresInSeconds);\n+        return { signedUrl };\n+      } else if (data instanceof Readable) {\n+        return new Promise((resolve, reject) => {\n+          const writeStream = file.createWriteStream(options);\n+\n+          data\n+            .pipe(writeStream)\n+            .on(\"error\", (err) => {\n+              reject(err);\n+            })\n+            .on(\"finish\", async () => {\n+              try {\n+                const signedUrl = await this.getSignedUrl(\n+                  fileName,\n+                  expiresInSeconds,\n+                );\n+                resolve({ signedUrl });\n+              } catch (err) {\n+                reject(err);\n+              }\n+            });\n+        });\n+      } else {\n+        throw new Error(\"Unsupported data type. Must be Readable or string.\");\n+      }\n+    } catch (err) {\n+      logger.error(\n+        `Failed to upload file to Google Cloud Storage ${fileName}`,\n+        err,\n+      );\n+      throw new Error(\"Failed to upload to Google Cloud Storage\");\n+    }\n+  }\n+\n+  public async uploadJson(\n+    path: string,\n+    body: Record<string, unknown>[],\n+  ): Promise<void> {\n+    try {\n+      const file = this.bucket.file(path);\n+      const content = JSON.stringify(body);\n+\n+      await file.save(content, {\n+        contentType: \"application/json\",\n+        resumable: false,\n+      });\n+    } catch (err) {\n+      logger.error(\n+        `Failed to upload JSON to Google Cloud Storage ${path}`,\n+        err,\n+      );\n+      throw Error(\"Failed to upload JSON to Google Cloud Storage\");\n+    }\n+  }\n+\n+  public async download(path: string): Promise<string> {\n+    try {\n+      const file = this.bucket.file(path);\n+      const [content] = await file.download();\n+\n+      return content.toString();\n+    } catch (err) {\n+      logger.error(\n+        `Failed to download file from Google Cloud Storage ${path}`,\n+        err,\n+      );\n+      throw Error(\"Failed to download file from Google Cloud Storage\");\n+    }\n+  }\n+\n+  public async listFiles(\n+    prefix: string,\n+  ): Promise<{ file: string; createdAt: Date }[]> {\n+    try {\n+      const [files] = await this.bucket.getFiles({ prefix });\n+\n+      return files.map((file) => ({\n+        file: file.name,\n+        createdAt: new Date(file.metadata.timeCreated ?? new Date()),\n+      }));\n+    } catch (err) {\n+      logger.error(\n+        `Failed to list files from Google Cloud Storage ${prefix}`,\n+        err,\n+      );\n+      throw Error(\"Failed to list files from Google Cloud Storage\");\n+    }\n+  }\n+\n+  public async getSignedUrl(\n+    fileName: string,\n+    ttlSeconds: number,\n+    asAttachment: boolean = false,\n+  ): Promise<string> {\n+    try {\n+      const file = this.bucket.file(fileName);\n+\n+      const options: GetSignedUrlConfig = {\n+        version: \"v4\",\n+        action: \"read\",\n+        expires: Date.now() + ttlSeconds * 1000,\n+      };\n+\n+      if (asAttachment) {\n+        options.responseDisposition = `attachment; filename=\"${fileName}\"`;\n+      }\n+\n+      const [url] = await file.getSignedUrl(options);\n+\n+      // Replace internal endpoint with external endpoint if configured",
+    "repo_full_name": "langfuse/langfuse",
+    "discussion_comments": [
+      {
+        "comment_id": "2018939552",
+        "repo_full_name": "langfuse/langfuse",
+        "pr_number": 6269,
+        "pr_file": "packages/shared/src/server/services/StorageService.ts",
+        "discussion_id": "2018939552",
+        "commented_code": "@@ -553,3 +570,267 @@ class S3StorageService implements StorageService {\n     return url;\n   }\n }\n+\n+class GoogleCloudStorageService implements StorageService {\n+  private storage: Storage;\n+  private bucket: Bucket;\n+  private externalEndpoint: string | undefined;\n+\n+  constructor(params: {\n+    accessKeyId: string | undefined;\n+    secretAccessKey: string | undefined;\n+    bucketName: string;\n+    endpoint: string | undefined;\n+    externalEndpoint?: string | undefined;\n+    region: string | undefined;\n+    forcePathStyle: boolean;\n+    googleCloudCredentials?: string;\n+  }) {\n+    this.externalEndpoint = params.externalEndpoint;\n+\n+    // Initialize Google Cloud Storage client\n+    if (params.googleCloudCredentials) {\n+      try {\n+        // Check if the credentials are a JSON string or a path to a file\n+        if (params.googleCloudCredentials.startsWith(\"{\")) {\n+          // It's a JSON string\n+          this.storage = new Storage({\n+            credentials: JSON.parse(params.googleCloudCredentials),\n+          });\n+        } else {\n+          // It's a path to a credentials file\n+          this.storage = new Storage({\n+            keyFilename: params.googleCloudCredentials,\n+          });\n+        }\n+      } catch (err) {\n+        logger.error(\"Failed to parse Google Cloud Storage credentials\", err);\n+        throw new Error(\"Failed to initialize Google Cloud Storage\");\n+      }\n+    } else {\n+      // Use default authentication (environment variables or instance metadata)\n+      this.storage = new Storage();\n+    }\n+\n+    this.bucket = this.storage.bucket(params.bucketName);\n+  }\n+\n+  public async uploadFile({\n+    fileName,\n+    fileType,\n+    data,\n+    expiresInSeconds,\n+  }: UploadFile): Promise<{ signedUrl: string }> {\n+    try {\n+      const file = this.bucket.file(fileName);\n+      const options = {\n+        contentType: fileType,\n+        resumable: false,\n+      };\n+\n+      if (typeof data === \"string\") {\n+        await file.save(data, options);\n+        const signedUrl = await this.getSignedUrl(fileName, expiresInSeconds);\n+        return { signedUrl };\n+      } else if (data instanceof Readable) {\n+        return new Promise((resolve, reject) => {\n+          const writeStream = file.createWriteStream(options);\n+\n+          data\n+            .pipe(writeStream)\n+            .on(\"error\", (err) => {\n+              reject(err);\n+            })\n+            .on(\"finish\", async () => {\n+              try {\n+                const signedUrl = await this.getSignedUrl(\n+                  fileName,\n+                  expiresInSeconds,\n+                );\n+                resolve({ signedUrl });\n+              } catch (err) {\n+                reject(err);\n+              }\n+            });\n+        });\n+      } else {\n+        throw new Error(\"Unsupported data type. Must be Readable or string.\");\n+      }\n+    } catch (err) {\n+      logger.error(\n+        `Failed to upload file to Google Cloud Storage ${fileName}`,\n+        err,\n+      );\n+      throw new Error(\"Failed to upload to Google Cloud Storage\");\n+    }\n+  }\n+\n+  public async uploadJson(\n+    path: string,\n+    body: Record<string, unknown>[],\n+  ): Promise<void> {\n+    try {\n+      const file = this.bucket.file(path);\n+      const content = JSON.stringify(body);\n+\n+      await file.save(content, {\n+        contentType: \"application/json\",\n+        resumable: false,\n+      });\n+    } catch (err) {\n+      logger.error(\n+        `Failed to upload JSON to Google Cloud Storage ${path}`,\n+        err,\n+      );\n+      throw Error(\"Failed to upload JSON to Google Cloud Storage\");\n+    }\n+  }\n+\n+  public async download(path: string): Promise<string> {\n+    try {\n+      const file = this.bucket.file(path);\n+      const [content] = await file.download();\n+\n+      return content.toString();\n+    } catch (err) {\n+      logger.error(\n+        `Failed to download file from Google Cloud Storage ${path}`,\n+        err,\n+      );\n+      throw Error(\"Failed to download file from Google Cloud Storage\");\n+    }\n+  }\n+\n+  public async listFiles(\n+    prefix: string,\n+  ): Promise<{ file: string; createdAt: Date }[]> {\n+    try {\n+      const [files] = await this.bucket.getFiles({ prefix });\n+\n+      return files.map((file) => ({\n+        file: file.name,\n+        createdAt: new Date(file.metadata.timeCreated ?? new Date()),\n+      }));\n+    } catch (err) {\n+      logger.error(\n+        `Failed to list files from Google Cloud Storage ${prefix}`,\n+        err,\n+      );\n+      throw Error(\"Failed to list files from Google Cloud Storage\");\n+    }\n+  }\n+\n+  public async getSignedUrl(\n+    fileName: string,\n+    ttlSeconds: number,\n+    asAttachment: boolean = false,\n+  ): Promise<string> {\n+    try {\n+      const file = this.bucket.file(fileName);\n+\n+      const options: GetSignedUrlConfig = {\n+        version: \"v4\",\n+        action: \"read\",\n+        expires: Date.now() + ttlSeconds * 1000,\n+      };\n+\n+      if (asAttachment) {\n+        options.responseDisposition = `attachment; filename=\"${fileName}\"`;\n+      }\n+\n+      const [url] = await file.getSignedUrl(options);\n+\n+      // Replace internal endpoint with external endpoint if configured",
+        "comment_created_at": "2025-03-28T16:00:38+00:00",
+        "comment_author": "ellipsis-dev[bot]",
+        "comment_body": "External endpoint replacement logic is duplicated in `getSignedUrl`; consider extracting a helper to reduce duplication and ensure consistent behavior.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2000496965",
+    "pr_number": 6055,
+    "pr_file": "packages/shared/src/server/services/StorageService.ts",
+    "created_at": "2025-03-18T08:49:11+00:00",
+    "commented_code": "await this.createContainerIfNotExists();\n \n       const blockBlobClient = this.client.getBlockBlobClient(path);\n-      return blockBlobClient.generateSasUrl({\n+      let url = await blockBlobClient.generateSasUrl({\n         permissions: BlobSASPermissions.parse(\"w\"),\n         expiresOn: new Date(Date.now() + ttlSeconds * 1000),\n         contentType: contentType,\n       });\n+\n+      // Replace internal endpoint with external endpoint if configured",
+    "repo_full_name": "langfuse/langfuse",
+    "discussion_comments": [
+      {
+        "comment_id": "2000496965",
+        "repo_full_name": "langfuse/langfuse",
+        "pr_number": 6055,
+        "pr_file": "packages/shared/src/server/services/StorageService.ts",
+        "discussion_id": "2000496965",
+        "commented_code": "@@ -286,11 +307,18 @@\n       await this.createContainerIfNotExists();\n \n       const blockBlobClient = this.client.getBlockBlobClient(path);\n-      return blockBlobClient.generateSasUrl({\n+      let url = await blockBlobClient.generateSasUrl({\n         permissions: BlobSASPermissions.parse(\"w\"),\n         expiresOn: new Date(Date.now() + ttlSeconds * 1000),\n         contentType: contentType,\n       });\n+\n+      // Replace internal endpoint with external endpoint if configured",
+        "comment_created_at": "2025-03-18T08:49:11+00:00",
+        "comment_author": "ellipsis-dev[bot]",
+        "comment_body": "Duplicated logic for replacing the internal endpoint with `externalEndpoint`. Consider refactoring this into a helper function to reduce duplication.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

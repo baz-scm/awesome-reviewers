@@ -1,0 +1,82 @@
+[
+  {
+    "discussion_id": "2174739816",
+    "pr_number": 58886,
+    "pr_file": "src/module_wrap.h",
+    "created_at": "2025-06-30T10:22:08+00:00",
+    "commented_code": "kEvaluationPhase = 2,\n };\n \n+struct ModuleRequest : public MemoryRetainer {\n+  std::string specifier;\n+  std::vector<std::pair<std::string, std::string>> import_attributes;\n+  ModulePhase phase;\n+\n+  ModuleRequest(\n+      std::string specifier,\n+      std::vector<std::pair<std::string, std::string>> import_attributes,\n+      ModulePhase phase)\n+      : specifier(specifier),\n+        import_attributes(import_attributes),\n+        phase(phase) {}\n+\n+  SET_MEMORY_INFO_NAME(ModuleRequest)\n+  SET_SELF_SIZE(ModuleRequest)\n+  void MemoryInfo(MemoryTracker* tracker) const override;\n+\n+  struct Hash {\n+    std::size_t operator()(const ModuleRequest& request) const {\n+      std::size_t h1 = std::hash<std::string>{}(request.specifier);",
+    "repo_full_name": "nodejs/node",
+    "discussion_comments": [
+      {
+        "comment_id": "2174739816",
+        "repo_full_name": "nodejs/node",
+        "pr_number": 58886,
+        "pr_file": "src/module_wrap.h",
+        "discussion_id": "2174739816",
+        "commented_code": "@@ -38,6 +38,44 @@ enum ModulePhase : int {\n   kEvaluationPhase = 2,\n };\n \n+struct ModuleRequest : public MemoryRetainer {\n+  std::string specifier;\n+  std::vector<std::pair<std::string, std::string>> import_attributes;\n+  ModulePhase phase;\n+\n+  ModuleRequest(\n+      std::string specifier,\n+      std::vector<std::pair<std::string, std::string>> import_attributes,\n+      ModulePhase phase)\n+      : specifier(specifier),\n+        import_attributes(import_attributes),\n+        phase(phase) {}\n+\n+  SET_MEMORY_INFO_NAME(ModuleRequest)\n+  SET_SELF_SIZE(ModuleRequest)\n+  void MemoryInfo(MemoryTracker* tracker) const override;\n+\n+  struct Hash {\n+    std::size_t operator()(const ModuleRequest& request) const {\n+      std::size_t h1 = std::hash<std::string>{}(request.specifier);",
+        "comment_created_at": "2025-06-30T10:22:08+00:00",
+        "comment_author": "joyeecheung",
+        "comment_body": "For string hashes I think it can be computed as the module request is constructed with `v8::Name::GetIdentityHash()` which is just an inline property access, and store it into the wrapper. There is no need to hash it again over the content using `std::hash`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2176133642",
+        "repo_full_name": "nodejs/node",
+        "pr_number": 58886,
+        "pr_file": "src/module_wrap.h",
+        "discussion_id": "2174739816",
+        "commented_code": "@@ -38,6 +38,44 @@ enum ModulePhase : int {\n   kEvaluationPhase = 2,\n };\n \n+struct ModuleRequest : public MemoryRetainer {\n+  std::string specifier;\n+  std::vector<std::pair<std::string, std::string>> import_attributes;\n+  ModulePhase phase;\n+\n+  ModuleRequest(\n+      std::string specifier,\n+      std::vector<std::pair<std::string, std::string>> import_attributes,\n+      ModulePhase phase)\n+      : specifier(specifier),\n+        import_attributes(import_attributes),\n+        phase(phase) {}\n+\n+  SET_MEMORY_INFO_NAME(ModuleRequest)\n+  SET_SELF_SIZE(ModuleRequest)\n+  void MemoryInfo(MemoryTracker* tracker) const override;\n+\n+  struct Hash {\n+    std::size_t operator()(const ModuleRequest& request) const {\n+      std::size_t h1 = std::hash<std::string>{}(request.specifier);",
+        "comment_created_at": "2025-06-30T23:21:50+00:00",
+        "comment_author": "legendecas",
+        "comment_body": "Thanks for suggestion! Updated, PTAL",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2178480814",
+    "pr_number": 58886,
+    "pr_file": "src/module_wrap.cc",
+    "created_at": "2025-07-01T20:44:02+00:00",
+    "commented_code": "using v8::Undefined;\n using v8::Value;\n \n+ModulePhase to_phase_constant(ModuleImportPhase phase) {\n+  switch (phase) {\n+    case ModuleImportPhase::kEvaluation:\n+      return kEvaluationPhase;\n+    case ModuleImportPhase::kSource:\n+      return kSourcePhase;\n+  }\n+  UNREACHABLE();\n+}\n+\n+void ModuleRequest::MemoryInfo(MemoryTracker* tracker) const {\n+  tracker->TrackField(\"specifier\", specifier);\n+  tracker->TrackField(\"import_attributes\", import_attributes);\n+  tracker->TrackField(\"phase\", static_cast<int>(phase));\n+}\n+\n+template <int elements_per_attribute>\n+ModuleRequest ModuleRequest::From(Local<Context> context,\n+                                  Local<String> specifier,\n+                                  Local<FixedArray> import_attributes,\n+                                  ModulePhase phase) {\n+  CHECK_EQ(import_attributes->Length() % elements_per_attribute, 0);\n+  Isolate* isolate = context->GetIsolate();\n+  std::size_t h1 = specifier->GetIdentityHash();\n+  size_t num_attributes = import_attributes->Length() / elements_per_attribute;\n+  std::vector<std::pair<std::string, std::string>> attributes;\n+  attributes.reserve(num_attributes);\n+\n+  std::size_t h2 = 0;\n+\n+  for (int i = 0; i < import_attributes->Length();\n+       i += elements_per_attribute) {\n+    Local<String> v8_key = import_attributes->Get(context, i).As<String>();\n+    Local<String> v8_value =\n+        import_attributes->Get(context, i + 1).As<String>();\n+    Utf8Value key_utf8(isolate, v8_key);\n+    Utf8Value value_utf8(isolate, v8_value);\n+\n+    attributes.emplace_back(key_utf8.ToString(), value_utf8.ToString());\n+    h2 ^= v8_key->GetIdentityHash();\n+    h2 ^= v8_value->GetIdentityHash();\n+  }\n+\n+  std::size_t h3 = std::hash<int>{}(static_cast<int>(phase));\n+  // Combine the hashes using a simple XOR and bit shift to reduce\n+  // collisions.\n+  std::size_t hash = h1 ^ (h2 << 1) ^ (h3 << 2);",
+    "repo_full_name": "nodejs/node",
+    "discussion_comments": [
+      {
+        "comment_id": "2178480814",
+        "repo_full_name": "nodejs/node",
+        "pr_number": 58886,
+        "pr_file": "src/module_wrap.cc",
+        "discussion_id": "2178480814",
+        "commented_code": "@@ -63,6 +62,66 @@ using v8::UnboundModuleScript;\n using v8::Undefined;\n using v8::Value;\n \n+ModulePhase to_phase_constant(ModuleImportPhase phase) {\n+  switch (phase) {\n+    case ModuleImportPhase::kEvaluation:\n+      return kEvaluationPhase;\n+    case ModuleImportPhase::kSource:\n+      return kSourcePhase;\n+  }\n+  UNREACHABLE();\n+}\n+\n+void ModuleRequest::MemoryInfo(MemoryTracker* tracker) const {\n+  tracker->TrackField(\"specifier\", specifier);\n+  tracker->TrackField(\"import_attributes\", import_attributes);\n+  tracker->TrackField(\"phase\", static_cast<int>(phase));\n+}\n+\n+template <int elements_per_attribute>\n+ModuleRequest ModuleRequest::From(Local<Context> context,\n+                                  Local<String> specifier,\n+                                  Local<FixedArray> import_attributes,\n+                                  ModulePhase phase) {\n+  CHECK_EQ(import_attributes->Length() % elements_per_attribute, 0);\n+  Isolate* isolate = context->GetIsolate();\n+  std::size_t h1 = specifier->GetIdentityHash();\n+  size_t num_attributes = import_attributes->Length() / elements_per_attribute;\n+  std::vector<std::pair<std::string, std::string>> attributes;\n+  attributes.reserve(num_attributes);\n+\n+  std::size_t h2 = 0;\n+\n+  for (int i = 0; i < import_attributes->Length();\n+       i += elements_per_attribute) {\n+    Local<String> v8_key = import_attributes->Get(context, i).As<String>();\n+    Local<String> v8_value =\n+        import_attributes->Get(context, i + 1).As<String>();\n+    Utf8Value key_utf8(isolate, v8_key);\n+    Utf8Value value_utf8(isolate, v8_value);\n+\n+    attributes.emplace_back(key_utf8.ToString(), value_utf8.ToString());\n+    h2 ^= v8_key->GetIdentityHash();\n+    h2 ^= v8_value->GetIdentityHash();\n+  }\n+\n+  std::size_t h3 = std::hash<int>{}(static_cast<int>(phase));\n+  // Combine the hashes using a simple XOR and bit shift to reduce\n+  // collisions.\n+  std::size_t hash = h1 ^ (h2 << 1) ^ (h3 << 2);",
+        "comment_created_at": "2025-07-01T20:44:02+00:00",
+        "comment_author": "joyeecheung",
+        "comment_body": "<del>I am slightly concerned about the collisions - I would suggest that we at least add a hash_combine helper and copy what Boost does: https://stackoverflow.com/questions/7222143/unordered-map-hash-function-c<del>\r\n\r\nAnother alternative: I feel that `std::map` should be sufficient - most of the times this map should be fairly small, most modules I've ever seen have <30 requests. With this size the performance difference between `std::unordered_map` and `std::map` is generally negligible. And most of the times import attributes are either empty or just have 1 entry, so we just need to implement a compare predicate that probably just handles comparison of a few identity hashes for each entry. Then there would not be collisions to worry about.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2178629358",
+        "repo_full_name": "nodejs/node",
+        "pr_number": 58886,
+        "pr_file": "src/module_wrap.cc",
+        "discussion_id": "2178480814",
+        "commented_code": "@@ -63,6 +62,66 @@ using v8::UnboundModuleScript;\n using v8::Undefined;\n using v8::Value;\n \n+ModulePhase to_phase_constant(ModuleImportPhase phase) {\n+  switch (phase) {\n+    case ModuleImportPhase::kEvaluation:\n+      return kEvaluationPhase;\n+    case ModuleImportPhase::kSource:\n+      return kSourcePhase;\n+  }\n+  UNREACHABLE();\n+}\n+\n+void ModuleRequest::MemoryInfo(MemoryTracker* tracker) const {\n+  tracker->TrackField(\"specifier\", specifier);\n+  tracker->TrackField(\"import_attributes\", import_attributes);\n+  tracker->TrackField(\"phase\", static_cast<int>(phase));\n+}\n+\n+template <int elements_per_attribute>\n+ModuleRequest ModuleRequest::From(Local<Context> context,\n+                                  Local<String> specifier,\n+                                  Local<FixedArray> import_attributes,\n+                                  ModulePhase phase) {\n+  CHECK_EQ(import_attributes->Length() % elements_per_attribute, 0);\n+  Isolate* isolate = context->GetIsolate();\n+  std::size_t h1 = specifier->GetIdentityHash();\n+  size_t num_attributes = import_attributes->Length() / elements_per_attribute;\n+  std::vector<std::pair<std::string, std::string>> attributes;\n+  attributes.reserve(num_attributes);\n+\n+  std::size_t h2 = 0;\n+\n+  for (int i = 0; i < import_attributes->Length();\n+       i += elements_per_attribute) {\n+    Local<String> v8_key = import_attributes->Get(context, i).As<String>();\n+    Local<String> v8_value =\n+        import_attributes->Get(context, i + 1).As<String>();\n+    Utf8Value key_utf8(isolate, v8_key);\n+    Utf8Value value_utf8(isolate, v8_value);\n+\n+    attributes.emplace_back(key_utf8.ToString(), value_utf8.ToString());\n+    h2 ^= v8_key->GetIdentityHash();\n+    h2 ^= v8_value->GetIdentityHash();\n+  }\n+\n+  std::size_t h3 = std::hash<int>{}(static_cast<int>(phase));\n+  // Combine the hashes using a simple XOR and bit shift to reduce\n+  // collisions.\n+  std::size_t hash = h1 ^ (h2 << 1) ^ (h3 << 2);",
+        "comment_created_at": "2025-07-01T22:19:30+00:00",
+        "comment_author": "legendecas",
+        "comment_body": "The `std::unordered_map` also compares the key equality with `std::equal_to` (i.e. `lhs == rhs`) when two keys' hash codes are equal). So the hash collisions should not affect the correctness in this case. In the case of collision, it will only impact performance due to the keys been put in the same bucket.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2179731926",
+        "repo_full_name": "nodejs/node",
+        "pr_number": 58886,
+        "pr_file": "src/module_wrap.cc",
+        "discussion_id": "2178480814",
+        "commented_code": "@@ -63,6 +62,66 @@ using v8::UnboundModuleScript;\n using v8::Undefined;\n using v8::Value;\n \n+ModulePhase to_phase_constant(ModuleImportPhase phase) {\n+  switch (phase) {\n+    case ModuleImportPhase::kEvaluation:\n+      return kEvaluationPhase;\n+    case ModuleImportPhase::kSource:\n+      return kSourcePhase;\n+  }\n+  UNREACHABLE();\n+}\n+\n+void ModuleRequest::MemoryInfo(MemoryTracker* tracker) const {\n+  tracker->TrackField(\"specifier\", specifier);\n+  tracker->TrackField(\"import_attributes\", import_attributes);\n+  tracker->TrackField(\"phase\", static_cast<int>(phase));\n+}\n+\n+template <int elements_per_attribute>\n+ModuleRequest ModuleRequest::From(Local<Context> context,\n+                                  Local<String> specifier,\n+                                  Local<FixedArray> import_attributes,\n+                                  ModulePhase phase) {\n+  CHECK_EQ(import_attributes->Length() % elements_per_attribute, 0);\n+  Isolate* isolate = context->GetIsolate();\n+  std::size_t h1 = specifier->GetIdentityHash();\n+  size_t num_attributes = import_attributes->Length() / elements_per_attribute;\n+  std::vector<std::pair<std::string, std::string>> attributes;\n+  attributes.reserve(num_attributes);\n+\n+  std::size_t h2 = 0;\n+\n+  for (int i = 0; i < import_attributes->Length();\n+       i += elements_per_attribute) {\n+    Local<String> v8_key = import_attributes->Get(context, i).As<String>();\n+    Local<String> v8_value =\n+        import_attributes->Get(context, i + 1).As<String>();\n+    Utf8Value key_utf8(isolate, v8_key);\n+    Utf8Value value_utf8(isolate, v8_value);\n+\n+    attributes.emplace_back(key_utf8.ToString(), value_utf8.ToString());\n+    h2 ^= v8_key->GetIdentityHash();\n+    h2 ^= v8_value->GetIdentityHash();\n+  }\n+\n+  std::size_t h3 = std::hash<int>{}(static_cast<int>(phase));\n+  // Combine the hashes using a simple XOR and bit shift to reduce\n+  // collisions.\n+  std::size_t hash = h1 ^ (h2 << 1) ^ (h3 << 2);",
+        "comment_created_at": "2025-07-02T10:43:29+00:00",
+        "comment_author": "legendecas",
+        "comment_body": "@joyeecheung updated to use a map to get rid of hashes.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

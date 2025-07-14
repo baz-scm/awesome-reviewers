@@ -1,0 +1,82 @@
+[
+  {
+    "discussion_id": "2156695681",
+    "pr_number": 58077,
+    "pr_file": "lib/internal/inspector/load_network_resource_worker.js",
+    "created_at": "2025-06-19T10:39:22+00:00",
+    "commented_code": "+'use strict';\n+const {\n+  JSONParse,\n+  JSONStringify,\n+} = primordials;\n+const {\n+  emitProtocolResponseInParent,\n+  addIoData,\n+} = internalBinding('inspector');\n+const { AbortController } = require('internal/abort_controller');\n+const { setTimeout, clearTimeout } = require('timers');\n+const { fetch } = require('internal/deps/undici/undici');\n+\n+module.exports = function setupInspectorWorker(_, port) {\n+  function emitResponse(callId, sessionId, success, streamId = null) {\n+    const result = {\n+      id: callId,\n+      result: {\n+        resource: {\n+          success,\n+        },\n+      },\n+    };\n+    if (success && streamId !== null) {\n+      result.result.resource.stream = streamId.toString();\n+    }\n+    emitProtocolResponseInParent(callId, JSONStringify(result), sessionId);\n+  }\n+\n+  port.on('message', (msg) => {\n+    const { sessionId, callId, message } = msg;\n+    const url = JSONParse(message)?.params?.url;\n+    if (!url) return;\n+\n+    const controller = new AbortController();\n+    const timeoutId = setTimeout(() => controller.abort(), 2000);\n+\n+    fetch(url, { signal: controller.signal })",
+    "repo_full_name": "nodejs/node",
+    "discussion_comments": [
+      {
+        "comment_id": "2156695681",
+        "repo_full_name": "nodejs/node",
+        "pr_number": 58077,
+        "pr_file": "lib/internal/inspector/load_network_resource_worker.js",
+        "discussion_id": "2156695681",
+        "commented_code": "@@ -0,0 +1,55 @@\n+'use strict';\n+const {\n+  JSONParse,\n+  JSONStringify,\n+} = primordials;\n+const {\n+  emitProtocolResponseInParent,\n+  addIoData,\n+} = internalBinding('inspector');\n+const { AbortController } = require('internal/abort_controller');\n+const { setTimeout, clearTimeout } = require('timers');\n+const { fetch } = require('internal/deps/undici/undici');\n+\n+module.exports = function setupInspectorWorker(_, port) {\n+  function emitResponse(callId, sessionId, success, streamId = null) {\n+    const result = {\n+      id: callId,\n+      result: {\n+        resource: {\n+          success,\n+        },\n+      },\n+    };\n+    if (success && streamId !== null) {\n+      result.result.resource.stream = streamId.toString();\n+    }\n+    emitProtocolResponseInParent(callId, JSONStringify(result), sessionId);\n+  }\n+\n+  port.on('message', (msg) => {\n+    const { sessionId, callId, message } = msg;\n+    const url = JSONParse(message)?.params?.url;\n+    if (!url) return;\n+\n+    const controller = new AbortController();\n+    const timeoutId = setTimeout(() => controller.abort(), 2000);\n+\n+    fetch(url, { signal: controller.signal })",
+        "comment_created_at": "2025-06-19T10:39:22+00:00",
+        "comment_author": "legendecas",
+        "comment_body": "Can we limit the origin of the url to be loopback interface like `localhost` only? This could reduce the security interface that this feature exposes.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2190262356",
+    "pr_number": 58980,
+    "pr_file": "lib/https.js",
+    "created_at": "2025-07-07T14:23:58+00:00",
+    "commented_code": "return new Server(opts, requestListener);\n }\n \n+// When proxying a HTTPS request, the following needs to be done:\n+// https://datatracker.ietf.org/doc/html/rfc9110#CONNECT\n+// 1. Send a CONNECT request to the proxy server.\n+// 2. Wait for 200 connection established response to establish the tunnel.\n+// 3. Perform TLS handshake with the endpoint over the socket.\n+// 4. Tunnel the request using the established connection.\n+//\n+// This function computes the tunnel configuration for HTTPS requests.\n+// The handling of the tunnel connection is done in createConnection.\n+function getTunnelConfigForProxiedHttps(agent, reqOptions) {\n+  if (!agent[kProxyConfig]) {\n+    return null;\n+  }\n+  if ((reqOptions.protocol || agent.protocol) !== 'https:') {\n+    return null;\n+  }\n+  const shouldUseProxy = checkShouldUseProxy(agent[kProxyConfig], reqOptions);\n+  debug(`getTunnelConfigForProxiedHttps should use proxy for ${reqOptions.host}:${reqOptions.port}:`, shouldUseProxy);\n+  if (!shouldUseProxy) {\n+    return null;\n+  }\n+  const { auth, href } = agent[kProxyConfig];\n+  // The request is a HTTPS request, assemble the payload for establishing the tunnel.\n+  const requestHost = isIPv6(reqOptions.host) ? `[${reqOptions.host}]` : reqOptions.host;\n+  let payload = `CONNECT ${requestHost}:${reqOptions.port} HTTP/1.1\\r\n`;\n+  if (auth) {\n+    payload += `proxy-authorization: ${auth}\\r\n`;",
+    "repo_full_name": "nodejs/node",
+    "discussion_comments": [
+      {
+        "comment_id": "2190262356",
+        "repo_full_name": "nodejs/node",
+        "pr_number": 58980,
+        "pr_file": "lib/https.js",
+        "discussion_id": "2190262356",
+        "commented_code": "@@ -135,26 +145,187 @@ function createServer(opts, requestListener) {\n   return new Server(opts, requestListener);\n }\n \n+// When proxying a HTTPS request, the following needs to be done:\n+// https://datatracker.ietf.org/doc/html/rfc9110#CONNECT\n+// 1. Send a CONNECT request to the proxy server.\n+// 2. Wait for 200 connection established response to establish the tunnel.\n+// 3. Perform TLS handshake with the endpoint over the socket.\n+// 4. Tunnel the request using the established connection.\n+//\n+// This function computes the tunnel configuration for HTTPS requests.\n+// The handling of the tunnel connection is done in createConnection.\n+function getTunnelConfigForProxiedHttps(agent, reqOptions) {\n+  if (!agent[kProxyConfig]) {\n+    return null;\n+  }\n+  if ((reqOptions.protocol || agent.protocol) !== 'https:') {\n+    return null;\n+  }\n+  const shouldUseProxy = checkShouldUseProxy(agent[kProxyConfig], reqOptions);\n+  debug(`getTunnelConfigForProxiedHttps should use proxy for ${reqOptions.host}:${reqOptions.port}:`, shouldUseProxy);\n+  if (!shouldUseProxy) {\n+    return null;\n+  }\n+  const { auth, href } = agent[kProxyConfig];\n+  // The request is a HTTPS request, assemble the payload for establishing the tunnel.\n+  const requestHost = isIPv6(reqOptions.host) ? `[${reqOptions.host}]` : reqOptions.host;\n+  let payload = `CONNECT ${requestHost}:${reqOptions.port} HTTP/1.1\\r\\n`;\n+  if (auth) {\n+    payload += `proxy-authorization: ${auth}\\r\\n`;",
+        "comment_created_at": "2025-07-07T14:23:58+00:00",
+        "comment_author": "jasnell",
+        "comment_body": "I might have missed it elsewhere, but we need to make sure that `requestHost`, `reqOptions.port`, `reqOptions.host`, `auth` etc are validated here to not include and invalid characters (like `\\r` and \\n`) in order to prevent any kind of request smuggling.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2190275463",
+        "repo_full_name": "nodejs/node",
+        "pr_number": 58980,
+        "pr_file": "lib/https.js",
+        "discussion_id": "2190262356",
+        "commented_code": "@@ -135,26 +145,187 @@ function createServer(opts, requestListener) {\n   return new Server(opts, requestListener);\n }\n \n+// When proxying a HTTPS request, the following needs to be done:\n+// https://datatracker.ietf.org/doc/html/rfc9110#CONNECT\n+// 1. Send a CONNECT request to the proxy server.\n+// 2. Wait for 200 connection established response to establish the tunnel.\n+// 3. Perform TLS handshake with the endpoint over the socket.\n+// 4. Tunnel the request using the established connection.\n+//\n+// This function computes the tunnel configuration for HTTPS requests.\n+// The handling of the tunnel connection is done in createConnection.\n+function getTunnelConfigForProxiedHttps(agent, reqOptions) {\n+  if (!agent[kProxyConfig]) {\n+    return null;\n+  }\n+  if ((reqOptions.protocol || agent.protocol) !== 'https:') {\n+    return null;\n+  }\n+  const shouldUseProxy = checkShouldUseProxy(agent[kProxyConfig], reqOptions);\n+  debug(`getTunnelConfigForProxiedHttps should use proxy for ${reqOptions.host}:${reqOptions.port}:`, shouldUseProxy);\n+  if (!shouldUseProxy) {\n+    return null;\n+  }\n+  const { auth, href } = agent[kProxyConfig];\n+  // The request is a HTTPS request, assemble the payload for establishing the tunnel.\n+  const requestHost = isIPv6(reqOptions.host) ? `[${reqOptions.host}]` : reqOptions.host;\n+  let payload = `CONNECT ${requestHost}:${reqOptions.port} HTTP/1.1\\r\\n`;\n+  if (auth) {\n+    payload += `proxy-authorization: ${auth}\\r\\n`;",
+        "comment_created_at": "2025-07-07T14:29:36+00:00",
+        "comment_author": "jasnell",
+        "comment_body": "If these are checked somewhere else, then a comment in here indicating where would be helpful for people coming into this code later.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2190771627",
+        "repo_full_name": "nodejs/node",
+        "pr_number": 58980,
+        "pr_file": "lib/https.js",
+        "discussion_id": "2190262356",
+        "commented_code": "@@ -135,26 +145,187 @@ function createServer(opts, requestListener) {\n   return new Server(opts, requestListener);\n }\n \n+// When proxying a HTTPS request, the following needs to be done:\n+// https://datatracker.ietf.org/doc/html/rfc9110#CONNECT\n+// 1. Send a CONNECT request to the proxy server.\n+// 2. Wait for 200 connection established response to establish the tunnel.\n+// 3. Perform TLS handshake with the endpoint over the socket.\n+// 4. Tunnel the request using the established connection.\n+//\n+// This function computes the tunnel configuration for HTTPS requests.\n+// The handling of the tunnel connection is done in createConnection.\n+function getTunnelConfigForProxiedHttps(agent, reqOptions) {\n+  if (!agent[kProxyConfig]) {\n+    return null;\n+  }\n+  if ((reqOptions.protocol || agent.protocol) !== 'https:') {\n+    return null;\n+  }\n+  const shouldUseProxy = checkShouldUseProxy(agent[kProxyConfig], reqOptions);\n+  debug(`getTunnelConfigForProxiedHttps should use proxy for ${reqOptions.host}:${reqOptions.port}:`, shouldUseProxy);\n+  if (!shouldUseProxy) {\n+    return null;\n+  }\n+  const { auth, href } = agent[kProxyConfig];\n+  // The request is a HTTPS request, assemble the payload for establishing the tunnel.\n+  const requestHost = isIPv6(reqOptions.host) ? `[${reqOptions.host}]` : reqOptions.host;\n+  let payload = `CONNECT ${requestHost}:${reqOptions.port} HTTP/1.1\\r\\n`;\n+  if (auth) {\n+    payload += `proxy-authorization: ${auth}\\r\\n`;",
+        "comment_created_at": "2025-07-07T18:21:08+00:00",
+        "comment_author": "joyeecheung",
+        "comment_body": "Thanks for catching it. For the auth I think we can throw early during agent construction (these currently get stripped away because we use URL to parse it). For host and port however, it's tricky because even without proxy, `http.request` already behaves in a quirky way:\r\n\r\n1. When the input is a string, these character just get stripped away by the ClientRequest constructor because it parses the URL using the URL constructor.\r\n2. When the input is an object, these characters in either `hostname` or `port` leads to `ERR_INVALID_CHAR`\r\n\r\nI am inclined to just keep the request option handling as-is for behavior transparency. In either case, the invalid chars won't end up in the payload.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2191158374",
+        "repo_full_name": "nodejs/node",
+        "pr_number": 58980,
+        "pr_file": "lib/https.js",
+        "discussion_id": "2190262356",
+        "commented_code": "@@ -135,26 +145,187 @@ function createServer(opts, requestListener) {\n   return new Server(opts, requestListener);\n }\n \n+// When proxying a HTTPS request, the following needs to be done:\n+// https://datatracker.ietf.org/doc/html/rfc9110#CONNECT\n+// 1. Send a CONNECT request to the proxy server.\n+// 2. Wait for 200 connection established response to establish the tunnel.\n+// 3. Perform TLS handshake with the endpoint over the socket.\n+// 4. Tunnel the request using the established connection.\n+//\n+// This function computes the tunnel configuration for HTTPS requests.\n+// The handling of the tunnel connection is done in createConnection.\n+function getTunnelConfigForProxiedHttps(agent, reqOptions) {\n+  if (!agent[kProxyConfig]) {\n+    return null;\n+  }\n+  if ((reqOptions.protocol || agent.protocol) !== 'https:') {\n+    return null;\n+  }\n+  const shouldUseProxy = checkShouldUseProxy(agent[kProxyConfig], reqOptions);\n+  debug(`getTunnelConfigForProxiedHttps should use proxy for ${reqOptions.host}:${reqOptions.port}:`, shouldUseProxy);\n+  if (!shouldUseProxy) {\n+    return null;\n+  }\n+  const { auth, href } = agent[kProxyConfig];\n+  // The request is a HTTPS request, assemble the payload for establishing the tunnel.\n+  const requestHost = isIPv6(reqOptions.host) ? `[${reqOptions.host}]` : reqOptions.host;\n+  let payload = `CONNECT ${requestHost}:${reqOptions.port} HTTP/1.1\\r\\n`;\n+  if (auth) {\n+    payload += `proxy-authorization: ${auth}\\r\\n`;",
+        "comment_created_at": "2025-07-07T23:08:59+00:00",
+        "comment_author": "joyeecheung",
+        "comment_body": "Added a comment and some tests.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

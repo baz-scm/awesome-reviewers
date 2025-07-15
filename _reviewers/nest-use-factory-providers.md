@@ -1,44 +1,34 @@
 ---
 title: Use factory providers
-description: Prefer `useFactory` over `useValue` when registering providers, especially
-  for large objects or complex configurations. This improves application performance
-  by avoiding unnecessary serialization during the dependency injection process.
+description: Prefer `useFactory` over `useValue` for better performance in NestJS
+  dependency injection, especially for large objects or complex configurations. Using
+  `useValue` with large objects can significantly slow down application bootstrapping
+  due to expensive module serialization.
 repository: nestjs/nest
 label: NestJS
 language: Typescript
-comments_count: 4
-repository_stars: 71766
+comments_count: 3
+repository_stars: 71767
 ---
 
-Prefer `useFactory` over `useValue` when registering providers, especially for large objects or complex configurations. This improves application performance by avoiding unnecessary serialization during the dependency injection process.
+Prefer `useFactory` over `useValue` for better performance in NestJS dependency injection, especially for large objects or complex configurations. Using `useValue` with large objects can significantly slow down application bootstrapping due to expensive module serialization.
 
-When using `useValue`, NestJS must serialize and hash the entire object to create a unique token, which can be computationally expensive for large objects. Using `useFactory` avoids this overhead as functions are not deeply serialized.
+When defining providers in a module, implement them as factory functions:
 
-**Instead of this:**
 ```typescript
-{
-  provide: MULTER_MODULE_OPTIONS,
-  useValue: options,  // Options object could be large or complex
+// Less optimal - may cause performance issues with large objects
+{ 
+  provide: MULTER_MODULE_OPTIONS, 
+  useValue: complexConfigObject 
+}
+
+// Better performance
+{ 
+  provide: MULTER_MODULE_OPTIONS, 
+  useFactory: () => complexConfigObject 
 }
 ```
 
-**Do this:**
-```typescript
-{
-  provide: MULTER_MODULE_OPTIONS,
-  useFactory: () => options,  // Function reference is lightweight
-}
-```
+This optimization prevents deep serialization of object structures during module token creation. The serialization process in NestJS needs to stringify providers to create unique identifiers, and complex objects can significantly impact performance.
 
-This approach is particularly important when:
-1. The provided value is a large object with many properties
-2. The value contains circular references
-3. You're registering multiple modules with similar configurations
-
-For modules that need unique identities, consider using the `UniqueDynamicModuleFactory` to avoid hash generation altogether:
-
-```typescript
-UniqueDynamicModuleFactory.wrap('my-unique-id', dynamicModule);
-```
-
-This performance optimization can significantly reduce bootstrap time for applications with many modules and complex configurations.
+If your application has slow startup times, check for warnings about module serialization exceeding 10ms, which indicates potential performance bottlenecks. Converting value providers to factory providers can substantially reduce initialization time in larger applications with complex dependency graphs.

@@ -6,7 +6,7 @@ description: 'When implementing AI model components like tokenizers, favor simpl
   removing or deferring implementation of features that:'
 repository: huggingface/tokenizers
 label: AI
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 9868
 ---

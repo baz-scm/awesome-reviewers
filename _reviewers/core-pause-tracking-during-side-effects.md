@@ -7,7 +7,7 @@ description: When executing side-effects in reactive systems (like event handler
   during side-effects.
 repository: vuejs/core
 label: Concurrency
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 50769
 ---

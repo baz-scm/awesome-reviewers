@@ -7,7 +7,7 @@ description: Use descriptive error messages and appropriate error severity based
   implementations.
 repository: mui/material-ui
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 96063
 ---

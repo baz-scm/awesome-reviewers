@@ -5,7 +5,7 @@ description: Use the appropriate invocation syntax for functions based on their 
   constructor functions (typically capitalized) should be instantiated with `new`.
 repository: oven-sh/bun
 label: Code Style
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 79093
 ---

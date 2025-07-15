@@ -5,7 +5,7 @@ description: Choose identifier names (variables, functions, parameters, classes)
   `value`, `data`, or `options` with more specific alternatives that convey meaning.
 repository: nestjs/nest
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 71766
 ---

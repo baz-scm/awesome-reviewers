@@ -5,7 +5,7 @@ description: Always validate and sanitize user-provided inputs before using them
   SQL injection, path traversal, SSRF, and similar attacks.
 repository: langchain-ai/langchainjs
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 15004
 ---

@@ -5,7 +5,7 @@ description: When working with Vue single-file components, pay special attention
   significantly impact module resolution and hot module replacement (HMR).
 repository: vitejs/vite
 label: Vue
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 74031
 ---

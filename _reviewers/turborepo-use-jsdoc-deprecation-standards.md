@@ -6,7 +6,7 @@ description: When marking code as deprecated, use JSDoc standards to provide cle
   to create clickable references to replacement functionality.
 repository: vercel/turborepo
 label: Documentation
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 28115
 ---

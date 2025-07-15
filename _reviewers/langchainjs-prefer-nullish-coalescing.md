@@ -7,7 +7,7 @@ description: 'When handling null or undefined values, use modern JavaScript patt
   1. Use the nullish coalescing operator (`??`) instead of logical OR (`||`) for defaults:'
 repository: langchain-ai/langchainjs
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 15004
 ---

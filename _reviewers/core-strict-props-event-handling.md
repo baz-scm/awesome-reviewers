@@ -5,7 +5,7 @@ description: 'Enforce strict typing and consistent handling of component props a
   Key guidelines:'
 repository: vuejs/core
 label: Vue
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 50769
 ---

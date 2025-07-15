@@ -5,7 +5,7 @@ description: When processing large arrays or data structures, implement chunked 
   manageable chunks rather than processing everything at once.
 repository: langchain-ai/langchainjs
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 15004
 ---

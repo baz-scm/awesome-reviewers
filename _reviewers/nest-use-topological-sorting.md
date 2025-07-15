@@ -6,7 +6,7 @@ description: When managing dependencies between modules or components, implement
   used.
 repository: nestjs/nest
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 71766
 ---

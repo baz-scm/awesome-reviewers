@@ -6,7 +6,7 @@ description: Keep the Next.js `/app` directory strictly for routing purposes as 
   maintainability, and follows Next.js best practices.
 repository: prowler-cloud/prowler
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 10
 repository_stars: 11834
 ---

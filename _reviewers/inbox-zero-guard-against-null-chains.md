@@ -5,7 +5,7 @@ description: Prevent null pointer exceptions by validating object chains before 
   when the rest of the function depends on a non-null value.
 repository: elie222/inbox-zero
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 8267
 ---

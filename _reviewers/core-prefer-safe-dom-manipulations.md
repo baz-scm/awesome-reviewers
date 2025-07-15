@@ -5,7 +5,7 @@ description: 'When manipulating DOM content, prefer safer alternatives to innerH
   when clearing element content, use textContent instead of innerHTML:'
 repository: vuejs/core
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 50769
 ---

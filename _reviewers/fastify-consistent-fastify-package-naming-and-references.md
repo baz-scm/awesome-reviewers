@@ -1,14 +1,14 @@
 ---
 title: "Consistent Fastify Package Naming and References"
-description: "When implementing code using the Fastify package in Typescript, it is important to use consistent and accurate naming conventions for Fastify-related references: always use the actual Fastify package name, use correct Fastify terminology and casing, and organize Fastify-related imports and references alphabetically."
+description: "When implementing code using the Fastify package in TypeScript, it is important to use consistent and accurate naming conventions for Fastify-related references: always use the actual Fastify package name, use correct Fastify terminology and casing, and organize Fastify-related imports and references alphabetically."
 repository: "fastify/fastify"
 label: "Fastify"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 2
 repository_stars: 34000
 ---
 
-When implementing code using the Fastify package in Typescript, it is important to use consistent and accurate naming conventions for Fastify-related references:
+When implementing code using the Fastify package in TypeScript, it is important to use consistent and accurate naming conventions for Fastify-related references:
 
 - Always use the actual Fastify package name (`fastify`) rather than referring to the Fastify repository or other informal names.
 - When referencing Fastify types, plugins, or other Fastify-specific concepts, use the correct Fastify terminology and casing (e.g. `FastifyInstance`, `fastify.get()`).

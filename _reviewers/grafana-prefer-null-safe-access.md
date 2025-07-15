@@ -4,7 +4,7 @@ description: 'Always use null-safe access patterns when dealing with potentially
   values to prevent runtime errors and improve code robustness. This includes:'
 repository: grafana/grafana
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 68825
 ---

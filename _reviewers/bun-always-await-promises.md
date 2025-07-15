@@ -6,7 +6,7 @@ description: Consistently use the `await` keyword when working with Promise-retu
   asynchronous operations to complete.
 repository: oven-sh/bun
 label: Concurrency
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 79093
 ---

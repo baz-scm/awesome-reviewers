@@ -5,7 +5,7 @@ description: Choose names that reflect the semantic purpose rather than implemen
   and accurately represent their usage.
 repository: elie222/inbox-zero
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 8267
 ---

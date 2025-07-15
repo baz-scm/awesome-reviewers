@@ -5,7 +5,7 @@ description: When managing module dependencies in a system, treat the dependenci
   order and prevent errors.
 repository: nestjs/nest
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 71767
 ---

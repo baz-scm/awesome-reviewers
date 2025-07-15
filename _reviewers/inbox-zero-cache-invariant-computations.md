@@ -5,7 +5,7 @@ description: Avoid repeatedly computing values that don't change frequently. For
   at module scope rather than recreating them on every function call.
 repository: elie222/inbox-zero
 label: Performance Optimization
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 8267
 ---

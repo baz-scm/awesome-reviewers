@@ -6,7 +6,7 @@ description: When implementing networking APIs that mirror Node.js functionality
   works consistently across both environments.
 repository: oven-sh/bun
 label: Networking
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 79093
 ---

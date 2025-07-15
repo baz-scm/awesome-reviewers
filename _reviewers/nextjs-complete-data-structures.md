@@ -3,7 +3,7 @@ title: "Complete data structures"
 description: "When implementing data structures such as tries, trees, or graphs, ensure all critical operations (insertion, deletion, traversal) are fully implemented with proper cleanup logic. Incomplete implementations can lead to memory leaks, stale data, and incorrect application behavior."
 repository: "vercel/next.js"
 label: "Algorithms"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 2
 repository_stars: 133000
 ---

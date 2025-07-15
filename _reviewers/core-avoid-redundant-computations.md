@@ -5,7 +5,7 @@ description: Identify and eliminate redundant operations that cause performance 
   and implementing lazy evaluation patterns.
 repository: vuejs/core
 label: Performance Optimization
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 50769
 ---

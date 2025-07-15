@@ -8,7 +8,7 @@ description: 'Maintain strict consistency between API implementation and contrac
   2. All required parameters are validated and documented'
 repository: elie222/inbox-zero
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 8267
 ---

@@ -6,7 +6,7 @@ description: Identify and optimize frequently executed code paths by moving inva
   efficiency.
 repository: grafana/grafana
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 68825
 ---

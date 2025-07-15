@@ -8,7 +8,7 @@ description: 'Use consistent, specific, and semantically appropriate naming conv
   for sort options to match existing UI components)'
 repository: grafana/grafana
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 68825
 ---

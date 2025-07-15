@@ -7,7 +7,7 @@ description: Configuration options should be organized based on their nature and
   duplicated in provider-specific options.
 repository: vercel/ai
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 15590
 ---

@@ -6,7 +6,7 @@ description: Always use cryptographically secure hash algorithms for sensitive o
   non-cryptographic hash functions.
 repository: nestjs/nest
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 1
 repository_stars: 71766
 ---

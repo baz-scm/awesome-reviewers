@@ -6,7 +6,7 @@ description: Always use strong, modern cryptographic hash algorithms for securit
   characteristics.
 repository: nestjs/nest
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 1
 repository_stars: 71767
 ---

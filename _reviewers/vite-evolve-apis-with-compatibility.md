@@ -7,7 +7,7 @@ description: 'When evolving APIs, maintain backwards compatibility while introdu
   1. Introduce new APIs alongside existing ones without deprecation warnings'
 repository: vitejs/vite
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 74031
 ---

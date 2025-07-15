@@ -7,7 +7,7 @@ description: 'When modifying or extending public API interfaces, ensure backward
   1. Make interface additions optional to avoid breaking changes:'
 repository: nestjs/nest
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 71766
 ---

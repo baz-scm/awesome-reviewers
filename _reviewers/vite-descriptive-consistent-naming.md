@@ -6,7 +6,7 @@ description: 'Choose variable, function, and class names that accurately reflect
   applies to:'
 repository: vitejs/vite
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 74031
 ---

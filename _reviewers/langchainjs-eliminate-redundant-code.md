@@ -4,7 +4,7 @@ description: Simplify code by eliminating redundancy and unnecessary complexity.
   improves readability, reduces potential bugs, and makes the codebase easier to maintain.
 repository: langchain-ai/langchainjs
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 15004
 ---

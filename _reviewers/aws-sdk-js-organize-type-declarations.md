@@ -5,7 +5,7 @@ description: Structure TypeScript declarations to improve maintainability and de
   to avoid duplication.
 repository: aws/aws-sdk-js
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 7628
 ---

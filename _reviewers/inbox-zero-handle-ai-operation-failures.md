@@ -6,7 +6,7 @@ description: Always implement proper error handling for AI service operations. A
   relevant error information, and provide appropriate fallbacks.
 repository: elie222/inbox-zero
 label: AI
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 8267
 ---

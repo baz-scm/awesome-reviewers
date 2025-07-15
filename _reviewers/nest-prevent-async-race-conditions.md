@@ -7,7 +7,7 @@ description: 'Design async operations to prevent race conditions, memory leaks, 
   1. Avoid mutating shared state in async operations'
 repository: nestjs/nest
 label: Concurrency
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 71767
 ---

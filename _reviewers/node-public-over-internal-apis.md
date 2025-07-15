@@ -5,7 +5,7 @@ description: When designing or implementing APIs, always prefer publicly documen
   subject to semantic versioning guarantees.
 repository: nodejs/node
 label: API
-language: Javascript
+language: JavaScript
 comments_count: 7
 repository_stars: 112178
 ---

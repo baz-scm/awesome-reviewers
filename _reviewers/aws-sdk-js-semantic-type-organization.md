@@ -6,7 +6,7 @@ description: Organize types and interfaces in intuitive namespace hierarchies an
   and return values. This improves code clarity, discoverability, and type safety.
 repository: aws/aws-sdk-js
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 7628
 ---

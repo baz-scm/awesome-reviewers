@@ -7,7 +7,7 @@ description: 'High-quality code documentation improves maintainability and helps
   1. **Use appropriate JSDoc annotations** to indicate API visibility and status:'
 repository: vitejs/vite
 label: Documentation
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 74031
 ---

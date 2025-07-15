@@ -5,7 +5,7 @@ description: Use modern JavaScript features and utility functions consistently f
   dedicated utility functions like isNil() over direct null checks or OR (||) operators.
 repository: nestjs/nest
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 71766
 ---

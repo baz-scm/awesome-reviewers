@@ -7,7 +7,7 @@ description: 'Add comprehensive JSDoc comments to all API interfaces, types, and
   1. Include links to official external documentation when available'
 repository: vercel/ai
 label: Documentation
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 15590
 ---

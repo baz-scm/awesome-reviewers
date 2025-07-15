@@ -5,7 +5,7 @@ description: Always ensure errors are properly surfaced rather than silently ign
   any indication of what went wrong, making debugging difficult or impossible.
 repository: oven-sh/bun
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 79093
 ---

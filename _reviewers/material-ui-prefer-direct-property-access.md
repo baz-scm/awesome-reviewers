@@ -6,7 +6,7 @@ description: When property names are known at development time, use direct prope
   type checking, and makes the code more maintainable.
 repository: mui/material-ui
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 96063
 ---

@@ -10,7 +10,7 @@ description: 'Design functions for maximum reusability, clarity, and maintainabi
   in different...'
 repository: grafana/grafana
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 68825
 ---

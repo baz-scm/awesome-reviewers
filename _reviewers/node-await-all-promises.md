@@ -5,7 +5,7 @@ description: Always explicitly await all asynchronous operations, especially in 
   to race conditions, resource leaks, and unpredictable behavior in concurrent environments.
 repository: nodejs/node
 label: Concurrency
-language: Javascript
+language: JavaScript
 comments_count: 4
 repository_stars: 112178
 ---

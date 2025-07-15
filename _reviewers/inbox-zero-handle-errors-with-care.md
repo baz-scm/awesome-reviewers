@@ -6,7 +6,7 @@ description: Always implement comprehensive error handling for asynchronous oper
   or recovery mechanisms.
 repository: elie222/inbox-zero
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 10
 repository_stars: 8267
 ---

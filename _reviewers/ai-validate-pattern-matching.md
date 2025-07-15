@@ -5,7 +5,7 @@ description: 'When implementing algorithms that involve pattern matching or data
   This is particularly important for:'
 repository: vercel/ai
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 15590
 ---

@@ -10,7 +10,7 @@ description: 'Ensure test assertions correctly validate the intended behavior by
   // PROBLEMATIC: Test may pass even if promise never resolves'
 repository: oven-sh/bun
 label: Testing
-language: Javascript
+language: JavaScript
 comments_count: 3
 repository_stars: 79093
 ---

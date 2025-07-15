@@ -8,7 +8,7 @@ description: 'When implementing algorithms involving date and time calculations,
   to zero when you only care about hours and minutes'
 repository: elie222/inbox-zero
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 8267
 ---

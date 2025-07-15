@@ -4,7 +4,7 @@ description: 'Names for variables, methods, and classes should be descriptive, s
   accurate, and consistent with established conventions. Follow these guidelines:'
 repository: nestjs/nest
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 9
 repository_stars: 71767
 ---

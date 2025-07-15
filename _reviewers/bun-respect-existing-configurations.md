@@ -6,7 +6,7 @@ description: When integrating with external services or tools, design your confi
   environments and avoids disrupting users' workflows.
 repository: oven-sh/bun
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 79093
 ---

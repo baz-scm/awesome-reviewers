@@ -6,7 +6,7 @@ description: Properly manage component lifecycle effects and cleanup in React co
   event listeners, and other side effects.
 repository: vuejs/core
 label: React
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 50769
 ---

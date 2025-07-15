@@ -8,7 +8,7 @@ description: 'Tests should thoroughly cover all code paths and edge cases. Each 
   2. Cover all logical branches and code paths'
 repository: vuejs/core
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 50769
 ---

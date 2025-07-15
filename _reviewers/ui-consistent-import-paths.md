@@ -7,7 +7,7 @@ description: Establish and follow consistent import path conventions throughout 
   project...
 repository: shadcn-ui/ui
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 90568
 ---

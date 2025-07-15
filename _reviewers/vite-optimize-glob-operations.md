@@ -5,7 +5,7 @@ description: 'When using glob patterns for file system operations, ensure optima
   and handling paths efficiently:'
 repository: vitejs/vite
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 74031
 ---

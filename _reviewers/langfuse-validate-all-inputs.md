@@ -5,7 +5,7 @@ description: All user-controlled inputs must be validated and sanitized before u
   This includes query parameters, environment variables, URLs, and database values.
 repository: langfuse/langfuse
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 13574
 ---

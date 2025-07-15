@@ -6,7 +6,7 @@ description: Organize tests using behavior-driven development (BDD) patterns to 
   rather than implementation details.
 repository: nestjs/nest
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 71766
 ---

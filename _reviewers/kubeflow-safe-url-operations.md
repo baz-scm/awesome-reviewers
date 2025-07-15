@@ -8,7 +8,7 @@ description: 'When handling URLs for API interactions and navigation, use precis
   false positives from substring matches:'
 repository: kubeflow/kubeflow
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 15064
 ---

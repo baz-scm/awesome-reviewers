@@ -4,7 +4,7 @@ description: 'When working with feature toggles and configuration flags, manage 
   entire lifecycle carefully to prevent breaking changes and compatibility issues. '
 repository: grafana/grafana
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 68825
 ---

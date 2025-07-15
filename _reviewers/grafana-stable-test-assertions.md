@@ -5,7 +5,7 @@ description: Write tests that focus on behavior rather than implementation detai
   and assertions that frequently break with implementation changes.
 repository: grafana/grafana
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 68825
 ---

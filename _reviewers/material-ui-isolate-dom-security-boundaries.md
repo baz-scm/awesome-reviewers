@@ -7,7 +7,7 @@ description: When developing UI components, establish clear DOM manipulation bou
   content that should be...
 repository: mui/material-ui
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 96063
 ---

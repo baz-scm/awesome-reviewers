@@ -7,7 +7,7 @@ description: 'When writing configuration files, be explicit and precise about de
   For dependency declarations:'
 repository: mui/material-ui
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 96063
 ---

@@ -5,7 +5,7 @@ description: 'Always use JSDoc format (`/** */`) instead of regular comments (`/
   including:'
 repository: langchain-ai/langchainjs
 label: Documentation
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 15004
 ---

@@ -6,7 +6,7 @@ description: When implementing authentication token handling, prioritize more se
   back to localStorage, which is vulnerable to XSS attacks.
 repository: apache/airflow
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 1
 repository_stars: 40858
 ---

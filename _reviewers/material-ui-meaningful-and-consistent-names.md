@@ -5,7 +5,7 @@ description: Use descriptive, accurate identifiers that follow established conve
   should clearly indicate their purpose and content.
 repository: mui/material-ui
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 96063
 ---

@@ -6,7 +6,7 @@ description: 'When modifying or extending APIs, prioritize backward compatibilit
   '
 repository: vuejs/core
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 50769
 ---

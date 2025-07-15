@@ -5,7 +5,7 @@ description: Always propagate errors with proper context and recovery strategy. 
   information is preserved, and provide meaningful error messages.
 repository: vitejs/vite
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 74031
 ---

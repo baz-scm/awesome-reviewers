@@ -5,7 +5,7 @@ description: Store all configuration values in dedicated configuration files rat
   and reduces the need for code changes when configurations change.
 repository: kubeflow/kubeflow
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 15064
 ---

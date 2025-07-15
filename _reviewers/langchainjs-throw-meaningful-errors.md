@@ -5,7 +5,7 @@ description: Always throw specific, actionable errors instead of returning unexp
   the exact reason for failure without redundancy.
 repository: langchain-ai/langchainjs
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 15004
 ---

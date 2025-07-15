@@ -5,7 +5,7 @@ description: When checking for the absence of values, use explicit nullish check
   falsy values like empty strings, zero, or false being treated as non-existent.
 repository: vuejs/core
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 50769
 ---

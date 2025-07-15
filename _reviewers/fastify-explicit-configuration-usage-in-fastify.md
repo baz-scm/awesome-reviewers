@@ -1,14 +1,14 @@
 ---
 title: "Explicit Configuration Usage in Fastify"
-description: "When using the Fastify framework in Typescript, ensure that all configuration options are explicitly declared and properly documented. This includes clearly defining all required configuration parameters, explicitly specifying any configuration constraints or mutually exclusive options, and providing comprehensive examples."
+description: "When using the Fastify framework in TypeScript, ensure that all configuration options are explicitly declared and properly documented. This includes clearly defining all required configuration parameters, explicitly specifying any configuration constraints or mutually exclusive options, and providing comprehensive examples."
 repository: "fastify/fastify"
 label: "Fastify"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 5
 repository_stars: 34000
 ---
 
-When using the Fastify framework in Typescript, ensure that all configuration options are explicitly declared and properly documented. This includes:
+When using the Fastify framework in TypeScript, ensure that all configuration options are explicitly declared and properly documented. This includes:
 
 1. Clearly defining all required configuration parameters, including their data types and default values (with units where applicable).
 2. Explicitly specifying any configuration constraints or mutually exclusive options.

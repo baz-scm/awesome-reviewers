@@ -5,7 +5,7 @@ description: Ensure API type definitions accurately reflect current implementati
   actual source code to prevent developers from using non-existent or deprecated features.
 repository: expressjs/express
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 67300
 ---

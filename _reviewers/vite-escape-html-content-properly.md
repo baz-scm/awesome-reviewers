@@ -6,7 +6,7 @@ description: Always use specialized HTML escaping functions when outputting dyna
   characters or may add unnecessary escapes.
 repository: vitejs/vite
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 1
 repository_stars: 74031
 ---

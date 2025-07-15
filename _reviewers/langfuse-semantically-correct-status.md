@@ -5,7 +5,7 @@ description: Use HTTP status codes that accurately reflect the outcome of API op
   intelligently.
 repository: langfuse/langfuse
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 13574
 ---

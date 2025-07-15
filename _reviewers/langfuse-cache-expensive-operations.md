@@ -5,7 +5,7 @@ description: Identify and cache results of computationally expensive or repetiti
   calls, date object creation, data transformations, and resolved promises.
 repository: langfuse/langfuse
 label: Performance Optimization
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 13574
 ---

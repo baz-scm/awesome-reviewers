@@ -5,7 +5,7 @@ description: Use explicit null/undefined checks instead of truthy/falsy checks w
   lead to bugs when dealing with valid falsy values like 0 or empty strings.
 repository: langfuse/langfuse
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 13574
 ---

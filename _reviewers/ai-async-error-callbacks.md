@@ -7,7 +7,7 @@ description: When handling asynchronous operations, especially those that might 
   recovery.
 repository: vercel/ai
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 15590
 ---

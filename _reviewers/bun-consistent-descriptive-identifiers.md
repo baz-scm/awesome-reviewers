@@ -6,7 +6,7 @@ description: Use camelCase for all variables, parameters, methods, and functions
   naming collisions between different scopes.
 repository: oven-sh/bun
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 79093
 ---

@@ -5,7 +5,7 @@ description: Design dedicated API endpoints for data that changes frequently or 
   ensures that applications remain maintainable as backend data evolves.
 repository: prowler-cloud/prowler
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 11834
 ---

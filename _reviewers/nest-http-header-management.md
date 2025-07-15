@@ -7,7 +7,7 @@ description: 'When working with HTTP responses, follow these principles for prop
   1. **Only set default headers when undefined, not when falsy:**'
 repository: nestjs/nest
 label: Networking
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 71766
 ---

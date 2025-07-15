@@ -5,7 +5,7 @@ description: Documentation should be both technically accurate and contextually 
   purpose, and relationships of code elements.
 repository: oven-sh/bun
 label: Documentation
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 79093
 ---

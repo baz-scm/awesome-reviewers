@@ -7,7 +7,7 @@ description: Documentation should be written to remain clear and useful regardle
   clear to developers reading the code...
 repository: mui/material-ui
 label: Documentation
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 96063
 ---

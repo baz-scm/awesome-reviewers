@@ -5,7 +5,7 @@ description: "Use TypeScript's type system and modern JavaScript features to pre
   \ `undefined` for properties that shouldn't have values"
 repository: vercel/ai
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 15590
 ---

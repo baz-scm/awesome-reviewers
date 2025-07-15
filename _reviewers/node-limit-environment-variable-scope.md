@@ -7,7 +7,7 @@ description: 'When working with environment variables for configuration:
   established variables like `NODE_TEST_CONTEXT` where possible to avoid fragmentation.'
 repository: nodejs/node
 label: Configurations
-language: Javascript
+language: JavaScript
 comments_count: 4
 repository_stars: 112178
 ---

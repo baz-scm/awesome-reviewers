@@ -9,7 +9,7 @@ description: 'Maintain clear and explicit code organization patterns by followin
   - Prefer public properties over getters/setters when no additional logic is needed'
 repository: vercel/ai
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 15590
 ---

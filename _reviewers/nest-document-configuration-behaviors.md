@@ -7,7 +7,7 @@ description: 'Always document configuration options thoroughly, especially for m
   1. Provide clear descriptions of what the option does'
 repository: nestjs/nest
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 71766
 ---

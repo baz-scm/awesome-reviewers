@@ -7,7 +7,7 @@ description: 'Always provide complete, clear, and contextually rich documentatio
   1. Use proper grammar and clear wording'
 repository: aws/aws-sdk-js
 label: Documentation
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 7628
 ---

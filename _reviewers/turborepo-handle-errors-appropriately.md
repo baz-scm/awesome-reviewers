@@ -7,7 +7,7 @@ description: Implement appropriate error handling strategies based on the critic
   continue, provide clear error...
 repository: vercel/turborepo
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 28115
 ---

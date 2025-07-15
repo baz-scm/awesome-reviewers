@@ -5,7 +5,7 @@ description: Maintain consistent logger configuration and usage patterns across 
   logging practices and ensures uniform log output.
 repository: nestjs/nest
 label: Logging
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 71766
 ---

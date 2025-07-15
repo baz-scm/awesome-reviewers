@@ -5,7 +5,7 @@ description: Write code that prioritizes readability and maintainability over cl
   developers or make the code harder to maintain.
 repository: nodejs/node
 label: Code Style
-language: Javascript
+language: JavaScript
 comments_count: 6
 repository_stars: 112178
 ---

@@ -5,7 +5,7 @@ description: Always provide explicit default values for configuration options to
   value management, and document defaults clearly.
 repository: nestjs/nest
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 9
 repository_stars: 71767
 ---

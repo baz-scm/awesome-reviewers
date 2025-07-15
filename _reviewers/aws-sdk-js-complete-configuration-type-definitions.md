@@ -7,7 +7,7 @@ description: Ensure configuration type definitions are complete and consistent b
   levels.
 repository: aws/aws-sdk-js
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 7628
 ---

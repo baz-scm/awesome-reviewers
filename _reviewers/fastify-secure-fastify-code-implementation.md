@@ -1,14 +1,14 @@
 ---
 title: "Secure Fastify Code Implementation"
-description: "This review focuses on secure implementation patterns when using the Fastify web framework in Typescript: prevent Prototype Pollution Attacks by avoiding direct property access on untrusted objects, and protect Against Denial-of-Service Attacks by configuring appropriate request timeouts."
+description: "This review focuses on secure implementation patterns when using the Fastify web framework in TypeScript: prevent Prototype Pollution Attacks by avoiding direct property access on untrusted objects, and protect Against Denial-of-Service Attacks by configuring appropriate request timeouts."
 repository: "fastify/fastify"
 label: "Fastify"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 2
 repository_stars: 34000
 ---
 
-This review focuses on secure implementation patterns when using the Fastify web framework in Typescript:
+This review focuses on secure implementation patterns when using the Fastify web framework in TypeScript:
 
 1. **Prevent Prototype Pollution Attacks**: Avoid direct property access on untrusted objects. Instead, use `Object.prototype` methods to safely access object properties:
 

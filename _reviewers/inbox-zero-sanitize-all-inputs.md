@@ -4,7 +4,7 @@ description: 'Properly sanitize or escape all user-provided inputs before using 
   in sensitive contexts to prevent injection attacks. This applies to multiple contexts:'
 repository: elie222/inbox-zero
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 11
 repository_stars: 8267
 ---

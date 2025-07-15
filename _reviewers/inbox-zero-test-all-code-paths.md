@@ -4,7 +4,7 @@ description: 'Write comprehensive tests that cover all code paths including edge
   error conditions, and different parameter combinations. Each test file should include:'
 repository: elie222/inbox-zero
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 8267
 ---

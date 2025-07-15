@@ -5,7 +5,7 @@ description: Always use curly braces for conditional statements and loops, even 
   readability. Avoid inline conditionals.
 repository: nestjs/nest
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 71767
 ---

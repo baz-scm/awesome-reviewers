@@ -5,7 +5,7 @@ description: Always use curly braces for control structures (if, for, while, etc
   by making the code structure explicit and consistent.
 repository: nestjs/nest
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 71766
 ---

@@ -5,7 +5,7 @@ description: "Follow project-wide code style conventions to ensure consistency a
   \   - Maintain blank lines between test cases"
 repository: vuejs/core
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 50769
 ---

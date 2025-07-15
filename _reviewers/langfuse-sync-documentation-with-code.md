@@ -5,7 +5,7 @@ description: 'Always ensure documentation and comments accurately reflect the ac
   consistency. This applies to:'
 repository: langfuse/langfuse
 label: Documentation
-language: Typescript
+language: TypeScript
 comments_count: 9
 repository_stars: 13574
 ---

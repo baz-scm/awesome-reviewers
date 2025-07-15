@@ -6,7 +6,7 @@ description: When handling nullable or undefined states, use enumerations instea
   or an unknown state.
 repository: kubeflow/kubeflow
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 15064
 ---

@@ -6,7 +6,7 @@ description: When implementing features that require cleanup or state restoratio
   in intermediate states, and operations from remaining incomplete after exceptions.
 repository: vuejs/core
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 50769
 ---

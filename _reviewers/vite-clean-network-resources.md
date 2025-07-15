@@ -7,7 +7,7 @@ description: Always properly close and clean up network connections to prevent m
   for network operations by using...
 repository: vitejs/vite
 label: Networking
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 74031
 ---

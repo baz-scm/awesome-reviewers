@@ -8,7 +8,7 @@ description: 'Follow consistent naming conventions in TypeScript to improve code
   with an uppercase letter.'
 repository: langchain-ai/langchainjs
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 10
 repository_stars: 15004
 ---

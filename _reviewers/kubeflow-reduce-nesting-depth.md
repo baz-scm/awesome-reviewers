@@ -5,7 +5,7 @@ description: Improve code readability by reducing nesting depth with early retur
   functional operators over nested conditionals when working with streams or collections.
 repository: kubeflow/kubeflow
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 15064
 ---

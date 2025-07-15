@@ -6,7 +6,7 @@ description: Follow the DRY (Don't Repeat Yourself) principle by extracting repe
   updated but others are overlooked.
 repository: langfuse/langfuse
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 8
 repository_stars: 13574
 ---

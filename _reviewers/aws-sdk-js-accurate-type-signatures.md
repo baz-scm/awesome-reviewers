@@ -5,7 +5,7 @@ description: 'When defining API interfaces in TypeScript, ensure that method sig
   special attention to:'
 repository: aws/aws-sdk-js
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 7628
 ---

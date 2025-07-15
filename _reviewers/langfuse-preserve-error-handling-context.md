@@ -5,7 +5,7 @@ description: Always preserve error context by using specific error types, safe e
   maintains a clear error handling chain.
 repository: langfuse/langfuse
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 13574
 ---

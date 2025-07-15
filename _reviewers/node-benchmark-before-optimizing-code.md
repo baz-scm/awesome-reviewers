@@ -5,7 +5,7 @@ description: Performance optimizations should be validated through benchmarks be
   improve performance in real-world scenarios.
 repository: nodejs/node
 label: Performance Optimization
-language: Javascript
+language: JavaScript
 comments_count: 7
 repository_stars: 112178
 ---

@@ -5,7 +5,7 @@ description: When handling concurrent operations in asynchronous environments, a
   state or use immutable patterns to ensure each request path has isolated context.
 repository: nestjs/nest
 label: Concurrency
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 71766
 ---

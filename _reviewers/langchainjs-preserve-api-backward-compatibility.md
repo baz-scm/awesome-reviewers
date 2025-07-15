@@ -5,7 +5,7 @@ description: When modifying existing APIs, maintain backward compatibility by im
   notices rather than direct breaking changes.
 repository: langchain-ai/langchainjs
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 15004
 ---

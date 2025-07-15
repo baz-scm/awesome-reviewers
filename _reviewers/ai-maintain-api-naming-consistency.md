@@ -5,7 +5,7 @@ description: When working with AI model interfaces and result objects, ensure co
   and model types, making naming consistency crucial for maintainable code.
 repository: vercel/ai
 label: AI
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 15590
 ---

@@ -5,7 +5,7 @@ description: Design logging systems with customizable formatting and output opti
   logger implementations.
 repository: nestjs/nest
 label: Logging
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 71767
 ---

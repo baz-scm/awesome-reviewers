@@ -6,7 +6,7 @@ description: When logging object properties, always verify that the property nam
   in undefined values in logs, reducing their usefulness for debugging and troubleshooting.
 repository: vercel/ai
 label: Logging
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 15590
 ---

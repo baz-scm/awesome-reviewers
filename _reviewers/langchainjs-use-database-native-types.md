@@ -7,7 +7,7 @@ description: 'Always leverage database-native data types and appropriate schema 
   1. Use database-specific type bindings when available instead of generic formats:'
 repository: langchain-ai/langchainjs
 label: Database
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 15004
 ---

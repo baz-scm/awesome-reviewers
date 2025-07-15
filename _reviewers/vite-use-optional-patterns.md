@@ -6,7 +6,7 @@ description: Choose the most appropriate pattern for handling potentially undefi
   null.
 repository: vitejs/vite
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 74031
 ---

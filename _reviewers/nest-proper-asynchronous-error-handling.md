@@ -6,7 +6,7 @@ description: Ensure errors in asynchronous operations and event-based systems ar
   handlers.
 repository: nestjs/nest
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 71767
 ---

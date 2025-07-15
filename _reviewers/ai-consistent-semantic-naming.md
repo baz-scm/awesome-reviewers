@@ -7,7 +7,7 @@ description: 'Use clear, consistent, and semantic naming patterns across your co
   1. **Start function names with verbs** that describe the action being performed:'
 repository: vercel/ai
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 10
 repository_stars: 15590
 ---

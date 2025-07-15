@@ -1,14 +1,14 @@
 ---
 title: "Adhere to Fastify Coding Conventions"
-description: "When implementing code that uses the Fastify package in Typescript, ensure the following conventions are followed: avoid contractions, use Oxford commas, and maintain consistent formatting."
+description: "When implementing code that uses the Fastify package in TypeScript, ensure the following conventions are followed: avoid contractions, use Oxford commas, and maintain consistent formatting."
 repository: "fastify/fastify"
 label: "Fastify"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 5
 repository_stars: 34000
 ---
 
-When implementing code that uses the Fastify package in Typescript, ensure the following conventions are followed:
+When implementing code that uses the Fastify package in TypeScript, ensure the following conventions are followed:
 
 1. **Avoid Contractions**: Use full words instead of contractions in code and comments. For example, use "it is" instead of "it's".
 

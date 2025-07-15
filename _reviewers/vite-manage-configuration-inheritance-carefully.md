@@ -7,7 +7,7 @@ description: 'When designing configuration systems, establish clear default valu
   1. Set explicit defaults that can be overridden by frameworks and users'
 repository: vitejs/vite
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 74031
 ---

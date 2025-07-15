@@ -6,7 +6,7 @@ description: 'When modifying or extending public interfaces, ensure changes main
   '
 repository: nestjs/nest
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 71767
 ---

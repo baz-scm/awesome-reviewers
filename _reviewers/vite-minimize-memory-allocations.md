@@ -5,7 +5,7 @@ description: 'Choose methods and patterns that reduce unnecessary memory allocat
   methods like `Buffer.byteLength()` over approaches that create intermediate objects:'
 repository: vitejs/vite
 label: Performance Optimization
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 74031
 ---

@@ -7,7 +7,7 @@ description: Feature flags like `__DEV__` and `__COMPAT__` are critical configur
   build time through tree-shaking, so...
 repository: vuejs/core
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 50769
 ---

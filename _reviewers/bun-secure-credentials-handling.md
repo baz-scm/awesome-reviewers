@@ -7,7 +7,7 @@ description: When handling credentials or secrets in code, avoid passing them di
   and ensure proper cleanup afterward.
 repository: oven-sh/bun
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 1
 repository_stars: 79093
 ---

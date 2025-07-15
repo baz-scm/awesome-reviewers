@@ -6,7 +6,7 @@ description: 'Names should be clear, descriptive and follow consistent patterns.
   '
 repository: vuejs/core
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 50769
 ---

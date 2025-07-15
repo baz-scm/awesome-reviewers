@@ -6,7 +6,7 @@ description: Design APIs with clear parameter interactions and priority rules to
   required.
 repository: mui/material-ui
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 96063
 ---

@@ -7,7 +7,7 @@ description: Error messages should be specific, actionable, and include context 
   traces.
 repository: nodejs/node
 label: Error Handling
-language: Javascript
+language: JavaScript
 comments_count: 8
 repository_stars: 112178
 ---

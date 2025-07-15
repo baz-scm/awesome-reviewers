@@ -5,7 +5,7 @@ description: Always ensure database queries produce deterministic results by inc
   result ordering and potential data inconsistencies.
 repository: langfuse/langfuse
 label: Database
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 13574
 ---

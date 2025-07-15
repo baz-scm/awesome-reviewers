@@ -6,7 +6,7 @@ description: 'Leverage modern JavaScript features and utility functions for safe
   '
 repository: nestjs/nest
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 71767
 ---

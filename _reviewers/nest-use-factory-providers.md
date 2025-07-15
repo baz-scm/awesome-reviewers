@@ -6,7 +6,7 @@ description: Prefer `useFactory` over `useValue` for better performance in NestJ
   due to expensive module serialization.
 repository: nestjs/nest
 label: NestJS
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 71767
 ---

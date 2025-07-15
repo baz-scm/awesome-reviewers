@@ -6,7 +6,7 @@ description: Always validate that URLs use the HTTPS protocol in both implementa
   man-in-the-middle attacks and data exposure.
 repository: kubeflow/kubeflow
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 1
 repository_stars: 15064
 ---

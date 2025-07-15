@@ -6,7 +6,7 @@ description: When writing tests, prioritize following the official recommendatio
   improve reliability, and future-proof your tests.
 repository: mui/material-ui
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 96063
 ---

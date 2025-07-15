@@ -5,7 +5,7 @@ description: When implementing networking features, strictly adhere to protocol 
   codes, and protocol-specific connection handling.
 repository: nestjs/nest
 label: Networking
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 71767
 ---

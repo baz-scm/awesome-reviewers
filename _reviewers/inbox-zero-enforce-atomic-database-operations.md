@@ -5,7 +5,7 @@ description: Replace check-then-act patterns with atomic database operations to 
   and leverage database-level constraints instead of application-level checks.
 repository: elie222/inbox-zero
 label: Concurrency
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 8267
 ---

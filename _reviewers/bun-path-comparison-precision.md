@@ -6,7 +6,7 @@ description: When implementing file path matching or exclusion algorithms, use p
   by accidentally matching unrelated paths that share prefixes.
 repository: oven-sh/bun
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 79093
 ---

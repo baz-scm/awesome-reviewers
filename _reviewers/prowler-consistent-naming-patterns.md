@@ -10,7 +10,7 @@ description: 'Follow systematic naming conventions for types, interfaces, and fu
   `RoleData`)'
 repository: prowler-cloud/prowler
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 11834
 ---

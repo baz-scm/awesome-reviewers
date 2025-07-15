@@ -6,7 +6,7 @@ description: Improve code readability and maintainability by decomposing large, 
   helper functions.
 repository: vitejs/vite
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 74031
 ---

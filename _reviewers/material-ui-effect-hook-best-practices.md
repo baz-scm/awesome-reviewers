@@ -8,7 +8,7 @@ description: 'When using React effect hooks, follow these practices to ensure pr
   arrays rather than creating a new array on each render.'
 repository: mui/material-ui
 label: React
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 96063
 ---

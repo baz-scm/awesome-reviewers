@@ -8,7 +8,7 @@ description: 'Use appropriate iteration techniques in performance-critical code 
   and `filter` for maximum performance:'
 repository: nestjs/nest
 label: Performance Optimization
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 71767
 ---

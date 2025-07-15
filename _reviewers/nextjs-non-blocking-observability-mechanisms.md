@@ -3,7 +3,7 @@ title: "Non-blocking observability mechanisms"
 description: "When implementing observability mechanisms like telemetry or status monitoring, ensure they don't block or interfere with critical application operations. Use background processes for telemetry submissions and dedicated endpoints for status checks."
 repository: "vercel/next.js"
 label: "Observability"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 2
 repository_stars: 133000
 ---

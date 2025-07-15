@@ -6,7 +6,7 @@ description: When designing APIs, carefully consider which elements of your impl
   implementation details as part of your contract.
 repository: oven-sh/bun
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 79093
 ---

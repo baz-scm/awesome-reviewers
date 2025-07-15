@@ -5,7 +5,7 @@ description: Tests should focus on verifying behavior rather than implementation
   internal code structure that can lead to flaky and brittle tests.
 repository: nodejs/node
 label: Testing
-language: Javascript
+language: JavaScript
 comments_count: 5
 repository_stars: 112178
 ---

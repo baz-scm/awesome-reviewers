@@ -7,7 +7,7 @@ description: 'Replace non-deterministic timing patterns with reliable alternativ
   1. Use element-based waits instead of fixed timeouts:'
 repository: langfuse/langfuse
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 13574
 ---

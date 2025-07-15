@@ -6,7 +6,7 @@ description: Always wrap multiple related database operations in a transaction t
   (e.g., Redis cache).
 repository: elie222/inbox-zero
 label: Database
-language: Typescript
+language: TypeScript
 comments_count: 9
 repository_stars: 8267
 ---

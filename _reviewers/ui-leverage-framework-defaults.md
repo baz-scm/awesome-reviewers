@@ -6,7 +6,7 @@ description: Avoid redundant or unnecessary configuration by understanding and u
   overhead and prevents configuration drift.
 repository: shadcn-ui/ui
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 90568
 ---

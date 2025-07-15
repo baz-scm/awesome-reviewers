@@ -6,7 +6,7 @@ description: Use names that clearly convey the purpose and content of variables,
   outputs. Include proper type declarations for parameters that describe their structure.
 repository: vercel/turborepo
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 28115
 ---

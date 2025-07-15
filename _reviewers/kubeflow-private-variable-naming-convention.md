@@ -5,7 +5,7 @@ description: Use the 'prv' prefix for private class members and ensure they're e
   team conventions and improves code readability by clearly indicating variable scope.
 repository: kubeflow/kubeflow
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 15064
 ---

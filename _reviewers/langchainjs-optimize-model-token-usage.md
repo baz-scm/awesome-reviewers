@@ -7,7 +7,7 @@ description: 'Implement token-efficient patterns when working with AI models to 
   1. Batch identical prompts into single API calls where supported'
 repository: langchain-ai/langchainjs
 label: AI
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 15004
 ---

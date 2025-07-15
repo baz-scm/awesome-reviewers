@@ -5,7 +5,7 @@ description: 'Tests should be straightforward, explicit, and free from complex l
   glance. When designing tests:'
 repository: vercel/ai
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 15590
 ---

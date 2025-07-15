@@ -6,7 +6,7 @@ description: Delete commented-out code instead of retaining it in the codebase. 
   the history if it needs to be referenced later.
 repository: elie222/inbox-zero
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 8267
 ---

@@ -6,7 +6,7 @@ description: Implement dedicated fast paths for common search patterns while mai
   scenarios.
 repository: vuejs/core
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 50769
 ---

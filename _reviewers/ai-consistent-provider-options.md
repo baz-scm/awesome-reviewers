@@ -6,7 +6,7 @@ description: When designing APIs that support multiple providers or service inte
   definitions.
 repository: vercel/ai
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 15590
 ---

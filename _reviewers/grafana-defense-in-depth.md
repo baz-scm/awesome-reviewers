@@ -5,7 +5,7 @@ description: Always implement multiple layers of security controls, even when th
   one security measure fails or is bypassed.
 repository: grafana/grafana
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 68825
 ---

@@ -6,7 +6,7 @@ description: 'Ensure configuration files and schemas adhere to their expected st
   conflicting configurations:'
 repository: vercel/turborepo
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 28115
 ---

@@ -6,7 +6,7 @@ description: Implement comprehensive validation for environment variables using 
   and prevents runtime issues.
 repository: langfuse/langfuse
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 13574
 ---

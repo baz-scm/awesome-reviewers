@@ -3,7 +3,7 @@ title: "Verify types in tests"
 description: "Use explicit type assertions in TypeScript tests to verify that types behave as expected across various scenarios. Include assertions for inheritance relationships, property types, and different response status codes."
 repository: "fastify/fastify"
 label: "Testing"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 2
 repository_stars: 34000
 ---

@@ -1,14 +1,14 @@
 ---
-title: "Consistent axum Usage in Typescript"
-description: "When implementing Typescript code that uses the axum package, maintain consistent and idiomatic usage: always use lowercase 'axum', leverage axum's built-in types correctly, follow best practices for state and dependencies, ensure proper error handling, and use routing and middleware features effectively."
+title: "Consistent axum Usage in TypeScript"
+description: "When implementing TypeScript code that uses the axum package, maintain consistent and idiomatic usage: always use lowercase 'axum', leverage axum's built-in types correctly, follow best practices for state and dependencies, ensure proper error handling, and use routing and middleware features effectively."
 repository: "tokio-rs/axum"
 label: "Axum"
-language: "Typescript"
+language: "TypeScript"
 comments_count: 5
 repository_stars: 22100
 ---
 
-When implementing Typescript code that uses the axum package, maintain consistent and idiomatic usage:
+When implementing TypeScript code that uses the axum package, maintain consistent and idiomatic usage:
 
 1. Always use the lowercase "axum" when referring to the framework, not "Axum".
 2. Leverage axum's built-in types and utilities correctly, such as `Router`, `Middleware`, and `RequestBody`.
@@ -16,7 +16,7 @@ When implementing Typescript code that uses the axum package, maintain consisten
 4. Ensure error handling is properly implemented, with clear and informative error messages returned to clients.
 5. Use axum's routing and middleware features effectively to structure your application, avoiding overly complex or nested routing.
 
-Example of correct axum usage in Typescript:
+Example of correct axum usage in TypeScript:
 
 ```typescript
 import { Router, RequestBody } from '@awslabs/aws-lambda-typescript-runtime';

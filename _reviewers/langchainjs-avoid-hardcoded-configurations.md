@@ -5,7 +5,7 @@ description: Always parameterize values that might vary across different environ
   regions, dimensions, credentials, and other configuration values.
 repository: langchain-ai/langchainjs
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 15004
 ---

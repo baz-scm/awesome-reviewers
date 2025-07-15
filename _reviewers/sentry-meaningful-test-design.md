@@ -7,7 +7,7 @@ description: 'Write tests that focus on unique edge cases and avoid redundancy. 
   1. Consolidate similar test cases that don''t provide additional coverage'
 repository: getsentry/sentry
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 41297
 ---

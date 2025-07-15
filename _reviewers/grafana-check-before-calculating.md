@@ -7,7 +7,7 @@ description: Implement preliminary validation checks before executing expensive 
   no effect or be redundant.
 repository: grafana/grafana
 label: Performance Optimization
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 68825
 ---

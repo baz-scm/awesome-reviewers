@@ -5,7 +5,7 @@ description: Extract complex logic into separate, pure functions to improve test
   complex mocking or setup.
 repository: vercel/turborepo
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 28115
 ---

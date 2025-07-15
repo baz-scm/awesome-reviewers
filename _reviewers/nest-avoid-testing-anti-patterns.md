@@ -8,7 +8,7 @@ description: 'Ensure your tests actually validate functionality by avoiding comm
   implementation as this tests nothing meaningful:'
 repository: nestjs/nest
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 71767
 ---

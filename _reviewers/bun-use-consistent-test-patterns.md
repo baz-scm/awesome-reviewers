@@ -6,7 +6,7 @@ description: Standardize testing by leveraging established patterns and helper f
   logic, and organize tests logically by functionality.
 repository: oven-sh/bun
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 79093
 ---

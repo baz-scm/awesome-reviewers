@@ -5,7 +5,7 @@ description: Implement consistent exception handling using framework-provided me
   exception classes and interceptors to handle errors at the right architectural level.
 repository: nestjs/nest
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 71766
 ---

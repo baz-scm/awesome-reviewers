@@ -5,7 +5,7 @@ description: When implementing or modifying APIs, ensure backward compatibility 
   and response formats for consistency.
 repository: grafana/grafana
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 68825
 ---

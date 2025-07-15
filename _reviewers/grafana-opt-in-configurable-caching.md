@@ -5,7 +5,7 @@ description: Implement caching mechanisms as opt-in features with explicit confi
   allows teams to deliberately enable caching where beneficial.
 repository: grafana/grafana
 label: Caching
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 68825
 ---

@@ -7,7 +7,7 @@ description: 'Use modern TypeScript syntax and conventions throughout the codeba
   needed'
 repository: expressjs/express
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 67300
 ---

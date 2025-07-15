@@ -6,7 +6,7 @@ description: When handling URLs in web applications, consistently normalize path
   slashes).
 repository: kubeflow/kubeflow
 label: Networking
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 15064
 ---

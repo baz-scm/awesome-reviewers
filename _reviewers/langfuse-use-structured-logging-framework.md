@@ -5,7 +5,7 @@ description: Replace all console.* calls with an appropriate structured logging 
   and appropriate handling of different severity levels.
 repository: langfuse/langfuse
 label: Logging
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 13574
 ---

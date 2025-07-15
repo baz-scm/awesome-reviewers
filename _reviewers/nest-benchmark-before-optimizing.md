@@ -5,7 +5,7 @@ description: When making performance-critical decisions, always validate your ap
   theoretical assumptions.
 repository: nestjs/nest
 label: Performance Optimization
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 71766
 ---

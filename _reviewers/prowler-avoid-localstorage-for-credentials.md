@@ -6,7 +6,7 @@ description: Do not store user profiles, authentication tokens, or other sensiti
   to any JavaScript running on the page, including potential XSS attacks.
 repository: prowler-cloud/prowler
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 1
 repository_stars: 11834
 ---

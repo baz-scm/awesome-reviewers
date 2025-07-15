@@ -3,7 +3,7 @@ title: "Standardize URL handling"
 description: "When working with URLs in networking code, always use the standard `URL` constructor to properly resolve relative URLs against a base URL instead of manual string concatenation or ad-hoc replacements."
 repository: "facebook/react"
 label: "Networking"
-language: "Javascript"
+language: "JavaScript"
 comments_count: 2
 repository_stars: 237000
 ---

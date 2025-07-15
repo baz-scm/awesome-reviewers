@@ -6,7 +6,7 @@ description: Use specific and consistent naming conventions when referencing AI 
   different AI services and avoid ambiguity.
 repository: langchain-ai/langchainjs
 label: AI
-language: Javascript
+language: JavaScript
 comments_count: 3
 repository_stars: 15004
 ---

@@ -4,7 +4,7 @@ description: Choose names that clearly communicate intention and follow establis
   conventions. This applies to variables, functions, methods, and architectural components.
 repository: expressjs/express
 label: Naming Conventions
-language: Javascript
+language: JavaScript
 comments_count: 7
 repository_stars: 67300
 ---

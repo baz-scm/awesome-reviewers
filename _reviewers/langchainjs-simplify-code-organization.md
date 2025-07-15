@@ -5,7 +5,7 @@ description: 'Maintain clean code organization by eliminating unnecessary abstra
   and module level:'
 repository: langchain-ai/langchainjs
 label: Code Style
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 15004
 ---

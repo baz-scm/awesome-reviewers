@@ -9,7 +9,7 @@ description: 'When writing code that will be executed frequently (hot paths), pr
   handlers or response methods.'
 repository: expressjs/express
 label: Performance Optimization
-language: Javascript
+language: JavaScript
 comments_count: 4
 repository_stars: 67300
 ---

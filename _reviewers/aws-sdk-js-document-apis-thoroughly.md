@@ -6,7 +6,7 @@ description: All public API elements must be thoroughly documented with JSDoc an
   assumptions or using misleading descriptions.
 repository: aws/aws-sdk-js
 label: Documentation
-language: Javascript
+language: JavaScript
 comments_count: 6
 repository_stars: 7628
 ---

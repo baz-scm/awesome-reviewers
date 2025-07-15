@@ -6,7 +6,7 @@ description: When adding promise support to API methods, implement a consistent 
   argument.
 repository: aws/aws-sdk-js
 label: API
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 7628
 ---

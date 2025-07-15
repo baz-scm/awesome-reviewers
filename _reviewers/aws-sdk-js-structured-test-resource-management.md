@@ -6,7 +6,7 @@ description: Organize tests with proper resource lifecycle management to ensure 
   use unique identifiers (e.g., timestamps) to prevent conflicts between test runs.
 repository: aws/aws-sdk-js
 label: Testing
-language: Javascript
+language: JavaScript
 comments_count: 5
 repository_stars: 7628
 ---

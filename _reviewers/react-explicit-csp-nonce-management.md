@@ -3,7 +3,7 @@ title: "Explicit CSP nonce management"
 description: "When implementing Content Security Policy (CSP) protections, always explicitly pass nonce values to components rather than auto-applying them. This gives developers more control over security aspects and prevents potential security bypasses when integrating components from different sources."
 repository: "facebook/react"
 label: "Security"
-language: "Javascript"
+language: "JavaScript"
 comments_count: 2
 repository_stars: 237000
 ---

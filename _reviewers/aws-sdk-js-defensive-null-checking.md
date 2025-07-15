@@ -5,7 +5,7 @@ description: Always perform explicit null/undefined checks before accessing prop
   than relying on JavaScript's truthy/falsy evaluation which can lead to subtle bugs.
 repository: aws/aws-sdk-js
 label: Null Handling
-language: Javascript
+language: JavaScript
 comments_count: 7
 repository_stars: 7628
 ---

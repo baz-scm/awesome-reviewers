@@ -6,7 +6,7 @@ description: When handling errors in asynchronous functions, always return immed
   that assume success.
 repository: aws/aws-sdk-js
 label: Error Handling
-language: Javascript
+language: JavaScript
 comments_count: 6
 repository_stars: 7628
 ---

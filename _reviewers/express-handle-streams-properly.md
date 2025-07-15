@@ -5,7 +5,7 @@ description: When transferring data over HTTP, properly implement streaming mech
   backpressure appropriately to ensure that slow clients cannot overwhelm server resources.
 repository: expressjs/express
 label: Networking
-language: Javascript
+language: JavaScript
 comments_count: 5
 repository_stars: 67300
 ---

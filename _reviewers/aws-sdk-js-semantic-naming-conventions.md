@@ -4,7 +4,7 @@ description: 'Use descriptive, semantic names for all code elements that clearly
   their purpose and behavior. Follow consistent casing patterns throughout the codebase:'
 repository: aws/aws-sdk-js
 label: Naming Conventions
-language: Javascript
+language: JavaScript
 comments_count: 6
 repository_stars: 7628
 ---

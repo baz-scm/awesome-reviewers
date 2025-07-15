@@ -5,7 +5,7 @@ description: When modifying existing code, update the touched lines to follow St
   consistent adoption of StandardJS formatting.
 repository: expressjs/express
 label: Code Style
-language: Javascript
+language: JavaScript
 comments_count: 7
 repository_stars: 67300
 ---

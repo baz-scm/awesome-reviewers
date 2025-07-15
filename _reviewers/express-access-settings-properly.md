@@ -6,7 +6,7 @@ description: Always use the provided settings accessor methods (`app.get()`, `ap
   deprecated and may lead to inconsistent behavior or errors.
 repository: expressjs/express
 label: Configurations
-language: Javascript
+language: JavaScript
 comments_count: 4
 repository_stars: 67300
 ---

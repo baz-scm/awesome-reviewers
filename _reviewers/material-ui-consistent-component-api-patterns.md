@@ -6,7 +6,7 @@ description: Design component APIs with consistent patterns that promote extensi
   across components.
 repository: mui/material-ui
 label: API
-language: Javascript
+language: JavaScript
 comments_count: 3
 repository_stars: 96063
 ---

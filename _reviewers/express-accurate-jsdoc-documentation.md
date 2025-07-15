@@ -5,7 +5,7 @@ description: Always ensure JSDoc comments accurately reflect the actual code imp
   to prevent confusion and bugs.
 repository: expressjs/express
 label: Documentation
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 67300
 ---

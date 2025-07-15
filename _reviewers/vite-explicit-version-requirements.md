@@ -5,7 +5,7 @@ description: Always specify explicit Node.js version requirements in configurati
   versions, verify feature compatibility and document reasoning behind version constraints.
 repository: vitejs/vite
 label: Configurations
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 74031
 ---

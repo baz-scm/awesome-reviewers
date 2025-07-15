@@ -5,7 +5,7 @@ description: Maintain precise and accurate documentation through both JSDoc anno
   implementation, avoiding inconsistencies between code and documentation.
 repository: nodejs/node
 label: Documentation
-language: Javascript
+language: JavaScript
 comments_count: 5
 repository_stars: 112178
 ---

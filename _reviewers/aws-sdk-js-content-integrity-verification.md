@@ -5,7 +5,7 @@ description: 'When handling HTTP responses, especially with streaming data, prop
   Key considerations:'
 repository: aws/aws-sdk-js
 label: Networking
-language: Javascript
+language: JavaScript
 comments_count: 5
 repository_stars: 7628
 ---

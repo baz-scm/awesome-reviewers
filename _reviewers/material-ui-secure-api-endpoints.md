@@ -8,7 +8,7 @@ description: 'Always implement appropriate security measures for API endpoints t
   using mechanisms like SDK verification, API keys, or signatures.'
 repository: mui/material-ui
 label: Security
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 96063
 ---

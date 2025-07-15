@@ -5,7 +5,7 @@ description: Always forward errors to the framework's error handling pipeline in
   handling, consistent user experiences, and proper error logging.
 repository: expressjs/express
 label: Error Handling
-language: Javascript
+language: JavaScript
 comments_count: 5
 repository_stars: 67300
 ---

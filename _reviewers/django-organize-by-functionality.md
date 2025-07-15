@@ -5,7 +5,7 @@ description: Place code in files that match its functionality. When functionalit
   ones. This improves maintainability and makes the codebase easier to navigate.
 repository: django/django
 label: Code Style
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 84182
 ---

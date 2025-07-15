@@ -3,7 +3,7 @@ title: "Balance constraints with flexibility"
 description: "When designing APIs, carefully evaluate constraints imposed on consumers. Each limitation should serve a clear purpose; otherwise, favor flexibility. Instead of rigid enforcement, consider more adaptable interfaces with documentation about recommended usage patterns."
 repository: "facebook/react"
 label: "API"
-language: "Javascript"
+language: "JavaScript"
 comments_count: 4
 repository_stars: 237000
 ---

@@ -6,7 +6,7 @@ description: 'Always use theme utilities for consistent styling across the appli
   for theme-aware styling:'
 repository: mui/material-ui
 label: Code Style
-language: Javascript
+language: JavaScript
 comments_count: 6
 repository_stars: 96063
 ---

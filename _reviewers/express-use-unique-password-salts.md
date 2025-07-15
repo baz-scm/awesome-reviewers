@@ -6,7 +6,7 @@ description: When implementing password hashing, always use unique, randomly gen
   to rainbow table attacks.
 repository: expressjs/express
 label: Security
-language: Javascript
+language: JavaScript
 comments_count: 1
 repository_stars: 67300
 ---

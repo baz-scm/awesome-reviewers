@@ -5,7 +5,7 @@ description: Function and method names should precisely describe their purpose a
   any special conditions or behaviors.
 repository: nodejs/node
 label: Naming Conventions
-language: Javascript
+language: JavaScript
 comments_count: 4
 repository_stars: 112178
 ---

@@ -5,7 +5,7 @@ description: When working with values that could be null or undefined, implement
   React applications.
 repository: mui/material-ui
 label: Null Handling
-language: Javascript
+language: JavaScript
 comments_count: 3
 repository_stars: 96063
 ---

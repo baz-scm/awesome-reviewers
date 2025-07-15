@@ -5,7 +5,7 @@ description: Choose names that clearly communicate purpose, behavior, and semant
   without requiring additional context.
 repository: mui/material-ui
 label: Naming Conventions
-language: Javascript
+language: JavaScript
 comments_count: 4
 repository_stars: 96063
 ---

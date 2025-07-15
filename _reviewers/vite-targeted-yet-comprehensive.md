@@ -5,7 +5,7 @@ description: Write focused tests that verify specific functionality without unne
   complex structures, create minimal test cases that target individual features directly.
 repository: vitejs/vite
 label: Testing
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 74031
 ---

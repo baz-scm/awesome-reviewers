@@ -5,7 +5,7 @@ description: Always use the correct syntax for accessing environment variables b
   instead of syntaxes from other languages (e.g., Python's `os.environ`).
 repository: langchain-ai/langchainjs
 label: Configurations
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 15004
 ---

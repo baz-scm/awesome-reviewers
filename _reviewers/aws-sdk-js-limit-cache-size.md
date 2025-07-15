@@ -5,7 +5,7 @@ description: Always implement size constraints on caches to prevent memory leaks
   memory, especially in long-running applications.
 repository: aws/aws-sdk-js
 label: Caching
-language: Javascript
+language: JavaScript
 comments_count: 3
 repository_stars: 7628
 ---

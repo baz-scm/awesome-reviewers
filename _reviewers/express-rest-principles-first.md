@@ -5,7 +5,7 @@ description: 'When designing APIs with Express, prioritize proper REST principle
   and maintainable:'
 repository: expressjs/express
 label: API
-language: Javascript
+language: JavaScript
 comments_count: 5
 repository_stars: 67300
 ---

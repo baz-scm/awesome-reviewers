@@ -8,7 +8,7 @@ description: 'Always validate and sanitize all network request parameters to pre
   localhost/loopback interfaces) to reduce the attack surface.'
 repository: nodejs/node
 label: Security
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 112178
 ---

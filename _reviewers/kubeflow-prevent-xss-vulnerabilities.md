@@ -7,7 +7,7 @@ description: Never directly concatenate untrusted data (like user inputs or API 
   escape special characters.
 repository: kubeflow/kubeflow
 label: Security
-language: Javascript
+language: JavaScript
 comments_count: 1
 repository_stars: 15064
 ---

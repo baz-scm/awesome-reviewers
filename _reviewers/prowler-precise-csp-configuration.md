@@ -7,7 +7,7 @@ description: When integrating third-party services into your web application, ca
   appropriate directives based on how...
 repository: prowler-cloud/prowler
 label: Security
-language: Javascript
+language: JavaScript
 comments_count: 1
 repository_stars: 11834
 ---

@@ -5,7 +5,7 @@ description: Creating new objects, arrays, or functions inside a component's ren
   especially in frequently-rendered components.
 repository: mui/material-ui
 label: Performance Optimization
-language: Javascript
+language: JavaScript
 comments_count: 4
 repository_stars: 96063
 ---

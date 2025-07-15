@@ -5,7 +5,7 @@ description: Design applications to use external configuration sources rather th
   without requiring code modifications or redeployment.
 repository: kubeflow/kubeflow
 label: Configurations
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 15064
 ---

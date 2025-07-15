@@ -5,7 +5,7 @@ description: Configure paths and system references dynamically to ensure they wo
   or environment-specific values that will break when code is packaged or deployed.
 repository: vercel/turborepo
 label: Configurations
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 28115
 ---

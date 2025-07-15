@@ -6,7 +6,7 @@ description: Focus tests on user behavior and outcomes rather than implementatio
   changes.
 repository: mui/material-ui
 label: Testing
-language: Javascript
+language: JavaScript
 comments_count: 4
 repository_stars: 96063
 ---

@@ -6,7 +6,7 @@ description: Tests must properly terminate by following appropriate asynchronous
   Use Mocha's built-in assertion handling rather than manual try-catch blocks.
 repository: expressjs/express
 label: Testing
-language: Javascript
+language: JavaScript
 comments_count: 5
 repository_stars: 67300
 ---

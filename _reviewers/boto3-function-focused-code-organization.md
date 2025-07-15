@@ -8,7 +8,7 @@ description: 'Files should contain only code related to their named purpose, wit
   in general utilities, not in specialized modules)'
 repository: boto/boto3
 label: Code Style
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 9417
 ---

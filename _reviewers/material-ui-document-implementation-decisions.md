@@ -6,7 +6,7 @@ description: Add explanatory comments for non-obvious implementation details, es
   behind design decisions and implementation choices.
 repository: mui/material-ui
 label: Documentation
-language: Javascript
+language: JavaScript
 comments_count: 3
 repository_stars: 96063
 ---

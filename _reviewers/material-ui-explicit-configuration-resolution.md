@@ -5,7 +5,7 @@ description: Always use explicit path resolution and document ordering requireme
   more reliable and self-documenting.
 repository: mui/material-ui
 label: Configurations
-language: Javascript
+language: JavaScript
 comments_count: 3
 repository_stars: 96063
 ---

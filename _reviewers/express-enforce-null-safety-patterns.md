@@ -7,7 +7,7 @@ description: 'Implement comprehensive null safety patterns to prevent runtime er
   1. Use explicit null/undefined checks instead of loose comparisons:'
 repository: expressjs/express
 label: Null Handling
-language: Javascript
+language: JavaScript
 comments_count: 8
 repository_stars: 67300
 ---

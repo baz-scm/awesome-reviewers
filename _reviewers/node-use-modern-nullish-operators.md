@@ -5,7 +5,7 @@ description: When dealing with potentially null or undefined values, use optiona
   These operators make code more readable, concise, and prevent null reference errors.
 repository: nodejs/node
 label: Null Handling
-language: Javascript
+language: JavaScript
 comments_count: 3
 repository_stars: 112178
 ---

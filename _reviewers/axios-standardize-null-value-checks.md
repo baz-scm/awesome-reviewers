@@ -3,7 +3,7 @@ title: "Standardize null value checks"
 description: "Always use consistent patterns and utility functions for handling null and undefined values. This improves code reliability and maintainability while preventing common errors."
 repository: "axios/axios"
 label: "Null Handling"
-language: "Javascript"
+language: "JavaScript"
 comments_count: 5
 repository_stars: 107000
 ---

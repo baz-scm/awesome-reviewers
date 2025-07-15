@@ -8,7 +8,7 @@ description: 'Enhance code readability and maintainability by applying consisten
   as the preceding line)'
 repository: aws/aws-sdk-js
 label: Code Style
-language: Javascript
+language: JavaScript
 comments_count: 4
 repository_stars: 7628
 ---

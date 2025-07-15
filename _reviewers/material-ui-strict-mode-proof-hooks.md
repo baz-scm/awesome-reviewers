@@ -6,7 +6,7 @@ description: 'Ensure your React components work correctly in both development (S
   refs to prevent duplicate executions:'
 repository: mui/material-ui
 label: React
-language: Javascript
+language: JavaScript
 comments_count: 4
 repository_stars: 96063
 ---

@@ -5,7 +5,7 @@ description: 'Configuration validation should use explicit checks and clear cond
   values:'
 repository: aws/aws-sdk-js
 label: Configurations
-language: Javascript
+language: JavaScript
 comments_count: 3
 repository_stars: 7628
 ---

@@ -5,7 +5,7 @@ description: When creating Web Workers for network communication, use self-refer
   reliability of your networking code.
 repository: vitejs/vite
 label: Networking
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 74031
 ---

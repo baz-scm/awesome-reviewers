@@ -8,7 +8,7 @@ description: 'Favor modern JavaScript syntax and clean code practices to improve
   interpolation:'
 repository: kubeflow/kubeflow
 label: Code Style
-language: Javascript
+language: JavaScript
 comments_count: 5
 repository_stars: 15064
 ---

@@ -6,7 +6,7 @@ description: When implementing user interactions that trigger network requests, 
   `event.buttons` (which buttons are currently pressed) to correctly handle user intent.
 repository: mui/material-ui
 label: Networking
-language: Javascript
+language: JavaScript
 comments_count: 4
 repository_stars: 96063
 ---

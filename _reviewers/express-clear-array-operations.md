@@ -7,7 +7,7 @@ description: When working with arrays, prioritize clarity and explicitness over 
   developers.
 repository: expressjs/express
 label: Algorithms
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 67300
 ---

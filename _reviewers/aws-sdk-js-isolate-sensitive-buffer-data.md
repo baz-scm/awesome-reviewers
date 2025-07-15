@@ -6,7 +6,7 @@ description: When handling sensitive data in Node.js, protect against data leaka
   sensitive data might be accessible to other code through the shared buffer memory.
 repository: aws/aws-sdk-js
 label: Security
-language: Javascript
+language: JavaScript
 comments_count: 1
 repository_stars: 7628
 ---

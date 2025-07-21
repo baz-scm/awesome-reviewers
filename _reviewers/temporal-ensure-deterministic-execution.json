@@ -1,0 +1,198 @@
+[
+  {
+    "discussion_id": "1970733723",
+    "pr_number": 7336,
+    "pr_file": "components/scheduler/backfiller_executors.go",
+    "created_at": "2025-02-26T00:40:44+00:00",
+    "commented_code": "+// The MIT License\n+//\n+// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.\n+//\n+// Copyright (c) 2020 Uber Technologies, Inc.\n+//\n+// Permission is hereby granted, free of charge, to any person obtaining a copy\n+// of this software and associated documentation files (the \"Software\"), to deal\n+// in the Software without restriction, including without limitation the rights\n+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n+// copies of the Software, and to permit persons to whom the Software is\n+// furnished to do so, subject to the following conditions:\n+//\n+// The above copyright notice and this permission notice shall be included in\n+// all copies or substantial portions of the Software.\n+//\n+// THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\n+// THE SOFTWARE.\n+\n+package scheduler\n+\n+import (\n+\t\"fmt\"\n+\t\"time\"\n+\n+\tschedulespb \"go.temporal.io/server/api/schedule/v1\"\n+\t\"go.temporal.io/server/common\"\n+\t\"go.temporal.io/server/common/log\"\n+\t\"go.temporal.io/server/common/log/tag\"\n+\t\"go.temporal.io/server/common/metrics\"\n+\t\"go.temporal.io/server/service/history/hsm\"\n+\t\"go.uber.org/fx\"\n+\t\"google.golang.org/protobuf/types/known/timestamppb\"\n+)\n+\n+type (\n+\tBackfillerTaskExecutorOptions struct {\n+\t\tfx.In\n+\n+\t\tConfig         *Config\n+\t\tMetricsHandler metrics.Handler\n+\t\tBaseLogger     log.Logger\n+\t\tSpecProcessor  SpecProcessor\n+\t}\n+\n+\tbackfillerTaskExecutor struct {\n+\t\tBackfillerTaskExecutorOptions\n+\t}\n+)\n+\n+func RegisterBackfillerExecutors(registry *hsm.Registry, options BackfillerTaskExecutorOptions) error {\n+\te := backfillerTaskExecutor{BackfillerTaskExecutorOptions: options}\n+\treturn hsm.RegisterTimerExecutor(registry, e.executeBackfillTask)\n+}\n+\n+func (e backfillerTaskExecutor) executeBackfillTask(env hsm.Environment, node *hsm.Node, task BackfillTask) error {\n+\tvar result backfillProgressResult\n+\n+\tschedulerNode := node.Parent\n+\tscheduler, err := loadScheduler(schedulerNode)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tlogger := newTaggedLogger(e.BaseLogger, scheduler)\n+\n+\tbackfiller, err := e.loadBackfiller(node)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\n+\t// If the buffer is already full, don't move the watermark at all, just back off\n+\t// and retry.\n+\ttweakables := e.Config.Tweakables(scheduler.Namespace)\n+\tlimit, err := e.allowedBufferedStarts(node, tweakables)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tif limit <= 0 {\n+\t\tresult.LastProcessedTime = backfiller.GetLastProcessedTime().AsTime()\n+\t\tresult.NextInvocationTime = env.Now().Add(e.backoffDelay(backfiller))\n+\n+\t\treturn hsm.MachineTransition(node, func(b Backfiller) (hsm.TransitionOutput, error) {\n+\t\t\treturn TransitionBackfillProgress.Apply(b, EventBackfillProgress{\n+\t\t\t\tNode:                   node,\n+\t\t\t\tbackfillProgressResult: result,\n+\t\t\t})\n+\t\t})\n+\t}\n+\n+\t// Process backfills, returning BufferedStarts.\n+\tswitch backfiller.RequestType() {\n+\tcase RequestTypeBackfill:\n+\t\tresult, err = e.processBackfill(env, scheduler, backfiller, limit)\n+\tcase RequestTypeTrigger:\n+\t\tresult, err = e.processTrigger(env, scheduler, backfiller)\n+\t}\n+\tif err != nil {\n+\t\tlogger.Error(\"Failed to process backfill\", tag.Error(err))\n+\t\treturn err\n+\t}\n+\n+\t// Enqueue new BufferedStarts on the Invoker, if we have any.\n+\tif len(result.BufferedStarts) > 0 {\n+\t\terr = e.enqueue(schedulerNode, result.BufferedStarts)\n+\t\tif err != nil {\n+\t\t\tlogger.Error(\"Failed to enqueue BufferedStarts\", tag.Error(err))\n+\t\t\treturn err\n+\t\t}\n+\t}\n+\n+\t// If we're complete, we can delete this Backfiller node and return without any\n+\t// more tasks.\n+\tif result.Complete {\n+\t\tlogger.Debug(fmt.Sprintf(\"Backfill complete, deleting Backfiller %s\", backfiller.GetBackfillId()))\n+\t\treturn schedulerNode.DeleteChild(node.Key)\n+\t}\n+\n+\t// Otherwise, update progress and reschedule.\n+\treturn hsm.MachineTransition(node, func(b Backfiller) (hsm.TransitionOutput, error) {\n+\t\treturn TransitionBackfillProgress.Apply(b, EventBackfillProgress{\n+\t\t\tNode:                   node,\n+\t\t\tbackfillProgressResult: result,\n+\t\t})\n+\t})\n+}\n+\n+func (backfillerTaskExecutor) enqueue(schedulerNode *hsm.Node, starts []*schedulespb.BufferedStart) error {\n+\tinvokerNode, err := schedulerNode.Child([]hsm.Key{InvokerMachineKey})\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\terr = hsm.MachineTransition(invokerNode, func(e Invoker) (hsm.TransitionOutput, error) {\n+\t\treturn TransitionEnqueue.Apply(e, EventEnqueue{\n+\t\t\tNode:           invokerNode,\n+\t\t\tBufferedStarts: starts,\n+\t\t})\n+\t})\n+\treturn err\n+}\n+\n+// processBackfill processes a Backfiller's BackfillRequest.\n+func (e backfillerTaskExecutor) processBackfill(\n+\tenv hsm.Environment,\n+\tscheduler Scheduler,\n+\tbackfiller Backfiller,\n+\tlimit int,\n+) (result backfillProgressResult, err error) {\n+\trequest := backfiller.GetBackfillRequest()\n+\n+\t// Restore high watermark if we've already started processing the backfill.\n+\tvar startTime time.Time\n+\tlastProcessed := backfiller.GetLastProcessedTime()\n+\tif backfiller.GetAttempt() > 0 {\n+\t\tstartTime = lastProcessed.AsTime()\n+\t} else {\n+\t\t// On the first attempt, the start time is set slightly behind in order to make\n+\t\t// the backfill start time inclusive.\n+\t\tstartTime = request.GetStartTime().AsTime().Add(-1 * time.Millisecond)\n+\t}\n+\tendTime := request.GetEndTime().AsTime()\n+\tspecResult, err := e.SpecProcessor.ProcessTimeRange(\n+\t\tscheduler,\n+\t\tstartTime,\n+\t\tendTime,\n+\t\trequest.GetOverlapPolicy(),\n+\t\tbackfiller.GetBackfillId(),\n+\t\ttrue,\n+\t\t&limit,\n+\t)\n+\tif err != nil {\n+\t\treturn\n+\t}\n+\n+\tnext := specResult.NextWakeupTime\n+\tif next.IsZero() || next.After(endTime) {\n+\t\tresult.Complete = true\n+\t} else {\n+\t\t// More to backfill, indicating the buffer is full. Set the high watermark, and\n+\t\t// apply a backoff time before attempting to continue filling.\n+\t\tresult.LastProcessedTime = specResult.LastActionTime\n+\n+\t\t// Apply retry policy.\n+\t\tresult.NextInvocationTime = env.Now().Add(e.backoffDelay(backfiller))\n+\t}\n+\tresult.BufferedStarts = specResult.BufferedStarts\n+\n+\treturn\n+}\n+\n+// backoffDelay returns the amount of delay that should be added when retrying.\n+func (e backfillerTaskExecutor) backoffDelay(backfiller Backfiller) time.Duration {\n+\t// GetAttempt is incremented early here as we increment the Backfiller's attempt\n+\t// in the transition.\n+\treturn e.Config.RetryPolicy().ComputeNextDelay(0, int(backfiller.GetAttempt()+1), nil)\n+}\n+\n+// processTrigger processes a Backfiller's TriggerImmediatelyRequest.\n+func (e backfillerTaskExecutor) processTrigger(env hsm.Environment, scheduler Scheduler, backfiller Backfiller) (result backfillProgressResult, err error) {\n+\trequest := backfiller.GetTriggerRequest()\n+\toverlapPolicy := scheduler.resolveOverlapPolicy(request.GetOverlapPolicy())\n+\n+\t// Add a single manual start and mark the backfiller as complete.\n+\tnow := env.Now()\n+\tnowpb := timestamppb.New(now)",
+    "repo_full_name": "temporalio/temporal",
+    "discussion_comments": [
+      {
+        "comment_id": "1970733723",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7336,
+        "pr_file": "components/scheduler/backfiller_executors.go",
+        "discussion_id": "1970733723",
+        "commented_code": "@@ -0,0 +1,274 @@\n+// The MIT License\n+//\n+// Copyright (c) 2020 Temporal Technologies Inc.  All rights reserved.\n+//\n+// Copyright (c) 2020 Uber Technologies, Inc.\n+//\n+// Permission is hereby granted, free of charge, to any person obtaining a copy\n+// of this software and associated documentation files (the \"Software\"), to deal\n+// in the Software without restriction, including without limitation the rights\n+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n+// copies of the Software, and to permit persons to whom the Software is\n+// furnished to do so, subject to the following conditions:\n+//\n+// The above copyright notice and this permission notice shall be included in\n+// all copies or substantial portions of the Software.\n+//\n+// THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\n+// THE SOFTWARE.\n+\n+package scheduler\n+\n+import (\n+\t\"fmt\"\n+\t\"time\"\n+\n+\tschedulespb \"go.temporal.io/server/api/schedule/v1\"\n+\t\"go.temporal.io/server/common\"\n+\t\"go.temporal.io/server/common/log\"\n+\t\"go.temporal.io/server/common/log/tag\"\n+\t\"go.temporal.io/server/common/metrics\"\n+\t\"go.temporal.io/server/service/history/hsm\"\n+\t\"go.uber.org/fx\"\n+\t\"google.golang.org/protobuf/types/known/timestamppb\"\n+)\n+\n+type (\n+\tBackfillerTaskExecutorOptions struct {\n+\t\tfx.In\n+\n+\t\tConfig         *Config\n+\t\tMetricsHandler metrics.Handler\n+\t\tBaseLogger     log.Logger\n+\t\tSpecProcessor  SpecProcessor\n+\t}\n+\n+\tbackfillerTaskExecutor struct {\n+\t\tBackfillerTaskExecutorOptions\n+\t}\n+)\n+\n+func RegisterBackfillerExecutors(registry *hsm.Registry, options BackfillerTaskExecutorOptions) error {\n+\te := backfillerTaskExecutor{BackfillerTaskExecutorOptions: options}\n+\treturn hsm.RegisterTimerExecutor(registry, e.executeBackfillTask)\n+}\n+\n+func (e backfillerTaskExecutor) executeBackfillTask(env hsm.Environment, node *hsm.Node, task BackfillTask) error {\n+\tvar result backfillProgressResult\n+\n+\tschedulerNode := node.Parent\n+\tscheduler, err := loadScheduler(schedulerNode)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tlogger := newTaggedLogger(e.BaseLogger, scheduler)\n+\n+\tbackfiller, err := e.loadBackfiller(node)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\n+\t// If the buffer is already full, don't move the watermark at all, just back off\n+\t// and retry.\n+\ttweakables := e.Config.Tweakables(scheduler.Namespace)\n+\tlimit, err := e.allowedBufferedStarts(node, tweakables)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tif limit <= 0 {\n+\t\tresult.LastProcessedTime = backfiller.GetLastProcessedTime().AsTime()\n+\t\tresult.NextInvocationTime = env.Now().Add(e.backoffDelay(backfiller))\n+\n+\t\treturn hsm.MachineTransition(node, func(b Backfiller) (hsm.TransitionOutput, error) {\n+\t\t\treturn TransitionBackfillProgress.Apply(b, EventBackfillProgress{\n+\t\t\t\tNode:                   node,\n+\t\t\t\tbackfillProgressResult: result,\n+\t\t\t})\n+\t\t})\n+\t}\n+\n+\t// Process backfills, returning BufferedStarts.\n+\tswitch backfiller.RequestType() {\n+\tcase RequestTypeBackfill:\n+\t\tresult, err = e.processBackfill(env, scheduler, backfiller, limit)\n+\tcase RequestTypeTrigger:\n+\t\tresult, err = e.processTrigger(env, scheduler, backfiller)\n+\t}\n+\tif err != nil {\n+\t\tlogger.Error(\"Failed to process backfill\", tag.Error(err))\n+\t\treturn err\n+\t}\n+\n+\t// Enqueue new BufferedStarts on the Invoker, if we have any.\n+\tif len(result.BufferedStarts) > 0 {\n+\t\terr = e.enqueue(schedulerNode, result.BufferedStarts)\n+\t\tif err != nil {\n+\t\t\tlogger.Error(\"Failed to enqueue BufferedStarts\", tag.Error(err))\n+\t\t\treturn err\n+\t\t}\n+\t}\n+\n+\t// If we're complete, we can delete this Backfiller node and return without any\n+\t// more tasks.\n+\tif result.Complete {\n+\t\tlogger.Debug(fmt.Sprintf(\"Backfill complete, deleting Backfiller %s\", backfiller.GetBackfillId()))\n+\t\treturn schedulerNode.DeleteChild(node.Key)\n+\t}\n+\n+\t// Otherwise, update progress and reschedule.\n+\treturn hsm.MachineTransition(node, func(b Backfiller) (hsm.TransitionOutput, error) {\n+\t\treturn TransitionBackfillProgress.Apply(b, EventBackfillProgress{\n+\t\t\tNode:                   node,\n+\t\t\tbackfillProgressResult: result,\n+\t\t})\n+\t})\n+}\n+\n+func (backfillerTaskExecutor) enqueue(schedulerNode *hsm.Node, starts []*schedulespb.BufferedStart) error {\n+\tinvokerNode, err := schedulerNode.Child([]hsm.Key{InvokerMachineKey})\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\terr = hsm.MachineTransition(invokerNode, func(e Invoker) (hsm.TransitionOutput, error) {\n+\t\treturn TransitionEnqueue.Apply(e, EventEnqueue{\n+\t\t\tNode:           invokerNode,\n+\t\t\tBufferedStarts: starts,\n+\t\t})\n+\t})\n+\treturn err\n+}\n+\n+// processBackfill processes a Backfiller's BackfillRequest.\n+func (e backfillerTaskExecutor) processBackfill(\n+\tenv hsm.Environment,\n+\tscheduler Scheduler,\n+\tbackfiller Backfiller,\n+\tlimit int,\n+) (result backfillProgressResult, err error) {\n+\trequest := backfiller.GetBackfillRequest()\n+\n+\t// Restore high watermark if we've already started processing the backfill.\n+\tvar startTime time.Time\n+\tlastProcessed := backfiller.GetLastProcessedTime()\n+\tif backfiller.GetAttempt() > 0 {\n+\t\tstartTime = lastProcessed.AsTime()\n+\t} else {\n+\t\t// On the first attempt, the start time is set slightly behind in order to make\n+\t\t// the backfill start time inclusive.\n+\t\tstartTime = request.GetStartTime().AsTime().Add(-1 * time.Millisecond)\n+\t}\n+\tendTime := request.GetEndTime().AsTime()\n+\tspecResult, err := e.SpecProcessor.ProcessTimeRange(\n+\t\tscheduler,\n+\t\tstartTime,\n+\t\tendTime,\n+\t\trequest.GetOverlapPolicy(),\n+\t\tbackfiller.GetBackfillId(),\n+\t\ttrue,\n+\t\t&limit,\n+\t)\n+\tif err != nil {\n+\t\treturn\n+\t}\n+\n+\tnext := specResult.NextWakeupTime\n+\tif next.IsZero() || next.After(endTime) {\n+\t\tresult.Complete = true\n+\t} else {\n+\t\t// More to backfill, indicating the buffer is full. Set the high watermark, and\n+\t\t// apply a backoff time before attempting to continue filling.\n+\t\tresult.LastProcessedTime = specResult.LastActionTime\n+\n+\t\t// Apply retry policy.\n+\t\tresult.NextInvocationTime = env.Now().Add(e.backoffDelay(backfiller))\n+\t}\n+\tresult.BufferedStarts = specResult.BufferedStarts\n+\n+\treturn\n+}\n+\n+// backoffDelay returns the amount of delay that should be added when retrying.\n+func (e backfillerTaskExecutor) backoffDelay(backfiller Backfiller) time.Duration {\n+\t// GetAttempt is incremented early here as we increment the Backfiller's attempt\n+\t// in the transition.\n+\treturn e.Config.RetryPolicy().ComputeNextDelay(0, int(backfiller.GetAttempt()+1), nil)\n+}\n+\n+// processTrigger processes a Backfiller's TriggerImmediatelyRequest.\n+func (e backfillerTaskExecutor) processTrigger(env hsm.Environment, scheduler Scheduler, backfiller Backfiller) (result backfillProgressResult, err error) {\n+\trequest := backfiller.GetTriggerRequest()\n+\toverlapPolicy := scheduler.resolveOverlapPolicy(request.GetOverlapPolicy())\n+\n+\t// Add a single manual start and mark the backfiller as complete.\n+\tnow := env.Now()\n+\tnowpb := timestamppb.New(now)",
+        "comment_created_at": "2025-02-26T00:40:44+00:00",
+        "comment_author": "bergundy",
+        "comment_body": "I wonder if you're going to want to be more deterministic than this and take the time from the trigger request.\r\nIt may come in handy when resolving conflicts when two clusters become active.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2072010787",
+    "pr_number": 7702,
+    "pr_file": "service/history/timer_queue_task_executor_base.go",
+    "created_at": "2025-05-02T18:41:24+00:00",
+    "commented_code": "return nil\n }\n \n-// executeStateMachineTimers gets the state machine timers, processed the expired timers,\n-// and return a slice of unprocessed timers.\n+// executeChasmPureTimers walks a CHASM tree for expired pure task timers,\n+// executes them, and returns a count of timers processed.\n+func (t *timerQueueTaskExecutorBase) executeChasmPureTimers(\n+\tctx context.Context,\n+\tworkflowContext historyi.WorkflowContext,\n+\tms historyi.MutableState,\n+\ttask *tasks.ChasmTaskPure,\n+\texecute func(node *chasm.Node, task any) error,\n+) (processedCount int, err error) {\n+\t// Because CHASM timers can target closed workflows, we need to specifically\n+\t// exclude zombie workflows, instead of merely checking that the workflow is\n+\t// running.\n+\tif ms.GetExecutionState().State == enumsspb.WORKFLOW_EXECUTION_STATE_ZOMBIE {\n+\t\treturn 0, consts.ErrWorkflowZombie\n+\t}\n+\n+\ttree := ms.ChasmTree()\n+\tif tree == nil {\n+\t\treturn 0, consts.ErrStaleReference\n+\t}\n+\n+\trootNode, ok := tree.(*chasm.Node)\n+\tif !ok {\n+\t\treturn 0, fmt.Errorf(\"failed type assertion for ChasmTree\")\n+\t}\n+\n+\tpureTasks, err := tree.GetPureTasks(t.Now())",
+    "repo_full_name": "temporalio/temporal",
+    "discussion_comments": [
+      {
+        "comment_id": "2072010787",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7702,
+        "pr_file": "service/history/timer_queue_task_executor_base.go",
+        "discussion_id": "2072010787",
+        "commented_code": "@@ -240,8 +241,51 @@ func (t *timerQueueTaskExecutorBase) executeSingleStateMachineTimer(\n \treturn nil\n }\n \n-// executeStateMachineTimers gets the state machine timers, processed the expired timers,\n-// and return a slice of unprocessed timers.\n+// executeChasmPureTimers walks a CHASM tree for expired pure task timers,\n+// executes them, and returns a count of timers processed.\n+func (t *timerQueueTaskExecutorBase) executeChasmPureTimers(\n+\tctx context.Context,\n+\tworkflowContext historyi.WorkflowContext,\n+\tms historyi.MutableState,\n+\ttask *tasks.ChasmTaskPure,\n+\texecute func(node *chasm.Node, task any) error,\n+) (processedCount int, err error) {\n+\t// Because CHASM timers can target closed workflows, we need to specifically\n+\t// exclude zombie workflows, instead of merely checking that the workflow is\n+\t// running.\n+\tif ms.GetExecutionState().State == enumsspb.WORKFLOW_EXECUTION_STATE_ZOMBIE {\n+\t\treturn 0, consts.ErrWorkflowZombie\n+\t}\n+\n+\ttree := ms.ChasmTree()\n+\tif tree == nil {\n+\t\treturn 0, consts.ErrStaleReference\n+\t}\n+\n+\trootNode, ok := tree.(*chasm.Node)\n+\tif !ok {\n+\t\treturn 0, fmt.Errorf(\"failed type assertion for ChasmTree\")\n+\t}\n+\n+\tpureTasks, err := tree.GetPureTasks(t.Now())",
+        "comment_created_at": "2025-05-02T18:41:24+00:00",
+        "comment_author": "yycptt",
+        "comment_body": "commented in the previous PR, t.Now() is not good enough. Check queues.IsTimeExpired().",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2072225254",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7702,
+        "pr_file": "service/history/timer_queue_task_executor_base.go",
+        "discussion_id": "2072010787",
+        "commented_code": "@@ -240,8 +241,51 @@ func (t *timerQueueTaskExecutorBase) executeSingleStateMachineTimer(\n \treturn nil\n }\n \n-// executeStateMachineTimers gets the state machine timers, processed the expired timers,\n-// and return a slice of unprocessed timers.\n+// executeChasmPureTimers walks a CHASM tree for expired pure task timers,\n+// executes them, and returns a count of timers processed.\n+func (t *timerQueueTaskExecutorBase) executeChasmPureTimers(\n+\tctx context.Context,\n+\tworkflowContext historyi.WorkflowContext,\n+\tms historyi.MutableState,\n+\ttask *tasks.ChasmTaskPure,\n+\texecute func(node *chasm.Node, task any) error,\n+) (processedCount int, err error) {\n+\t// Because CHASM timers can target closed workflows, we need to specifically\n+\t// exclude zombie workflows, instead of merely checking that the workflow is\n+\t// running.\n+\tif ms.GetExecutionState().State == enumsspb.WORKFLOW_EXECUTION_STATE_ZOMBIE {\n+\t\treturn 0, consts.ErrWorkflowZombie\n+\t}\n+\n+\ttree := ms.ChasmTree()\n+\tif tree == nil {\n+\t\treturn 0, consts.ErrStaleReference\n+\t}\n+\n+\trootNode, ok := tree.(*chasm.Node)\n+\tif !ok {\n+\t\treturn 0, fmt.Errorf(\"failed type assertion for ChasmTree\")\n+\t}\n+\n+\tpureTasks, err := tree.GetPureTasks(t.Now())",
+        "comment_created_at": "2025-05-02T23:02:17+00:00",
+        "comment_author": "lina-temporal",
+        "comment_body": "Fixed. I address skew between DB and physical task queue within the timer task queue executor, and then also truncate times against the reference time within the CHASM tree.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2061055920",
+    "pr_number": 7619,
+    "pr_file": "service/worker/scheduler/workflow.go",
+    "created_at": "2025-04-26T00:12:38+00:00",
+    "commented_code": "if currentInfoPayload == nil ||\n \t\tpayload.Decode(currentInfoPayload, &currentInfoBytes) != nil ||\n \t\tcurrentInfo.Unmarshal(currentInfoBytes) != nil ||\n-\t\t!proto.Equal(&currentInfo, newInfo) {\n+\t\t!s.deterministicProtoEqual(&currentInfo, newInfo) { // TODO(carlydf): proto.Equal is non-deterministic",
+    "repo_full_name": "temporalio/temporal",
+    "discussion_comments": [
+      {
+        "comment_id": "2061055920",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7619,
+        "pr_file": "service/worker/scheduler/workflow.go",
+        "discussion_id": "2061055920",
+        "commented_code": "@@ -1117,7 +1119,7 @@ func (s *scheduler) updateMemoAndSearchAttributes() {\n \tif currentInfoPayload == nil ||\n \t\tpayload.Decode(currentInfoPayload, &currentInfoBytes) != nil ||\n \t\tcurrentInfo.Unmarshal(currentInfoBytes) != nil ||\n-\t\t!proto.Equal(&currentInfo, newInfo) {\n+\t\t!s.deterministicProtoEqual(&currentInfo, newInfo) { // TODO(carlydf): proto.Equal is non-deterministic",
+        "comment_created_at": "2025-04-26T00:12:38+00:00",
+        "comment_author": "dnr",
+        "comment_body": "Changes to this condition can cause nondeterminism errors so if we do need to do this (and I don't think we do) then it should be versioned.\r\n\r\nAs far as I know proto.Equal is totally fine and correct here. If you disagree could you point to some evidence otherwise?\r\n\r\n(Yes there are replay tests but they can't catch all edge cases)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2069346861",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7619,
+        "pr_file": "service/worker/scheduler/workflow.go",
+        "discussion_id": "2061055920",
+        "commented_code": "@@ -1117,7 +1119,7 @@ func (s *scheduler) updateMemoAndSearchAttributes() {\n \tif currentInfoPayload == nil ||\n \t\tpayload.Decode(currentInfoPayload, &currentInfoBytes) != nil ||\n \t\tcurrentInfo.Unmarshal(currentInfoBytes) != nil ||\n-\t\t!proto.Equal(&currentInfo, newInfo) {\n+\t\t!s.deterministicProtoEqual(&currentInfo, newInfo) { // TODO(carlydf): proto.Equal is non-deterministic",
+        "comment_created_at": "2025-04-30T19:49:07+00:00",
+        "comment_author": "carlydf",
+        "comment_body": "proto.Equal calls underlying libraries that trigger the workflow static check to error",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2069347317",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7619,
+        "pr_file": "service/worker/scheduler/workflow.go",
+        "discussion_id": "2061055920",
+        "commented_code": "@@ -1117,7 +1119,7 @@ func (s *scheduler) updateMemoAndSearchAttributes() {\n \tif currentInfoPayload == nil ||\n \t\tpayload.Decode(currentInfoPayload, &currentInfoBytes) != nil ||\n \t\tcurrentInfo.Unmarshal(currentInfoBytes) != nil ||\n-\t\t!proto.Equal(&currentInfo, newInfo) {\n+\t\t!s.deterministicProtoEqual(&currentInfo, newInfo) { // TODO(carlydf): proto.Equal is non-deterministic",
+        "comment_created_at": "2025-04-30T19:49:19+00:00",
+        "comment_author": "carlydf",
+        "comment_body": "that's why I reimplemented it",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2069350871",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7619,
+        "pr_file": "service/worker/scheduler/workflow.go",
+        "discussion_id": "2061055920",
+        "commented_code": "@@ -1117,7 +1119,7 @@ func (s *scheduler) updateMemoAndSearchAttributes() {\n \tif currentInfoPayload == nil ||\n \t\tpayload.Decode(currentInfoPayload, &currentInfoBytes) != nil ||\n \t\tcurrentInfo.Unmarshal(currentInfoBytes) != nil ||\n-\t\t!proto.Equal(&currentInfo, newInfo) {\n+\t\t!s.deterministicProtoEqual(&currentInfo, newInfo) { // TODO(carlydf): proto.Equal is non-deterministic",
+        "comment_created_at": "2025-04-30T19:51:54+00:00",
+        "comment_author": "dnr",
+        "comment_body": "Just because it's flagged by workflowcheck doesn't mean that it's actually nondeterministic. And just because it's not flagged doesn't mean that it is determistic (how did proto.Marshal get by? that one actually is documented to be nondetermistic)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2069364959",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7619,
+        "pr_file": "service/worker/scheduler/workflow.go",
+        "discussion_id": "2061055920",
+        "commented_code": "@@ -1117,7 +1119,7 @@ func (s *scheduler) updateMemoAndSearchAttributes() {\n \tif currentInfoPayload == nil ||\n \t\tpayload.Decode(currentInfoPayload, &currentInfoBytes) != nil ||\n \t\tcurrentInfo.Unmarshal(currentInfoBytes) != nil ||\n-\t\t!proto.Equal(&currentInfo, newInfo) {\n+\t\t!s.deterministicProtoEqual(&currentInfo, newInfo) { // TODO(carlydf): proto.Equal is non-deterministic",
+        "comment_created_at": "2025-04-30T20:02:58+00:00",
+        "comment_author": "carlydf",
+        "comment_body": "Yimin asked me to add `workflowcheck` to our CI for internal workflows, because that's a recommended way to protect ourselves from accidentally creating NDEs by using things like `time.Now()`, which have slipped through multiple times. \r\n\r\nI'm ok reverting this PR, but I do think we want to automatically run workflowcheck on these workflows still. Maybe the right answer is for it to be a warning instead of a merge blocker? I can look into ways to ignore it too for specific uses, or only run it on new files.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2069367752",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7619,
+        "pr_file": "service/worker/scheduler/workflow.go",
+        "discussion_id": "2061055920",
+        "commented_code": "@@ -1117,7 +1119,7 @@ func (s *scheduler) updateMemoAndSearchAttributes() {\n \tif currentInfoPayload == nil ||\n \t\tpayload.Decode(currentInfoPayload, &currentInfoBytes) != nil ||\n \t\tcurrentInfo.Unmarshal(currentInfoBytes) != nil ||\n-\t\t!proto.Equal(&currentInfo, newInfo) {\n+\t\t!s.deterministicProtoEqual(&currentInfo, newInfo) { // TODO(carlydf): proto.Equal is non-deterministic",
+        "comment_created_at": "2025-04-30T20:05:14+00:00",
+        "comment_author": "carlydf",
+        "comment_body": "It looks like we can whitelist certain functions, so we could whitelist proto.Equal. https://github.com/temporalio/sdk-go/tree/master/contrib/tools/workflowcheck",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2069372779",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7619,
+        "pr_file": "service/worker/scheduler/workflow.go",
+        "discussion_id": "2061055920",
+        "commented_code": "@@ -1117,7 +1119,7 @@ func (s *scheduler) updateMemoAndSearchAttributes() {\n \tif currentInfoPayload == nil ||\n \t\tpayload.Decode(currentInfoPayload, &currentInfoBytes) != nil ||\n \t\tcurrentInfo.Unmarshal(currentInfoBytes) != nil ||\n-\t\t!proto.Equal(&currentInfo, newInfo) {\n+\t\t!s.deterministicProtoEqual(&currentInfo, newInfo) { // TODO(carlydf): proto.Equal is non-deterministic",
+        "comment_created_at": "2025-04-30T20:09:29+00:00",
+        "comment_author": "carlydf",
+        "comment_body": "I think the reason proto.Equal was flagged is because it called `(reflect.Value).Interface` or something similar. \r\n\r\nI could start by whitelisting proto.Equal in our internal use of it, and also open an issue in go-sdk to ask them to fix the false-positive proto.Equal and false-negative proto.Marshal. And I'll revert the proto.Equal change to this workflow.\r\n\r\n```\r\nIn some cases, functions that are considered non-deterministic are commonly used in ways that only follow a deterministic code path. For example if a common library function iterates over a map in a rare case that does not apply to the situation, it will be flagged as non-deterministic. A few common cases of this have been force-set as deterministic for common use:\r\n\r\n(reflect.Value).Interface - Was considered non-deterministic because deep down in Go internal source, this uses sync.Map (that does map iteration) as a cache of method layouts\r\nruntime.Caller - Was considered non-deterministic because deep down in Go internal source, some runtime source starts a goroutine on lazy GC start when building CGo frames\r\ngo.temporal.io/sdk/internal.propagateCancel - Was considered non-deterministic because it starts a goroutine\r\n(*go.temporal.io/sdk/internal.cancelCtx).cancel - Was considered non-deterministic because it iterates over a map\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2069375847",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7619,
+        "pr_file": "service/worker/scheduler/workflow.go",
+        "discussion_id": "2061055920",
+        "commented_code": "@@ -1117,7 +1119,7 @@ func (s *scheduler) updateMemoAndSearchAttributes() {\n \tif currentInfoPayload == nil ||\n \t\tpayload.Decode(currentInfoPayload, &currentInfoBytes) != nil ||\n \t\tcurrentInfo.Unmarshal(currentInfoBytes) != nil ||\n-\t\t!proto.Equal(&currentInfo, newInfo) {\n+\t\t!s.deterministicProtoEqual(&currentInfo, newInfo) { // TODO(carlydf): proto.Equal is non-deterministic",
+        "comment_created_at": "2025-04-30T20:11:58+00:00",
+        "comment_author": "dnr",
+        "comment_body": "I was only suggesting reverting the changes to the schedule wf (at least the proto.Equal) and adding ignore comments, not the whole PR",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2060969674",
+    "pr_number": 7621,
+    "pr_file": "chasm/task.go",
+    "created_at": "2025-04-25T22:38:48+00:00",
+    "commented_code": "Destination   string\n \t}\n \n-\tTaskHandler[C any, T any] interface {\n-\t\tValidate(Context, C, T) error\n+\tSideEffectTaskExecutor[C any, T any] interface {\n \t\tExecute(context.Context, ComponentRef, T) error",
+    "repo_full_name": "temporalio/temporal",
+    "discussion_comments": [
+      {
+        "comment_id": "2060969674",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7621,
+        "pr_file": "chasm/task.go",
+        "discussion_id": "2060969674",
+        "commented_code": "@@ -37,10 +37,17 @@ type (\n \t\tDestination   string\n \t}\n \n-\tTaskHandler[C any, T any] interface {\n-\t\tValidate(Context, C, T) error\n+\tSideEffectTaskExecutor[C any, T any] interface {\n \t\tExecute(context.Context, ComponentRef, T) error",
+        "comment_created_at": "2025-04-25T22:38:48+00:00",
+        "comment_author": "lina-temporal",
+        "comment_body": "Since we aren't passing a `Context` to plumb through `Now()`, If a side effect task wanted to know the wall clock time, what should it do?\r\n\r\nHSM provided `Environment` on both executors:\r\n\r\n```\r\ntype ImmediateExecutor[T Task] func(ctx context.Context, env Environment, ref Ref, task T) error\r\ntype TimerExecutor[T Task] func(env Environment, node *Node, task T) error\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2061076500",
+        "repo_full_name": "temporalio/temporal",
+        "pr_number": 7621,
+        "pr_file": "chasm/task.go",
+        "discussion_id": "2060969674",
+        "commented_code": "@@ -37,10 +37,17 @@ type (\n \t\tDestination   string\n \t}\n \n-\tTaskHandler[C any, T any] interface {\n-\t\tValidate(Context, C, T) error\n+\tSideEffectTaskExecutor[C any, T any] interface {\n \t\tExecute(context.Context, ComponentRef, T) error",
+        "comment_created_at": "2025-04-26T00:37:34+00:00",
+        "comment_author": "yycptt",
+        "comment_body": "If side effect task executor logic want to know the now() time for a component, it needs to invoke a chasm engine Update/Read method. Then chasm.Context is available in the updateFn or readFn they pass to the Update/Read method. Then from the chasm.Context, the Now() method is available.\r\n(The chasm engine implementation itself needs to be available from the context.Context. https://github.com/yycptt/temporal/commit/163c3ee5203b97144635b87a101404b01725420b#diff-3687673cd41da46293431f19d81ab231ae8e23227baf29a4c9d429c81a064db8R157 )\r\n\r\nIf the executor just want to know wall clock in general, its implementation (struct) needs to inject a time source itself before registering the task executor to chasm,  like any other dependencies the execution logic may rely on. ",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

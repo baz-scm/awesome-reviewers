@@ -54,7 +54,19 @@ Using **Awesome Reviewers** is straightforward:
 
 5. **(Optional) Deploy with Baz:** If you use the [Baz platform](https://baz.co) for CI, you can deploy a reviewer directly. Clicking **“Deploy to baz”** on a prompt will connect it with your Baz account, so that Baz’s AI will automatically apply that reviewer to your future pull requests. This is ideal for teams wanting to enforce certain standards on every PR – the reviewer agent will leave comments on your GitHub PR just like a human reviewer, but powered by the prompt’s rules.
 
+
 No installation or CLI is required to use Awesome Reviewers – the content is readily accessible. If you prefer not to use the website UI, you can also find all prompt files in the GitHub repo’s `_reviewers/` directory for direct viewing or copying.
+
+## Development Setup
+
+To build the site locally you need Ruby and Bundler. Install the gems using the lowercase `gemfile` and then run Jekyll via Bundler:
+
+```bash
+bundle install --gemfile=gemfile
+BUNDLE_GEMFILE=gemfile bundle exec jekyll build
+```
+
+This will generate the `_site/` folder with the static site.
 
 ## Acknowledgments
 

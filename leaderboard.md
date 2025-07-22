@@ -11,14 +11,14 @@ permalink: /leaderboard/
 <!-- Embed the reviewer stats JSON -->
 <script id="review-data" type="application/json">
 [
-{% raw %}{% assign sorted = site.reviewers | sort: 'comments_count' | reverse %}{% endraw %}
-{% raw %}{% for r in sorted %}{% endraw %}
+{% assign sorted = site.reviewers | sort: 'comments_count' | reverse %}
+{% for r in sorted %}
   {
-    "slug": "{{ r.basename }}",
+    "slug": "{{ r.slug }}",
     "title": "{{ r.title | escape }}",
     "comments": {{ r.comments_count }},
     "stars": {{ r.repository_stars }}
-  }{% raw %}{% unless forloop.last %},{% endunless %}{% endfor %}{% endraw %}
+  }{% unless forloop.last %},{% endunless %}{% endfor %}
 ]
 </script>
 

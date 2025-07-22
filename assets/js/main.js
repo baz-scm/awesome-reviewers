@@ -1,6 +1,19 @@
 // Add Repository modal handling
 // Attempt POST with required header; if it fails, fall back to a GET request
 
+function renderDiscussionThread(slug, container) {
+  fetch(`/reviewers/${slug}.json`)
+    .then(r => r.json())
+    .then(comments => {
+      if (!comments.length) return;
+      let html = '<h3>Discussion Thread</h3>';
+      comments.forEach(c => {
+        html += `\n          <div class="comment-entry">\n            <pre class="comment-code">${c.commented_code}</pre>\n          </div>`;
+      });
+      container.innerHTML = html;
+    });
+}
+
 const modal = document.getElementById('add-repo-modal');
 const openBtn = document.getElementById('add-repo-button');
 const closeBtn = modal.querySelector('.modal__close');
@@ -99,5 +112,13 @@ form && form.addEventListener('submit', async e => {
     submitBtn.disabled = false;
     urlInput.disabled = false;
     submitBtn.textContent = originalButtonText;
+  }
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  const pageThread = document.getElementById('discussion-thread');
+  if (pageThread) {
+    const slug = window.location.pathname.split('/').slice(-2, -1)[0];
+    renderDiscussionThread(slug, pageThread);
   }
 });

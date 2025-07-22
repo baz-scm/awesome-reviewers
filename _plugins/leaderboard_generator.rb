@@ -2,12 +2,35 @@ require 'json'
 require 'set'
 require 'yaml'
 require 'fileutils'
+require 'net/http'
+require 'uri'
 
 module Jekyll
   class LeaderboardGenerator < Generator
     safe true
     priority :high
 
+    def fetch_github_info(username)
+      url = URI("https://api.github.com/users/#{username}")
+      req = Net::HTTP::Get.new(url)
+      token = ENV['GITHUB_TOKEN']
+      req['Authorization'] = "Bearer #{token}" if token
+      req['User-Agent'] = 'AwesomeReviewers'
+      begin
+        res = Net::HTTP.start(url.hostname, url.port, use_ssl: true) { |h| h.request(req) }
+        return {} unless res.is_a?(Net::HTTPSuccess)
+        data = JSON.parse(res.body)
+        {
+          'name' => data['name'],
+          'bio' => data['bio'],
+          'company' => data['company'],
+          'location' => data['location']
+        }
+      rescue => e
+        Jekyll.logger.warn("GitHub user fetch failed for #{username}: #{e.message}")
+        {}
+      end
+    end
 
     def generate(site)
       contributors = {}
@@ -58,27 +81,37 @@ module Jekyll
       leaderboard.sort_by! { |entry| -entry['entries_count'] }
       leaderboard = leaderboard.first(50)
 
-      site.data['leaderboard'] = leaderboard
+        site.data['leaderboard'] = leaderboard
 
-      contributors_data = {}
-      contributors.each do |user, info|
-        entries = info['entries'].map do |slug|
-          {
-            'slug' => slug,
-            'title' => reviewer_meta.dig(slug, 'title')
+        contributors_data = {}
+        leaderboard.each do |entry|
+          user = entry['user']
+          info = contributors[user]
+          next unless info
+
+          entries = info['entries'].map do |slug|
+            {
+              'slug' => slug,
+              'title' => reviewer_meta.dig(slug, 'title')
+            }
+          end
+
+          meta = fetch_github_info(user)
+
+          contributors_data[user] = {
+            'name' => meta['name'],
+            'bio' => meta['bio'],
+            'company' => meta['company'],
+            'location' => meta['location'],
+            'repos' => info['repos'].to_a,
+            'entries' => entries,
+            'comments' => info['comments']
           }
         end
 
-        contributors_data[user] = {
-          'repos' => info['repos'].to_a,
-          'entries' => entries,
-          'comments' => info['comments']
-        }
+        site.data['contributors'] = contributors_data
+        site.config['contributors_data'] = contributors_data
       end
-
-      site.data['contributors'] = contributors_data
-      site.config['contributors_data'] = contributors_data
-    end
   end
 end
 

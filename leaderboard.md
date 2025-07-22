@@ -48,6 +48,6 @@ permalink: /leaderboard/
   </div>
 </div>
 
-<script>
-window.contributorsData = {{ site.data.contributors | jsonify }};
+<script id="contributors-data" type="application/json">
+{{ site.data.contributors | jsonify }}
 </script>

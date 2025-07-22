@@ -16,6 +16,7 @@ permalink: /leaderboard/
   <div class="container">
     <div class="reviewer-grid">
       {% assign top_contributors = site.data.leaderboard %}
+      {% if top_contributors and top_contributors != empty %}
       {% for contributor in top_contributors %}
       <div class="reviewer-card contributor-card">
         {% if forloop.index0 == 0 %}
@@ -34,6 +35,9 @@ permalink: /leaderboard/
         </div>
       </div>
       {% endfor %}
+      {% else %}
+      <p>The leaderboard data is currently unavailable. Please check back later.</p>
+      {% endif %}
     </div>
   </div>
 </main>

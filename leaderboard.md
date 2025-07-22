@@ -17,6 +17,7 @@ permalink: /leaderboard/
     <div class="reviewer-grid">
       {% assign top_contributors = site.data.leaderboard %}
       {% for contributor in top_contributors %}
+      {% assign info = site.data.contributors[contributor.user] %}
       <a href="#contrib-{{ contributor.user }}" class="reviewer-card contributor-card" id="contrib-card-{{ contributor.user }}">
         {% if forloop.index0 == 0 %}
           <span class="badge gold">🥇</span>
@@ -25,12 +26,22 @@ permalink: /leaderboard/
         {% elsif forloop.index0 == 2 %}
           <span class="badge bronze">🥉</span>
         {% endif %}
-        <img src="https://github.com/{{ contributor.user }}.png?size=80" alt="{{ contributor.user }}'s avatar" class="avatar">
-        <a href="https://github.com/{{ contributor.user }}" target="_blank" class="username">@{{ contributor.user }}</a>
-        <div class="contributor-stats">
-          <span class="count">{{ contributor.entries_count }}</span> entries
-          <span class="sep">•</span>
-          <span class="repos">{{ contributor.repos_count }}</span> repos
+        <div class="contributor-card-header">
+          <img src="{{ info.avatar | default: 'https://github.com/' | append: contributor.user | append: '.png?size=80' }}" alt="{{ contributor.user }} avatar" class="avatar">
+          <div class="contributor-card-meta">
+            {% if info.name %}<h3 class="contributor-name">{{ info.name }}</h3>{% endif %}
+            <p class="username">@{{ contributor.user }}</p>
+            {% if info.bio %}<p class="contributor-bio">{{ info.bio }}</p>{% endif %}
+            <div class="contributor-extra">
+              {% if info.company %}<span class="company">🏢 {{ info.company }}</span>{% endif %}
+              {% if info.location %}<span class="location">📍 {{ info.location }}</span>{% endif %}
+            </div>
+          </div>
+        </div>
+        <div class="contributor-counts">
+          <div>⭐ {{ info.stats.repositories }}</div>
+          <div>📄 {{ info.stats.entries }}</div>
+          <div>💬 {{ info.stats.comments }}</div>
         </div>
       </a>
       {% endfor %}
@@ -47,69 +58,73 @@ permalink: /leaderboard/
     <div class="drawer-header">
       <a href="#" class="drawer-close">&times;</a>
     </div>
-    <div class="p-4 border-b">
-      <div class="flex items-center space-x-3">
-        <img src="https://github.com/{{ user }}.png?size=80" class="w-16 h-16 rounded-full" alt="{{ user }} avatar">
+    <div class="drawer-body">
+      <div class="drawer-profile">
+        <img src="{{ info.avatar }}" class="drawer-avatar" alt="{{ user }} avatar">
         <div>
-          <h2 class="font-bold text-xl">@{{ user }}</h2>
-          {% if info.name %}<div class="text-sm text-gray-700">{{ info.name }}</div>{% endif %}
-          {% if info.bio %}<div class="text-sm text-gray-700">{{ info.bio }}</div>{% endif %}
-          {% if info.company %}<div class="text-sm text-gray-700">🏢 {{ info.company }}</div>{% endif %}
-          {% if info.location %}<div class="text-sm text-gray-700">📍 {{ info.location }}</div>{% endif %}
+          <h2 class="drawer-title">@{{ user }}</h2>
+          {% if info.name %}<div class="drawer-name">{{ info.name }}</div>{% endif %}
+          {% if info.bio %}<div class="drawer-bio">{{ info.bio }}</div>{% endif %}
+          <div class="drawer-meta">
+            {% if info.company %}<span class="company">🏢 {{ info.company }}</span>{% endif %}
+            {% if info.location %}<span class="location">📍 {{ info.location }}</span>{% endif %}
+          </div>
         </div>
       </div>
-    </div>
-    <div class="flex text-center divide-x divide-gray-200 my-4">
-      <div class="flex-1">
-        <div class="text-lg font-semibold">{{ info.repos | size }}</div>
-        <div class="text-xs text-gray-600">Repositories</div>
+      <div class="drawer-stats">
+        <div class="stat">
+          <div class="count">{{ info.stats.repositories }}</div>
+          <div class="label">Repositories</div>
+        </div>
+        <div class="stat">
+          <div class="count">{{ info.stats.entries }}</div>
+          <div class="label">Entries</div>
+        </div>
+        <div class="stat">
+          <div class="count">{{ info.stats.comments }}</div>
+          <div class="label">Comments</div>
+        </div>
       </div>
-      <div class="flex-1">
-        <div class="text-lg font-semibold">{{ info.entries | size }}</div>
-        <div class="text-xs text-gray-600">Entries</div>
+      <div class="drawer-section">
+        <details open>
+          <summary>Repositories</summary>
+          <ul class="link-list">
+          {% for repo in info.repos %}
+            <li><a href="/?repo={{ repo | uri_escape }}" target="_blank" rel="noopener noreferrer">⭐ {{ repo }} ↗️</a></li>
+          {% endfor %}
+          </ul>
+        </details>
       </div>
-      <div class="flex-1">
-        {% assign comment_count = 0 %}
-        {% for pair in info.comments %}
-          {% assign comment_count = comment_count | plus: pair[1].size %}
-        {% endfor %}
-        <div class="text-lg font-semibold">{{ comment_count }}</div>
-        <div class="text-xs text-gray-600">Comments</div>
+      <div class="drawer-section">
+        <details open>
+          <summary>Reviewer Entries</summary>
+          <ul class="link-list">
+          {% for e in info.entries %}
+            <li><a href="/reviewers/{{ e.slug }}/" target="_blank" rel="noopener noreferrer">{{ e.title }} ↗️</a></li>
+          {% endfor %}
+          </ul>
+        </details>
       </div>
-    </div>
-    <div class="p-4">
-      <h3 class="font-semibold mb-2">Repositories</h3>
-      <div class="space-y-2">
-        {% for repo in info.repos %}
-        <a href="/?repo={{ repo | uri_escape }}" target="_blank" rel="noopener noreferrer" class="block border rounded-md p-2 hover:bg-gray-50">⭐ {{ repo }} <span class="ml-1">↗️</span></a>
-        {% endfor %}
-      </div>
-    </div>
-    <div class="p-4">
-      <h3 class="font-semibold mb-2">Reviewer Entries</h3>
-      <div class="space-y-2">
-        {% for e in info.entries %}
-        <a href="/reviewers/{{ e.slug }}/" target="_blank" rel="noopener noreferrer" class="block border rounded-md p-2 hover:bg-gray-50">{{ e.title }} <span class="ml-1">↗️</span></a>
-        {% endfor %}
-      </div>
-    </div>
-    <div class="p-4">
-      <h3 class="font-semibold mb-2">Comments</h3>
-      <div>
-        {% for pair in info.comments %}
-          {% assign slug = pair[0] %}
-          {% assign list = pair[1] %}
-          {% assign entry = info.entries | where: 'slug', slug | first %}
-          {% assign title = entry.title | default: slug %}
-          <details class="border rounded-md p-2 mb-2">
-            <summary class="cursor-pointer font-medium">{{ title }}</summary>
-            <ul class="mt-2 ml-4 list-disc">
-              {% for text in list %}
-              <li class="mb-1">{{ text }}</li>
-              {% endfor %}
-            </ul>
-          </details>
-        {% endfor %}
+      <div class="drawer-section">
+        <details>
+          <summary>Comments</summary>
+          <div class="comment-groups">
+          {% for pair in info.comments %}
+            {% assign slug = pair[0] %}
+            {% assign list = pair[1] %}
+            {% assign entry = info.entries | where: 'slug', slug | first %}
+            {% assign title = entry.title | default: slug %}
+            <details class="comment-group">
+              <summary>{{ title }}</summary>
+              <ul>
+                {% for text in list %}
+                <li>{{ text }}</li>
+                {% endfor %}
+              </ul>
+            </details>
+          {% endfor %}
+          </div>
+        </details>
       </div>
     </div>
   </div>

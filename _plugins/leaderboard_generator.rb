@@ -98,14 +98,21 @@ module Jekyll
 
           meta = fetch_github_info(user)
 
+          comment_count = info['comments'].values.map(&:size).sum
           contributors_data[user] = {
             'name' => meta['name'],
             'bio' => meta['bio'],
             'company' => meta['company'],
             'location' => meta['location'],
+            'avatar' => "https://github.com/#{user}.png?size=80",
             'repos' => info['repos'].to_a,
             'entries' => entries,
-            'comments' => info['comments']
+            'comments' => info['comments'],
+            'stats' => {
+              'repositories' => info['repos'].size,
+              'entries' => info['entries'].size,
+              'comments' => comment_count
+            }
           }
         end
 

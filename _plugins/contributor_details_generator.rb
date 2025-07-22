@@ -7,7 +7,13 @@ module Jekyll
     priority :high
 
     def generate(site)
-      contributors = Hash.new { |h, k| h[k] = { 'repos' => Set.new, 'entries' => {}, 'comments' => Hash.new { |hh, kk| hh[kk] = [] } } }
+      contributors = Hash.new do |h, k|
+        h[k] = {
+          'repos' => Set.new,
+          'entries' => {},
+          'comments' => Hash.new { |hh, kk| hh[kk] = [] }
+        }
+      end
 
       # Map reviewer slug to title and repository from collection docs
       metadata = {}
@@ -38,7 +44,7 @@ module Jekyll
             info['repos'] << repo if repo
             info['entries'][slug] = entry_title if entry_title
             if body && !body.strip.empty?
-              info['comments'][slug] << body
+              info['comments'][slug] << body unless info['comments'][slug].include?(body)
             end
           end
         end
@@ -46,9 +52,10 @@ module Jekyll
 
       result = {}
       contributors.each do |user, info|
+        entries = info['entries'].map { |s, t| { 'slug' => s, 'title' => t } }
         result[user] = {
           'repos' => info['repos'].to_a.sort,
-          'entries' => info['entries'].map { |s, t| { 'slug' => s, 'title' => t } },
+          'entries' => entries.sort_by { |e| e['slug'] },
           'comments' => info['comments']
         }
       end

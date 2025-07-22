@@ -4,7 +4,30 @@
 function renderDiscussionThread(slug, container) {
   fetch(`/reviewers/${slug}.json`)
     .then(r => r.json())
-    .then(blocks => renderDiscussion(container, blocks));
+    .then(rawBlocks => {
+      const blocks = rawBlocks.map(b => ({
+        changes: parseDiff(b.commented_code || ''),
+        comments: (b.discussion_comments || []).map(c => ({
+          author: {
+            username: c.comment_author,
+            name: c.comment_author,
+            avatar: `https://avatars.githubusercontent.com/${c.comment_author}`,
+          },
+          content: c.comment_body,
+          timestamp: c.comment_created_at,
+          isReply: false,
+        })),
+      }));
+      renderDiscussion(container, blocks);
+    });
+}
+
+function parseDiff(str) {
+  return str.split('\n').map(l => {
+    if (l.startsWith('+')) return { type: 'added', content: l.slice(1) };
+    if (l.startsWith('-')) return { type: 'removed', content: l.slice(1) };
+    return { type: 'context', content: l.replace(/^ /, '') };
+  });
 }
 
 function renderDiscussion(container, blocks) {

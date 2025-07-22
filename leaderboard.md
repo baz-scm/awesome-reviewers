@@ -14,14 +14,10 @@ permalink: /leaderboard/
 
 <main class="main-content">
   <div class="container">
-    <div class="sort-buttons">
-      <button id="sort-entries" class="active">Sort by entries</button>
-      <button id="sort-repos">Sort by repos</button>
-    </div>
     <div class="reviewer-grid">
       {% assign top_contributors = site.data.leaderboard %}
       {% for contributor in top_contributors %}
-      <div class="reviewer-card contributor-card" data-entries="{{ contributor.entries_count }}" data-repos="{{ contributor.repos_count }}">
+      <div class="reviewer-card contributor-card">
         {% if forloop.index0 == 0 %}
           <span class="badge gold">🥇</span>
         {% elsif forloop.index0 == 1 %}

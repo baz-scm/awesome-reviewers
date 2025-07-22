@@ -17,7 +17,7 @@ permalink: /leaderboard/
     <div class="reviewer-grid">
       {% assign top_contributors = site.data.leaderboard %}
       {% for contributor in top_contributors %}
-      <div class="reviewer-card contributor-card">
+      <div class="reviewer-card contributor-card" data-contributor="{{ contributor.user }}" id="{{ contributor.user }}">
         {% if forloop.index0 == 0 %}
           <span class="badge gold">🥇</span>
         {% elsif forloop.index0 == 1 %}
@@ -37,3 +37,15 @@ permalink: /leaderboard/
     </div>
   </div>
 </main>
+
+<div id="drawer" class="drawer">
+  <div class="drawer-overlay" onclick="closeDrawer()"></div>
+  <div class="drawer-panel">
+    <div class="drawer-header">
+      <button class="drawer-close" onclick="closeDrawer()">&times;</button>
+    </div>
+    <div id="drawer-content"></div>
+  </div>
+</div>
+
+<script src="{{ '/assets/js/leaderboard.js' | relative_url }}"></script>

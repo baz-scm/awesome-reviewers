@@ -86,13 +86,22 @@ layout: default
   (function() {
     const threadEl = document.getElementById('discussion-thread');
     if (!threadEl) return;
-    fetch(`${window.location.pathname.replace(/\/$/, '')}.json`)
+    fetch("{{ '/reviewers/' | append: page.slug | append: '.json' | relative_url }}")
       .then(r => r.json())
-      .then(codeBlocks => renderDiscussion(threadEl, codeBlocks));
+      .then(blocks => renderDiscussion(threadEl, blocks));
+
+    function parseDiff(str) {
+      if (!str) return [];
+      return str.split('\n').map(l => {
+        if (l.startsWith('+')) return {type:'added', content:l.slice(1)};
+        if (l.startsWith('-')) return {type:'removed', content:l.slice(1)};
+        return {type:'context', content:l.replace(/^ /, '')};
+      });
+    }
 
     function renderDiscussion(container, blocks) {
-      const totalComments = blocks.reduce((sum, b) => sum + b.comments.length, 0);
-      const participants = new Set(blocks.flatMap(b => b.comments.map(c => c.author.username))).size;
+      const totalComments = blocks.reduce((sum, b) => sum + b.discussion_comments.length, 0);
+      const participants = new Set(blocks.flatMap(b => b.discussion_comments.map(c => c.comment_author))).size;
       container.innerHTML = `
         <div class="flex items-center gap-2 mb-4">
           <svg class="h-6 w-6 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -106,7 +115,7 @@ layout: default
         const blockEl = document.createElement('div');
         blockEl.className = `rounded-lg border border-muted-foreground/20 overflow-hidden border-l-4 border-l-primary/20`;
         let codeHtml = `<div class="bg-slate-50 dark:bg-slate-900/50"><div class="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border-b text-xs text-muted-foreground flex items-center"><span class="font-mono">Changes #${i+1}</span></div><div class="font-mono text-sm">`;
-        block.changes.forEach(line => {
+        parseDiff(block.commented_code).forEach(line => {
           const type = line.type,
                 symbol = type==='added'?'+': type==='removed'?'-':'\u00A0',
                 colorCls = type==='added'
@@ -118,23 +127,22 @@ layout: default
         });
         codeHtml += `</div></div>`;
         blockEl.innerHTML = codeHtml;
-        if (block.comments.length) {
+        if (block.discussion_comments.length) {
           const commentsWrap = document.createElement('div');
           commentsWrap.className = 'p-4 space-y-4';
-          block.comments.forEach((c, idx) => {
+          block.discussion_comments.forEach((c, idx) => {
             if (idx) {
               const sep = document.createElement('hr');
               sep.className = 'my-3 border-t border-muted-foreground/20';
               commentsWrap.appendChild(sep);
             }
             const commentEl = document.createElement('div');
-            commentEl.className = `flex gap-3 ${c.isReply?'ml-6 pl-3 border-l-2 border-muted':''}`;
+            commentEl.className = `flex gap-3 ${idx ? 'ml-6 pl-3 border-l-2 border-muted' : ''}`;
             commentEl.innerHTML = `
-              <img src="${c.author.avatar}" alt="${c.author.name}" class="w-8 h-8 rounded-full border-2 border-background shadow-sm flex-shrink-0"/>
+              <img src="https://avatars.githubusercontent.com/${c.comment_author}?s=40" alt="${c.comment_author}" class="w-8 h-8 rounded-full border-2 border-background shadow-sm flex-shrink-0"/>
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2 mb-1">
-                  <h3 class="font-semibold text-sm">${c.author.name}</h3>
-                  <span class="text-xs text-muted-foreground">@${c.author.username}</span>
+                  <h3 class="font-semibold text-sm">${c.comment_author}</h3>
                   <div class="flex items-center gap-1 text-xs text-muted-foreground ml-auto">
                     <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
@@ -142,10 +150,10 @@ layout: default
                       <line x1="8" y1="2" x2="8" y2="6"/>
                       <line x1="3" y1="10" x2="21" y2="10"/>
                     </svg>
-                    ${c.timestamp}
+                    ${new Date(c.comment_created_at).toLocaleString()}
                   </div>
                 </div>
-                <p class="prose prose-sm max-w-none dark:prose-invert text-xs leading-relaxed m-0">${c.content}</p>
+                <p class="prose prose-sm max-w-none dark:prose-invert text-xs leading-relaxed m-0">${c.comment_body}</p>
               </div>`;
             commentsWrap.appendChild(commentEl);
           });
@@ -172,8 +180,116 @@ layout: default
             ${totalComments} total comments
           </span>
         </div>
-        <span>Last updated ${blocks[0]?.comments[0]?.timestamp||''}</span>`;
+        <span>Last updated ${blocks[0]?.discussion_comments[0]?.comment_created_at || ''}</span>`;
       container.appendChild(footer);
     }
   })();
+
+  function htmlToMarkdown(element) {
+    let markdown = '';
+
+    function processNode(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return node.textContent;
+      }
+
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const tagName = node.tagName.toLowerCase();
+        const children = Array.from(node.childNodes).map(processNode).join('');
+
+        switch (tagName) {
+          case 'h1': return `# ${children}\n\n`;
+          case 'h2': return `## ${children}\n\n`;
+          case 'h3': return `### ${children}\n\n`;
+          case 'h4': return `#### ${children}\n\n`;
+          case 'h5': return `##### ${children}\n\n`;
+          case 'h6': return `###### ${children}\n\n`;
+          case 'p': return `${children}\n\n`;
+          case 'strong':
+          case 'b': return `**${children}**`;
+          case 'em':
+          case 'i': return `*${children}*`;
+          case 'code':
+            if (node.parentElement && node.parentElement.tagName.toLowerCase() === 'pre') {
+              return children;
+            }
+            return `\`${children}\``;
+          case 'pre':
+            const codeElement = node.querySelector('code');
+            if (codeElement) {
+              const languageMatch = codeElement.className.match(/(?:language-|hljs-)(\w+)/);
+              const language = languageMatch ? languageMatch[1] : '';
+              return `\`\`\`${language}\n${codeElement.textContent}\n\`\`\`\n\n`;
+            }
+            return `\`\`\`\n${children}\n\`\`\`\n\n`;
+          case 'ul':
+            return `${children}\n`;
+          case 'ol':
+            return `${children}\n`;
+          case 'li':
+            const parent = node.parentElement;
+            if (parent.tagName.toLowerCase() === 'ol') {
+              return `1. ${children}\n`;
+            } else {
+              return `- ${children}\n`;
+            }
+          case 'blockquote':
+            return children.split('\n').map(line => `> ${line}`).join('\n') + '\n\n';
+          case 'br':
+            return '\n';
+          default:
+            return children;
+        }
+      }
+
+      return '';
+    }
+
+    markdown = processNode(element);
+    markdown = markdown.replace(/\n{3,}/g, '\n\n').trim();
+    return markdown;
+  }
+
+  function copyPrompt() {
+    const promptContent = document.getElementById('prompt-content');
+    const copyButton = document.querySelector('.copy-button');
+    const copyText = document.getElementById('copy-text');
+
+    const markdownContent = htmlToMarkdown(promptContent);
+    const textarea = document.createElement('textarea');
+    textarea.value = markdownContent;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+
+    copyButton.classList.add('copied');
+    copyText.textContent = 'Copied!';
+
+    setTimeout(() => {
+      copyButton.classList.remove('copied');
+      copyText.textContent = 'Copy Prompt';
+    }, 2000);
+  }
+
+  function shareFromDrawer(e) {
+    const slug = location.hash.slice(1);
+    const button = e.currentTarget;
+    const url = `${window.location.origin}${window.location.pathname}#${slug}`;
+
+    const textarea = document.createElement('textarea');
+    textarea.value = url;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+
+    button.classList.add('copied');
+    button.textContent = 'Copied!';
+
+    setTimeout(() => {
+      button.classList.remove('copied');
+      button.textContent = 'Share';
+    }, 2000);
+  }
 </script>

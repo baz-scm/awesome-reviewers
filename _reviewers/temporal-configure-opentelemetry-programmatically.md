@@ -16,7 +16,9 @@ Configure OpenTelemetry programmatically rather than through environment variabl
 Example:
 ```yaml
 # Preferred - Adding collector to Docker Compose services
+{% raw %}
 services: "${{ format('{0}\notel-collector', join(matrix.containers, '\n')) }}"
+{% endraw %}
 
 # Avoid passing as environment variables
 # make OTEL=true functional-test-coverage  # Not recommended

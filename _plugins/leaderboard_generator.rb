@@ -17,6 +17,8 @@ module Jekyll
           next unless discussion['discussion_comments']
           discussion['discussion_comments'].each do |comment|
             user = comment['comment_author']
+            next if user.nil? || user.include?('[bot]')
+
             repo = comment['repo_full_name'] || site.data.dig('reviewers', entry_slug, 'repository')
             contributors[user] ||= { 'entries' => Set.new, 'repos' => Set.new }
             contributors[user]['entries'] << entry_slug

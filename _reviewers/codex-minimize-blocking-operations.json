@@ -1,0 +1,114 @@
+[
+  {
+    "discussion_id": "2214082920",
+    "pr_number": 1598,
+    "pr_file": "codex-rs/core/src/rollout.rs",
+    "created_at": "2025-07-17T19:05:42+00:00",
+    "commented_code": "/// Folder inside `~/.codex` that holds saved rollouts.\n const SESSIONS_SUBDIR: &str = \"sessions\";\n \n+#[derive(Serialize)]\n+struct GitInfo {\n+    /// Current commit hash (SHA)\n+    #[serde(skip_serializing_if = \"Option::is_none\")]\n+    commit_hash: Option<String>,\n+    /// Current branch name\n+    #[serde(skip_serializing_if = \"Option::is_none\")]\n+    branch: Option<String>,\n+    /// Repository URL (if available from remote)\n+    #[serde(skip_serializing_if = \"Option::is_none\")]\n+    repository_url: Option<String>,\n+}\n+\n #[derive(Serialize)]\n struct SessionMeta {\n     id: String,\n     timestamp: String,\n     #[serde(skip_serializing_if = \"Option::is_none\")]\n     instructions: Option<String>,\n+    #[serde(skip_serializing_if = \"Option::is_none\")]\n+    git: Option<GitInfo>,\n+}\n+\n+/// Timeout for git commands to prevent freezing on large repositories\n+const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);\n+\n+/// Run a git command with a timeout to prevent blocking on large repositories\n+fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {",
+    "repo_full_name": "openai/codex",
+    "discussion_comments": [
+      {
+        "comment_id": "2214082920",
+        "repo_full_name": "openai/codex",
+        "pr_number": 1598,
+        "pr_file": "codex-rs/core/src/rollout.rs",
+        "discussion_id": "2214082920",
+        "commented_code": "@@ -22,12 +27,105 @@ use crate::models::ResponseItem;\n /// Folder inside `~/.codex` that holds saved rollouts.\n const SESSIONS_SUBDIR: &str = \"sessions\";\n \n+#[derive(Serialize)]\n+struct GitInfo {\n+    /// Current commit hash (SHA)\n+    #[serde(skip_serializing_if = \"Option::is_none\")]\n+    commit_hash: Option<String>,\n+    /// Current branch name\n+    #[serde(skip_serializing_if = \"Option::is_none\")]\n+    branch: Option<String>,\n+    /// Repository URL (if available from remote)\n+    #[serde(skip_serializing_if = \"Option::is_none\")]\n+    repository_url: Option<String>,\n+}\n+\n #[derive(Serialize)]\n struct SessionMeta {\n     id: String,\n     timestamp: String,\n     #[serde(skip_serializing_if = \"Option::is_none\")]\n     instructions: Option<String>,\n+    #[serde(skip_serializing_if = \"Option::is_none\")]\n+    git: Option<GitInfo>,\n+}\n+\n+/// Timeout for git commands to prevent freezing on large repositories\n+const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(3);\n+\n+/// Run a git command with a timeout to prevent blocking on large repositories\n+fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {",
+        "comment_created_at": "2025-07-17T19:05:42+00:00",
+        "comment_author": "bolinfest",
+        "comment_body": "Can you use tokio::Command and make this `async` instead? It's cheaper to create tokio tasks than POSIX threads. You should then update `collect_git_info()` to make all these calls in parallel.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2214462855",
+    "pr_number": 1598,
+    "pr_file": "codex-rs/core/src/rollout.rs",
+    "created_at": "2025-07-17T23:06:24+00:00",
+    "commented_code": ".format(timestamp_format)\n             .map_err(|e| IoError::other(format!(\"failed to format timestamp: {e}\")))?;\n \n+        // Collect git repository information\n+        let git_info = collect_git_info(cwd).await;",
+    "repo_full_name": "openai/codex",
+    "discussion_comments": [
+      {
+        "comment_id": "2214462855",
+        "repo_full_name": "openai/codex",
+        "pr_number": 1598,
+        "pr_file": "codex-rs/core/src/rollout.rs",
+        "discussion_id": "2214462855",
+        "commented_code": "@@ -67,16 +165,20 @@ impl RolloutRecorder {\n             .format(timestamp_format)\n             .map_err(|e| IoError::other(format!(\"failed to format timestamp: {e}\")))?;\n \n+        // Collect git repository information\n+        let git_info = collect_git_info(cwd).await;",
+        "comment_created_at": "2025-07-17T23:06:24+00:00",
+        "comment_author": "bolinfest",
+        "comment_body": "I appreciate the timeouts in `collect_git_info()`, though if I am reading it correctly, I suppose this could add ~6s to startup in the worst case? It would be nice to figure out how to make this truly async, since `RolloutRecorder::new()` is on the critical path to startup.\r\n\r\nThe challenge seems to be that we have these lines below:\r\n\r\n```rust\r\n    recorder.record_item(&meta).await?;\r\n    Ok(recorder)\r\n```\r\n\r\nThat is, we don't want `new()` to exit until the first item has recorded and now that is dependent on `collect_git_info()`. Certainly this is fixable, but the bookkeeping may be a bit ugly. What do you think?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2214474763",
+        "repo_full_name": "openai/codex",
+        "pr_number": 1598,
+        "pr_file": "codex-rs/core/src/rollout.rs",
+        "discussion_id": "2214462855",
+        "commented_code": "@@ -67,16 +165,20 @@ impl RolloutRecorder {\n             .format(timestamp_format)\n             .map_err(|e| IoError::other(format!(\"failed to format timestamp: {e}\")))?;\n \n+        // Collect git repository information\n+        let git_info = collect_git_info(cwd).await;",
+        "comment_created_at": "2025-07-17T23:15:31+00:00",
+        "comment_author": "bolinfest",
+        "comment_body": "Actually, what if we move `collect_git_info(cwd).await` into the lambda passed to `tokio::task::spawn` and then ensure it is written to `file` before the `while let Some(line) = rx.recv().await` loop starts?\r\n\r\nYou could also increase the `git` timeout to 5s maybe?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2220494978",
+        "repo_full_name": "openai/codex",
+        "pr_number": 1598,
+        "pr_file": "codex-rs/core/src/rollout.rs",
+        "discussion_id": "2214462855",
+        "commented_code": "@@ -67,16 +165,20 @@ impl RolloutRecorder {\n             .format(timestamp_format)\n             .map_err(|e| IoError::other(format!(\"failed to format timestamp: {e}\")))?;\n \n+        // Collect git repository information\n+        let git_info = collect_git_info(cwd).await;",
+        "comment_created_at": "2025-07-21T22:32:49+00:00",
+        "comment_author": "vishnu-oai",
+        "comment_body": "we can do this, i tried an implementation of this, however it breaks `integration_creates_and_checks_session_file` -> we can change this test or we can create a separate entry for the git info which is recorded async. the second method wont break the integration test, but when we run `codex exec` mode, we will get the git_info record in a random order in the rollout, which I'm not sure is desirable. let me know what you'd prefer.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2221338087",
+    "pr_number": 1646,
+    "pr_file": "codex-rs/mcp-server/src/codex_tool_runner.rs",
+    "created_at": "2025-07-22T06:14:29+00:00",
+    "commented_code": "tracing::error!(\"Failed to submit user input: {e}\");\n     }\n \n-    run_codex_tool_session_inner(codex, outgoing, request_id).await;\n+    run_codex_tool_session_inner(\n+        codex,\n+        outgoing,\n+        request_id,\n+        running_requests_id_to_codex_uuid,\n+        session_id,\n+    )\n+    .await;\n }\n \n async fn run_codex_tool_session_inner(\n     codex: Arc<Codex>,\n     outgoing: Arc<OutgoingMessageSender>,\n     request_id: RequestId,\n+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,\n+    session_id: Uuid,\n ) {\n     let sub_id = match &request_id {\n         RequestId::String(s) => s.clone(),\n         RequestId::Integer(n) => n.to_string(),\n     };\n+    {\n+        let mut running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.lock().await;\n+        running_requests_id_to_codex_uuid.insert(request_id.clone(), session_id);\n+    }",
+    "repo_full_name": "openai/codex",
+    "discussion_comments": [
+      {
+        "comment_id": "2221338087",
+        "repo_full_name": "openai/codex",
+        "pr_number": 1646,
+        "pr_file": "codex-rs/mcp-server/src/codex_tool_runner.rs",
+        "discussion_id": "2221338087",
+        "commented_code": "@@ -112,18 +123,31 @@ pub async fn run_codex_tool_session_reply(\n         tracing::error!(\"Failed to submit user input: {e}\");\n     }\n \n-    run_codex_tool_session_inner(codex, outgoing, request_id).await;\n+    run_codex_tool_session_inner(\n+        codex,\n+        outgoing,\n+        request_id,\n+        running_requests_id_to_codex_uuid,\n+        session_id,\n+    )\n+    .await;\n }\n \n async fn run_codex_tool_session_inner(\n     codex: Arc<Codex>,\n     outgoing: Arc<OutgoingMessageSender>,\n     request_id: RequestId,\n+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,\n+    session_id: Uuid,\n ) {\n     let sub_id = match &request_id {\n         RequestId::String(s) => s.clone(),\n         RequestId::Integer(n) => n.to_string(),\n     };\n+    {\n+        let mut running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.lock().await;\n+        running_requests_id_to_codex_uuid.insert(request_id.clone(), session_id);\n+    }",
+        "comment_created_at": "2025-07-22T06:14:29+00:00",
+        "comment_author": "bolinfest",
+        "comment_body": "FYI, if you write it as a single statement, then there is no intermediate `running_requests_id_to_codex_uuid` reference that has to be _dropped_ to release the lock, so the `Drop` happens implicitly as part of the statement executing.\r\n\r\n```suggestion\r\n    running_requests_id_to_codex_uuid.lock().await.running_requests_id_to_codex_uuid.insert(request_id.clone(), session_id);\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2214023745",
+    "pr_number": 1599,
+    "pr_file": "codex-rs/tui/src/app.rs",
+    "created_at": "2025-07-17T18:31:36+00:00",
+    "commented_code": "self.app_event_tx.clone()\n     }\n \n+    /// Schedule a redraw if one is not already pending.\n+    #[allow(clippy::unwrap_used)]\n+    fn schedule_redraw(&self) {\n+        let mut flag = self.pending_redraw.lock().unwrap();\n+        if *flag {\n+            return;\n+        }\n+        *flag = true;\n+        let tx = self.app_event_tx.clone();\n+        let pending = Arc::clone(&self.pending_redraw);\n+        thread::spawn(move || {\n+            thread::sleep(REDRAW_DEBOUNCE);\n+            tx.send(AppEvent::Redraw);\n+            #[allow(clippy::unwrap_used)]\n+            let mut f = pending.lock().unwrap();\n+            *f = false;\n+        });",
+    "repo_full_name": "openai/codex",
+    "discussion_comments": [
+      {
+        "comment_id": "2214023745",
+        "repo_full_name": "openai/codex",
+        "pr_number": 1599,
+        "pr_file": "codex-rs/tui/src/app.rs",
+        "discussion_id": "2214023745",
+        "commented_code": "@@ -162,17 +174,39 @@ impl<'a> App<'a> {\n         self.app_event_tx.clone()\n     }\n \n+    /// Schedule a redraw if one is not already pending.\n+    #[allow(clippy::unwrap_used)]\n+    fn schedule_redraw(&self) {\n+        let mut flag = self.pending_redraw.lock().unwrap();\n+        if *flag {\n+            return;\n+        }\n+        *flag = true;\n+        let tx = self.app_event_tx.clone();\n+        let pending = Arc::clone(&self.pending_redraw);\n+        thread::spawn(move || {\n+            thread::sleep(REDRAW_DEBOUNCE);\n+            tx.send(AppEvent::Redraw);\n+            #[allow(clippy::unwrap_used)]\n+            let mut f = pending.lock().unwrap();\n+            *f = false;\n+        });",
+        "comment_created_at": "2025-07-17T18:31:36+00:00",
+        "comment_author": "bolinfest",
+        "comment_body": "This is slightly better because it results in holding the lock for a shorter amount of time.\r\n\r\nThat extra level of scoping around the use of `self.pending_redraw.lock()` and `flag` ensures that after `*flag = true`, the lock is dropped.\r\n\r\nAlso, `Arc::clone()` is less canonical than just invoking `.clone()`, in my experience.\r\n\r\n```suggestion\r\n        {\r\n            #[allow(clippy::unwrap_used)]\r\n            let mut flag = self.pending_redraw.lock().unwrap();\r\n            if *flag {\r\n                return;\r\n            }\r\n            *flag = true;\r\n        }\r\n\r\n        let tx = self.app_event_tx.clone();\r\n        let pending_redraw = &self.pending_redraw.clone();\r\n        thread::spawn(move || {\r\n            thread::sleep(REDRAW_DEBOUNCE);\r\n            tx.send(AppEvent::Redraw);\r\n            #[allow(clippy::unwrap_used)]\r\n            let mut f = pending.lock().unwrap();\r\n            *f = false;\r\n        });\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

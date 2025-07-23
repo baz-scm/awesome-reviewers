@@ -1,0 +1,192 @@
+[
+  {
+    "discussion_id": "2201954138",
+    "pr_number": 5544,
+    "pr_file": "src/utils/safeWriteJson.ts",
+    "created_at": "2025-07-11T22:01:06+00:00",
+    "commented_code": "import Disassembler from \"stream-json/Disassembler\"\n import Stringer from \"stream-json/Stringer\"\n \n+import { _streamDataFromFile } from \"./safeReadJson\"\n+\n+/**\n+ * Acquires a lock on a file.\n+ *\n+ * @param {string} filePath - The path to the file to lock\n+ * @param {lockfile.LockOptions} [options] - Optional lock options\n+ * @returns {Promise<() => Promise<void>>} - The lock release function\n+ * @private\n+ */\n+export async function _acquireLock(filePath: string, options?: lockfile.LockOptions): Promise<() => Promise<void>> {\n+\tconst absoluteFilePath = path.resolve(filePath)\n+\n+\treturn await lockfile.lock(absoluteFilePath, {\n+\t\tstale: 31000, // Stale after 31 seconds\n+\t\tupdate: 10000, // Update mtime every 10 seconds\n+\t\trealpath: false, // The file may not exist yet\n+\t\tretries: {\n+\t\t\tretries: 5,\n+\t\t\tfactor: 2,\n+\t\t\tminTimeout: 100,\n+\t\t\tmaxTimeout: 1000,\n+\t\t},\n+\t\tonCompromised: (err) => {\n+\t\t\tconsole.error(`Lock at ${absoluteFilePath} was compromised:`, err)\n+\t\t\tthrow err\n+\t\t},\n+\t\t...options,\n+\t})\n+}\n+\n /**\n  * Safely writes JSON data to a file.\n  * - Creates parent directories if they don't exist\n  * - Uses 'proper-lockfile' for inter-process advisory locking to prevent concurrent writes to the same path.\n  * - Writes to a temporary file first.\n  * - If the target file exists, it's backed up before being replaced.\n  * - Attempts to roll back and clean up in case of errors.\n+ * - Supports atomic read-modify-write transactions via the readModifyFn parameter.\n  *\n- * @param {string} filePath - The absolute path to the target file.\n- * @param {any} data - The data to serialize to JSON and write.\n- * @returns {Promise<void>}\n+ * @param {string} filePath - The path to the target file.\n+ * @param {any} data - The data to serialize to JSON and write. When using readModifyFn, this becomes the default value if file doesn't exist.\n+ * @param {(data: any) => Promise<any | undefined>} [readModifyFn] - Optional function for atomic read-modify-write transactions. For efficiency, modify the data object in-place and return the same reference. Alternatively, return a new data structure. Return undefined to abort the write (no error).\n+ * @returns {Promise<any>} - The structure that was written to the file\n  */\n+async function safeWriteJson(\n+\tfilePath: string,\n+\tdata: any,\n+\treadModifyFn?: (data: any) => Promise<any | undefined>,\n+): Promise<any> {\n+\tif (!readModifyFn && data === undefined) {\n+\t\tthrow new Error(\"When not using readModifyFn, data must be provided\")\n+\t}\n+\n+\t// If data is provided with readModifyFn, ensure it's a modifiable type\n+\tif (readModifyFn && data !== undefined) {\n+\t\t// JSON can serialize objects, arrays, strings, numbers, booleans, and null,\n+\t\t// but only objects and arrays can be modified in-place\n+\t\tconst isModifiable = typeof data === \"object\" || Array.isArray(data)",
+    "repo_full_name": "RooCodeInc/Roo-Code",
+    "discussion_comments": [
+      {
+        "comment_id": "2201954138",
+        "repo_full_name": "RooCodeInc/Roo-Code",
+        "pr_number": 5544,
+        "pr_file": "src/utils/safeWriteJson.ts",
+        "discussion_id": "2201954138",
+        "commented_code": "@@ -5,20 +5,71 @@ import * as lockfile from \"proper-lockfile\"\n import Disassembler from \"stream-json/Disassembler\"\n import Stringer from \"stream-json/Stringer\"\n \n+import { _streamDataFromFile } from \"./safeReadJson\"\n+\n+/**\n+ * Acquires a lock on a file.\n+ *\n+ * @param {string} filePath - The path to the file to lock\n+ * @param {lockfile.LockOptions} [options] - Optional lock options\n+ * @returns {Promise<() => Promise<void>>} - The lock release function\n+ * @private\n+ */\n+export async function _acquireLock(filePath: string, options?: lockfile.LockOptions): Promise<() => Promise<void>> {\n+\tconst absoluteFilePath = path.resolve(filePath)\n+\n+\treturn await lockfile.lock(absoluteFilePath, {\n+\t\tstale: 31000, // Stale after 31 seconds\n+\t\tupdate: 10000, // Update mtime every 10 seconds\n+\t\trealpath: false, // The file may not exist yet\n+\t\tretries: {\n+\t\t\tretries: 5,\n+\t\t\tfactor: 2,\n+\t\t\tminTimeout: 100,\n+\t\t\tmaxTimeout: 1000,\n+\t\t},\n+\t\tonCompromised: (err) => {\n+\t\t\tconsole.error(`Lock at ${absoluteFilePath} was compromised:`, err)\n+\t\t\tthrow err\n+\t\t},\n+\t\t...options,\n+\t})\n+}\n+\n /**\n  * Safely writes JSON data to a file.\n  * - Creates parent directories if they don't exist\n  * - Uses 'proper-lockfile' for inter-process advisory locking to prevent concurrent writes to the same path.\n  * - Writes to a temporary file first.\n  * - If the target file exists, it's backed up before being replaced.\n  * - Attempts to roll back and clean up in case of errors.\n+ * - Supports atomic read-modify-write transactions via the readModifyFn parameter.\n  *\n- * @param {string} filePath - The absolute path to the target file.\n- * @param {any} data - The data to serialize to JSON and write.\n- * @returns {Promise<void>}\n+ * @param {string} filePath - The path to the target file.\n+ * @param {any} data - The data to serialize to JSON and write. When using readModifyFn, this becomes the default value if file doesn't exist.\n+ * @param {(data: any) => Promise<any | undefined>} [readModifyFn] - Optional function for atomic read-modify-write transactions. For efficiency, modify the data object in-place and return the same reference. Alternatively, return a new data structure. Return undefined to abort the write (no error).\n+ * @returns {Promise<any>} - The structure that was written to the file\n  */\n+async function safeWriteJson(\n+\tfilePath: string,\n+\tdata: any,\n+\treadModifyFn?: (data: any) => Promise<any | undefined>,\n+): Promise<any> {\n+\tif (!readModifyFn && data === undefined) {\n+\t\tthrow new Error(\"When not using readModifyFn, data must be provided\")\n+\t}\n+\n+\t// If data is provided with readModifyFn, ensure it's a modifiable type\n+\tif (readModifyFn && data !== undefined) {\n+\t\t// JSON can serialize objects, arrays, strings, numbers, booleans, and null,\n+\t\t// but only objects and arrays can be modified in-place\n+\t\tconst isModifiable = typeof data === \"object\" || Array.isArray(data)",
+        "comment_created_at": "2025-07-11T22:01:06+00:00",
+        "comment_author": "ellipsis-dev[bot]",
+        "comment_body": "When using readModifyFn, the code checks that data is modifiable using `typeof data === 'object'` but note that `null` also has type 'object'. Consider adding an explicit check to ensure data is not null, so that a null default isn\u2019t accidentally accepted.\n```suggestion\n\t\tconst isModifiable = (typeof data === \"object\" && data !== null) || Array.isArray(data)\n```\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2201962041",
+        "repo_full_name": "RooCodeInc/Roo-Code",
+        "pr_number": 5544,
+        "pr_file": "src/utils/safeWriteJson.ts",
+        "discussion_id": "2201954138",
+        "commented_code": "@@ -5,20 +5,71 @@ import * as lockfile from \"proper-lockfile\"\n import Disassembler from \"stream-json/Disassembler\"\n import Stringer from \"stream-json/Stringer\"\n \n+import { _streamDataFromFile } from \"./safeReadJson\"\n+\n+/**\n+ * Acquires a lock on a file.\n+ *\n+ * @param {string} filePath - The path to the file to lock\n+ * @param {lockfile.LockOptions} [options] - Optional lock options\n+ * @returns {Promise<() => Promise<void>>} - The lock release function\n+ * @private\n+ */\n+export async function _acquireLock(filePath: string, options?: lockfile.LockOptions): Promise<() => Promise<void>> {\n+\tconst absoluteFilePath = path.resolve(filePath)\n+\n+\treturn await lockfile.lock(absoluteFilePath, {\n+\t\tstale: 31000, // Stale after 31 seconds\n+\t\tupdate: 10000, // Update mtime every 10 seconds\n+\t\trealpath: false, // The file may not exist yet\n+\t\tretries: {\n+\t\t\tretries: 5,\n+\t\t\tfactor: 2,\n+\t\t\tminTimeout: 100,\n+\t\t\tmaxTimeout: 1000,\n+\t\t},\n+\t\tonCompromised: (err) => {\n+\t\t\tconsole.error(`Lock at ${absoluteFilePath} was compromised:`, err)\n+\t\t\tthrow err\n+\t\t},\n+\t\t...options,\n+\t})\n+}\n+\n /**\n  * Safely writes JSON data to a file.\n  * - Creates parent directories if they don't exist\n  * - Uses 'proper-lockfile' for inter-process advisory locking to prevent concurrent writes to the same path.\n  * - Writes to a temporary file first.\n  * - If the target file exists, it's backed up before being replaced.\n  * - Attempts to roll back and clean up in case of errors.\n+ * - Supports atomic read-modify-write transactions via the readModifyFn parameter.\n  *\n- * @param {string} filePath - The absolute path to the target file.\n- * @param {any} data - The data to serialize to JSON and write.\n- * @returns {Promise<void>}\n+ * @param {string} filePath - The path to the target file.\n+ * @param {any} data - The data to serialize to JSON and write. When using readModifyFn, this becomes the default value if file doesn't exist.\n+ * @param {(data: any) => Promise<any | undefined>} [readModifyFn] - Optional function for atomic read-modify-write transactions. For efficiency, modify the data object in-place and return the same reference. Alternatively, return a new data structure. Return undefined to abort the write (no error).\n+ * @returns {Promise<any>} - The structure that was written to the file\n  */\n+async function safeWriteJson(\n+\tfilePath: string,\n+\tdata: any,\n+\treadModifyFn?: (data: any) => Promise<any | undefined>,\n+): Promise<any> {\n+\tif (!readModifyFn && data === undefined) {\n+\t\tthrow new Error(\"When not using readModifyFn, data must be provided\")\n+\t}\n+\n+\t// If data is provided with readModifyFn, ensure it's a modifiable type\n+\tif (readModifyFn && data !== undefined) {\n+\t\t// JSON can serialize objects, arrays, strings, numbers, booleans, and null,\n+\t\t// but only objects and arrays can be modified in-place\n+\t\tconst isModifiable = typeof data === \"object\" || Array.isArray(data)",
+        "comment_created_at": "2025-07-11T22:07:13+00:00",
+        "comment_author": "KJ7LNW",
+        "comment_body": "fixed, pushing.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2217531059",
+    "pr_number": 5968,
+    "pr_file": "src/core/prompts/tools/index.ts",
+    "created_at": "2025-07-20T01:55:59+00:00",
+    "commented_code": "tools.delete(\"codebase_search\")\n \t}\n \n+\t// Filter out disabled tools (except always-available tools)\n+\tif (disabledTools && disabledTools.length > 0) {\n+\t\tdisabledTools.forEach((tool) => {\n+\t\t\t// Don't filter out always-available tools\n+\t\t\tif (!ALWAYS_AVAILABLE_TOOLS.includes(tool as any)) {",
+    "repo_full_name": "RooCodeInc/Roo-Code",
+    "discussion_comments": [
+      {
+        "comment_id": "2217531059",
+        "repo_full_name": "RooCodeInc/Roo-Code",
+        "pr_number": 5968,
+        "pr_file": "src/core/prompts/tools/index.ts",
+        "discussion_id": "2217531059",
+        "commented_code": "@@ -109,6 +110,16 @@ export function getToolDescriptionsForMode(\n \t\ttools.delete(\"codebase_search\")\n \t}\n \n+\t// Filter out disabled tools (except always-available tools)\n+\tif (disabledTools && disabledTools.length > 0) {\n+\t\tdisabledTools.forEach((tool) => {\n+\t\t\t// Don't filter out always-available tools\n+\t\t\tif (!ALWAYS_AVAILABLE_TOOLS.includes(tool as any)) {",
+        "comment_created_at": "2025-07-20T01:55:59+00:00",
+        "comment_author": "ellipsis-dev[bot]",
+        "comment_body": "Consider avoiding the use of 'tool as any' during the filtering of disabled tools. Strengthening the type definition (e.g., using a union type) would improve type safety.\n```suggestion\n\t\t\tif (!ALWAYS_AVAILABLE_TOOLS.includes(tool as ToolName)) {\n```\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2217538950",
+        "repo_full_name": "RooCodeInc/Roo-Code",
+        "pr_number": 5968,
+        "pr_file": "src/core/prompts/tools/index.ts",
+        "discussion_id": "2217531059",
+        "commented_code": "@@ -109,6 +110,16 @@ export function getToolDescriptionsForMode(\n \t\ttools.delete(\"codebase_search\")\n \t}\n \n+\t// Filter out disabled tools (except always-available tools)\n+\tif (disabledTools && disabledTools.length > 0) {\n+\t\tdisabledTools.forEach((tool) => {\n+\t\t\t// Don't filter out always-available tools\n+\t\t\tif (!ALWAYS_AVAILABLE_TOOLS.includes(tool as any)) {",
+        "comment_created_at": "2025-07-20T02:36:08+00:00",
+        "comment_author": "KJ7LNW",
+        "comment_body": "only filter tools at the very end of getToolDescriptionsForMode()\r\n\r\nuse the simplest possible filter implementation ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2174302130",
+    "pr_number": 4388,
+    "pr_file": "src/shared/tools.ts",
+    "created_at": "2025-06-30T06:14:53+00:00",
+    "commented_code": "getProgressStatus?(toolUse: ToolUse, result?: any): ToolProgressStatus\n }\n+\n+/**\n+ * Safely reads a file from the .roo directory with the given filename.\n+ * Returns an empty string if the file doesn't exist or cannot be read.\n+ *\n+ * @param cwd - The working directory\n+ * @param file - The filename to read from the .roo directory\n+ * @returns A promise that resolves to the file content or empty string\n+ */\n+export async function readToolOverride(cwd: string, file: string): Promise<string> {\n+\ttry {\n+\t\tconst filePath = path.join(cwd, \".roo\", \"tools\", `${file}.md`)\n+\t\tconst content = await fs.readFile(filePath, \"utf-8\")\n+\t\treturn content.trim()\n+\t} catch (err) {\n+\t\tconst errorCode = (err as NodeJS.ErrnoException).code\n+\t\tif (!errorCode || ![\"ENOENT\", \"EISDIR\"].includes(errorCode)) {\n+\t\t\tthrow err\n+\t\t}\n+\t\treturn \"\"\n+\t}\n+}\n+\n+/**\n+ * Interpolates args data into a tool description string.\n+ * Replaces placeholders like ${args.cwd} or ${args.cwd.toPosix()} with actual values from the args object.\n+ *\n+ * @param content - The tool description content with placeholders\n+ * @param args - The tool arguments object containing values to interpolate\n+ * @returns The content with interpolated values\n+ */\n+function interpolateToolDescription(content: string, args: any): string {\n+\t// Replace ${args.property.method()} or ${args.property} patterns with actual values\n+\treturn content.replace(/\\$\\{args\\.([^}]+)\\}/g, (match, expression) => {\n+\t\ttry {\n+\t\t\t// Split the expression by dots to handle nested properties and methods\n+\t\t\tconst parts = expression.split(\".\")\n+\t\t\tlet value = args\n+\n+\t\t\tfor (const part of parts) {\n+\t\t\t\tif (part.includes(\"()\")) {\n+\t\t\t\t\t// Handle method calls\n+\t\t\t\t\tconst methodName = part.replace(\"()\", \"\")\n+\t\t\t\t\tif (value && typeof value[methodName] === \"function\") {\n+\t\t\t\t\t\tvalue = value[methodName]()\n+\t\t\t\t\t} else {\n+\t\t\t\t\t\treturn match // Return original if method doesn't exist\n+\t\t\t\t\t}\n+\t\t\t\t} else {\n+\t\t\t\t\t// Handle properties\n+\t\t\t\t\tif (value && Object.hasOwn(value, part)) {\n+\t\t\t\t\t\tvalue = value[part]\n+\t\t\t\t\t} else {\n+\t\t\t\t\t\treturn match // Return original if property doesn't exist\n+\t\t\t\t\t}\n+\t\t\t\t}\n+\t\t\t}\n+\n+\t\t\treturn value !== undefined ? String(value) : match\n+\t\t} catch (error) {\n+\t\t\t// If any error occurs during evaluation, return the original placeholder\n+\t\t\treturn match\n+\t\t}\n+\t})\n+}\n+\n+/**\n+ * Gets tool override content with args interpolation.\n+ * Reads the override file and interpolates args data into the content.\n+ *\n+ * @param cwd - The working directory\n+ * @param file - The filename to read from the .roo directory\n+ * @param args - The tool arguments object for interpolation\n+ * @returns The interpolated content or empty string\n+ */\n+export async function readToolOverrideWithArgs(cwd: string, file: string, args: any): Promise<string> {\n+\tconst content = await readToolOverride(cwd, file)\n+\tif (!content) {",
+    "repo_full_name": "RooCodeInc/Roo-Code",
+    "discussion_comments": [
+      {
+        "comment_id": "2174302130",
+        "repo_full_name": "RooCodeInc/Roo-Code",
+        "pr_number": 4388,
+        "pr_file": "src/shared/tools.ts",
+        "discussion_id": "2174302130",
+        "commented_code": "@@ -267,3 +269,85 @@ export interface DiffStrategy {\n \n \tgetProgressStatus?(toolUse: ToolUse, result?: any): ToolProgressStatus\n }\n+\n+/**\n+ * Safely reads a file from the .roo directory with the given filename.\n+ * Returns an empty string if the file doesn't exist or cannot be read.\n+ *\n+ * @param cwd - The working directory\n+ * @param file - The filename to read from the .roo directory\n+ * @returns A promise that resolves to the file content or empty string\n+ */\n+export async function readToolOverride(cwd: string, file: string): Promise<string> {\n+\ttry {\n+\t\tconst filePath = path.join(cwd, \".roo\", \"tools\", `${file}.md`)\n+\t\tconst content = await fs.readFile(filePath, \"utf-8\")\n+\t\treturn content.trim()\n+\t} catch (err) {\n+\t\tconst errorCode = (err as NodeJS.ErrnoException).code\n+\t\tif (!errorCode || ![\"ENOENT\", \"EISDIR\"].includes(errorCode)) {\n+\t\t\tthrow err\n+\t\t}\n+\t\treturn \"\"\n+\t}\n+}\n+\n+/**\n+ * Interpolates args data into a tool description string.\n+ * Replaces placeholders like ${args.cwd} or ${args.cwd.toPosix()} with actual values from the args object.\n+ *\n+ * @param content - The tool description content with placeholders\n+ * @param args - The tool arguments object containing values to interpolate\n+ * @returns The content with interpolated values\n+ */\n+function interpolateToolDescription(content: string, args: any): string {\n+\t// Replace ${args.property.method()} or ${args.property} patterns with actual values\n+\treturn content.replace(/\\$\\{args\\.([^}]+)\\}/g, (match, expression) => {\n+\t\ttry {\n+\t\t\t// Split the expression by dots to handle nested properties and methods\n+\t\t\tconst parts = expression.split(\".\")\n+\t\t\tlet value = args\n+\n+\t\t\tfor (const part of parts) {\n+\t\t\t\tif (part.includes(\"()\")) {\n+\t\t\t\t\t// Handle method calls\n+\t\t\t\t\tconst methodName = part.replace(\"()\", \"\")\n+\t\t\t\t\tif (value && typeof value[methodName] === \"function\") {\n+\t\t\t\t\t\tvalue = value[methodName]()\n+\t\t\t\t\t} else {\n+\t\t\t\t\t\treturn match // Return original if method doesn't exist\n+\t\t\t\t\t}\n+\t\t\t\t} else {\n+\t\t\t\t\t// Handle properties\n+\t\t\t\t\tif (value && Object.hasOwn(value, part)) {\n+\t\t\t\t\t\tvalue = value[part]\n+\t\t\t\t\t} else {\n+\t\t\t\t\t\treturn match // Return original if property doesn't exist\n+\t\t\t\t\t}\n+\t\t\t\t}\n+\t\t\t}\n+\n+\t\t\treturn value !== undefined ? String(value) : match\n+\t\t} catch (error) {\n+\t\t\t// If any error occurs during evaluation, return the original placeholder\n+\t\t\treturn match\n+\t\t}\n+\t})\n+}\n+\n+/**\n+ * Gets tool override content with args interpolation.\n+ * Reads the override file and interpolates args data into the content.\n+ *\n+ * @param cwd - The working directory\n+ * @param file - The filename to read from the .roo directory\n+ * @param args - The tool arguments object for interpolation\n+ * @returns The interpolated content or empty string\n+ */\n+export async function readToolOverrideWithArgs(cwd: string, file: string, args: any): Promise<string> {\n+\tconst content = await readToolOverride(cwd, file)\n+\tif (!content) {",
+        "comment_created_at": "2025-06-30T06:14:53+00:00",
+        "comment_author": "KJ7LNW",
+        "comment_body": "be careful here because `\"\"` could be intentional: what if I have an empty file because I need to blank out the tool's instructions completely? I have run into cases where I really need to remove the instructions for a tool, so an empty file should be valid.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2184163761",
+    "pr_number": 5388,
+    "pr_file": "webview-ui/src/utils/context-mentions.ts",
+    "created_at": "2025-07-04T02:34:56+00:00",
+    "commented_code": "import { escapeSpaces } from \"./path-mentions\"\n \n+/**\n+ * Gets the description for a mode, prioritizing description > whenToUse > roleDefinition\n+ * and taking only the first line\n+ */\n+function getModeDescription(mode: ModeConfig): string {\n+\treturn (mode.description || mode.whenToUse || mode.roleDefinition).split(\"\n\")[0]",
+    "repo_full_name": "RooCodeInc/Roo-Code",
+    "discussion_comments": [
+      {
+        "comment_id": "2184163761",
+        "repo_full_name": "RooCodeInc/Roo-Code",
+        "pr_number": 5388,
+        "pr_file": "webview-ui/src/utils/context-mentions.ts",
+        "discussion_id": "2184163761",
+        "commented_code": "@@ -6,6 +6,14 @@ import { mentionRegex } from \"@roo/context-mentions\"\n \n import { escapeSpaces } from \"./path-mentions\"\n \n+/**\n+ * Gets the description for a mode, prioritizing description > whenToUse > roleDefinition\n+ * and taking only the first line\n+ */\n+function getModeDescription(mode: ModeConfig): string {\n+\treturn (mode.description || mode.whenToUse || mode.roleDefinition).split(\"\\n\")[0]",
+        "comment_created_at": "2025-07-04T02:34:56+00:00",
+        "comment_author": "ellipsis-dev[bot]",
+        "comment_body": "Good extraction of the description logic into a standalone function. Consider adding a fallback (e.g., using '' if none of description, whenToUse, or roleDefinition are defined) to avoid potential runtime errors when calling split on undefined.\n```suggestion\n\treturn (mode.description || mode.whenToUse || mode.roleDefinition || '').split(\"\\n\")[0]\n```\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2125663239",
+    "pr_number": 4314,
+    "pr_file": "webview-ui/src/components/ui/hooks/useSelectedModel.ts",
+    "created_at": "2025-06-04T05:17:02+00:00",
+    "commented_code": "}\n \t\tcase \"ollama\": {\n \t\t\tconst id = apiConfiguration.ollamaModelId ?? \"\"\n-\t\t\tconst info = openAiModelInfoSaneDefaults\n+\t\t\tconst info = routerModels.ollama[id]\n \t\t\treturn { id, info }\n \t\t}\n \t\tcase \"lmstudio\": {\n \t\t\tconst id = apiConfiguration.lmStudioModelId ?? \"\"\n-\t\t\tconst info = openAiModelInfoSaneDefaults\n+\t\t\tconst info = routerModels.lmstudio[id]",
+    "repo_full_name": "RooCodeInc/Roo-Code",
+    "discussion_comments": [
+      {
+        "comment_id": "2125663239",
+        "repo_full_name": "RooCodeInc/Roo-Code",
+        "pr_number": 4314,
+        "pr_file": "webview-ui/src/components/ui/hooks/useSelectedModel.ts",
+        "discussion_id": "2125663239",
+        "commented_code": "@@ -184,12 +184,12 @@\n \t\t}\n \t\tcase \"ollama\": {\n \t\t\tconst id = apiConfiguration.ollamaModelId ?? \"\"\n-\t\t\tconst info = openAiModelInfoSaneDefaults\n+\t\t\tconst info = routerModels.ollama[id]\n \t\t\treturn { id, info }\n \t\t}\n \t\tcase \"lmstudio\": {\n \t\t\tconst id = apiConfiguration.lmStudioModelId ?? \"\"\n-\t\t\tconst info = openAiModelInfoSaneDefaults\n+\t\t\tconst info = routerModels.lmstudio[id]",
+        "comment_created_at": "2025-06-04T05:17:02+00:00",
+        "comment_author": "ellipsis-dev[bot]",
+        "comment_body": "For the `lmstudio` case, consider adding a fallback default for model info if `routerModels.lmstudio[id]` is undefined, to maintain consistency with other provider cases.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2154917479",
+    "pr_number": 4314,
+    "pr_file": "src/api/providers/fetchers/ollama.ts",
+    "created_at": "2025-06-18T15:29:35+00:00",
+    "commented_code": "+import axios from \"axios\"\n+import { ModelInfo, ollamaDefaultModelInfo } from \"@roo-code/types\"\n+import { z } from \"zod\"\n+\n+const OllamaModelDetailsSchema = z.object({\n+\tfamily: z.string(),\n+\tfamilies: z.array(z.string()),\n+\tformat: z.string(),\n+\tparameter_size: z.string(),\n+\tparent_model: z.string(),\n+\tquantization_level: z.string(),\n+})\n+\n+const OllamaModelSchema = z.object({\n+\tdetails: OllamaModelDetailsSchema,\n+\tdigest: z.string(),\n+\tmodel: z.string(),\n+\tmodified_at: z.string(),\n+\tname: z.string(),\n+\tsize: z.number(),\n+})\n+\n+const OllamaModelInfoResponseSchema = z.object({\n+\tmodelfile: z.string(),\n+\tparameters: z.string(),\n+\ttemplate: z.string(),\n+\tdetails: OllamaModelDetailsSchema,\n+\tmodel_info: z.record(z.string(), z.any()),\n+\tcapabilities: z.array(z.string()).optional(),\n+})\n+\n+const OllamaModelsResponseSchema = z.object({\n+\tmodels: z.array(OllamaModelSchema),\n+})\n+\n+type OllamaModelsResponse = z.infer<typeof OllamaModelsResponseSchema>\n+\n+type OllamaModelInfoResponse = z.infer<typeof OllamaModelInfoResponseSchema>\n+\n+export const parseOllamaModel = (rawModel: OllamaModelInfoResponse): ModelInfo => {\n+\tconst contextKey = Object.keys(rawModel.model_info).find((k) => k.includes(\"context_length\"))",
+    "repo_full_name": "RooCodeInc/Roo-Code",
+    "discussion_comments": [
+      {
+        "comment_id": "2154917479",
+        "repo_full_name": "RooCodeInc/Roo-Code",
+        "pr_number": 4314,
+        "pr_file": "src/api/providers/fetchers/ollama.ts",
+        "discussion_id": "2154917479",
+        "commented_code": "@@ -0,0 +1,99 @@\n+import axios from \"axios\"\n+import { ModelInfo, ollamaDefaultModelInfo } from \"@roo-code/types\"\n+import { z } from \"zod\"\n+\n+const OllamaModelDetailsSchema = z.object({\n+\tfamily: z.string(),\n+\tfamilies: z.array(z.string()),\n+\tformat: z.string(),\n+\tparameter_size: z.string(),\n+\tparent_model: z.string(),\n+\tquantization_level: z.string(),\n+})\n+\n+const OllamaModelSchema = z.object({\n+\tdetails: OllamaModelDetailsSchema,\n+\tdigest: z.string(),\n+\tmodel: z.string(),\n+\tmodified_at: z.string(),\n+\tname: z.string(),\n+\tsize: z.number(),\n+})\n+\n+const OllamaModelInfoResponseSchema = z.object({\n+\tmodelfile: z.string(),\n+\tparameters: z.string(),\n+\ttemplate: z.string(),\n+\tdetails: OllamaModelDetailsSchema,\n+\tmodel_info: z.record(z.string(), z.any()),\n+\tcapabilities: z.array(z.string()).optional(),\n+})\n+\n+const OllamaModelsResponseSchema = z.object({\n+\tmodels: z.array(OllamaModelSchema),\n+})\n+\n+type OllamaModelsResponse = z.infer<typeof OllamaModelsResponseSchema>\n+\n+type OllamaModelInfoResponse = z.infer<typeof OllamaModelInfoResponseSchema>\n+\n+export const parseOllamaModel = (rawModel: OllamaModelInfoResponse): ModelInfo => {\n+\tconst contextKey = Object.keys(rawModel.model_info).find((k) => k.includes(\"context_length\"))",
+        "comment_created_at": "2025-06-18T15:29:35+00:00",
+        "comment_author": "hannesrudolph",
+        "comment_body": "For better type safety, consider defining a more specific type for the model_info keys that contain context length. Something like:\n\n```typescript\ntype OllamaModelInfo = {\n  \"ollama.context_length\"?: number;\n  \"qwen3.context_length\"?: number;\n  // ... other known keys\n  [key: string]: any;\n}\n```\n\nOr at least add a type guard to ensure the value is a number before using it:\n\n```typescript\nconst contextWindow = contextKey && typeof rawModel.model_info[contextKey] === 'number' \n  ? rawModel.model_info[contextKey] \n  : undefined;\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2156957730",
+        "repo_full_name": "RooCodeInc/Roo-Code",
+        "pr_number": 4314,
+        "pr_file": "src/api/providers/fetchers/ollama.ts",
+        "discussion_id": "2154917479",
+        "commented_code": "@@ -0,0 +1,99 @@\n+import axios from \"axios\"\n+import { ModelInfo, ollamaDefaultModelInfo } from \"@roo-code/types\"\n+import { z } from \"zod\"\n+\n+const OllamaModelDetailsSchema = z.object({\n+\tfamily: z.string(),\n+\tfamilies: z.array(z.string()),\n+\tformat: z.string(),\n+\tparameter_size: z.string(),\n+\tparent_model: z.string(),\n+\tquantization_level: z.string(),\n+})\n+\n+const OllamaModelSchema = z.object({\n+\tdetails: OllamaModelDetailsSchema,\n+\tdigest: z.string(),\n+\tmodel: z.string(),\n+\tmodified_at: z.string(),\n+\tname: z.string(),\n+\tsize: z.number(),\n+})\n+\n+const OllamaModelInfoResponseSchema = z.object({\n+\tmodelfile: z.string(),\n+\tparameters: z.string(),\n+\ttemplate: z.string(),\n+\tdetails: OllamaModelDetailsSchema,\n+\tmodel_info: z.record(z.string(), z.any()),\n+\tcapabilities: z.array(z.string()).optional(),\n+})\n+\n+const OllamaModelsResponseSchema = z.object({\n+\tmodels: z.array(OllamaModelSchema),\n+})\n+\n+type OllamaModelsResponse = z.infer<typeof OllamaModelsResponseSchema>\n+\n+type OllamaModelInfoResponse = z.infer<typeof OllamaModelInfoResponseSchema>\n+\n+export const parseOllamaModel = (rawModel: OllamaModelInfoResponse): ModelInfo => {\n+\tconst contextKey = Object.keys(rawModel.model_info).find((k) => k.includes(\"context_length\"))",
+        "comment_created_at": "2025-06-19T12:52:01+00:00",
+        "comment_author": "thecolorblue",
+        "comment_body": "I am going to add the type guard for now. I am not sure how many unique keys for context length there are. I think the format is `{model family}.context_length` but I am not sure. I would not want to hard code a list of model families. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2150556608",
+    "pr_number": 4748,
+    "pr_file": "src/api/providers/bedrock.ts",
+    "created_at": "2025-06-16T18:00:01+00:00",
+    "commented_code": "// Clear timeout on error\n \t\t\tclearTimeout(timeoutId)\n \n-\t\t\t// Use the extracted error handling method for all errors\n+\t\t\t// Check if this is a throttling error that should trigger retry logic\n+\t\t\tconst errorType = this.getErrorType(error)\n+\n+\t\t\t// For throttling errors, throw immediately without yielding chunks\n+\t\t\t// This allows the retry mechanism in attemptApiRequest() to catch and handle it\n+\t\t\tif (errorType === \"THROTTLING\") {\n+\t\t\t\tif (error instanceof Error) {\n+\t\t\t\t\tthrow error\n+\t\t\t\t} else {\n+\t\t\t\t\tthrow new Error(\"Throttling error occurred\")\n+\t\t\t\t}\n+\t\t\t}\n+\n+\t\t\t// For non-throttling errors, use the standard error handling with chunks\n \t\t\tconst errorChunks = this.handleBedrockError(error, true) // true for streaming context\n \t\t\t// Yield each chunk individually to ensure type compatibility\n \t\t\tfor (const chunk of errorChunks) {\n \t\t\t\tyield chunk as any // Cast to any to bypass type checking since we know the structure is correct\n \t\t\t}\n \n-\t\t\t// Re-throw the error\n+\t\t\t// Re-throw with enhanced error message so retry system shows verbose details\n+\t\t\tconst enhancedErrorMessage = this.formatErrorMessage(error, this.getErrorType(error), true)\n \t\t\tif (error instanceof Error) {\n-\t\t\t\tthrow error\n+\t\t\t\tconst enhancedError = new Error(enhancedErrorMessage)\n+\t\t\t\t// Preserve important properties from the original error\n+\t\t\t\tenhancedError.name = error.name\n+\t\t\t\tif ((error as any).status) {\n+\t\t\t\t\t;(enhancedError as any).status = (error as any).status\n+\t\t\t\t}\n+\t\t\t\tif ((error as any).$metadata) {\n+\t\t\t\t\t;(enhancedError as any).$metadata = (error as any).$metadata",
+    "repo_full_name": "RooCodeInc/Roo-Code",
+    "discussion_comments": [
+      {
+        "comment_id": "2150556608",
+        "repo_full_name": "RooCodeInc/Roo-Code",
+        "pr_number": 4748,
+        "pr_file": "src/api/providers/bedrock.ts",
+        "discussion_id": "2150556608",
+        "commented_code": "@@ -561,16 +561,39 @@ export class AwsBedrockHandler extends BaseProvider implements SingleCompletionH\n \t\t\t// Clear timeout on error\n \t\t\tclearTimeout(timeoutId)\n \n-\t\t\t// Use the extracted error handling method for all errors\n+\t\t\t// Check if this is a throttling error that should trigger retry logic\n+\t\t\tconst errorType = this.getErrorType(error)\n+\n+\t\t\t// For throttling errors, throw immediately without yielding chunks\n+\t\t\t// This allows the retry mechanism in attemptApiRequest() to catch and handle it\n+\t\t\tif (errorType === \"THROTTLING\") {\n+\t\t\t\tif (error instanceof Error) {\n+\t\t\t\t\tthrow error\n+\t\t\t\t} else {\n+\t\t\t\t\tthrow new Error(\"Throttling error occurred\")\n+\t\t\t\t}\n+\t\t\t}\n+\n+\t\t\t// For non-throttling errors, use the standard error handling with chunks\n \t\t\tconst errorChunks = this.handleBedrockError(error, true) // true for streaming context\n \t\t\t// Yield each chunk individually to ensure type compatibility\n \t\t\tfor (const chunk of errorChunks) {\n \t\t\t\tyield chunk as any // Cast to any to bypass type checking since we know the structure is correct\n \t\t\t}\n \n-\t\t\t// Re-throw the error\n+\t\t\t// Re-throw with enhanced error message so retry system shows verbose details\n+\t\t\tconst enhancedErrorMessage = this.formatErrorMessage(error, this.getErrorType(error), true)\n \t\t\tif (error instanceof Error) {\n-\t\t\t\tthrow error\n+\t\t\t\tconst enhancedError = new Error(enhancedErrorMessage)\n+\t\t\t\t// Preserve important properties from the original error\n+\t\t\t\tenhancedError.name = error.name\n+\t\t\t\tif ((error as any).status) {\n+\t\t\t\t\t;(enhancedError as any).status = (error as any).status\n+\t\t\t\t}\n+\t\t\t\tif ((error as any).$metadata) {\n+\t\t\t\t\t;(enhancedError as any).$metadata = (error as any).$metadata",
+        "comment_created_at": "2025-06-16T18:00:01+00:00",
+        "comment_author": "hannesrudolph",
+        "comment_body": "The code preserves error properties without validating if they exist on all error types. While this provides flexibility, should we add type guards or validation to ensure we're only accessing properties that actually exist?\n\nFor example:\n```typescript\nif ('status' in error && typeof error.status === 'number') {\n  (enhancedError as any).status = error.status\n}\n```\n\nThis would make the code more robust against unexpected error shapes.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

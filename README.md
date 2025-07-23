@@ -18,7 +18,7 @@
 
 <div align="center">
 
-📝 **1K+** Reviewers &nbsp;&nbsp;•&nbsp;&nbsp; 💬 **Thousands** of Discussions &nbsp;&nbsp;•&nbsp;&nbsp; ⭐ Popular OSS repositories &nbsp;&nbsp;•&nbsp;&nbsp; 🚀 **15+** Languages
+📝 **1K+** Reviewers &nbsp;&nbsp;•&nbsp;&nbsp; ⭐ Popular OSS repositories &nbsp;&nbsp;•&nbsp;&nbsp; 🚀 **15+** Languages
 
 </div>
 

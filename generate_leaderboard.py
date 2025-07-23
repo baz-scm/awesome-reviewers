@@ -20,11 +20,11 @@ def parse_front_matter(md_path):
 
 def main():
     reviewers_dir = Path('_reviewers')
-    users = defaultdict(lambda: {'reviewers': set(), 'repos': set(), 'categories': set(), 'last': None})
+    users = defaultdict(lambda: {'reviewers': set(), 'repos': set(), 'last': None})
     for json_path in reviewers_dir.glob('*.json'):
         slug = json_path.stem
         meta = parse_front_matter(reviewers_dir / f'{slug}.md')
-        label = meta.get('label')
+        # category label not used in leaderboard
         with open(json_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         for item in data:
@@ -38,8 +38,6 @@ def main():
                 info['reviewers'].add(slug)
                 if repo:
                     info['repos'].add(repo)
-                if label:
-                    info['categories'].add(label)
                 dt = datetime.fromisoformat(ts.replace('Z','+00:00'))
                 if info['last'] is None or dt > info['last']:
                     info['last'] = dt
@@ -50,8 +48,7 @@ def main():
             'name': user,
             'reviewers_count': len(d['reviewers']),
             'repos_count': len(d['repos']),
-            'last_contribution': d['last'].isoformat() if d['last'] else None,
-            'categories': sorted(d['categories'])
+            'last_contribution': d['last'].isoformat() if d['last'] else None
         })
     output.sort(key=lambda x: x['reviewers_count'], reverse=True)
     # Keep only the top 100 contributors to keep the dataset small

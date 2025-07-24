@@ -78,7 +78,7 @@ def main():
         contributors[user] = {
             'repos': sorted(d['repos']),
             'entries': entries,
-            'comments': d['comments']
+            'comments': {k: v for k, v in d['comments'].items()}
         }
 
     data_dir = Path('_data')

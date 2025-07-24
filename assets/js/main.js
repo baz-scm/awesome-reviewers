@@ -101,3 +101,15 @@ form && form.addEventListener('submit', async e => {
     submitBtn.textContent = originalButtonText;
   }
 });
+
+// Mobile header menu toggle
+const menuToggle = document.querySelector('.menu-toggle');
+const headerEl = document.querySelector('.header');
+if (menuToggle && headerEl) {
+  menuToggle.addEventListener('click', () => {
+    headerEl.classList.toggle('open');
+    const open = headerEl.classList.contains('open');
+    menuToggle.querySelector('.hamburger-icon').style.display = open ? 'none' : 'block';
+    menuToggle.querySelector('.close-icon').style.display = open ? 'block' : 'none';
+  });
+}

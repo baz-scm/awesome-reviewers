@@ -1,0 +1,460 @@
+[
+  {
+    "discussion_id": "2201476300",
+    "pr_number": 130160,
+    "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/pools.go",
+    "created_at": "2025-07-11T18:14:35+00:00",
+    "commented_code": "}\n \n+\tif len(needBindingSlices) > 0 {",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "2201476300",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 130160,
+        "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/pools.go",
+        "discussion_id": "2201476300",
+        "commented_code": "@@ -107,13 +148,39 @@ func GatherPools(ctx context.Context, slices []*resourceapi.ResourceSlice, node\n \n \t}\n \n+\tif len(needBindingSlices) > 0 {",
+        "comment_created_at": "2025-07-11T18:14:35+00:00",
+        "comment_author": "mortent",
+        "comment_body": "From what I understand, the logic here puts devices that uses binding conditions last in the device list for each ResourceSlice and then puts the ResourceSlices with devices with binding conditions last in each pool, and finally puts those pools last for the allocator search.\r\n\r\nWhat is the goal here? This makes it less likely that a device with conditions are selected, but the allocator can still end up choosing a device with conditions even though a device without them are available.\r\n\r\nI'm a bit uncertain about changing the order of the devices in a ResourceSlice. Since the allocator does a first fit search, the order can be important. For example, a request for a GPU with at least 1Gi of memory will select one with 40Gi available if it is listed first in the ResourceSlice, even though that might be a poor fit. Giving the ResourceSlice author control of the order makes makes it a bit easier to avoid poor allocation choices, although scoring is obviously the real solution here. Maybe not a big issue since this only happens for devices with binding conditions, which is also controlled by the ResourceSlice author.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2203963025",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 130160,
+        "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/pools.go",
+        "discussion_id": "2201476300",
+        "commented_code": "@@ -107,13 +148,39 @@ func GatherPools(ctx context.Context, slices []*resourceapi.ResourceSlice, node\n \n \t}\n \n+\tif len(needBindingSlices) > 0 {",
+        "comment_created_at": "2025-07-14T06:38:25+00:00",
+        "comment_author": "KobayashiD27",
+        "comment_body": "> From what I understand, the logic here puts devices that uses binding conditions last in the device list for each ResourceSlice and then puts the ResourceSlices with devices with binding conditions last in each pool, and finally puts those pools last for the allocator search.\r\n> \r\n\r\nYes, you are right.\r\n\r\n> What is the goal here? This makes it less likely that a device with conditions are selected, but the allocator can still end up choosing a device with conditions even though a device without them are available.\r\n> \r\n> I'm a bit uncertain about changing the order of the devices in a ResourceSlice. Since the allocator does a first fit search, the order can be important. For example, a request for a GPU with at least 1Gi of memory will select one with 40Gi available if it is listed first in the ResourceSlice, even though that might be a poor fit. Giving the ResourceSlice author control of the order makes makes it a bit easier to avoid poor allocation choices, although scoring is obviously the real solution here. Maybe not a big issue since this only happens for devices with binding conditions, which is also controlled by the ResourceSlice author.\r\n\r\nThe goal of this change is to prioritize devices **without** `BindingConditions` during allocation. By adjusting the search order, we aim to reduce the likelihood of selecting devices with conditions when other suitable options are available.\r\n\r\nOriginally, the implementation only changed the order of `ResourceSlices` within a pool. Based on this [discussion](https://github.com/kubernetes/kubernetes/pull/130160#discussion_r2101956530), I added logic to also reorder devices within a `ResourceSlice`.\r\n\r\nHowever, I\u2019ve realized that the discussion around whether device reordering is appropriate hasn\u2019t been fully settled. If there are concerns about changing the order of devices, one alternative could be to revert that part of the logic and instead document that `ResourceSlices` containing devices with `BindingConditions` are less likely to be selected by the allocator.\r\n\r\n\r\n@pohly \r\nAny thoughts on sorting the devices?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2204305429",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 130160,
+        "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/pools.go",
+        "discussion_id": "2201476300",
+        "commented_code": "@@ -107,13 +148,39 @@ func GatherPools(ctx context.Context, slices []*resourceapi.ResourceSlice, node\n \n \t}\n \n+\tif len(needBindingSlices) > 0 {",
+        "comment_created_at": "2025-07-14T09:07:31+00:00",
+        "comment_author": "pohly",
+        "comment_body": "What we really want is \"order all devices in the pool\" according to the triplet `binding conditions yes/no, name of slice, index within slice`.\r\n\r\nThe \"name of the slice\" is just there to ensure that we don't compare device indices from different slices, which would be meaningless. The name is random, so driver's cannot rely on that to prefer some devices over others.\r\n\r\nIf a driver does not use binding conditions, then this is equivalent to the current \"look at random slices, iterate over devices in them in the order chosen by the DRA driver\".\r\n\r\nIf a driver uses binding conditions, then it can publish some devices with binding conditions in one slice and others without binding conditions in another and it will work as intended. The sorting in the allocator wouldn't be necessary if all devices were in the same slice, but we cannot assume that.\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2204315270",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 130160,
+        "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/pools.go",
+        "discussion_id": "2201476300",
+        "commented_code": "@@ -107,13 +148,39 @@ func GatherPools(ctx context.Context, slices []*resourceapi.ResourceSlice, node\n \n \t}\n \n+\tif len(needBindingSlices) > 0 {",
+        "comment_created_at": "2025-07-14T09:12:29+00:00",
+        "comment_author": "pohly",
+        "comment_body": "Maintaining such a list is a change of how the allocator currently iterates over devices and also adds overhead. So as a less intrusive change, sorting slices based on \"some device uses binding conditions\" and not sorting within the slice should be sufficient.\r\n\r\nIt's just an approximation, but DRA driver authors can make it work for them by not mixing devices with and without binding conditions in the same slice and if they need to do that, use only a single slice with devices using binding conditions come last.\r\n\r\nI had violated that constraint in https://github.com/kubernetes/kubernetes/pull/130160#discussion_r2101956530 and didn't get the expected outcome. But if we clearly document this for driver authors, they can avoid such a mistake, so I am fine with the original implementation.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2205302696",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 130160,
+        "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/pools.go",
+        "discussion_id": "2201476300",
+        "commented_code": "@@ -107,13 +148,39 @@ func GatherPools(ctx context.Context, slices []*resourceapi.ResourceSlice, node\n \n \t}\n \n+\tif len(needBindingSlices) > 0 {",
+        "comment_created_at": "2025-07-14T16:10:34+00:00",
+        "comment_author": "mortent",
+        "comment_body": "So my understanding is that the original implementation just ordered ResourceSlices based on whether they had devices with BindingConditions in them. Agree that it should be sufficient since users can control how devices are split across ResourceSlices (with some caveats around Partitionable Devices) and they control the order of devices within each ResourceSlice.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2206144638",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 130160,
+        "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/pools.go",
+        "discussion_id": "2201476300",
+        "commented_code": "@@ -107,13 +148,39 @@ func GatherPools(ctx context.Context, slices []*resourceapi.ResourceSlice, node\n \n \t}\n \n+\tif len(needBindingSlices) > 0 {",
+        "comment_created_at": "2025-07-15T02:24:26+00:00",
+        "comment_author": "KobayashiD27",
+        "comment_body": "Thank you. So, I will update the implementation to simply changing the order of ResourceSlice depending on whether BindingConditions are set or not.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2206536024",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 130160,
+        "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/pools.go",
+        "discussion_id": "2201476300",
+        "commented_code": "@@ -107,13 +148,39 @@ func GatherPools(ctx context.Context, slices []*resourceapi.ResourceSlice, node\n \n \t}\n \n+\tif len(needBindingSlices) > 0 {",
+        "comment_created_at": "2025-07-15T06:37:15+00:00",
+        "comment_author": "KobayashiD27",
+        "comment_body": "I removed the process of changing the order of devices and updated the implementation accordingly.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2218699195",
+    "pr_number": 130160,
+    "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/internal/incubating/allocator_incubating.go",
+    "created_at": "2025-07-21T09:57:02+00:00",
+    "commented_code": "Device:      internal.id.Device.String(),\n \t\t\t\tAdminAccess: internal.adminAccess,\n \t\t\t}\n+\n+\t\t\t// If deviceBindingConditions are enabled, we need to populate the AllocatedDeviceStatus.\n+\t\t\tif a.features.DeviceBinding {\n+\t\t\t\tfor _, device := range internal.slice.Spec.Devices {\n+\t\t\t\t\tif device.Name == internal.id.Device && len(device.Basic.BindingConditions) > 0 {\n+\t\t\t\t\t\tallocationResult.Devices.Results[i].BindingConditions = device.Basic.BindingConditions\n+\t\t\t\t\t\tallocationResult.Devices.Results[i].BindingFailureConditions = device.Basic.BindingFailureConditions\n+\t\t\t\t\t\tallocationResult.Devices.Results[i].BindingTimeoutSeconds = device.Basic.BindingTimeoutSeconds\n+\t\t\t\t\t}\n+\t\t\t\t}",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "2218699195",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 130160,
+        "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/internal/incubating/allocator_incubating.go",
+        "discussion_id": "2218699195",
+        "commented_code": "@@ -293,6 +294,17 @@ func (a *Allocator) Allocate(ctx context.Context, node *v1.Node, claims []*resou\n \t\t\t\tDevice:      internal.id.Device.String(),\n \t\t\t\tAdminAccess: internal.adminAccess,\n \t\t\t}\n+\n+\t\t\t// If deviceBindingConditions are enabled, we need to populate the AllocatedDeviceStatus.\n+\t\t\tif a.features.DeviceBinding {\n+\t\t\t\tfor _, device := range internal.slice.Spec.Devices {\n+\t\t\t\t\tif device.Name == internal.id.Device && len(device.Basic.BindingConditions) > 0 {\n+\t\t\t\t\t\tallocationResult.Devices.Results[i].BindingConditions = device.Basic.BindingConditions\n+\t\t\t\t\t\tallocationResult.Devices.Results[i].BindingFailureConditions = device.Basic.BindingFailureConditions\n+\t\t\t\t\t\tallocationResult.Devices.Results[i].BindingTimeoutSeconds = device.Basic.BindingTimeoutSeconds\n+\t\t\t\t\t}\n+\t\t\t\t}",
+        "comment_created_at": "2025-07-21T09:57:02+00:00",
+        "comment_author": "pohly",
+        "comment_body": "```suggestion\r\n\t\t\t\t\tif device.Name == internal.id.Device {\r\n\t\t\t\t\t\tallocationResult.Devices.Results[i].BindingConditions = device.Basic.BindingConditions\r\n\t\t\t\t\t\tallocationResult.Devices.Results[i].BindingFailureConditions = device.Basic.BindingFailureConditions\r\n\t\t\t\t\t\tallocationResult.Devices.Results[i].BindingTimeoutSeconds = device.Basic.BindingTimeoutSeconds\r\n\t\t\t\t\t\tbreak\r\n\t\t\t\t\t}\r\n\t\t\t\t}\r\n```\r\n\r\nOnce we have the device, we don't need to keep searching, do we?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2226621470",
+    "pr_number": 130160,
+    "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/internal/incubating/allocator_incubating.go",
+    "created_at": "2025-07-23T20:36:11+00:00",
+    "commented_code": "}},\n \t\t\t}, nil\n \t\t}\n+\t\tfor _, device := range slice.Spec.Devices {",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "2226621470",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 130160,
+        "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/internal/incubating/allocator_incubating.go",
+        "discussion_id": "2226621470",
+        "commented_code": "@@ -1343,6 +1365,19 @@ func (alloc *allocator) createNodeSelector(result []internalDeviceResult) (*v1.N\n \t\t\t\t}},\n \t\t\t}, nil\n \t\t}\n+\t\tfor _, device := range slice.Spec.Devices {",
+        "comment_created_at": "2025-07-23T20:36:11+00:00",
+        "comment_author": "liggitt",
+        "comment_body": "is it correct that this is looking at _all_ the devices in the slice, not just the one(s) that were allocated to this claim?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2227068393",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 130160,
+        "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/internal/incubating/allocator_incubating.go",
+        "discussion_id": "2226621470",
+        "commented_code": "@@ -1343,6 +1365,19 @@ func (alloc *allocator) createNodeSelector(result []internalDeviceResult) (*v1.N\n \t\t\t\t}},\n \t\t\t}, nil\n \t\t}\n+\t\tfor _, device := range slice.Spec.Devices {",
+        "comment_created_at": "2025-07-24T01:15:01+00:00",
+        "comment_author": "KobayashiD27",
+        "comment_body": "We are looking for devices that have been allocated to a claim among all devices in the slice.\r\nHowever, it looks like need to narrow it down using `result[i].id`. I will update it.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2227815451",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 130160,
+        "pr_file": "staging/src/k8s.io/dynamic-resource-allocation/structured/internal/incubating/allocator_incubating.go",
+        "discussion_id": "2226621470",
+        "commented_code": "@@ -1343,6 +1365,19 @@ func (alloc *allocator) createNodeSelector(result []internalDeviceResult) (*v1.N\n \t\t\t\t}},\n \t\t\t}, nil\n \t\t}\n+\t\tfor _, device := range slice.Spec.Devices {",
+        "comment_created_at": "2025-07-24T08:23:52+00:00",
+        "comment_author": "KobayashiD27",
+        "comment_body": "I have updated.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2042661371",
+    "pr_number": 129719,
+    "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+    "created_at": "2025-04-14T18:10:25+00:00",
+    "commented_code": "return nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "2042661371",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-04-14T18:10:25+00:00",
+        "comment_author": "pravk03",
+        "comment_body": "How do we handle cases where the original CPU request n is assigned to a NUMA Node (say Node 0), and the scaled up request n+m cannot be fit on Node 0. The preferred hint now is Node 1, but during Allocate() we try and retain the originally assigned CPU's which is on Node 0 ? . Is there any possibility of not respecting the Topology manager policy (like single-numa-node) during resizing. \r\n\r\nI think the existing NUMA alignment should also be considered (and not just cpu count) while generating hints during scaling. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2043747802",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-04-15T06:41:43+00:00",
+        "comment_author": "esotsal",
+        "comment_body": "Thanks   Good point , I think here is where the promised and ExclusiveCPUs takes action, or at least that was the plan, since promised CPUs will be in Node 0 and they must be kept resize will fail, i believe. Will double check and comeback.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2071686539",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-05-02T14:19:58+00:00",
+        "comment_author": "esotsal",
+        "comment_body": "> I think the existing NUMA alignment should also be considered (and not just cpu count) while generating hints during scaling.\r\n\r\nI think this is taken care in line 473 with current commit, is this what you meant ?\r\n\r\nhttps://github.com/kubernetes/kubernetes/blob/445bd48bfab041e81158908dcfedacbf8719e65a/pkg/kubelet/cm/cpumanager/policy_static.go#L461-L477\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2076112245",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-05-06T19:23:27+00:00",
+        "comment_author": "pravk03",
+        "comment_body": "I am still not sure if this is handled. \r\nDo we throw an error is mustKeepCPUsForResize is not used during Allocation() ?. mustKeepCPUsForResize might not align with the new NUMA hint we generate here. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2117744359",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-05-31T11:52:52+00:00",
+        "comment_author": "esotsal",
+        "comment_body": "Done, PTAL\r\n\r\nhttps://github.com/kubernetes/kubernetes/blob/09b2d95e3f66633f546d4b50da9b6f0f9c0c487e/pkg/kubelet/cm/cpumanager/policy_static.go#L674-L692\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2158084870",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-06-20T05:32:35+00:00",
+        "comment_author": "pravk03",
+        "comment_body": "Thank you @esotsal. Had a couple of questions. \r\n\r\n1. Would it be ok if the new hint (during resize) does not include NUMA nodes in the current hint (before resize).  \r\n2. The function generateCPUTopologyHints() marks the smallest affinity hints as preferred, but that might not work during resize?. Would it be better to prefer a hint which has maximum overlap with the current hint so that the new cpu's are closer to the promised cpu's.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2158127456",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-06-20T06:11:14+00:00",
+        "comment_author": "Chunxia202410",
+        "comment_body": "Hi @pravk03 and @esotsal, A [PR](https://github.com/esotsal/kubernetes/pull/10) I create before consider this problem in this [commit](https://github.com/esotsal/kubernetes/pull/10/commits/7c4a58820abbb88be7ea4db0627147d9ae1fa288), it is try to generate a NUMA nodes hint near the current hint (before resize).\r\nWhat your opinion about this PR?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2158137602",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-06-20T06:19:43+00:00",
+        "comment_author": "ffromani",
+        "comment_body": "Apologies for the question which I probably asked already but I don't remember the answer. The hint extension logic and the allocation and alignment after resize are nontrivial topics with quite some implications. Is their design discussed in some KEP or design doc? It should be documented with some form of design and not just by the PR and its comments. I'm worried about all the future bugs and corner cases which can arise, which will be 10x harder to fix without a design document.\r\nIf it's already part of a KEP great! just please make sure it is clearly linked in the PR description.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2158164674",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-06-20T06:37:00+00:00",
+        "comment_author": "pravk03",
+        "comment_body": "@ffromani  Yes, the intention is to cover this in the KEP as @esotsal suggested [here](https://github.com/kubernetes/kubernetes/pull/129719#issuecomment-2975198433). My previous comment was out of curiosity regarding the recent changes in the PR. Apologies for any confusion.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2158176529",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-06-20T06:42:36+00:00",
+        "comment_author": "ffromani",
+        "comment_body": "@pravk03 no worries at all, just asking. If the design is discussed and recorded, that's fine. By all means this is a good conversation so please keep going.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2168543310",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-06-26T08:48:06+00:00",
+        "comment_author": "Chunxia202410",
+        "comment_body": "> Hi @pravk03 and @esotsal, A [PR](https://github.com/esotsal/kubernetes/pull/10) I create before consider this problem in this [commit](https://github.com/esotsal/kubernetes/pull/10/commits/7c4a58820abbb88be7ea4db0627147d9ae1fa288), it is try to generate a NUMA nodes hint near the current hint (before resize). What your opinion about this PR?\r\n\r\nHi @esotsal, Do you intend to add topology hint to your PR? It seems the [draft design doc](https://docs.google.com/document/d/19-yzI41L6_XRj6l_27ylWSc114fzgP301FhxCPf0Dbg/edit?tab=t.0) do not have the related content yet.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2171161226",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-06-27T08:12:30+00:00",
+        "comment_author": "esotsal",
+        "comment_body": "Draft design doc is not ready for review, I will ping you all, when KEP is ready for review. Apologies for the delay, finalizing some parts as we speak, i have now secured more bandwidth to work full speed on this task, the next 2-3 weeks.\r\n\r\nPlan is this PR to implement, most or all parts with regard CPU aspects, of the final reviewed , merged KEP by the Kubernetes community and sig-node, aiming for v1.35.\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2172287949",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-06-27T15:28:31+00:00",
+        "comment_author": "esotsal",
+        "comment_body": "> * Would it be ok if the new hint (during resize) does not include NUMA nodes in the current hint (before resize).\r\n\r\nI think since we have decided to introduce \"promised\" concept, it depends on topology manager policy used. \r\n\r\n> * The function generateCPUTopologyHints() marks the smallest affinity hints as preferred, but that might not work during resize?. Would it be better to prefer a hint which has maximum overlap with the current hint so that the new cpu's are closer to the promised cpu's.\r\n\r\nWorth investigating, i suspect \"best\" would be \"subjective\" depending on the options. Noted !",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2172290496",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-06-27T15:30:05+00:00",
+        "comment_author": "esotsal",
+        "comment_body": "> Hi @esotsal, Do you intend to add topology hint to your PR? It seems the [draft design doc](https://docs.google.com/document/d/19-yzI41L6_XRj6l_27ylWSc114fzgP301FhxCPf0Dbg/edit?tab=t.0) do not have the related content yet.\r\n\r\nHi sorry for late response. Answer is yes, intention is to consider all topology manager policies for all hint providers. Thanks for the PR, i will take a look as soon as i have updated the KEP draft and send for review in community.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2172301638",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-06-27T15:37:01+00:00",
+        "comment_author": "esotsal",
+        "comment_body": "> I'm worried about all the future bugs and corner cases which can arise, which will be 10x harder to fix without a design document.\r\n\r\nAbsolutely, plan is to utilize [Topology Manager existing design](https://kubernetes.io/docs/tasks/administer-cluster/topology-manager/#how-topology-manager-works) being the single source of truth. It took me a while to understand Topology Manager internals in the code and how brilliant topology manager design is ( respect to the creators ) , beautifully and future proof splitting the concerns in an elegant way.  I am less worried now , i will be 10x less worried when the KEP is finalized, i agree with you  :-) ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2178509747",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-07-01T21:02:03+00:00",
+        "comment_author": "pravk03",
+        "comment_body": "> Hi @pravk03 and @esotsal, A https://github.com/esotsal/kubernetes/pull/10 I create before consider this problem in this [commit](https://github.com/esotsal/kubernetes/pull/10/commits/7c4a58820abbb88be7ea4db0627147d9ae1fa288), it is try to generate a NUMA nodes hint near the current hint (before resize).\r\nWhat your opinion about this PR?\r\n\r\nHi @Chunxia202410, Thank you for sharing this. I spent some time trying to understand this PR and other relevant code. I agree with the logic here for prioritizing existing allocations during resize. We may still need to think about how an affinity mask is marked as \"preferred\", which we can address in the design document.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2178852755",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2042661371",
+        "commented_code": "@@ -557,23 +723,25 @@ func (p *staticPolicy) GetTopologyHints(s state.State, pod *v1.Pod, container *v\n \t\treturn nil\n \t}\n \n-\t// Short circuit to regenerate the same hints if there are already\n-\t// guaranteed CPUs allocated to the Container. This might happen after a\n-\t// kubelet restart, for example.\n-\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n-\t\tif allocated.Size() != requested {\n-\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n-\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n-\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n-\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\tif !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScalingExclusiveCPUs) || !utilfeature.DefaultFeatureGate.Enabled(features.InPlacePodVerticalScaling) {\n+\t\t// Short circuit to regenerate the same hints if there are already\n+\t\t// guaranteed CPUs allocated to the Container. This might happen after a\n+\t\t// kubelet restart, for example.\n+\t\tif allocated, exists := s.GetCPUSet(string(pod.UID), container.Name); exists {\n+\t\t\tif allocated.Size() != requested {\n+\t\t\t\tklog.InfoS(\"CPUs already allocated to container with different number than request\", \"pod\", klog.KObj(pod), \"containerName\", container.Name, \"requestedSize\", requested, \"allocatedSize\", allocated.Size())\n+\t\t\t\t// An empty list of hints will be treated as a preference that cannot be satisfied.\n+\t\t\t\t// In definition of hints this is equal to: TopologyHint[NUMANodeAffinity: nil, Preferred: false].\n+\t\t\t\t// For all but the best-effort policy, the Topology Manager will throw a pod-admission error.\n+\t\t\t\treturn map[string][]topologymanager.TopologyHint{\n+\t\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n \t\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\t\tstring(v1.ResourceCPU): {},\n+\t\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n \t\t\t}\n \t\t}\n-\t\tklog.InfoS(\"Regenerating TopologyHints for CPUs already allocated\", \"pod\", klog.KObj(pod), \"containerName\", container.Name)\n-\t\treturn map[string][]topologymanager.TopologyHint{\n-\t\t\tstring(v1.ResourceCPU): p.generateCPUTopologyHints(allocated, cpuset.CPUSet{}, requested),\n-\t\t}\n \t}",
+        "comment_created_at": "2025-07-02T02:17:38+00:00",
+        "comment_author": "Chunxia202410",
+        "comment_body": "> Hi @Chunxia202410, Thank you for sharing this. I spent some time trying to understand this PR and other relevant code. I agree with the logic here for prioritizing existing allocations during resize. We may still need to think about how an affinity mask is marked as \"preferred\", which we can address in the design document.\r\n\r\nThank you for taking time to review and give encouraging feedback. I agree that we should marked \"preferred\" topology hints properly, I will do more research for this, so that we can have more candidates to get the best solution, thank you~\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2076096582",
+    "pr_number": 129719,
+    "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+    "created_at": "2025-05-06T19:12:25+00:00",
+    "commented_code": "return nil\n }\n \n-func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet) (topology.Allocation, error) {\n+func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet, reusableCPUsForResize *cpuset.CPUSet, mustKeepCPUsForResize *cpuset.CPUSet) (topology.Allocation, error) {\n \tklog.InfoS(\"AllocateCPUs\", \"numCPUs\", numCPUs, \"socket\", numaAffinity)\n-\n-\tallocatableCPUs := p.GetAvailableCPUs(s).Union(reusableCPUs)\n+\tallocatableCPUs := cpuset.New()",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "2076096582",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2076096582",
+        "commented_code": "@@ -423,10 +539,18 @@ func (p *staticPolicy) RemoveContainer(s state.State, podUID string, containerNa\n \treturn nil\n }\n \n-func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet) (topology.Allocation, error) {\n+func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet, reusableCPUsForResize *cpuset.CPUSet, mustKeepCPUsForResize *cpuset.CPUSet) (topology.Allocation, error) {\n \tklog.InfoS(\"AllocateCPUs\", \"numCPUs\", numCPUs, \"socket\", numaAffinity)\n-\n-\tallocatableCPUs := p.GetAvailableCPUs(s).Union(reusableCPUs)\n+\tallocatableCPUs := cpuset.New()",
+        "comment_created_at": "2025-05-06T19:12:25+00:00",
+        "comment_author": "pravk03",
+        "comment_body": "Maybe worth exploring an alternate approach here. \r\n\r\nInstead of combining everything (reusableCPUsForResize, available cpus) into allocatableCPUs and then attempting allocation, we can have a more tiered approach. \r\n\r\n1.  Attempt allocation from mustKeepCPUsForResize. \r\n2. Remaining is allocated from  reusableCPUsForResize.\r\n3. Remaining from NUMA aligned CPUs\r\n4. Remaining from other NUMA nodes\r\n\r\nWith this approach, takeByTopology() function does not have to change ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104842315",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2076096582",
+        "commented_code": "@@ -423,10 +539,18 @@ func (p *staticPolicy) RemoveContainer(s state.State, podUID string, containerNa\n \treturn nil\n }\n \n-func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet) (topology.Allocation, error) {\n+func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet, reusableCPUsForResize *cpuset.CPUSet, mustKeepCPUsForResize *cpuset.CPUSet) (topology.Allocation, error) {\n \tklog.InfoS(\"AllocateCPUs\", \"numCPUs\", numCPUs, \"socket\", numaAffinity)\n-\n-\tallocatableCPUs := p.GetAvailableCPUs(s).Union(reusableCPUs)\n+\tallocatableCPUs := cpuset.New()",
+        "comment_created_at": "2025-05-23T15:33:10+00:00",
+        "comment_author": "esotsal",
+        "comment_body": "I am not sure if i understand the use case, reusableCPUsForResize is a reference to cpusInUseByPodContainer which must include the mustKeepCPUsForResize ( i.e. the promised ). \r\n\r\nhttps://github.com/kubernetes/kubernetes/blob/5a8f4a6809417521e33aa5c5688a1657d522d36b/pkg/kubelet/cm/cpumanager/policy_static.go#L458-L493\r\n\r\nCan you please elaborate the use case ?  Does it have to do with a race condition or a security case if someone manipulates CPUManager promised checkpoint and modifies the entries or combinatory resize with both memory and CPU manager perhaps ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2104903677",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2076096582",
+        "commented_code": "@@ -423,10 +539,18 @@ func (p *staticPolicy) RemoveContainer(s state.State, podUID string, containerNa\n \treturn nil\n }\n \n-func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet) (topology.Allocation, error) {\n+func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet, reusableCPUsForResize *cpuset.CPUSet, mustKeepCPUsForResize *cpuset.CPUSet) (topology.Allocation, error) {\n \tklog.InfoS(\"AllocateCPUs\", \"numCPUs\", numCPUs, \"socket\", numaAffinity)\n-\n-\tallocatableCPUs := p.GetAvailableCPUs(s).Union(reusableCPUs)\n+\tallocatableCPUs := cpuset.New()",
+        "comment_created_at": "2025-05-23T16:02:04+00:00",
+        "comment_author": "esotsal",
+        "comment_body": "Github doesn't allow me to respond in below comment so answering here\r\n\r\n> Do we throw an error is mustKeepCPUsForResize is not used during Allocation() ?. mustKeepCPUsForResize might not align with the new NUMA hint we generate here.\r\n\r\nI was with the impression cpu_assigment  below code, would prevent this from happening. \r\n\r\nhttps://github.com/kubernetes/kubernetes/blob/5a8f4a6809417521e33aa5c5688a1657d522d36b/pkg/kubelet/cm/cpumanager/cpu_assignment.go#L456-L491\r\n\r\nI admit i haven't thought thoroughly the what if scenarios, thanks for indicating. Did you have in mind a specific CPU & Memory Manager policy option combination?   ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2105681947",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2076096582",
+        "commented_code": "@@ -423,10 +539,18 @@ func (p *staticPolicy) RemoveContainer(s state.State, podUID string, containerNa\n \treturn nil\n }\n \n-func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet) (topology.Allocation, error) {\n+func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet, reusableCPUsForResize *cpuset.CPUSet, mustKeepCPUsForResize *cpuset.CPUSet) (topology.Allocation, error) {\n \tklog.InfoS(\"AllocateCPUs\", \"numCPUs\", numCPUs, \"socket\", numaAffinity)\n-\n-\tallocatableCPUs := p.GetAvailableCPUs(s).Union(reusableCPUs)\n+\tallocatableCPUs := cpuset.New()",
+        "comment_created_at": "2025-05-24T03:03:46+00:00",
+        "comment_author": "esotsal",
+        "comment_body": "I will add additional checks , i agree are worth having them anyhow. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2105700860",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2076096582",
+        "commented_code": "@@ -423,10 +539,18 @@ func (p *staticPolicy) RemoveContainer(s state.State, podUID string, containerNa\n \treturn nil\n }\n \n-func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet) (topology.Allocation, error) {\n+func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet, reusableCPUsForResize *cpuset.CPUSet, mustKeepCPUsForResize *cpuset.CPUSet) (topology.Allocation, error) {\n \tklog.InfoS(\"AllocateCPUs\", \"numCPUs\", numCPUs, \"socket\", numaAffinity)\n-\n-\tallocatableCPUs := p.GetAvailableCPUs(s).Union(reusableCPUs)\n+\tallocatableCPUs := cpuset.New()",
+        "comment_created_at": "2025-05-24T04:33:09+00:00",
+        "comment_author": "esotsal",
+        "comment_body": "> With this approach, takeByTopology() function does not have to change ?\r\n\r\nI think you might have a point here, it will make the code cleaner as well, let me try it out. Will come back",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2118920160",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 129719,
+        "pr_file": "pkg/kubelet/cm/cpumanager/policy_static.go",
+        "discussion_id": "2076096582",
+        "commented_code": "@@ -423,10 +539,18 @@ func (p *staticPolicy) RemoveContainer(s state.State, podUID string, containerNa\n \treturn nil\n }\n \n-func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet) (topology.Allocation, error) {\n+func (p *staticPolicy) allocateCPUs(s state.State, numCPUs int, numaAffinity bitmask.BitMask, reusableCPUs cpuset.CPUSet, reusableCPUsForResize *cpuset.CPUSet, mustKeepCPUsForResize *cpuset.CPUSet) (topology.Allocation, error) {\n \tklog.InfoS(\"AllocateCPUs\", \"numCPUs\", numCPUs, \"socket\", numaAffinity)\n-\n-\tallocatableCPUs := p.GetAvailableCPUs(s).Union(reusableCPUs)\n+\tallocatableCPUs := cpuset.New()",
+        "comment_created_at": "2025-06-01T09:11:20+00:00",
+        "comment_author": "esotsal",
+        "comment_body": "> I will add additional checks , i agree are worth having them anyhow.\r\n\r\nChecks added inside takeByTopology, will continue now and try your proposed step wise split allocation\r\n\r\nhttps://github.com/kubernetes/kubernetes/blob/09b2d95e3f66633f546d4b50da9b6f0f9c0c487e/pkg/kubelet/cm/cpumanager/policy_static.go#L674-L692",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

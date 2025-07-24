@@ -93,10 +93,5 @@ def main():
         json.dump(contributors, f, indent=2, ensure_ascii=False)
     print(f'Wrote {len(contributors)} users to assets/data/contributors.json')
 
-    # Also store a copy under _data for use with Liquid templates
-    with open(data_dir / 'contributors.json', 'w', encoding='utf-8') as f:
-        json.dump(contributors, f, indent=2, ensure_ascii=False)
-    print(f'Wrote {len(contributors)} users to _data/contributors.json')
-
 if __name__ == '__main__':
     main()

@@ -34,6 +34,8 @@ def main():
                 ts = c.get('comment_created_at')
                 if not author or not ts:
                     continue
+                if author == 'Copilot' or '[bot]' in author:
+                    continue
                 info = users[author]
                 info['reviewers'].add(slug)
                 if repo:

@@ -24,22 +24,6 @@ Ensure all JSON configuration files adhere to proper syntax and formatting conve
    +  "message": "hi am sairam",
    ```
 
-2. **Complete template variables**: Always ensure template variables have properly closed braces to prevent interpolation errors.
-   ```diff
-   // Incorrect
-   -"emails.invitation.signature": "ٹیم۔ {{project}"
-   
-   // Correct
-   +"emails.invitation.signature": "ٹیم۔ {{project}}",
-   ```
-
-3. **Consistent punctuation**: Use consistent punctuation in string values to maintain formatting standards.
-   ```diff
-   // Incorrect
-   -"emails.verification.hello": "Hola, {{name}}.,",
-   
-   // Correct
-   +"emails.verification.hello": "Hola, {{name}},"
    ```
 
 Run a JSON validator on configuration files before committing changes to catch these issues early. Proper JSON formatting ensures reliable parsing, prevents runtime errors, and maintains code consistency across the project.

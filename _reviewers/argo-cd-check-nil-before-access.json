@@ -1,0 +1,196 @@
+[
+  {
+    "discussion_id": "2171322919",
+    "pr_number": 23586,
+    "pr_file": "server/server.go",
+    "created_at": "2025-06-27T09:03:31+00:00",
+    "commented_code": "// Dex reverse proxy and client app and OAuth2 login/callback\n \tserver.registerDexHandlers(mux)\n \n+\tth := util_session.WithAuthMiddleware(server.DisableAuth, server.ssoClientApp, server.settings, server.sessionMgr, terminal)\n+\tmux.Handle(\"/terminal\", th)\n+",
+    "repo_full_name": "argoproj/argo-cd",
+    "discussion_comments": [
+      {
+        "comment_id": "2171322919",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 23586,
+        "pr_file": "server/server.go",
+        "discussion_id": "2171322919",
+        "commented_code": "@@ -1238,6 +1236,9 @@ func (server *ArgoCDServer) newHTTPServer(ctx context.Context, port int, grpcWeb\n \t// Dex reverse proxy and client app and OAuth2 login/callback\n \tserver.registerDexHandlers(mux)\n \n+\tth := util_session.WithAuthMiddleware(server.DisableAuth, server.ssoClientApp, server.settings, server.sessionMgr, terminal)\n+\tmux.Handle(\"/terminal\", th)\n+",
+        "comment_created_at": "2025-06-27T09:03:31+00:00",
+        "comment_author": "the-technat",
+        "comment_body": "I had to move these lines below `server.registerDexHandlers` to avoid `a.ssoClientApp` being `nil`. I hope that doesn't have other side-effects.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2185503509",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 23586,
+        "pr_file": "server/server.go",
+        "discussion_id": "2171322919",
+        "commented_code": "@@ -1238,6 +1236,9 @@ func (server *ArgoCDServer) newHTTPServer(ctx context.Context, port int, grpcWeb\n \t// Dex reverse proxy and client app and OAuth2 login/callback\n \tserver.registerDexHandlers(mux)\n \n+\tth := util_session.WithAuthMiddleware(server.DisableAuth, server.ssoClientApp, server.settings, server.sessionMgr, terminal)\n+\tmux.Handle(\"/terminal\", th)\n+",
+        "comment_created_at": "2025-07-04T14:28:50+00:00",
+        "comment_author": "agaudreault",
+        "comment_body": "Based on the implementation of registerDexHandlers, if SSO is not configured, ssoClientApp will be nil. The auth middleware should handle the nil use case. Make sure to add an additional unit test to validate that (TestWithAuthMiddlewareWhenSSONotConfigured)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2186051069",
+    "pr_number": 22901,
+    "pr_file": "util/jwt/jwt.go",
+    "created_at": "2025-07-04T19:55:05+00:00",
+    "commented_code": "return 0\n }\n \n-// GetScopeValues extracts the values of specified scopes from the claims\n+// GetScopeValues extracts the values of specified scopes (claim names) from the claims map.\n+// It handles cases where the claim value is a single string or a slice of strings/interfaces.\n func GetScopeValues(claims jwtgo.MapClaims, scopes []string) []string {\n-\tgroups := make([]string, 0)\n-\tfor i := range scopes {\n-\t\tscopeIf, ok := claims[scopes[i]]\n+\tvalues := make([]string, 0)\n+\tfor _, scope := range scopes {\n+\t\tscopeIf, ok := claims[scope]\n \t\tif !ok {\n \t\t\tcontinue\n \t\t}\n \n-\t\tswitch val := scopeIf.(type) {\n-\t\tcase []any:\n-\t\t\tfor _, groupIf := range val {\n-\t\t\t\tgroup, ok := groupIf.(string)\n-\t\t\t\tif ok {\n-\t\t\t\t\tgroups = append(groups, group)\n+\t\tswitch v := scopeIf.(type) {\n+\t\tcase string:\n+\t\t\tvalues = append(values, v)\n+\t\tcase []string:\n+\t\t\tvalues = append(values, v...)\n+\t\tcase []any: // Handle JSON arrays which often unmarshal to []interface{}\n+\t\t\tfor _, item := range v {\n+\t\t\t\tif strVal, ok := item.(string); ok {\n+\t\t\t\t\tvalues = append(values, strVal)\n \t\t\t\t}\n \t\t\t}\n-\t\tcase []string:\n-\t\t\tgroups = append(groups, val...)\n-\t\tcase string:\n-\t\t\tgroups = append(groups, val)\n+\t\t\t// Could add handling for other types like []float64 if needed\n \t\t}\n \t}\n-\n-\treturn groups\n+\t// Deduplicate results? Depending on usage, might be useful.\n+\t// Example:\n+\t// seen := make(map[string]struct{})\n+\t// uniqueValues := make([]string, 0, len(values))\n+\t// for _, val := range values {\n+\t//\t if _, exists := seen[val]; !exists {\n+\t//\t\t seen[val] = struct{}{}\n+\t//\t\t uniqueValues = append(uniqueValues, val)\n+\t//\t }\n+\t// }\n+\t// return uniqueValues\n+\treturn values\n }\n \n-func numField(m jwtgo.MapClaims, key string) (int64, error) {\n-\tfield, ok := m[key]\n-\tif !ok {\n-\t\treturn 0, fmt.Errorf(\"token does not have %s claim\", key)\n+// IssuedAtTime returns the issued at (\"iat\") claim as a time.Time pointer.\n+// Returns nil, nil if the claim is not present.\n+// Returns nil, error if the claim is present but invalid.\n+func IssuedAtTime(m jwtgo.MapClaims) (*time.Time, error) {\n+\tclaim, err := m.GetIssuedAt()\n+\tif err != nil {\n+\t\t// Check if the error is specifically because the claim is missing\n+\t\tif _, ok := m[\"iat\"]; !ok {\n+\t\t\treturn nil, nil // Claim is missing, return nil, nil as per test expectation\n+\t\t}\n+\t\t// Otherwise, the claim exists but is invalid\n+\t\treturn nil, fmt.Errorf(\"failed to get 'iat' claim: %w\", err)\n \t}\n-\tswitch val := field.(type) {\n-\tcase float64:\n-\t\treturn int64(val), nil\n-\tcase json.Number:\n-\t\treturn val.Int64()\n-\tcase int64:\n-\t\treturn val, nil\n-\tdefault:\n-\t\treturn 0, fmt.Errorf(\"%s '%v' is not a number\", key, val)\n+\tif claim == nil {\n+\t\t// This case might occur if GetIssuedAt returns nil without error (unlikely but safe to handle)\n+\t\treturn nil, nil\n \t}\n+\tt := claim.Time\n+\treturn &t, nil\n }\n \n-// IssuedAt returns the issued at as an int64\n-func IssuedAt(m jwtgo.MapClaims) (int64, error) {\n-\treturn numField(m, \"iat\")\n-}\n-\n-// IssuedAtTime returns the issued at as a time.Time\n-func IssuedAtTime(m jwtgo.MapClaims) (time.Time, error) {\n-\tiat, err := IssuedAt(m)\n-\treturn time.Unix(iat, 0), err\n-}\n-\n-// ExpirationTime returns the expiration as a time.Time\n-func ExpirationTime(m jwtgo.MapClaims) (time.Time, error) {\n-\texp, err := numField(m, \"exp\")\n-\treturn time.Unix(exp, 0), err\n+// ExpirationTime returns the expiration (\"exp\") claim as a time.Time pointer.\n+// Returns nil, nil if the claim is not present.\n+// Returns nil, error if the claim is present but invalid.\n+func ExpirationTime(m jwtgo.MapClaims) (*time.Time, error) {\n+\tclaim, err := m.GetExpirationTime()\n+\tif err != nil {\n+\t\t// Check if the error is specifically because the claim is missing\n+\t\tif _, ok := m[\"exp\"]; !ok {\n+\t\t\treturn nil, nil // Claim is missing, return nil, nil\n+\t\t}\n+\t\t// Otherwise, the claim exists but is invalid\n+\t\treturn nil, fmt.Errorf(\"failed to get 'exp' claim: %w\", err)\n+\t}",
+    "repo_full_name": "argoproj/argo-cd",
+    "discussion_comments": [
+      {
+        "comment_id": "2186051069",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 22901,
+        "pr_file": "util/jwt/jwt.go",
+        "discussion_id": "2186051069",
+        "commented_code": "@@ -46,65 +55,84 @@ func Float64Field(claims jwtgo.MapClaims, fieldName string) float64 {\n \treturn 0\n }\n \n-// GetScopeValues extracts the values of specified scopes from the claims\n+// GetScopeValues extracts the values of specified scopes (claim names) from the claims map.\n+// It handles cases where the claim value is a single string or a slice of strings/interfaces.\n func GetScopeValues(claims jwtgo.MapClaims, scopes []string) []string {\n-\tgroups := make([]string, 0)\n-\tfor i := range scopes {\n-\t\tscopeIf, ok := claims[scopes[i]]\n+\tvalues := make([]string, 0)\n+\tfor _, scope := range scopes {\n+\t\tscopeIf, ok := claims[scope]\n \t\tif !ok {\n \t\t\tcontinue\n \t\t}\n \n-\t\tswitch val := scopeIf.(type) {\n-\t\tcase []any:\n-\t\t\tfor _, groupIf := range val {\n-\t\t\t\tgroup, ok := groupIf.(string)\n-\t\t\t\tif ok {\n-\t\t\t\t\tgroups = append(groups, group)\n+\t\tswitch v := scopeIf.(type) {\n+\t\tcase string:\n+\t\t\tvalues = append(values, v)\n+\t\tcase []string:\n+\t\t\tvalues = append(values, v...)\n+\t\tcase []any: // Handle JSON arrays which often unmarshal to []interface{}\n+\t\t\tfor _, item := range v {\n+\t\t\t\tif strVal, ok := item.(string); ok {\n+\t\t\t\t\tvalues = append(values, strVal)\n \t\t\t\t}\n \t\t\t}\n-\t\tcase []string:\n-\t\t\tgroups = append(groups, val...)\n-\t\tcase string:\n-\t\t\tgroups = append(groups, val)\n+\t\t\t// Could add handling for other types like []float64 if needed\n \t\t}\n \t}\n-\n-\treturn groups\n+\t// Deduplicate results? Depending on usage, might be useful.\n+\t// Example:\n+\t// seen := make(map[string]struct{})\n+\t// uniqueValues := make([]string, 0, len(values))\n+\t// for _, val := range values {\n+\t//\t if _, exists := seen[val]; !exists {\n+\t//\t\t seen[val] = struct{}{}\n+\t//\t\t uniqueValues = append(uniqueValues, val)\n+\t//\t }\n+\t// }\n+\t// return uniqueValues\n+\treturn values\n }\n \n-func numField(m jwtgo.MapClaims, key string) (int64, error) {\n-\tfield, ok := m[key]\n-\tif !ok {\n-\t\treturn 0, fmt.Errorf(\"token does not have %s claim\", key)\n+// IssuedAtTime returns the issued at (\"iat\") claim as a time.Time pointer.\n+// Returns nil, nil if the claim is not present.\n+// Returns nil, error if the claim is present but invalid.\n+func IssuedAtTime(m jwtgo.MapClaims) (*time.Time, error) {\n+\tclaim, err := m.GetIssuedAt()\n+\tif err != nil {\n+\t\t// Check if the error is specifically because the claim is missing\n+\t\tif _, ok := m[\"iat\"]; !ok {\n+\t\t\treturn nil, nil // Claim is missing, return nil, nil as per test expectation\n+\t\t}\n+\t\t// Otherwise, the claim exists but is invalid\n+\t\treturn nil, fmt.Errorf(\"failed to get 'iat' claim: %w\", err)\n \t}\n-\tswitch val := field.(type) {\n-\tcase float64:\n-\t\treturn int64(val), nil\n-\tcase json.Number:\n-\t\treturn val.Int64()\n-\tcase int64:\n-\t\treturn val, nil\n-\tdefault:\n-\t\treturn 0, fmt.Errorf(\"%s '%v' is not a number\", key, val)\n+\tif claim == nil {\n+\t\t// This case might occur if GetIssuedAt returns nil without error (unlikely but safe to handle)\n+\t\treturn nil, nil\n \t}\n+\tt := claim.Time\n+\treturn &t, nil\n }\n \n-// IssuedAt returns the issued at as an int64\n-func IssuedAt(m jwtgo.MapClaims) (int64, error) {\n-\treturn numField(m, \"iat\")\n-}\n-\n-// IssuedAtTime returns the issued at as a time.Time\n-func IssuedAtTime(m jwtgo.MapClaims) (time.Time, error) {\n-\tiat, err := IssuedAt(m)\n-\treturn time.Unix(iat, 0), err\n-}\n-\n-// ExpirationTime returns the expiration as a time.Time\n-func ExpirationTime(m jwtgo.MapClaims) (time.Time, error) {\n-\texp, err := numField(m, \"exp\")\n-\treturn time.Unix(exp, 0), err\n+// ExpirationTime returns the expiration (\"exp\") claim as a time.Time pointer.\n+// Returns nil, nil if the claim is not present.\n+// Returns nil, error if the claim is present but invalid.\n+func ExpirationTime(m jwtgo.MapClaims) (*time.Time, error) {\n+\tclaim, err := m.GetExpirationTime()\n+\tif err != nil {\n+\t\t// Check if the error is specifically because the claim is missing\n+\t\tif _, ok := m[\"exp\"]; !ok {\n+\t\t\treturn nil, nil // Claim is missing, return nil, nil\n+\t\t}\n+\t\t// Otherwise, the claim exists but is invalid\n+\t\treturn nil, fmt.Errorf(\"failed to get 'exp' claim: %w\", err)\n+\t}",
+        "comment_created_at": "2025-07-04T19:55:05+00:00",
+        "comment_author": "agaudreault",
+        "comment_body": "Should always return nil when claims is missing\r\n\r\n```suggestion\r\n\tclaim, err := m.GetExpirationTime()\r\n\tif err != nil {\r\n\t\treturn nil, fmt.Errorf(\"failed to get 'exp' claim: %w\", err)\r\n\t}\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1971814601",
+    "pr_number": 21999,
+    "pr_file": "cmd/util/app.go",
+    "created_at": "2025-02-26T15:24:37+00:00",
+    "commented_code": "if spec.SyncPolicy == nil {\n \t\t\t\t\tspec.SyncPolicy = &argoappv1.SyncPolicy{}\n \t\t\t\t}\n-\t\t\t\tspec.SyncPolicy.Automated = &argoappv1.SyncPolicyAutomated{}\n+\t\t\t\t*spec.SyncPolicy.Automated.Enable = true",
+    "repo_full_name": "argoproj/argo-cd",
+    "discussion_comments": [
+      {
+        "comment_id": "1971814601",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21999,
+        "pr_file": "cmd/util/app.go",
+        "discussion_id": "1971814601",
+        "commented_code": "@@ -238,7 +238,7 @@ func SetAppSpecOptions(flags *pflag.FlagSet, spec *argoappv1.ApplicationSpec, ap\n \t\t\t\tif spec.SyncPolicy == nil {\n \t\t\t\t\tspec.SyncPolicy = &argoappv1.SyncPolicy{}\n \t\t\t\t}\n-\t\t\t\tspec.SyncPolicy.Automated = &argoappv1.SyncPolicyAutomated{}\n+\t\t\t\t*spec.SyncPolicy.Automated.Enable = true",
+        "comment_created_at": "2025-02-26T15:24:37+00:00",
+        "comment_author": "andrii-korotkov-verkada",
+        "comment_body": "What if automated is not present?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1973388658",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21999,
+        "pr_file": "cmd/util/app.go",
+        "discussion_id": "1971814601",
+        "commented_code": "@@ -238,7 +238,7 @@ func SetAppSpecOptions(flags *pflag.FlagSet, spec *argoappv1.ApplicationSpec, ap\n \t\t\t\tif spec.SyncPolicy == nil {\n \t\t\t\t\tspec.SyncPolicy = &argoappv1.SyncPolicy{}\n \t\t\t\t}\n-\t\t\t\tspec.SyncPolicy.Automated = &argoappv1.SyncPolicyAutomated{}\n+\t\t\t\t*spec.SyncPolicy.Automated.Enable = true",
+        "comment_created_at": "2025-02-27T11:21:56+00:00",
+        "comment_author": "anandrkskd",
+        "comment_body": "The changes do not affect the current behavior. Currently, if we don't have automated field set, then we assume automated sync policy is not set and hence not enabled.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1973869811",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21999,
+        "pr_file": "cmd/util/app.go",
+        "discussion_id": "1971814601",
+        "commented_code": "@@ -238,7 +238,7 @@ func SetAppSpecOptions(flags *pflag.FlagSet, spec *argoappv1.ApplicationSpec, ap\n \t\t\t\tif spec.SyncPolicy == nil {\n \t\t\t\t\tspec.SyncPolicy = &argoappv1.SyncPolicy{}\n \t\t\t\t}\n-\t\t\t\tspec.SyncPolicy.Automated = &argoappv1.SyncPolicyAutomated{}\n+\t\t\t\t*spec.SyncPolicy.Automated.Enable = true",
+        "comment_created_at": "2025-02-27T15:50:23+00:00",
+        "comment_author": "andrii-korotkov-verkada",
+        "comment_body": "The problem is you can get nil pointer panic.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1977002820",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21999,
+        "pr_file": "cmd/util/app.go",
+        "discussion_id": "1971814601",
+        "commented_code": "@@ -238,7 +238,7 @@ func SetAppSpecOptions(flags *pflag.FlagSet, spec *argoappv1.ApplicationSpec, ap\n \t\t\t\tif spec.SyncPolicy == nil {\n \t\t\t\t\tspec.SyncPolicy = &argoappv1.SyncPolicy{}\n \t\t\t\t}\n-\t\t\t\tspec.SyncPolicy.Automated = &argoappv1.SyncPolicyAutomated{}\n+\t\t\t\t*spec.SyncPolicy.Automated.Enable = true",
+        "comment_created_at": "2025-03-03T07:36:08+00:00",
+        "comment_author": "anandrkskd",
+        "comment_body": "~If we change the implementation to what you have suggested, below, I think this will not be a problem, as previous behavior can have automated field set to nil.~\r\nNeed to revert it to the setting to previous implementation.\r\nThanks!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1981234077",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21999,
+        "pr_file": "cmd/util/app.go",
+        "discussion_id": "1971814601",
+        "commented_code": "@@ -238,7 +238,7 @@ func SetAppSpecOptions(flags *pflag.FlagSet, spec *argoappv1.ApplicationSpec, ap\n \t\t\t\tif spec.SyncPolicy == nil {\n \t\t\t\t\tspec.SyncPolicy = &argoappv1.SyncPolicy{}\n \t\t\t\t}\n-\t\t\t\tspec.SyncPolicy.Automated = &argoappv1.SyncPolicyAutomated{}\n+\t\t\t\t*spec.SyncPolicy.Automated.Enable = true",
+        "comment_created_at": "2025-03-05T11:33:38+00:00",
+        "comment_author": "anandrkskd",
+        "comment_body": "updated!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1971815377",
+    "pr_number": 21999,
+    "pr_file": "cmd/util/app.go",
+    "created_at": "2025-02-26T15:25:01+00:00",
+    "commented_code": "}\n \t})\n \tif flags.Changed(\"auto-prune\") {\n-\t\tif spec.SyncPolicy == nil || spec.SyncPolicy.Automated == nil {\n+\t\tif spec.SyncPolicy == nil || !*spec.SyncPolicy.Automated.IsAutomatedSyncEnabled() {",
+    "repo_full_name": "argoproj/argo-cd",
+    "discussion_comments": [
+      {
+        "comment_id": "1971815377",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21999,
+        "pr_file": "cmd/util/app.go",
+        "discussion_id": "1971815377",
+        "commented_code": "@@ -283,19 +283,19 @@ func SetAppSpecOptions(flags *pflag.FlagSet, spec *argoappv1.ApplicationSpec, ap\n \t\t}\n \t})\n \tif flags.Changed(\"auto-prune\") {\n-\t\tif spec.SyncPolicy == nil || spec.SyncPolicy.Automated == nil {\n+\t\tif spec.SyncPolicy == nil || !*spec.SyncPolicy.Automated.IsAutomatedSyncEnabled() {",
+        "comment_created_at": "2025-02-26T15:25:01+00:00",
+        "comment_author": "andrii-korotkov-verkada",
+        "comment_body": "This should probably be a method on sync policy, since Automated can be nil",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1973390532",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21999,
+        "pr_file": "cmd/util/app.go",
+        "discussion_id": "1971815377",
+        "commented_code": "@@ -283,19 +283,19 @@ func SetAppSpecOptions(flags *pflag.FlagSet, spec *argoappv1.ApplicationSpec, ap\n \t\t}\n \t})\n \tif flags.Changed(\"auto-prune\") {\n-\t\tif spec.SyncPolicy == nil || spec.SyncPolicy.Automated == nil {\n+\t\tif spec.SyncPolicy == nil || !*spec.SyncPolicy.Automated.IsAutomatedSyncEnabled() {",
+        "comment_created_at": "2025-02-27T11:23:18+00:00",
+        "comment_author": "anandrkskd",
+        "comment_body": "yeah, that makes more sense. Thanks I make the appropriate changes.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1981233827",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21999,
+        "pr_file": "cmd/util/app.go",
+        "discussion_id": "1971815377",
+        "commented_code": "@@ -283,19 +283,19 @@ func SetAppSpecOptions(flags *pflag.FlagSet, spec *argoappv1.ApplicationSpec, ap\n \t\t}\n \t})\n \tif flags.Changed(\"auto-prune\") {\n-\t\tif spec.SyncPolicy == nil || spec.SyncPolicy.Automated == nil {\n+\t\tif spec.SyncPolicy == nil || !*spec.SyncPolicy.Automated.IsAutomatedSyncEnabled() {",
+        "comment_created_at": "2025-03-05T11:33:33+00:00",
+        "comment_author": "anandrkskd",
+        "comment_body": "updated!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2146064764",
+    "pr_number": 18474,
+    "pr_file": "controller/metrics/metrics.go",
+    "created_at": "2025-06-13T20:41:53+00:00",
+    "commented_code": "m.syncCounter.WithLabelValues(app.Namespace, app.Name, app.Spec.GetProject(), app.Spec.Destination.Server, string(state.Phase), strconv.FormatBool(isDryRun)).Inc()\n }\n \n+// IncAppSyncDuration observes app sync duration\n+func (m *MetricsServer) IncAppSyncDuration(app *argoappv1.Application, state *argoappv1.OperationState) {\n+\tif !state.Phase.Successful() {\n+\t\treturn\n+\t}\n+\tm.syncDuration.WithLabelValues(app.Namespace, app.Name, app.Spec.GetProject(), app.Spec.Destination.Server).",
+    "repo_full_name": "argoproj/argo-cd",
+    "discussion_comments": [
+      {
+        "comment_id": "2146064764",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 18474,
+        "pr_file": "controller/metrics/metrics.go",
+        "discussion_id": "2146064764",
+        "commented_code": "@@ -243,6 +254,15 @@ func (m *MetricsServer) IncSync(app *argoappv1.Application, state *argoappv1.Ope\n \tm.syncCounter.WithLabelValues(app.Namespace, app.Name, app.Spec.GetProject(), app.Spec.Destination.Server, string(state.Phase), strconv.FormatBool(isDryRun)).Inc()\n }\n \n+// IncAppSyncDuration observes app sync duration\n+func (m *MetricsServer) IncAppSyncDuration(app *argoappv1.Application, state *argoappv1.OperationState) {\n+\tif !state.Phase.Successful() {\n+\t\treturn\n+\t}\n+\tm.syncDuration.WithLabelValues(app.Namespace, app.Name, app.Spec.GetProject(), app.Spec.Destination.Server).",
+        "comment_created_at": "2025-06-13T20:41:53+00:00",
+        "comment_author": "agaudreault",
+        "comment_body": "`app.Spec.Destination.Server` should be received in parameters bacuse it can be `nil` if destination by name is used",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

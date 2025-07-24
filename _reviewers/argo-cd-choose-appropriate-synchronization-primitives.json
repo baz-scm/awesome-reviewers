@@ -1,0 +1,184 @@
+[
+  {
+    "discussion_id": "1938167642",
+    "pr_number": 21702,
+    "pr_file": "cmd/argocd/commands/app.go",
+    "created_at": "2025-02-01T02:38:23+00:00",
+    "commented_code": "if timeout != 0 {\n \t\ttime.AfterFunc(time.Duration(timeout)*time.Second, func() {\n \t\t\t_, appClient := acdClient.NewApplicationClientOrDie()\n-\t\t\tapp, err := appClient.Get(ctx, &application.ApplicationQuery{",
+    "repo_full_name": "argoproj/argo-cd",
+    "discussion_comments": [
+      {
+        "comment_id": "1938167642",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21702,
+        "pr_file": "cmd/argocd/commands/app.go",
+        "discussion_id": "1938167642",
+        "commented_code": "@@ -2577,7 +2588,7 @@ func waitOnApplicationStatus(ctx context.Context, acdClient argocdclient.Client,\n \tif timeout != 0 {\n \t\ttime.AfterFunc(time.Duration(timeout)*time.Second, func() {\n \t\t\t_, appClient := acdClient.NewApplicationClientOrDie()\n-\t\t\tapp, err := appClient.Get(ctx, &application.ApplicationQuery{",
+        "comment_created_at": "2025-02-01T02:38:23+00:00",
+        "comment_author": "agaudreault",
+        "comment_body": "I think when it timeouts, this will call `cancel()` on the context which will in turn close the `appEventCh` causing the for-range loop below to break. The last call will be `_ = printFinalStatus(app)`.\r\n\r\nThis would mean that the AfterFunc should make sure that\r\n1. It is not also calling `printFinalStatus` \u2705 \r\n2. it should set `refresh = false` to make sure that the last call to `printFinalStatus` will not refresh the app.\r\n3. it should call `app, err = appClient.Get(ctx, &application.ApplicationQuery` to update the `app` (without refresh) so it is used by printFinalStatus.\r\n\r\nI haven't debugged if it is really what the execution does, but it should be testable in a unit test similar to `TestWaitOnApplicationStatus_JSON_YAML_WideOutput`.\r\n\r\nThere are also a few other problem with the code like the connection not being closed in the AfterFunc, and potential race conditions with refresh and app that might now require a lock. TBD",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1938609940",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21702,
+        "pr_file": "cmd/argocd/commands/app.go",
+        "discussion_id": "1938167642",
+        "commented_code": "@@ -2577,7 +2588,7 @@ func waitOnApplicationStatus(ctx context.Context, acdClient argocdclient.Client,\n \tif timeout != 0 {\n \t\ttime.AfterFunc(time.Duration(timeout)*time.Second, func() {\n \t\t\t_, appClient := acdClient.NewApplicationClientOrDie()\n-\t\t\tapp, err := appClient.Get(ctx, &application.ApplicationQuery{",
+        "comment_created_at": "2025-02-02T23:10:32+00:00",
+        "comment_author": "almoelda",
+        "comment_body": "I've pushed the suggested changes and they are ready to review\r\n- added a test `TestWaitOnApplicationStatus_JSON_YAML_WideOutput_WithTimeout`\r\n- handle race condition\r\n- Timeout handling corrected in AfterFunc",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1938175069",
+    "pr_number": 21702,
+    "pr_file": "cmd/argocd/commands/app.go",
+    "created_at": "2025-02-01T03:06:26+00:00",
+    "commented_code": "`),\n \n \t\tRun: func(c *cobra.Command, args []string) {\n-\t\t\tctx := c.Context()\n+\t\t\tctx, cancel := context.WithCancel(c.Context())",
+    "repo_full_name": "argoproj/argo-cd",
+    "discussion_comments": [
+      {
+        "comment_id": "1938175069",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21702,
+        "pr_file": "cmd/argocd/commands/app.go",
+        "discussion_id": "1938175069",
+        "commented_code": "@@ -382,17 +383,26 @@ func NewApplicationGetCommand(clientOpts *argocdclient.ClientOptions) *cobra.Com\n   \t\t`),\n \n \t\tRun: func(c *cobra.Command, args []string) {\n-\t\t\tctx := c.Context()\n+\t\t\tctx, cancel := context.WithCancel(c.Context())",
+        "comment_created_at": "2025-02-01T03:06:26+00:00",
+        "comment_author": "agaudreault",
+        "comment_body": "immediately call `defer cancel()`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1938609496",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21702,
+        "pr_file": "cmd/argocd/commands/app.go",
+        "discussion_id": "1938175069",
+        "commented_code": "@@ -382,17 +383,26 @@ func NewApplicationGetCommand(clientOpts *argocdclient.ClientOptions) *cobra.Com\n   \t\t`),\n \n \t\tRun: func(c *cobra.Command, args []string) {\n-\t\t\tctx := c.Context()\n+\t\t\tctx, cancel := context.WithCancel(c.Context())",
+        "comment_created_at": "2025-02-02T23:08:12+00:00",
+        "comment_author": "almoelda",
+        "comment_body": "done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1987983699",
+    "pr_number": 21702,
+    "pr_file": "cmd/argocd/commands/app.go",
+    "created_at": "2025-03-10T20:34:17+00:00",
+    "commented_code": "const waitFormatString = \"%s\\t%5s\\t%10s\\t%10s\\t%20s\\t%8s\\t%7s\\t%10s\\t%s\n\"\n \n+// AppWithLock encapsulates the application and its lock\n+type AppWithLock struct {\n+\tmu  sync.RWMutex",
+    "repo_full_name": "argoproj/argo-cd",
+    "discussion_comments": [
+      {
+        "comment_id": "1987983699",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21702,
+        "pr_file": "cmd/argocd/commands/app.go",
+        "discussion_id": "1987983699",
+        "commented_code": "@@ -2512,18 +2552,47 @@ func resourceParentChild(ctx context.Context, acdClient argocdclient.Client, app\n \n const waitFormatString = \"%s\\t%5s\\t%10s\\t%10s\\t%20s\\t%8s\\t%7s\\t%10s\\t%s\\n\"\n \n+// AppWithLock encapsulates the application and its lock\n+type AppWithLock struct {\n+\tmu  sync.RWMutex",
+        "comment_created_at": "2025-03-10T20:34:17+00:00",
+        "comment_author": "andrii-korotkov-verkada",
+        "comment_body": "RWMutex may be less efficient than a regular mutex, unless it's some specific case. What does justify using it here? I'm asking since I've once tried to replace regular with rw and got a regression.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2013753769",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21702,
+        "pr_file": "cmd/argocd/commands/app.go",
+        "discussion_id": "1987983699",
+        "commented_code": "@@ -2512,18 +2552,47 @@ func resourceParentChild(ctx context.Context, acdClient argocdclient.Client, app\n \n const waitFormatString = \"%s\\t%5s\\t%10s\\t%10s\\t%20s\\t%8s\\t%7s\\t%10s\\t%s\\n\"\n \n+// AppWithLock encapsulates the application and its lock\n+type AppWithLock struct {\n+\tmu  sync.RWMutex",
+        "comment_created_at": "2025-03-26T09:48:22+00:00",
+        "comment_author": "almoelda",
+        "comment_body": "> RWMutex may be less efficient than a regular mutex\r\nI agree. actually nothing justifies it here, switched it back to Mutex. Thanks",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1899052835",
+    "pr_number": 21287,
+    "pr_file": "server/application/logs_test.go",
+    "created_at": "2024-12-29T02:55:09+00:00",
+    "commented_code": "// and channel closer.\n \t}\n }\n+\n+func TestParseLogsStream_ContainerLogRetrievalMessage(t *testing.T) {\n+\tr := io.NopCloser(strings.NewReader(`unable to retrieve container logs for containerd://2c7e54dbbfef27148d5`))\n+\n+\tres := make(chan logEntry)\n+\tgo func() {\n+\t\tparseLogsStream(\"test\", r, res)\n+\t\tclose(res)\n+\t}()\n+\n+\tvar entries []logEntry\n+\tfor entry := range res {\n+\t\tentries = append(entries, entry)\n+\t}\n+",
+    "repo_full_name": "argoproj/argo-cd",
+    "discussion_comments": [
+      {
+        "comment_id": "1899052835",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21287,
+        "pr_file": "server/application/logs_test.go",
+        "discussion_id": "1899052835",
+        "commented_code": "@@ -105,3 +105,25 @@ func TestMergeLogStreams_RaceCondition(t *testing.T) {\n \t\t// and channel closer.\n \t}\n }\n+\n+func TestParseLogsStream_ContainerLogRetrievalMessage(t *testing.T) {\n+\tr := io.NopCloser(strings.NewReader(`unable to retrieve container logs for containerd://2c7e54dbbfef27148d5`))\n+\n+\tres := make(chan logEntry)\n+\tgo func() {\n+\t\tparseLogsStream(\"test\", r, res)\n+\t\tclose(res)\n+\t}()\n+\n+\tvar entries []logEntry\n+\tfor entry := range res {\n+\t\tentries = append(entries, entry)\n+\t}\n+",
+        "comment_created_at": "2024-12-29T02:55:09+00:00",
+        "comment_author": "andrii-korotkov-verkada",
+        "comment_body": "You probably need some wait before checking results to avoid flakiness. Or, use some channel for synchronization. This would also help to exit from a goroutine.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1899123190",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21287,
+        "pr_file": "server/application/logs_test.go",
+        "discussion_id": "1899052835",
+        "commented_code": "@@ -105,3 +105,25 @@ func TestMergeLogStreams_RaceCondition(t *testing.T) {\n \t\t// and channel closer.\n \t}\n }\n+\n+func TestParseLogsStream_ContainerLogRetrievalMessage(t *testing.T) {\n+\tr := io.NopCloser(strings.NewReader(`unable to retrieve container logs for containerd://2c7e54dbbfef27148d5`))\n+\n+\tres := make(chan logEntry)\n+\tgo func() {\n+\t\tparseLogsStream(\"test\", r, res)\n+\t\tclose(res)\n+\t}()\n+\n+\tvar entries []logEntry\n+\tfor entry := range res {\n+\t\tentries = append(entries, entry)\n+\t}\n+",
+        "comment_created_at": "2024-12-29T12:37:08+00:00",
+        "comment_author": "Fluder-Paradyne",
+        "comment_body": "Have added done channel for sync, \r\nHave increased the time window to 5 seconds, would  5 seconds be enough ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1913867234",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 21287,
+        "pr_file": "server/application/logs_test.go",
+        "discussion_id": "1899052835",
+        "commented_code": "@@ -105,3 +105,25 @@ func TestMergeLogStreams_RaceCondition(t *testing.T) {\n \t\t// and channel closer.\n \t}\n }\n+\n+func TestParseLogsStream_ContainerLogRetrievalMessage(t *testing.T) {\n+\tr := io.NopCloser(strings.NewReader(`unable to retrieve container logs for containerd://2c7e54dbbfef27148d5`))\n+\n+\tres := make(chan logEntry)\n+\tgo func() {\n+\t\tparseLogsStream(\"test\", r, res)\n+\t\tclose(res)\n+\t}()\n+\n+\tvar entries []logEntry\n+\tfor entry := range res {\n+\t\tentries = append(entries, entry)\n+\t}\n+",
+        "comment_created_at": "2025-01-13T22:09:02+00:00",
+        "comment_author": "agaudreault",
+        "comment_body": "Does the value of the timestamp really matter? Or what matters is that we received the log correctly?\r\n\r\n\"timestamp <= now\" seems more reliable. I don't think it is works mocking now, but ideally this is what should be done.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2153108221",
+    "pr_number": 23460,
+    "pr_file": "controller/syncid/id.go",
+    "created_at": "2025-06-17T20:25:23+00:00",
+    "commented_code": "+package syncid\n+\n+import (\n+\t\"fmt\"\n+\t\"sync/atomic\"\n+\n+\t\"github.com/argoproj/argo-cd/v3/util/rand\"\n+)\n+\n+var globalCount uint64",
+    "repo_full_name": "argoproj/argo-cd",
+    "discussion_comments": [
+      {
+        "comment_id": "2153108221",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 23460,
+        "pr_file": "controller/syncid/id.go",
+        "discussion_id": "2153108221",
+        "commented_code": "@@ -0,0 +1,20 @@\n+package syncid\n+\n+import (\n+\t\"fmt\"\n+\t\"sync/atomic\"\n+\n+\t\"github.com/argoproj/argo-cd/v3/util/rand\"\n+)\n+\n+var globalCount uint64",
+        "comment_created_at": "2025-06-17T20:25:23+00:00",
+        "comment_author": "crenshaw-dev",
+        "comment_body": "I haven't used `atomic` much... could we just use `atomic.Int64`? Docs seem to recommend that: https://pkg.go.dev/sync/atomic#AddInt64",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2153125835",
+        "repo_full_name": "argoproj/argo-cd",
+        "pr_number": 23460,
+        "pr_file": "controller/syncid/id.go",
+        "discussion_id": "2153108221",
+        "commented_code": "@@ -0,0 +1,20 @@\n+package syncid\n+\n+import (\n+\t\"fmt\"\n+\t\"sync/atomic\"\n+\n+\t\"github.com/argoproj/argo-cd/v3/util/rand\"\n+)\n+\n+var globalCount uint64",
+        "comment_created_at": "2025-06-17T20:37:07+00:00",
+        "comment_author": "agaudreault",
+        "comment_body": "updated to use struct type",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

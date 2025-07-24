@@ -1,0 +1,248 @@
+[
+  {
+    "discussion_id": "1779666852",
+    "pr_number": 14904,
+    "pr_file": "storage/remote/queue_manager.go",
+    "created_at": "2024-09-28T16:09:01+00:00",
+    "commented_code": "}\n }\n \n-func populateTimeSeries(batch []timeSeries, pendingData []prompb.TimeSeries, sendExemplars, sendNativeHistograms bool) (int, int, int) {\n+func populateTimeSeries(batch []timeSeries, pendingData []*prompb.TimeSeries, sendExemplars, sendNativeHistograms bool) (int, int, int) {\n \tvar nPendingSamples, nPendingExemplars, nPendingHistograms int\n \tfor nPending, d := range batch {\n-\t\tpendingData[nPending].Samples = pendingData[nPending].Samples[:0]\n \t\tif sendExemplars {\n+\t\t\tfor _, exemplar := range pendingData[nPending].Exemplars {\n+\t\t\t\tfor _, lbl := range exemplar.Labels {\n+\t\t\t\t\tlbl.ReturnToVTPool()\n+\t\t\t\t}\n+\t\t\t\texemplar.ReturnToVTPool()\n+\t\t\t}",
+    "repo_full_name": "prometheus/prometheus",
+    "discussion_comments": [
+      {
+        "comment_id": "1779666852",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 14904,
+        "pr_file": "storage/remote/queue_manager.go",
+        "discussion_id": "1779666852",
+        "commented_code": "@@ -1619,16 +1620,33 @@ func (s *shards) runShard(ctx context.Context, shardID int, queue *queue) {\n \t}\n }\n \n-func populateTimeSeries(batch []timeSeries, pendingData []prompb.TimeSeries, sendExemplars, sendNativeHistograms bool) (int, int, int) {\n+func populateTimeSeries(batch []timeSeries, pendingData []*prompb.TimeSeries, sendExemplars, sendNativeHistograms bool) (int, int, int) {\n \tvar nPendingSamples, nPendingExemplars, nPendingHistograms int\n \tfor nPending, d := range batch {\n-\t\tpendingData[nPending].Samples = pendingData[nPending].Samples[:0]\n \t\tif sendExemplars {\n+\t\t\tfor _, exemplar := range pendingData[nPending].Exemplars {\n+\t\t\t\tfor _, lbl := range exemplar.Labels {\n+\t\t\t\t\tlbl.ReturnToVTPool()\n+\t\t\t\t}\n+\t\t\t\texemplar.ReturnToVTPool()\n+\t\t\t}",
+        "comment_created_at": "2024-09-28T16:09:01+00:00",
+        "comment_author": "tonyli233",
+        "comment_body": "This part returns the objects to the memory pool before populating new objects. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1779667388",
+    "pr_number": 14904,
+    "pr_file": "storage/remote/queue_manager.go",
+    "created_at": "2024-09-28T16:11:23+00:00",
+    "commented_code": "func compressPayload(tmpbuf *[]byte, inp []byte, enc Compression) (compressed []byte, _ error) {\n \tswitch enc {\n \tcase SnappyBlockCompression:\n-\t\tcompressed = snappy.Encode(*tmpbuf, inp)\n \t\tif n := snappy.MaxEncodedLen(len(inp)); n > len(*tmpbuf) {\n \t\t\t// grow the buffer for the next time\n \t\t\t*tmpbuf = make([]byte, n)\n \t\t}\n+\t\tcompressed = snappy.Encode(*tmpbuf, inp)\n \t\treturn compressed, nil\n \tdefault:\n \t\treturn compressed, fmt.Errorf(\"Unknown compression scheme [%v]\", enc)\n \t}\n }\n \n-func buildWriteRequest(logger log.Logger, timeSeries []prompb.TimeSeries, metadata []prompb.MetricMetadata, pBuf *proto.Buffer, buf *[]byte, filter func(prompb.TimeSeries) bool, enc Compression) (compressed []byte, highest, lowest int64, _ error) {\n+func buildWriteRequest(logger log.Logger, timeSeries []*prompb.TimeSeries, metadata []*prompb.MetricMetadata, pBuf, buf *[]byte, filter func(*prompb.TimeSeries) bool, enc Compression) (compressed []byte, highest, lowest int64, _ error) {\n \thighest, lowest, timeSeries,\n \t\tdroppedSamples, droppedExemplars, droppedHistograms := buildTimeSeries(timeSeries, filter)\n \n \tif droppedSamples > 0 || droppedExemplars > 0 || droppedHistograms > 0 {\n \t\tlevel.Debug(logger).Log(\"msg\", \"dropped data due to their age\", \"droppedSamples\", droppedSamples, \"droppedExemplars\", droppedExemplars, \"droppedHistograms\", droppedHistograms)\n \t}\n \n-\treq := &prompb.WriteRequest{\n-\t\tTimeseries: timeSeries,\n-\t\tMetadata:   metadata,\n+\treq := prompb.WriteRequestFromVTPool()\n+\treq.Timeseries = timeSeries\n+\treq.Metadata = metadata\n+\tif pBuf == nil {\n+\t\tpBuf = &[]byte{} // For convenience in tests. Not efficient.\n \t}\n \n-\tif pBuf == nil {\n-\t\tpBuf = proto.NewBuffer(nil) // For convenience in tests. Not efficient.\n-\t} else {\n-\t\tpBuf.Reset()\n+\tif len(*pBuf) < req.SizeVT() {\n+\t\t*pBuf = make([]byte, req.SizeVT())\n \t}\n-\terr := pBuf.Marshal(req)\n+\tsize, err := req.MarshalToVT(*pBuf)\n+\treq.Metadata = []*prompb.MetricMetadata{}\n+\treq.Timeseries = []*prompb.TimeSeries{}\n+\treq.ReturnToVTPool()",
+    "repo_full_name": "prometheus/prometheus",
+    "discussion_comments": [
+      {
+        "comment_id": "1779667388",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 14904,
+        "pr_file": "storage/remote/queue_manager.go",
+        "discussion_id": "1779667388",
+        "commented_code": "@@ -2136,36 +2164,39 @@ func buildTimeSeries(timeSeries []prompb.TimeSeries, filter func(prompb.TimeSeri\n func compressPayload(tmpbuf *[]byte, inp []byte, enc Compression) (compressed []byte, _ error) {\n \tswitch enc {\n \tcase SnappyBlockCompression:\n-\t\tcompressed = snappy.Encode(*tmpbuf, inp)\n \t\tif n := snappy.MaxEncodedLen(len(inp)); n > len(*tmpbuf) {\n \t\t\t// grow the buffer for the next time\n \t\t\t*tmpbuf = make([]byte, n)\n \t\t}\n+\t\tcompressed = snappy.Encode(*tmpbuf, inp)\n \t\treturn compressed, nil\n \tdefault:\n \t\treturn compressed, fmt.Errorf(\"Unknown compression scheme [%v]\", enc)\n \t}\n }\n \n-func buildWriteRequest(logger log.Logger, timeSeries []prompb.TimeSeries, metadata []prompb.MetricMetadata, pBuf *proto.Buffer, buf *[]byte, filter func(prompb.TimeSeries) bool, enc Compression) (compressed []byte, highest, lowest int64, _ error) {\n+func buildWriteRequest(logger log.Logger, timeSeries []*prompb.TimeSeries, metadata []*prompb.MetricMetadata, pBuf, buf *[]byte, filter func(*prompb.TimeSeries) bool, enc Compression) (compressed []byte, highest, lowest int64, _ error) {\n \thighest, lowest, timeSeries,\n \t\tdroppedSamples, droppedExemplars, droppedHistograms := buildTimeSeries(timeSeries, filter)\n \n \tif droppedSamples > 0 || droppedExemplars > 0 || droppedHistograms > 0 {\n \t\tlevel.Debug(logger).Log(\"msg\", \"dropped data due to their age\", \"droppedSamples\", droppedSamples, \"droppedExemplars\", droppedExemplars, \"droppedHistograms\", droppedHistograms)\n \t}\n \n-\treq := &prompb.WriteRequest{\n-\t\tTimeseries: timeSeries,\n-\t\tMetadata:   metadata,\n+\treq := prompb.WriteRequestFromVTPool()\n+\treq.Timeseries = timeSeries\n+\treq.Metadata = metadata\n+\tif pBuf == nil {\n+\t\tpBuf = &[]byte{} // For convenience in tests. Not efficient.\n \t}\n \n-\tif pBuf == nil {\n-\t\tpBuf = proto.NewBuffer(nil) // For convenience in tests. Not efficient.\n-\t} else {\n-\t\tpBuf.Reset()\n+\tif len(*pBuf) < req.SizeVT() {\n+\t\t*pBuf = make([]byte, req.SizeVT())\n \t}\n-\terr := pBuf.Marshal(req)\n+\tsize, err := req.MarshalToVT(*pBuf)\n+\treq.Metadata = []*prompb.MetricMetadata{}\n+\treq.Timeseries = []*prompb.TimeSeries{}\n+\treq.ReturnToVTPool()",
+        "comment_created_at": "2024-09-28T16:11:23+00:00",
+        "comment_author": "tonyli233",
+        "comment_body": "We need to reset the `req.Metadata` and `req.Timeseries` since the input `timeSeries` and `metadata` will be reused after the function returns. `req.ReturnToVTPool()` will destroy those fields. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2022305469",
+    "pr_number": 16355,
+    "pr_file": "notifier/queue.go",
+    "created_at": "2025-04-01T07:30:56+00:00",
+    "commented_code": "+// Copyright 2025 The Prometheus Authors\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+// http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package notifier\n+\n+import (\n+\t\"sync\"\n+\n+\t\"go.uber.org/atomic\"\n+)\n+\n+type Queue struct {\n+\tmtx          sync.RWMutex\n+\talerts       []*Alert\n+\tcapacity     int\n+\tmaxBatchSize int\n+\tmore         chan struct{}\n+\tdone         chan struct{}\n+\tclosed       atomic.Bool\n+}\n+\n+func newQueue(capacity, maxBatchSize int) *Queue {\n+\treturn &Queue{\n+\t\tcapacity:     capacity,\n+\t\talerts:       make([]*Alert, 0, capacity),\n+\t\tmore:         make(chan struct{}, 1),\n+\t\tdone:         make(chan struct{}, 1),\n+\t\tmaxBatchSize: maxBatchSize,\n+\t}\n+}\n+\n+func (q *Queue) push(alerts []*Alert) (dropped int) {\n+\tnewAlerts := alerts\n+\n+\tif q.isClosed() {\n+\t\treturn len(newAlerts)\n+\t}\n+\n+\tq.mtx.Lock()\n+\tdefer q.mtx.Unlock()\n+\n+\t// Queue capacity should be significantly larger than a single alert batch could be.\n+\tif d := len(newAlerts) - q.capacity; d > 0 {\n+\t\tnewAlerts = newAlerts[d:]\n+\t\tdropped = d\n+\t}\n+\n+\t// If the Queue is full, remove the oldest alerts in favor of newer ones.\n+\tif d := (len(q.alerts) + len(newAlerts)) - q.capacity; d > 0 {\n+\t\tq.alerts = q.alerts[d:]\n+\n+\t\tdropped += d\n+\t}\n+\n+\tq.alerts = append(q.alerts, newAlerts...)\n+\n+\tq.setMore()\n+\n+\treturn\n+}\n+\n+func (q *Queue) pop() []*Alert {\n+\tq.mtx.Lock()\n+\tdefer q.mtx.Unlock()\n+\n+\tvar alerts []*Alert\n+\n+\tif len(q.alerts) > q.maxBatchSize {\n+\t\talerts = make([]*Alert, q.maxBatchSize)\n+\t\tcopy(alerts, q.alerts[:q.maxBatchSize])\n+\t\tq.alerts = q.alerts[q.maxBatchSize:]",
+    "repo_full_name": "prometheus/prometheus",
+    "discussion_comments": [
+      {
+        "comment_id": "2022305469",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 16355,
+        "pr_file": "notifier/queue.go",
+        "discussion_id": "2022305469",
+        "commented_code": "@@ -0,0 +1,119 @@\n+// Copyright 2025 The Prometheus Authors\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+// http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package notifier\n+\n+import (\n+\t\"sync\"\n+\n+\t\"go.uber.org/atomic\"\n+)\n+\n+type Queue struct {\n+\tmtx          sync.RWMutex\n+\talerts       []*Alert\n+\tcapacity     int\n+\tmaxBatchSize int\n+\tmore         chan struct{}\n+\tdone         chan struct{}\n+\tclosed       atomic.Bool\n+}\n+\n+func newQueue(capacity, maxBatchSize int) *Queue {\n+\treturn &Queue{\n+\t\tcapacity:     capacity,\n+\t\talerts:       make([]*Alert, 0, capacity),\n+\t\tmore:         make(chan struct{}, 1),\n+\t\tdone:         make(chan struct{}, 1),\n+\t\tmaxBatchSize: maxBatchSize,\n+\t}\n+}\n+\n+func (q *Queue) push(alerts []*Alert) (dropped int) {\n+\tnewAlerts := alerts\n+\n+\tif q.isClosed() {\n+\t\treturn len(newAlerts)\n+\t}\n+\n+\tq.mtx.Lock()\n+\tdefer q.mtx.Unlock()\n+\n+\t// Queue capacity should be significantly larger than a single alert batch could be.\n+\tif d := len(newAlerts) - q.capacity; d > 0 {\n+\t\tnewAlerts = newAlerts[d:]\n+\t\tdropped = d\n+\t}\n+\n+\t// If the Queue is full, remove the oldest alerts in favor of newer ones.\n+\tif d := (len(q.alerts) + len(newAlerts)) - q.capacity; d > 0 {\n+\t\tq.alerts = q.alerts[d:]\n+\n+\t\tdropped += d\n+\t}\n+\n+\tq.alerts = append(q.alerts, newAlerts...)\n+\n+\tq.setMore()\n+\n+\treturn\n+}\n+\n+func (q *Queue) pop() []*Alert {\n+\tq.mtx.Lock()\n+\tdefer q.mtx.Unlock()\n+\n+\tvar alerts []*Alert\n+\n+\tif len(q.alerts) > q.maxBatchSize {\n+\t\talerts = make([]*Alert, q.maxBatchSize)\n+\t\tcopy(alerts, q.alerts[:q.maxBatchSize])\n+\t\tq.alerts = q.alerts[q.maxBatchSize:]",
+        "comment_created_at": "2025-04-01T07:30:56+00:00",
+        "comment_author": "krajorama",
+        "comment_body": "As far as I know this reduces the capacity of `q.alerts`, meaning that next time you append to it, you get an allocation. And allocations are the worst for performance. Have you thought of using a circular buffer instead ? That would also get rid of `q.capacity` since `cap(q.alerts)` would have that.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2022442060",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 16355,
+        "pr_file": "notifier/queue.go",
+        "discussion_id": "2022305469",
+        "commented_code": "@@ -0,0 +1,119 @@\n+// Copyright 2025 The Prometheus Authors\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+// http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package notifier\n+\n+import (\n+\t\"sync\"\n+\n+\t\"go.uber.org/atomic\"\n+)\n+\n+type Queue struct {\n+\tmtx          sync.RWMutex\n+\talerts       []*Alert\n+\tcapacity     int\n+\tmaxBatchSize int\n+\tmore         chan struct{}\n+\tdone         chan struct{}\n+\tclosed       atomic.Bool\n+}\n+\n+func newQueue(capacity, maxBatchSize int) *Queue {\n+\treturn &Queue{\n+\t\tcapacity:     capacity,\n+\t\talerts:       make([]*Alert, 0, capacity),\n+\t\tmore:         make(chan struct{}, 1),\n+\t\tdone:         make(chan struct{}, 1),\n+\t\tmaxBatchSize: maxBatchSize,\n+\t}\n+}\n+\n+func (q *Queue) push(alerts []*Alert) (dropped int) {\n+\tnewAlerts := alerts\n+\n+\tif q.isClosed() {\n+\t\treturn len(newAlerts)\n+\t}\n+\n+\tq.mtx.Lock()\n+\tdefer q.mtx.Unlock()\n+\n+\t// Queue capacity should be significantly larger than a single alert batch could be.\n+\tif d := len(newAlerts) - q.capacity; d > 0 {\n+\t\tnewAlerts = newAlerts[d:]\n+\t\tdropped = d\n+\t}\n+\n+\t// If the Queue is full, remove the oldest alerts in favor of newer ones.\n+\tif d := (len(q.alerts) + len(newAlerts)) - q.capacity; d > 0 {\n+\t\tq.alerts = q.alerts[d:]\n+\n+\t\tdropped += d\n+\t}\n+\n+\tq.alerts = append(q.alerts, newAlerts...)\n+\n+\tq.setMore()\n+\n+\treturn\n+}\n+\n+func (q *Queue) pop() []*Alert {\n+\tq.mtx.Lock()\n+\tdefer q.mtx.Unlock()\n+\n+\tvar alerts []*Alert\n+\n+\tif len(q.alerts) > q.maxBatchSize {\n+\t\talerts = make([]*Alert, q.maxBatchSize)\n+\t\tcopy(alerts, q.alerts[:q.maxBatchSize])\n+\t\tq.alerts = q.alerts[q.maxBatchSize:]",
+        "comment_created_at": "2025-04-01T08:55:34+00:00",
+        "comment_author": "siavashs",
+        "comment_body": "This is the same logic which already exists: https://github.com/prometheus/prometheus/blob/bd5b2ea95ce14fba11db871b4068313408465207/notifier/notifier.go#L322\r\nBut we can improve it \ud83d\udc4d ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2032173813",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 16355,
+        "pr_file": "notifier/queue.go",
+        "discussion_id": "2022305469",
+        "commented_code": "@@ -0,0 +1,119 @@\n+// Copyright 2025 The Prometheus Authors\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+// http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package notifier\n+\n+import (\n+\t\"sync\"\n+\n+\t\"go.uber.org/atomic\"\n+)\n+\n+type Queue struct {\n+\tmtx          sync.RWMutex\n+\talerts       []*Alert\n+\tcapacity     int\n+\tmaxBatchSize int\n+\tmore         chan struct{}\n+\tdone         chan struct{}\n+\tclosed       atomic.Bool\n+}\n+\n+func newQueue(capacity, maxBatchSize int) *Queue {\n+\treturn &Queue{\n+\t\tcapacity:     capacity,\n+\t\talerts:       make([]*Alert, 0, capacity),\n+\t\tmore:         make(chan struct{}, 1),\n+\t\tdone:         make(chan struct{}, 1),\n+\t\tmaxBatchSize: maxBatchSize,\n+\t}\n+}\n+\n+func (q *Queue) push(alerts []*Alert) (dropped int) {\n+\tnewAlerts := alerts\n+\n+\tif q.isClosed() {\n+\t\treturn len(newAlerts)\n+\t}\n+\n+\tq.mtx.Lock()\n+\tdefer q.mtx.Unlock()\n+\n+\t// Queue capacity should be significantly larger than a single alert batch could be.\n+\tif d := len(newAlerts) - q.capacity; d > 0 {\n+\t\tnewAlerts = newAlerts[d:]\n+\t\tdropped = d\n+\t}\n+\n+\t// If the Queue is full, remove the oldest alerts in favor of newer ones.\n+\tif d := (len(q.alerts) + len(newAlerts)) - q.capacity; d > 0 {\n+\t\tq.alerts = q.alerts[d:]\n+\n+\t\tdropped += d\n+\t}\n+\n+\tq.alerts = append(q.alerts, newAlerts...)\n+\n+\tq.setMore()\n+\n+\treturn\n+}\n+\n+func (q *Queue) pop() []*Alert {\n+\tq.mtx.Lock()\n+\tdefer q.mtx.Unlock()\n+\n+\tvar alerts []*Alert\n+\n+\tif len(q.alerts) > q.maxBatchSize {\n+\t\talerts = make([]*Alert, q.maxBatchSize)\n+\t\tcopy(alerts, q.alerts[:q.maxBatchSize])\n+\t\tq.alerts = q.alerts[q.maxBatchSize:]",
+        "comment_created_at": "2025-04-08T00:08:49+00:00",
+        "comment_author": "siavashs",
+        "comment_body": "I updated code to implement a circular buffer as suggested.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2074922542",
+    "pr_number": 16355,
+    "pr_file": "notifier/buffer.go",
+    "created_at": "2025-05-06T07:54:23+00:00",
+    "commented_code": "+// Copyright 2025 The Prometheus Authors\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+// http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package notifier\n+\n+import (\n+\t\"sync\"\n+\n+\t\"go.uber.org/atomic\"\n+)\n+\n+// Buffer is a circular buffer for Alerts.\n+type Buffer struct {\n+\tmtx          sync.RWMutex\n+\tdata         []*Alert\n+\tsize         int\n+\tcount        int\n+\treadPointer  int\n+\twritePointer int\n+\tmore         chan struct{}\n+\tdone         chan struct{}\n+\tclosed       atomic.Bool\n+}\n+\n+func newBuffer(size int) *Buffer {\n+\treturn &Buffer{\n+\t\tdata:         make([]*Alert, size),\n+\t\tsize:         size,\n+\t\treadPointer:  0,\n+\t\twritePointer: 0,\n+\t\tcount:        0,\n+\t\tmore:         make(chan struct{}, 1),\n+\t\tdone:         make(chan struct{}, 1),\n+\t}\n+}\n+\n+func (b *Buffer) push(alerts ...*Alert) (dropped int) {\n+\tif b.isClosed() {\n+\t\treturn len(alerts)\n+\t}\n+\n+\tb.mtx.Lock()\n+\tdefer b.mtx.Unlock()\n+\n+\tfor _, a := range alerts {\n+\t\tif b.count == b.size {\n+\t\t\tb.readPointer = (b.readPointer + 1) % b.size\n+\t\t\tdropped++\n+\t\t} else {\n+\t\t\tb.count++\n+\t\t}\n+\t\tb.data[b.writePointer] = a\n+\t\tb.writePointer = (b.writePointer + 1) % b.size\n+\t}\n+\n+\tb.setMore()\n+\n+\treturn\n+}\n+\n+func (b *Buffer) pop(n int) []*Alert {\n+\tb.mtx.Lock()\n+\tdefer b.mtx.Unlock()\n+\n+\tif b.count == 0 {\n+\t\treturn nil\n+\t}\n+\n+\tcount := min(b.count, n)\n+\talerts := make([]*Alert, count)",
+    "repo_full_name": "prometheus/prometheus",
+    "discussion_comments": [
+      {
+        "comment_id": "2074922542",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 16355,
+        "pr_file": "notifier/buffer.go",
+        "discussion_id": "2074922542",
+        "commented_code": "@@ -0,0 +1,120 @@\n+// Copyright 2025 The Prometheus Authors\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+// http://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+\n+package notifier\n+\n+import (\n+\t\"sync\"\n+\n+\t\"go.uber.org/atomic\"\n+)\n+\n+// Buffer is a circular buffer for Alerts.\n+type Buffer struct {\n+\tmtx          sync.RWMutex\n+\tdata         []*Alert\n+\tsize         int\n+\tcount        int\n+\treadPointer  int\n+\twritePointer int\n+\tmore         chan struct{}\n+\tdone         chan struct{}\n+\tclosed       atomic.Bool\n+}\n+\n+func newBuffer(size int) *Buffer {\n+\treturn &Buffer{\n+\t\tdata:         make([]*Alert, size),\n+\t\tsize:         size,\n+\t\treadPointer:  0,\n+\t\twritePointer: 0,\n+\t\tcount:        0,\n+\t\tmore:         make(chan struct{}, 1),\n+\t\tdone:         make(chan struct{}, 1),\n+\t}\n+}\n+\n+func (b *Buffer) push(alerts ...*Alert) (dropped int) {\n+\tif b.isClosed() {\n+\t\treturn len(alerts)\n+\t}\n+\n+\tb.mtx.Lock()\n+\tdefer b.mtx.Unlock()\n+\n+\tfor _, a := range alerts {\n+\t\tif b.count == b.size {\n+\t\t\tb.readPointer = (b.readPointer + 1) % b.size\n+\t\t\tdropped++\n+\t\t} else {\n+\t\t\tb.count++\n+\t\t}\n+\t\tb.data[b.writePointer] = a\n+\t\tb.writePointer = (b.writePointer + 1) % b.size\n+\t}\n+\n+\tb.setMore()\n+\n+\treturn\n+}\n+\n+func (b *Buffer) pop(n int) []*Alert {\n+\tb.mtx.Lock()\n+\tdefer b.mtx.Unlock()\n+\n+\tif b.count == 0 {\n+\t\treturn nil\n+\t}\n+\n+\tcount := min(b.count, n)\n+\talerts := make([]*Alert, count)",
+        "comment_created_at": "2025-05-06T07:54:23+00:00",
+        "comment_author": "krajorama",
+        "comment_body": "nit: we could avoid this allocation if pop received a reusable buffer as input parameter",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2095856624",
+    "pr_number": 14095,
+    "pr_file": "promql/engine.go",
+    "created_at": "2025-05-19T14:33:02+00:00",
+    "commented_code": "return ms, mat.TotalSamples(), ws\n }\n \n+// evalBinaryExpr evaluates the binary expression and returns the evaluated\n+// MatrixSelector in its place. Note that the Name and LabelMatchers are not set.\n+func (ev *evaluator) evalBinaryExpr(ctx context.Context, binexp *parser.BinaryExpr) (*parser.MatrixSelector, int, annotations.Annotations) {\n+\tval, ws := ev.eval(ctx, binexp)\n+\tmat := val.(Matrix)\n+\n+\tvar ms *parser.MatrixSelector\n+\tvar vs *parser.VectorSelector\n+\n+\tparser.Inspect(binexp, func(node parser.Node, _ []parser.Node) error {\n+\t\tif n, ok := node.(*parser.MatrixSelector); ok {\n+\t\t\tms = n\n+\t\t}\n+\t\treturn nil\n+\t})\n+\n+\tvs = ms.VectorSelector.(*parser.VectorSelector)\n+\tvs.Series = make([]storage.Series, 0, len(mat))",
+    "repo_full_name": "prometheus/prometheus",
+    "discussion_comments": [
+      {
+        "comment_id": "2095856624",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 14095,
+        "pr_file": "promql/engine.go",
+        "discussion_id": "2095856624",
+        "commented_code": "@@ -1633,6 +1633,33 @@ func (ev *evaluator) evalSubquery(ctx context.Context, subq *parser.SubqueryExpr\n \treturn ms, mat.TotalSamples(), ws\n }\n \n+// evalBinaryExpr evaluates the binary expression and returns the evaluated\n+// MatrixSelector in its place. Note that the Name and LabelMatchers are not set.\n+func (ev *evaluator) evalBinaryExpr(ctx context.Context, binexp *parser.BinaryExpr) (*parser.MatrixSelector, int, annotations.Annotations) {\n+\tval, ws := ev.eval(ctx, binexp)\n+\tmat := val.(Matrix)\n+\n+\tvar ms *parser.MatrixSelector\n+\tvar vs *parser.VectorSelector\n+\n+\tparser.Inspect(binexp, func(node parser.Node, _ []parser.Node) error {\n+\t\tif n, ok := node.(*parser.MatrixSelector); ok {\n+\t\t\tms = n\n+\t\t}\n+\t\treturn nil\n+\t})\n+\n+\tvs = ms.VectorSelector.(*parser.VectorSelector)\n+\tvs.Series = make([]storage.Series, 0, len(mat))",
+        "comment_created_at": "2025-05-19T14:33:02+00:00",
+        "comment_author": "juliusv",
+        "comment_body": "Since there's no conditional appending here and it's a performance-sensitive piece of code, wouldn't it be faster to pre-set the slice length via `make([]storage.Series, len(mat))` and then use `vs.Series[i] = NewStorageSeries(s)` instead of using `append()`? Although I see that the equivalent code in `evalSubquery()` also doesn't do that currently.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2117727661",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 14095,
+        "pr_file": "promql/engine.go",
+        "discussion_id": "2095856624",
+        "commented_code": "@@ -1633,6 +1633,33 @@ func (ev *evaluator) evalSubquery(ctx context.Context, subq *parser.SubqueryExpr\n \treturn ms, mat.TotalSamples(), ws\n }\n \n+// evalBinaryExpr evaluates the binary expression and returns the evaluated\n+// MatrixSelector in its place. Note that the Name and LabelMatchers are not set.\n+func (ev *evaluator) evalBinaryExpr(ctx context.Context, binexp *parser.BinaryExpr) (*parser.MatrixSelector, int, annotations.Annotations) {\n+\tval, ws := ev.eval(ctx, binexp)\n+\tmat := val.(Matrix)\n+\n+\tvar ms *parser.MatrixSelector\n+\tvar vs *parser.VectorSelector\n+\n+\tparser.Inspect(binexp, func(node parser.Node, _ []parser.Node) error {\n+\t\tif n, ok := node.(*parser.MatrixSelector); ok {\n+\t\t\tms = n\n+\t\t}\n+\t\treturn nil\n+\t})\n+\n+\tvs = ms.VectorSelector.(*parser.VectorSelector)\n+\tvs.Series = make([]storage.Series, 0, len(mat))",
+        "comment_created_at": "2025-05-31T11:25:15+00:00",
+        "comment_author": "darshanime",
+        "comment_body": "we do preset the max capacity of the slice in `vs.Series = make([]storage.Series, 0, len(mat))`; but updated to use the `vs.Series[i] = NewStorageSeries(s)` syntax \ud83d\udc4d ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1503718347",
+    "pr_number": 13592,
+    "pr_file": "model/histogram/float_histogram.go",
+    "created_at": "2024-02-27T06:49:32+00:00",
+    "commented_code": "func (h *FloatHistogram) CopyTo(to *FloatHistogram) {\n \tto.CounterResetHint = h.CounterResetHint\n \tto.Schema = h.Schema\n-\tto.ZeroThreshold = h.ZeroThreshold\n-\tto.ZeroCount = h.ZeroCount\n \tto.Count = h.Count\n \tto.Sum = h.Sum\n \n+\tif h.HasCustomBounds() {\n+\t\tto.ZeroThreshold = 0\n+\t\tto.ZeroCount = 0\n+\n+\t\tto.NegativeSpans = nil",
+    "repo_full_name": "prometheus/prometheus",
+    "discussion_comments": [
+      {
+        "comment_id": "1503718347",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 13592,
+        "pr_file": "model/histogram/float_histogram.go",
+        "discussion_id": "1503718347",
+        "commented_code": "@@ -87,22 +104,35 @@ func (h *FloatHistogram) Copy() *FloatHistogram {\n func (h *FloatHistogram) CopyTo(to *FloatHistogram) {\n \tto.CounterResetHint = h.CounterResetHint\n \tto.Schema = h.Schema\n-\tto.ZeroThreshold = h.ZeroThreshold\n-\tto.ZeroCount = h.ZeroCount\n \tto.Count = h.Count\n \tto.Sum = h.Sum\n \n+\tif h.HasCustomBounds() {\n+\t\tto.ZeroThreshold = 0\n+\t\tto.ZeroCount = 0\n+\n+\t\tto.NegativeSpans = nil",
+        "comment_created_at": "2024-02-27T06:49:32+00:00",
+        "comment_author": "krajorama",
+        "comment_body": "This is for a followup PR at this point:\r\nWe might be throwing away memory here which is against @fpetkovski 's optimization , so probably need to\r\n```suggestion\r\n\t\tif to.NegativeSpans != nil {\r\n       \t\tto.NegativeSpans = to.NegativeSpans[:0]\r\n                }\r\n```\r\n\r\nAnd in validation check for len(h.NegativeSpans) == 0 , not nil.\r\nSame for negative buckets.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1503725833",
+    "pr_number": 13592,
+    "pr_file": "model/histogram/histogram.go",
+    "created_at": "2024-02-27T06:57:08+00:00",
+    "commented_code": "func (h *Histogram) CopyTo(to *Histogram) {\n \tto.CounterResetHint = h.CounterResetHint\n \tto.Schema = h.Schema\n-\tto.ZeroThreshold = h.ZeroThreshold\n-\tto.ZeroCount = h.ZeroCount\n \tto.Count = h.Count\n \tto.Sum = h.Sum\n \n+\tif h.HasCustomBounds() {\n+\t\tto.ZeroThreshold = 0\n+\t\tto.ZeroCount = 0\n+\n+\t\tto.NegativeSpans = nil",
+    "repo_full_name": "prometheus/prometheus",
+    "discussion_comments": [
+      {
+        "comment_id": "1503725833",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 13592,
+        "pr_file": "model/histogram/histogram.go",
+        "discussion_id": "1503725833",
+        "commented_code": "@@ -117,22 +134,35 @@ func (h *Histogram) Copy() *Histogram {\n func (h *Histogram) CopyTo(to *Histogram) {\n \tto.CounterResetHint = h.CounterResetHint\n \tto.Schema = h.Schema\n-\tto.ZeroThreshold = h.ZeroThreshold\n-\tto.ZeroCount = h.ZeroCount\n \tto.Count = h.Count\n \tto.Sum = h.Sum\n \n+\tif h.HasCustomBounds() {\n+\t\tto.ZeroThreshold = 0\n+\t\tto.ZeroCount = 0\n+\n+\t\tto.NegativeSpans = nil",
+        "comment_created_at": "2024-02-27T06:57:08+00:00",
+        "comment_author": "krajorama",
+        "comment_body": "resize to 0 if not nil to save memory, same for buckets",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2063600255",
+    "pr_number": 16429,
+    "pr_file": "scrape/scrape.go",
+    "created_at": "2025-04-28T12:56:39+00:00",
+    "commented_code": "return &scrapeCache{\n \t\tseries:        map[string]*cacheEntry{},\n \t\tdroppedSeries: map[string]*uint64{},\n-\t\tseriesCur:     map[uint64]labels.Labels{},\n-\t\tseriesPrev:    map[uint64]labels.Labels{},\n+\t\tseriesCur:     map[uint64]*cacheEntry{},\n+\t\tseriesPrev:    map[uint64]*cacheEntry{},",
+    "repo_full_name": "prometheus/prometheus",
+    "discussion_comments": [
+      {
+        "comment_id": "2063600255",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 16429,
+        "pr_file": "scrape/scrape.go",
+        "discussion_id": "2063600255",
+        "commented_code": "@@ -1003,8 +1003,8 @@ func newScrapeCache(metrics *scrapeMetrics) *scrapeCache {\n \treturn &scrapeCache{\n \t\tseries:        map[string]*cacheEntry{},\n \t\tdroppedSeries: map[string]*uint64{},\n-\t\tseriesCur:     map[uint64]labels.Labels{},\n-\t\tseriesPrev:    map[uint64]labels.Labels{},\n+\t\tseriesCur:     map[uint64]*cacheEntry{},\n+\t\tseriesPrev:    map[uint64]*cacheEntry{},",
+        "comment_created_at": "2025-04-28T12:56:39+00:00",
+        "comment_author": "bboreham",
+        "comment_body": "Nice bonus: `*cacheEntry` is 8 bytes smaller than `labels.Labels` (16 when Labels is a slice)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2151953466",
+    "pr_number": 16721,
+    "pr_file": "storage/remote/queue_manager_test.go",
+    "created_at": "2025-06-17T10:50:13+00:00",
+    "commented_code": "}\n }\n \n+func (c *TestWriteClient) expectMetadataForBatch(metadata []record.RefMetadata, series []record.RefSeries, samples []record.RefSample, exemplars []record.RefExemplar, histograms []record.RefHistogramSample, floatHistograms []record.RefFloatHistogramSample) {\n+\tc.mtx.Lock()\n+\tdefer c.mtx.Unlock()\n+\n+\tc.expectedMetadata = map[string][]prompb.MetricMetadata{}\n+\tc.receivedMetadata = map[string][]prompb.MetricMetadata{}\n+\n+\t// Collect refs that have data in this batch\n+\trefsWithData := make(map[chunks.HeadSeriesRef]bool)",
+    "repo_full_name": "prometheus/prometheus",
+    "discussion_comments": [
+      {
+        "comment_id": "2151953466",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 16721,
+        "pr_file": "storage/remote/queue_manager_test.go",
+        "discussion_id": "2151953466",
+        "commented_code": "@@ -1051,6 +1056,43 @@ func (c *TestWriteClient) expectFloatHistograms(fhs []record.RefFloatHistogramSa\n \t}\n }\n \n+func (c *TestWriteClient) expectMetadataForBatch(metadata []record.RefMetadata, series []record.RefSeries, samples []record.RefSample, exemplars []record.RefExemplar, histograms []record.RefHistogramSample, floatHistograms []record.RefFloatHistogramSample) {\n+\tc.mtx.Lock()\n+\tdefer c.mtx.Unlock()\n+\n+\tc.expectedMetadata = map[string][]prompb.MetricMetadata{}\n+\tc.receivedMetadata = map[string][]prompb.MetricMetadata{}\n+\n+\t// Collect refs that have data in this batch\n+\trefsWithData := make(map[chunks.HeadSeriesRef]bool)",
+        "comment_created_at": "2025-06-17T10:50:13+00:00",
+        "comment_author": "bwplotka",
+        "comment_body": "nit: we don't need extra \"false\" information.\r\n\r\n```suggestion\r\n\trefsWithData := make(map[chunks.HeadSeriesRef]struct{})\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2153133628",
+        "repo_full_name": "prometheus/prometheus",
+        "pr_number": 16721,
+        "pr_file": "storage/remote/queue_manager_test.go",
+        "discussion_id": "2151953466",
+        "commented_code": "@@ -1051,6 +1056,43 @@ func (c *TestWriteClient) expectFloatHistograms(fhs []record.RefFloatHistogramSa\n \t}\n }\n \n+func (c *TestWriteClient) expectMetadataForBatch(metadata []record.RefMetadata, series []record.RefSeries, samples []record.RefSample, exemplars []record.RefExemplar, histograms []record.RefHistogramSample, floatHistograms []record.RefFloatHistogramSample) {\n+\tc.mtx.Lock()\n+\tdefer c.mtx.Unlock()\n+\n+\tc.expectedMetadata = map[string][]prompb.MetricMetadata{}\n+\tc.receivedMetadata = map[string][]prompb.MetricMetadata{}\n+\n+\t// Collect refs that have data in this batch\n+\trefsWithData := make(map[chunks.HeadSeriesRef]bool)",
+        "comment_created_at": "2025-06-17T20:42:06+00:00",
+        "comment_author": "AxcelXander",
+        "comment_body": "Makes sense - since we're only checking for existence and never use the boolean value, struct{} is the better choice here. Updated!",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

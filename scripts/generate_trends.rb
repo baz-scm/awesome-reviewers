@@ -6,6 +6,18 @@ require "time"
 ROOT = File.expand_path("..", __dir__)
 prompts = Dir.glob("#{ROOT}/_reviewers/**/*.md")
 
+LANG_MAP = {
+  "javascript" => "JavaScript",
+  "typescript" => "TypeScript",
+  "json"       => "JSON",
+  "yaml"       => "YAML",
+  "toml"       => "TOML",
+  "css"        => "CSS",
+  "html"       => "HTML",
+  "xml"        => "XML",
+  "php"        => "PHP"
+}
+
 stats = {
   languages:      Hash.new(0),
   categories:     Hash.new(0),
@@ -19,10 +31,17 @@ stats = {
 }
 
 prompts.each do |file|
-  fm, body = File.read(file).split(/^---\s*$/, 3)[1..2]
-  meta = YAML.safe_load(fm)
+  content = File.read(file)
+  parts = content.split(/^---\s*$/, 3)
+  if parts.size >= 3
+    fm = parts[1]
+    meta = YAML.safe_load(fm) || {}
+  else
+    meta = {}
+  end
 
   lang  = (meta["language"] || "Other").strip
+  lang  = LANG_MAP.fetch(lang.downcase, lang)
   cat   = (meta["label"]    || "Uncategorised").strip
   repo  = (meta["repository"] || "Unknown/Unknown").strip
 

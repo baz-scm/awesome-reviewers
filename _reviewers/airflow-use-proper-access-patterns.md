@@ -27,9 +27,11 @@ def my_task(**context):
 
 For version-dependent configurations, use explicit version comparison functions (like `semverCompare` in Helm) rather than hard-coding version assumptions:
 
+{% raw %}
 ```yaml
 # Good practice (Helm example)
 {{- if and (semverCompare "<3.0.0" .Values.airflowVersion) (or .Values.webserver.webserverConfig .Values.webserver.webserverConfigConfigMapName) }}
 # Version-specific configuration here
 {{- end }}
 ```
+{% endraw %}

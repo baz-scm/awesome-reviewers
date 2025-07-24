@@ -21,21 +21,6 @@ Common issues to watch for:
    ```
    {% endraw %}
 
-2. **Complete template variables**: Always include both opening and closing braces
-   {% raw %}
-   ```diff
-   -"emails.invitation.buttonText": "Accetta invito a {{team}",
-   +"emails.invitation.buttonText": "Accetta invito a {{team}}",
-   ```
-   {% endraw %}
-   
-3. **Proper variable name boundaries**: Don't let punctuation merge with variable names
-   {% raw %}
-   ```diff
-   -"emails.invitation.buttonText": "Elfogadni meghívást a {{team}-re",
-   +"emails.invitation.buttonText": "Elfogadni meghívást a {{team}}-re",
-   ```
-   {% endraw %}
 
 Placeholder errors are particularly problematic because they can:
 - Break runtime string substitution

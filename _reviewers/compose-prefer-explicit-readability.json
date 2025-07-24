@@ -1,0 +1,116 @@
+[
+  {
+    "discussion_id": "350154111",
+    "pr_number": 7052,
+    "pr_file": "compose/project.py",
+    "created_at": "2019-11-25T12:28:22+00:00",
+    "commented_code": "def pull(self, service_names=None, ignore_pull_failures=False, parallel_pull=False, silent=False,\n              include_deps=False):\n         services = self.get_services(service_names, include_deps)\n-        msg = not silent and 'Pulling' or None\n \n         if parallel_pull:\n-            def pull_service(service):\n-                strm = service.pull(ignore_pull_failures, True, stream=True)\n-                if strm is None:  # Attempting to pull service with no `image` key is a no-op\n-                    return\n+            self.parallel_pull(services, silent=silent)\n \n-                writer = parallel.get_stream_writer()\n+        else:\n+            for service in services:\n+                must_build = []\n+                try:\n+                    service.pull(ignore_pull_failures, silent=silent)\n+                except NotFound:\n+                    if service.can_be_built():\n+                        must_build.append(service.name)\n+                    else:\n+                        raise\n+\n+            if len(must_build):\n+                log.warning('Some service image(s) must be built from source by running:\n'\n+                            '    docker compose build {}'\n+                            .format(' '.join(must_build)))\n+\n+    def parallel_pull(self, services, ignore_pull_failures=False, silent=False):\n+        msg = not silent and 'Pulling' or None",
+    "repo_full_name": "docker/compose",
+    "discussion_comments": [
+      {
+        "comment_id": "350154111",
+        "repo_full_name": "docker/compose",
+        "pr_number": 7052,
+        "pr_file": "compose/project.py",
+        "discussion_id": "350154111",
+        "commented_code": "@@ -619,46 +621,68 @@ def _get_convergence_plans(self, services, strategy, always_recreate_deps=False)\n     def pull(self, service_names=None, ignore_pull_failures=False, parallel_pull=False, silent=False,\n              include_deps=False):\n         services = self.get_services(service_names, include_deps)\n-        msg = not silent and 'Pulling' or None\n \n         if parallel_pull:\n-            def pull_service(service):\n-                strm = service.pull(ignore_pull_failures, True, stream=True)\n-                if strm is None:  # Attempting to pull service with no `image` key is a no-op\n-                    return\n+            self.parallel_pull(services, silent=silent)\n \n-                writer = parallel.get_stream_writer()\n+        else:\n+            for service in services:\n+                must_build = []\n+                try:\n+                    service.pull(ignore_pull_failures, silent=silent)\n+                except NotFound:\n+                    if service.can_be_built():\n+                        must_build.append(service.name)\n+                    else:\n+                        raise\n+\n+            if len(must_build):\n+                log.warning('Some service image(s) must be built from source by running:\\n'\n+                            '    docker compose build {}'\n+                            .format(' '.join(must_build)))\n+\n+    def parallel_pull(self, services, ignore_pull_failures=False, silent=False):\n+        msg = not silent and 'Pulling' or None",
+        "comment_created_at": "2019-11-25T12:28:22+00:00",
+        "comment_author": "ulyssessouza",
+        "comment_body": "Not sure if I understood this line, but the following equivalent would be more readable.\r\n\r\n```suggestion\r\n        msg = 'Pulling' if not silent else None\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "350158441",
+        "repo_full_name": "docker/compose",
+        "pr_number": 7052,
+        "pr_file": "compose/project.py",
+        "discussion_id": "350154111",
+        "commented_code": "@@ -619,46 +621,68 @@ def _get_convergence_plans(self, services, strategy, always_recreate_deps=False)\n     def pull(self, service_names=None, ignore_pull_failures=False, parallel_pull=False, silent=False,\n              include_deps=False):\n         services = self.get_services(service_names, include_deps)\n-        msg = not silent and 'Pulling' or None\n \n         if parallel_pull:\n-            def pull_service(service):\n-                strm = service.pull(ignore_pull_failures, True, stream=True)\n-                if strm is None:  # Attempting to pull service with no `image` key is a no-op\n-                    return\n+            self.parallel_pull(services, silent=silent)\n \n-                writer = parallel.get_stream_writer()\n+        else:\n+            for service in services:\n+                must_build = []\n+                try:\n+                    service.pull(ignore_pull_failures, silent=silent)\n+                except NotFound:\n+                    if service.can_be_built():\n+                        must_build.append(service.name)\n+                    else:\n+                        raise\n+\n+            if len(must_build):\n+                log.warning('Some service image(s) must be built from source by running:\\n'\n+                            '    docker compose build {}'\n+                            .format(' '.join(must_build)))\n+\n+    def parallel_pull(self, services, ignore_pull_failures=False, silent=False):\n+        msg = not silent and 'Pulling' or None",
+        "comment_created_at": "2019-11-25T12:37:40+00:00",
+        "comment_author": "ndeloof",
+        "comment_body": "took me time indeed to understand this syntax used in original code.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "39742829",
+    "pr_number": 2051,
+    "pr_file": "compose/config/config.py",
+    "created_at": "2015-09-17T13:13:46+00:00",
+    "commented_code": "Pre validation checks and processing of the config file to interpolate env\n     vars returning a config dict ready to be tested against the schema.\n     \"\"\"\n-    config = interpolate_environment_variables(config)\n-    return config\n+    return interpolate_environment_variables(config)\n \n \n def load(config_details):\n-    config, working_dir, filename = config_details\n+    working_dir, configs = config_details\n \n-    processed_config = pre_process_config(config)\n-    validate_against_fields_schema(processed_config)\n-\n-    service_dicts = []\n-\n-    for service_name, service_dict in list(processed_config.items()):\n-        loader = ServiceLoader(\n-            working_dir=working_dir,\n-            filename=filename,\n-            service_name=service_name,\n-            service_dict=service_dict)\n+    def build_service(filename, service_name, service_dict):\n+        loader = ServiceLoader(working_dir, filename, service_name, service_dict)\n         service_dict = loader.make_service_dict()\n         validate_paths(service_dict)\n-        service_dicts.append(service_dict)\n-\n-    return service_dicts\n+        return service_dict\n+\n+    def load_file(filename, config):\n+        processed_config = pre_process_config(config)\n+        validate_against_fields_schema(processed_config)\n+        return [\n+            build_service(filename, name, service_config)\n+            for name, service_config in processed_config.items()\n+        ]\n+\n+    def merge_services(base, override):\n+        return {\n+            name: merge_service_dicts(base.get(name, {}), override.get(name, {}))\n+            for name in set(base) | set(override)\n+        }\n+\n+    def combine_configs(base, override):\n+        service_dicts = load_file(base.filename, base.config)\n+        if not override:\n+            return service_dicts\n+\n+        return ConfigFile(\n+            override.filename,\n+            merge_services(base.config, override.config))\n+\n+    return reduce(combine_configs, configs + [None])",
+    "repo_full_name": "docker/compose",
+    "discussion_comments": [
+      {
+        "comment_id": "39742829",
+        "repo_full_name": "docker/compose",
+        "pr_number": 2051,
+        "pr_file": "compose/config/config.py",
+        "discussion_id": "39742829",
+        "commented_code": "@@ -132,29 +163,42 @@ def pre_process_config(config):\n     Pre validation checks and processing of the config file to interpolate env\n     vars returning a config dict ready to be tested against the schema.\n     \"\"\"\n-    config = interpolate_environment_variables(config)\n-    return config\n+    return interpolate_environment_variables(config)\n \n \n def load(config_details):\n-    config, working_dir, filename = config_details\n+    working_dir, configs = config_details\n \n-    processed_config = pre_process_config(config)\n-    validate_against_fields_schema(processed_config)\n-\n-    service_dicts = []\n-\n-    for service_name, service_dict in list(processed_config.items()):\n-        loader = ServiceLoader(\n-            working_dir=working_dir,\n-            filename=filename,\n-            service_name=service_name,\n-            service_dict=service_dict)\n+    def build_service(filename, service_name, service_dict):\n+        loader = ServiceLoader(working_dir, filename, service_name, service_dict)\n         service_dict = loader.make_service_dict()\n         validate_paths(service_dict)\n-        service_dicts.append(service_dict)\n-\n-    return service_dicts\n+        return service_dict\n+\n+    def load_file(filename, config):\n+        processed_config = pre_process_config(config)\n+        validate_against_fields_schema(processed_config)\n+        return [\n+            build_service(filename, name, service_config)\n+            for name, service_config in processed_config.items()\n+        ]\n+\n+    def merge_services(base, override):\n+        return {\n+            name: merge_service_dicts(base.get(name, {}), override.get(name, {}))\n+            for name in set(base) | set(override)\n+        }\n+\n+    def combine_configs(base, override):\n+        service_dicts = load_file(base.filename, base.config)\n+        if not override:\n+            return service_dicts\n+\n+        return ConfigFile(\n+            override.filename,\n+            merge_services(base.config, override.config))\n+\n+    return reduce(combine_configs, configs + [None])",
+        "comment_created_at": "2015-09-17T13:13:46+00:00",
+        "comment_author": "aanand",
+        "comment_body": "This took me a long time to wrap my head around. I think it could be a lot less smart.\n- `reduce` always, always makes my head hurt. Here in particular, `combine_configs` is returning a completely different type in the intermediate vs. the terminal case (list of dicts vs. `ConfigFile`). Could we make it just a plain loop?\n- I had to stare at the set union in `merge_services` for a bit. Could we assign it to a variable so its purpose is clear?\n  \n  ``` python\n  all_service_names = set(base) | set(override)\n  return {\n      ...\n      for name in all_service_names\n  }\n  ```\n- `configs` is a strange name - could we change it to `config_files`, since (if I understand it correctly) it's a list of `ConfigFile` objects? We should also do the same with `ConfigDetails.configs`.\n  \n  Also, we should probably document the attributes (including types) of both `ConfigDetails` and `ConfigFile`.\n- The nested functions make `load` a difficult function to skim because of how much I have to keep in my head, and they happen in between two lines of code, making the flow difficult to follow. Could we either define them all at the very top, or move them out to the module level?\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "532835591",
+    "pr_number": 7930,
+    "pr_file": "compose/project.py",
+    "created_at": "2020-11-30T19:12:40+00:00",
+    "commented_code": "reordering as needed to resolve dependencies.\n \n         Raises NoSuchService if any of the named services do not exist.\n+\n+        Raises ConfigurationError if any service depended on is not enabled by active profiles\n         \"\"\"\n+        enabled_profiles = self.enabled_profiles.copy()\n+\n         if service_names is None or len(service_names) == 0:\n-            service_names = self.service_names\n+            auto_enable_profiles = False\n+            service_names = [\n+                service.name\n+                for service in self.services\n+                # only include services without profiles or in enabled profiles\n+                if 'profiles' not in service.options or [\n+                    e for e in service.options.get('profiles')\n+                    if e in enabled_profiles\n+                ]\n+            ]",
+    "repo_full_name": "docker/compose",
+    "discussion_comments": [
+      {
+        "comment_id": "532835591",
+        "repo_full_name": "docker/compose",
+        "pr_number": 7930,
+        "pr_file": "compose/project.py",
+        "discussion_id": "532835591",
+        "commented_code": "@@ -198,15 +201,42 @@ def get_services(self, service_names=None, include_deps=False):\n         reordering as needed to resolve dependencies.\n \n         Raises NoSuchService if any of the named services do not exist.\n+\n+        Raises ConfigurationError if any service depended on is not enabled by active profiles\n         \"\"\"\n+        enabled_profiles = self.enabled_profiles.copy()\n+\n         if service_names is None or len(service_names) == 0:\n-            service_names = self.service_names\n+            auto_enable_profiles = False\n+            service_names = [\n+                service.name\n+                for service in self.services\n+                # only include services without profiles or in enabled profiles\n+                if 'profiles' not in service.options or [\n+                    e for e in service.options.get('profiles')\n+                    if e in enabled_profiles\n+                ]\n+            ]",
+        "comment_created_at": "2020-11-30T19:12:40+00:00",
+        "comment_author": "ulyssessouza",
+        "comment_body": "IMHO this list comprehension seems too big.  Even looks like the  `if` is inside `for`but not respecting indentation.\r\nI think this deserves a verbose version",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "533614634",
+        "repo_full_name": "docker/compose",
+        "pr_number": 7930,
+        "pr_file": "compose/project.py",
+        "discussion_id": "532835591",
+        "commented_code": "@@ -198,15 +201,42 @@ def get_services(self, service_names=None, include_deps=False):\n         reordering as needed to resolve dependencies.\n \n         Raises NoSuchService if any of the named services do not exist.\n+\n+        Raises ConfigurationError if any service depended on is not enabled by active profiles\n         \"\"\"\n+        enabled_profiles = self.enabled_profiles.copy()\n+\n         if service_names is None or len(service_names) == 0:\n-            service_names = self.service_names\n+            auto_enable_profiles = False\n+            service_names = [\n+                service.name\n+                for service in self.services\n+                # only include services without profiles or in enabled profiles\n+                if 'profiles' not in service.options or [\n+                    e for e in service.options.get('profiles')\n+                    if e in enabled_profiles\n+                ]\n+            ]",
+        "comment_created_at": "2020-12-01T18:02:40+00:00",
+        "comment_author": "acran",
+        "comment_body": "oh yes, there seems to be indentation missing/wrong.\r\nHow would I make this more _verbose_? extract into a separate function?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "533802682",
+        "repo_full_name": "docker/compose",
+        "pr_number": 7930,
+        "pr_file": "compose/project.py",
+        "discussion_id": "532835591",
+        "commented_code": "@@ -198,15 +201,42 @@ def get_services(self, service_names=None, include_deps=False):\n         reordering as needed to resolve dependencies.\n \n         Raises NoSuchService if any of the named services do not exist.\n+\n+        Raises ConfigurationError if any service depended on is not enabled by active profiles\n         \"\"\"\n+        enabled_profiles = self.enabled_profiles.copy()\n+\n         if service_names is None or len(service_names) == 0:\n-            service_names = self.service_names\n+            auto_enable_profiles = False\n+            service_names = [\n+                service.name\n+                for service in self.services\n+                # only include services without profiles or in enabled profiles\n+                if 'profiles' not in service.options or [\n+                    e for e in service.options.get('profiles')\n+                    if e in enabled_profiles\n+                ]\n+            ]",
+        "comment_created_at": "2020-12-01T23:58:43+00:00",
+        "comment_author": "acran",
+        "comment_body": "I now moved this to [`service.enabled_for_profiles(enabled_profiles)`](https://github.com/docker/compose/commit/a5e5318f8c1eb9b5e3a7cafb154af8ce6b9aee20#diff-c0385cfc998f4ccdf336127a3d7cc3c934fa3067c8e04e67dac7da47846da6f0R1340-R1350) which should make it clearer and also re-used this in `_inject_deps`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "533804260",
+        "repo_full_name": "docker/compose",
+        "pr_number": 7930,
+        "pr_file": "compose/project.py",
+        "discussion_id": "532835591",
+        "commented_code": "@@ -198,15 +201,42 @@ def get_services(self, service_names=None, include_deps=False):\n         reordering as needed to resolve dependencies.\n \n         Raises NoSuchService if any of the named services do not exist.\n+\n+        Raises ConfigurationError if any service depended on is not enabled by active profiles\n         \"\"\"\n+        enabled_profiles = self.enabled_profiles.copy()\n+\n         if service_names is None or len(service_names) == 0:\n-            service_names = self.service_names\n+            auto_enable_profiles = False\n+            service_names = [\n+                service.name\n+                for service in self.services\n+                # only include services without profiles or in enabled profiles\n+                if 'profiles' not in service.options or [\n+                    e for e in service.options.get('profiles')\n+                    if e in enabled_profiles\n+                ]\n+            ]",
+        "comment_created_at": "2020-12-02T00:02:36+00:00",
+        "comment_author": "acran",
+        "comment_body": "also, the indentation actually was correct - at least syntactically; and regarding the coding style matching with other list comprehensions already in the code.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

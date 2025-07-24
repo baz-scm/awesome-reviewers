@@ -109,7 +109,9 @@ if (menuToggle && headerEl) {
   menuToggle.addEventListener('click', () => {
     headerEl.classList.toggle('open');
     const open = headerEl.classList.contains('open');
-    menuToggle.querySelector('.hamburger-icon').style.display = open ? 'none' : 'block';
-    menuToggle.querySelector('.close-icon').style.display = open ? 'block' : 'none';
+    const hamburgerIcon = menuToggle.querySelector('.hamburger-icon');
+    const closeIcon = menuToggle.querySelector('.close-icon');
+    if (hamburgerIcon) hamburgerIcon.style.display = open ? 'none' : 'block';
+    if (closeIcon) closeIcon.style.display = open ? 'block' : 'none';
   });
 }

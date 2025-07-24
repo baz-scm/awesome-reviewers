@@ -1,0 +1,216 @@
+[
+  {
+    "discussion_id": "2219164447",
+    "pr_number": 144236,
+    "pr_file": "library/core/src/mem/drop_guard.rs",
+    "created_at": "2025-07-21T13:07:03+00:00",
+    "commented_code": "+use crate::mem::ManuallyDrop;\n+use crate::ops::{Deref, DerefMut};\n+use crate::ptr;\n+\n+/// Wrap a value and run a closure when dropped.\n+///\n+/// This is useful for quickly creating desructors inline.\n+///\n+/// # Examples\n+///\n+/// ```rust\n+/// # #![allow(unused)]\n+/// use std::mem::DropGuard;\n+///\n+/// {\n+///     // Create a new guard around a string that will\n+///     // print its value when dropped.\n+///     let s = String::from(\"Chashu likes tuna\");\n+///     let mut s = DropGuard::new(s, |s| println!(\"{s}\"));\n+///\n+///     // Modify the string contained in the guard.\n+///     s.push_str(\"!!!\");\n+///\n+///     // The guard will be dropped here, printing:\n+///     // \"Chashu likes tuna!!!\"\n+/// }\n+/// ```\n+#[unstable(feature = \"drop_guard\", issue = \"none\")]\n+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]\n+pub struct DropGuard<T, F>\n+where\n+    F: FnOnce(T),\n+{\n+    inner: ManuallyDrop<T>,\n+    f: ManuallyDrop<F>,\n+}\n+\n+impl<T, F> DropGuard<T, F>\n+where\n+    F: FnOnce(T),\n+{\n+    /// Create a new instance of `DropGuard`.\n+    ///\n+    /// # Example\n+    ///\n+    /// ```rust\n+    /// # #![allow(unused)]\n+    /// use std::mem::DropGuard;\n+    ///\n+    /// let value = String::from(\"Chashu likes tuna\");\n+    /// let guard = DropGuard::new(value, |s| println!(\"{s}\"));\n+    /// ```\n+    #[unstable(feature = \"drop_guard\", issue = \"none\")]\n+    pub fn new(inner: T, f: F) -> Self {\n+        Self { inner: ManuallyDrop::new(inner), f: ManuallyDrop::new(f) }\n+    }\n+\n+    /// Consumes the `Guard`, returning the wrapped value.\n+    ///\n+    /// This will not execute the closure. This is implemented as a static\n+    /// method to prevent any potential conflicts with any other methods called\n+    /// `into_inner` from the `Deref` and `DerefMut` impls.\n+    ///\n+    /// It is typically preferred to call this function instead of `mem::forget`\n+    /// because it will appropriately de-initialize the closure stored in the\n+    /// `DropGuard` before returning the stored value.\n+    ///\n+    /// # Example\n+    ///\n+    /// ```rust\n+    /// # #![allow(unused)]\n+    /// use std::mem::DropGuard;\n+    ///\n+    /// let value = String::from(\"Nori likes chicken\");\n+    /// let guard = DropGuard::new(value, |s| println!(\"{s}\"));\n+    /// assert_eq!(Guard::into_inner(guard), \"Nori likes chicken\");\n+    /// ```\n+    #[unstable(feature = \"drop_guard\", issue = \"none\")]\n+    #[inline]\n+    pub fn into_inner(guard: Self) -> T {\n+        // Implementation note: this is the same approach that scopeguard takes.\n+\n+        // First we ensure that dropping the guard will not trigger\n+        // its destructor\n+        let mut guard = ManuallyDrop::new(guard);\n+\n+        // Next we manually read the stored value from the guard.\n+        //\n+        // SAFETY: this is safe because we've taken ownership of the guard.\n+        let value = unsafe { ptr::read(&*guard.inner) };\n+\n+        // Finally we drop the stored closure. We do this *after* having read\n+        // the value, so that even if the closure's `drop` function panics,\n+        // unwinding still tries to drop the value.\n+        //\n+        // SAFETY: this is safe because we've taken ownership of the guard.\n+        unsafe { ManuallyDrop::drop(&mut guard.f) };\n+        value\n+    }\n+}\n+\n+#[unstable(feature = \"drop_guard\", issue = \"none\")]\n+impl<T, F> Deref for DropGuard<T, F>\n+where\n+    F: FnOnce(T),\n+{\n+    type Target = T;\n+\n+    fn deref(&self) -> &T {\n+        &*self.inner\n+    }\n+}\n+\n+#[unstable(feature = \"drop_guard\", issue = \"none\")]\n+impl<T, F> DerefMut for DropGuard<T, F>\n+where\n+    F: FnOnce(T),\n+{\n+    fn deref_mut(&mut self) -> &mut T {\n+        &mut *self.inner\n+    }\n+}\n+\n+#[unstable(feature = \"drop_guard\", issue = \"none\")]\n+impl<T, F> Drop for DropGuard<T, F>\n+where\n+    F: FnOnce(T),\n+{\n+    fn drop(&mut self) {\n+        // SAFETY: we're taking the values out of the `ManuallyDrop` with\n+        // the express intent of dropping them.\n+        let inner = unsafe { ManuallyDrop::take(&mut self.inner) };\n+        let f = unsafe { ManuallyDrop::take(&mut self.f) };\n+        f(inner);\n+    }\n+}\n+\n+// tests copied from https://docs.rs/scopeguard/latest/src/scopeguard/lib.rs.html#1-595\n+#[cfg(test)]\n+mod tests {",
+    "repo_full_name": "rust-lang/rust",
+    "discussion_comments": [
+      {
+        "comment_id": "2219164447",
+        "repo_full_name": "rust-lang/rust",
+        "pr_number": 144236,
+        "pr_file": "library/core/src/mem/drop_guard.rs",
+        "discussion_id": "2219164447",
+        "commented_code": "@@ -0,0 +1,166 @@\n+use crate::mem::ManuallyDrop;\n+use crate::ops::{Deref, DerefMut};\n+use crate::ptr;\n+\n+/// Wrap a value and run a closure when dropped.\n+///\n+/// This is useful for quickly creating desructors inline.\n+///\n+/// # Examples\n+///\n+/// ```rust\n+/// # #![allow(unused)]\n+/// use std::mem::DropGuard;\n+///\n+/// {\n+///     // Create a new guard around a string that will\n+///     // print its value when dropped.\n+///     let s = String::from(\"Chashu likes tuna\");\n+///     let mut s = DropGuard::new(s, |s| println!(\"{s}\"));\n+///\n+///     // Modify the string contained in the guard.\n+///     s.push_str(\"!!!\");\n+///\n+///     // The guard will be dropped here, printing:\n+///     // \"Chashu likes tuna!!!\"\n+/// }\n+/// ```\n+#[unstable(feature = \"drop_guard\", issue = \"none\")]\n+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]\n+pub struct DropGuard<T, F>\n+where\n+    F: FnOnce(T),\n+{\n+    inner: ManuallyDrop<T>,\n+    f: ManuallyDrop<F>,\n+}\n+\n+impl<T, F> DropGuard<T, F>\n+where\n+    F: FnOnce(T),\n+{\n+    /// Create a new instance of `DropGuard`.\n+    ///\n+    /// # Example\n+    ///\n+    /// ```rust\n+    /// # #![allow(unused)]\n+    /// use std::mem::DropGuard;\n+    ///\n+    /// let value = String::from(\"Chashu likes tuna\");\n+    /// let guard = DropGuard::new(value, |s| println!(\"{s}\"));\n+    /// ```\n+    #[unstable(feature = \"drop_guard\", issue = \"none\")]\n+    pub fn new(inner: T, f: F) -> Self {\n+        Self { inner: ManuallyDrop::new(inner), f: ManuallyDrop::new(f) }\n+    }\n+\n+    /// Consumes the `Guard`, returning the wrapped value.\n+    ///\n+    /// This will not execute the closure. This is implemented as a static\n+    /// method to prevent any potential conflicts with any other methods called\n+    /// `into_inner` from the `Deref` and `DerefMut` impls.\n+    ///\n+    /// It is typically preferred to call this function instead of `mem::forget`\n+    /// because it will appropriately de-initialize the closure stored in the\n+    /// `DropGuard` before returning the stored value.\n+    ///\n+    /// # Example\n+    ///\n+    /// ```rust\n+    /// # #![allow(unused)]\n+    /// use std::mem::DropGuard;\n+    ///\n+    /// let value = String::from(\"Nori likes chicken\");\n+    /// let guard = DropGuard::new(value, |s| println!(\"{s}\"));\n+    /// assert_eq!(Guard::into_inner(guard), \"Nori likes chicken\");\n+    /// ```\n+    #[unstable(feature = \"drop_guard\", issue = \"none\")]\n+    #[inline]\n+    pub fn into_inner(guard: Self) -> T {\n+        // Implementation note: this is the same approach that scopeguard takes.\n+\n+        // First we ensure that dropping the guard will not trigger\n+        // its destructor\n+        let mut guard = ManuallyDrop::new(guard);\n+\n+        // Next we manually read the stored value from the guard.\n+        //\n+        // SAFETY: this is safe because we've taken ownership of the guard.\n+        let value = unsafe { ptr::read(&*guard.inner) };\n+\n+        // Finally we drop the stored closure. We do this *after* having read\n+        // the value, so that even if the closure's `drop` function panics,\n+        // unwinding still tries to drop the value.\n+        //\n+        // SAFETY: this is safe because we've taken ownership of the guard.\n+        unsafe { ManuallyDrop::drop(&mut guard.f) };\n+        value\n+    }\n+}\n+\n+#[unstable(feature = \"drop_guard\", issue = \"none\")]\n+impl<T, F> Deref for DropGuard<T, F>\n+where\n+    F: FnOnce(T),\n+{\n+    type Target = T;\n+\n+    fn deref(&self) -> &T {\n+        &*self.inner\n+    }\n+}\n+\n+#[unstable(feature = \"drop_guard\", issue = \"none\")]\n+impl<T, F> DerefMut for DropGuard<T, F>\n+where\n+    F: FnOnce(T),\n+{\n+    fn deref_mut(&mut self) -> &mut T {\n+        &mut *self.inner\n+    }\n+}\n+\n+#[unstable(feature = \"drop_guard\", issue = \"none\")]\n+impl<T, F> Drop for DropGuard<T, F>\n+where\n+    F: FnOnce(T),\n+{\n+    fn drop(&mut self) {\n+        // SAFETY: we're taking the values out of the `ManuallyDrop` with\n+        // the express intent of dropping them.\n+        let inner = unsafe { ManuallyDrop::take(&mut self.inner) };\n+        let f = unsafe { ManuallyDrop::take(&mut self.f) };\n+        f(inner);\n+    }\n+}\n+\n+// tests copied from https://docs.rs/scopeguard/latest/src/scopeguard/lib.rs.html#1-595\n+#[cfg(test)]\n+mod tests {",
+        "comment_created_at": "2025-07-21T13:07:03+00:00",
+        "comment_author": "bjorn3",
+        "comment_body": "Copying https://github.com/rust-lang/rust/pull/144236#discussion_r2219160177 to a top-level review comment to ensure it isn't lost:\r\n\r\n> `#[test]` inside `library/core` is ignored. Tests for libcore should be in `library/coretests` instead.\r\n\r\nTidy also complains about this.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2161076280",
+    "pr_number": 142531,
+    "pr_file": "tests/mir-opt/copy-prop/copy_prop_borrowed_storage_not_removed.rs",
+    "created_at": "2025-06-23T08:53:59+00:00",
+    "commented_code": "+// skip-filecheck",
+    "repo_full_name": "rust-lang/rust",
+    "discussion_comments": [
+      {
+        "comment_id": "2161076280",
+        "repo_full_name": "rust-lang/rust",
+        "pr_number": 142531,
+        "pr_file": "tests/mir-opt/copy-prop/copy_prop_borrowed_storage_not_removed.rs",
+        "discussion_id": "2161076280",
+        "commented_code": "@@ -0,0 +1,30 @@\n+// skip-filecheck",
+        "comment_created_at": "2025-06-23T08:53:59+00:00",
+        "comment_author": "tmiasko",
+        "comment_body": "Add FileCheck annotations for the test (and to all new tests in general).",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2216455884",
+    "pr_number": 144113,
+    "pr_file": "tests/ui/lint/dead-code/allow-unused-trait.rs",
+    "created_at": "2025-07-18T16:33:33+00:00",
+    "commented_code": "+//@ check-pass\n+\n+#![deny(dead_code)]\n+\n+#[allow(dead_code)]\n+trait Foo {\n+    const FOO: u32;\n+}\n+\n+impl Foo for u32 {\n+    const FOO: u32 = bar(0);",
+    "repo_full_name": "rust-lang/rust",
+    "discussion_comments": [
+      {
+        "comment_id": "2216455884",
+        "repo_full_name": "rust-lang/rust",
+        "pr_number": 144113,
+        "pr_file": "tests/ui/lint/dead-code/allow-unused-trait.rs",
+        "discussion_id": "2216455884",
+        "commented_code": "@@ -0,0 +1,18 @@\n+//@ check-pass\n+\n+#![deny(dead_code)]\n+\n+#[allow(dead_code)]\n+trait Foo {\n+    const FOO: u32;\n+}\n+\n+impl Foo for u32 {\n+    const FOO: u32 = bar(0);",
+        "comment_created_at": "2025-07-18T16:33:33+00:00",
+        "comment_author": "compiler-errors",
+        "comment_body": "This test should probably also demonstrate the analogous behavior for `fn` items. And do we lint for unused structs in associated items?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2211368914",
+    "pr_number": 143628,
+    "pr_file": "tests/ui/traits/const-traits/const-traits-core.rs",
+    "created_at": "2025-07-16T19:30:13+00:00",
+    "commented_code": "-//@ run-pass",
+    "repo_full_name": "rust-lang/rust",
+    "discussion_comments": [
+      {
+        "comment_id": "2211368914",
+        "repo_full_name": "rust-lang/rust",
+        "pr_number": 143628,
+        "pr_file": "tests/ui/traits/const-traits/const-traits-core.rs",
+        "discussion_id": "2211368914",
+        "commented_code": "@@ -1,6 +1,6 @@\n-//@ run-pass",
+        "comment_created_at": "2025-07-16T19:30:13+00:00",
+        "comment_author": "compiler-errors",
+        "comment_body": "Please don't turn a run-pass test into a failing one. Please put the clone tests into a separate file.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2030227673",
+    "pr_number": 139451,
+    "pr_file": "compiler/rustc_target/src/spec/base/apple/tests.rs",
+    "created_at": "2025-04-06T18:40:42+00:00",
+    "commented_code": "];\n \n     for target in &all_sim_targets {\n-        assert_eq!(target.abi, \"sim\")\n+        assert_eq!(target.env, \"sim\")",
+    "repo_full_name": "rust-lang/rust",
+    "discussion_comments": [
+      {
+        "comment_id": "2030227673",
+        "repo_full_name": "rust-lang/rust",
+        "pr_number": 139451,
+        "pr_file": "compiler/rustc_target/src/spec/base/apple/tests.rs",
+        "discussion_id": "2030227673",
+        "commented_code": "@@ -18,7 +18,7 @@ fn simulator_targets_set_abi() {\n     ];\n \n     for target in &all_sim_targets {\n-        assert_eq!(target.abi, \"sim\")\n+        assert_eq!(target.env, \"sim\")",
+        "comment_created_at": "2025-04-06T18:40:42+00:00",
+        "comment_author": "BlackHoleFox",
+        "comment_body": "Could probably check both `.abi` and `.env` here to validate backwards compact doesn't regress mistakenly?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2200189989",
+    "pr_number": 143771,
+    "pr_file": "library/coretests/tests/result.rs",
+    "created_at": "2025-07-11T09:20:55+00:00",
+    "commented_code": "assert_eq!(Ok::<NonZero<u32>, ()>(one).branch(), Continue(one));\n     assert_eq!(Err::<NonZero<u32>, ()>(()).branch(), Break(Err(())));\n }\n+\n+// helper functions for const contexts\n+const fn eq10(x: u8) -> bool {\n+    x == 10\n+}\n+const fn eq20(e: u8) -> bool {\n+    e == 20\n+}\n+const fn double_u16(x: u8) -> u16 {\n+    x as u16 * 2\n+}\n+const fn to_u16(x: u8) -> u16 {\n+    x as u16\n+}\n+const fn err_to_u16_plus1(e: u8) -> u16 {\n+    e as u16 + 1\n+}\n+const fn inc_u8(x: u8) -> u8 {\n+    x + 1\n+}\n+const fn noop_u8_ref(_x: &u8) {}\n+const fn add1_result(x: u8) -> Result<u8, u8> {\n+    Ok(x + 1)\n+}\n+const fn add5_result(e: u8) -> Result<u8, u8> {\n+    Ok(e + 5)\n+}\n+const fn plus7_u8(e: u8) -> u8 {\n+    e + 7\n+}\n+\n+const _: () = {",
+    "repo_full_name": "rust-lang/rust",
+    "discussion_comments": [
+      {
+        "comment_id": "2200189989",
+        "repo_full_name": "rust-lang/rust",
+        "pr_number": 143771,
+        "pr_file": "library/coretests/tests/result.rs",
+        "discussion_id": "2200189989",
+        "commented_code": "@@ -421,3 +421,66 @@ fn result_try_trait_v2_branch() {\n     assert_eq!(Ok::<NonZero<u32>, ()>(one).branch(), Continue(one));\n     assert_eq!(Err::<NonZero<u32>, ()>(()).branch(), Break(Err(())));\n }\n+\n+// helper functions for const contexts\n+const fn eq10(x: u8) -> bool {\n+    x == 10\n+}\n+const fn eq20(e: u8) -> bool {\n+    e == 20\n+}\n+const fn double_u16(x: u8) -> u16 {\n+    x as u16 * 2\n+}\n+const fn to_u16(x: u8) -> u16 {\n+    x as u16\n+}\n+const fn err_to_u16_plus1(e: u8) -> u16 {\n+    e as u16 + 1\n+}\n+const fn inc_u8(x: u8) -> u8 {\n+    x + 1\n+}\n+const fn noop_u8_ref(_x: &u8) {}\n+const fn add1_result(x: u8) -> Result<u8, u8> {\n+    Ok(x + 1)\n+}\n+const fn add5_result(e: u8) -> Result<u8, u8> {\n+    Ok(e + 5)\n+}\n+const fn plus7_u8(e: u8) -> u8 {\n+    e + 7\n+}\n+\n+const _: () = {",
+        "comment_created_at": "2025-07-11T09:20:55+00:00",
+        "comment_author": "tgross35",
+        "comment_body": "For nicer error messages, this all could be moved into within a `#[test]` function and then replace `const _: ()` with a `const { ... }` block. Similar to e.g. https://github.com/rust-lang/rust/blob/855e0fe46e68d94e9f6147531b75ac2d488c548e/library/coretests/tests/ptr.rs#L896.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2192583685",
+    "pr_number": 143636,
+    "pr_file": "tests/run-make/num-fmt/rmake.rs",
+    "created_at": "2025-07-08T13:46:17+00:00",
+    "commented_code": "+// Test to ensure that if you use a `NumBuffer` with a too small integer, it\n+// will fail at compilation time.\n+\n+// FIXME: This test should be a `ui` test, but not possible for the following reasons:\n+// * With the default `--emit`, the compilation succeeds, we can go around by using `--emit=link`\n+//   but then we get the second problem.\n+// * Compilation error is not generated in the JSON output.\n+//\n+// So for not we go around this problem by moving it in `run-make` until we figure out what's\n+// going on.",
+    "repo_full_name": "rust-lang/rust",
+    "discussion_comments": [
+      {
+        "comment_id": "2192583685",
+        "repo_full_name": "rust-lang/rust",
+        "pr_number": 143636,
+        "pr_file": "tests/run-make/num-fmt/rmake.rs",
+        "discussion_id": "2192583685",
+        "commented_code": "@@ -0,0 +1,21 @@\n+// Test to ensure that if you use a `NumBuffer` with a too small integer, it\n+// will fail at compilation time.\n+\n+// FIXME: This test should be a `ui` test, but not possible for the following reasons:\n+// * With the default `--emit`, the compilation succeeds, we can go around by using `--emit=link`\n+//   but then we get the second problem.\n+// * Compilation error is not generated in the JSON output.\n+//\n+// So for not we go around this problem by moving it in `run-make` until we figure out what's\n+// going on.",
+        "comment_created_at": "2025-07-08T13:46:17+00:00",
+        "comment_author": "jieyouxu",
+        "comment_body": "Maybe you need `//@ build-fail` + `//@ ignore-pass` for the ui test? I'm not quite seeing anything too special about this \ud83e\udd14 ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192589237",
+        "repo_full_name": "rust-lang/rust",
+        "pr_number": 143636,
+        "pr_file": "tests/run-make/num-fmt/rmake.rs",
+        "discussion_id": "2192583685",
+        "commented_code": "@@ -0,0 +1,21 @@\n+// Test to ensure that if you use a `NumBuffer` with a too small integer, it\n+// will fail at compilation time.\n+\n+// FIXME: This test should be a `ui` test, but not possible for the following reasons:\n+// * With the default `--emit`, the compilation succeeds, we can go around by using `--emit=link`\n+//   but then we get the second problem.\n+// * Compilation error is not generated in the JSON output.\n+//\n+// So for not we go around this problem by moving it in `run-make` until we figure out what's\n+// going on.",
+        "comment_created_at": "2025-07-08T13:48:35+00:00",
+        "comment_author": "GuillaumeGomez",
+        "comment_body": "Seems not:\r\n\r\n```\r\nerror: 1 unexpected diagnostics reported, 1 expected diagnostics not reported\r\n--- reported in JSON output but not expected in test file ---\r\ntests/ui/numeric/fmt.rs:?: ERROR: evaluation panicked: buffer is not big enough [E0080]\r\n  expected on line tests/ui/numeric/fmt.rs:14:30\r\n---\r\n--- expected in test file but not reported in JSON output ---\r\ntests/ui/numeric/fmt.rs:14:30: ERROR: buffer is not big enough\r\n  reported on line tests/ui/numeric/fmt.rs:?\r\n---\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192594483",
+        "repo_full_name": "rust-lang/rust",
+        "pr_number": 143636,
+        "pr_file": "tests/run-make/num-fmt/rmake.rs",
+        "discussion_id": "2192583685",
+        "commented_code": "@@ -0,0 +1,21 @@\n+// Test to ensure that if you use a `NumBuffer` with a too small integer, it\n+// will fail at compilation time.\n+\n+// FIXME: This test should be a `ui` test, but not possible for the following reasons:\n+// * With the default `--emit`, the compilation succeeds, we can go around by using `--emit=link`\n+//   but then we get the second problem.\n+// * Compilation error is not generated in the JSON output.\n+//\n+// So for not we go around this problem by moving it in `run-make` until we figure out what's\n+// going on.",
+        "comment_created_at": "2025-07-08T13:50:50+00:00",
+        "comment_author": "jieyouxu",
+        "comment_body": "~~Oh, does that const-eval panic not have span info? Let me double-check this locally~~",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192597702",
+        "repo_full_name": "rust-lang/rust",
+        "pr_number": 143636,
+        "pr_file": "tests/run-make/num-fmt/rmake.rs",
+        "discussion_id": "2192583685",
+        "commented_code": "@@ -0,0 +1,21 @@\n+// Test to ensure that if you use a `NumBuffer` with a too small integer, it\n+// will fail at compilation time.\n+\n+// FIXME: This test should be a `ui` test, but not possible for the following reasons:\n+// * With the default `--emit`, the compilation succeeds, we can go around by using `--emit=link`\n+//   but then we get the second problem.\n+// * Compilation error is not generated in the JSON output.\n+//\n+// So for not we go around this problem by moving it in `run-make` until we figure out what's\n+// going on.",
+        "comment_created_at": "2025-07-08T13:52:11+00:00",
+        "comment_author": "GuillaumeGomez",
+        "comment_body": "Maybe not indeed. How can we provide the missing span info?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192602878",
+        "repo_full_name": "rust-lang/rust",
+        "pr_number": 143636,
+        "pr_file": "tests/run-make/num-fmt/rmake.rs",
+        "discussion_id": "2192583685",
+        "commented_code": "@@ -0,0 +1,21 @@\n+// Test to ensure that if you use a `NumBuffer` with a too small integer, it\n+// will fail at compilation time.\n+\n+// FIXME: This test should be a `ui` test, but not possible for the following reasons:\n+// * With the default `--emit`, the compilation succeeds, we can go around by using `--emit=link`\n+//   but then we get the second problem.\n+// * Compilation error is not generated in the JSON output.\n+//\n+// So for not we go around this problem by moving it in `run-make` until we figure out what's\n+// going on.",
+        "comment_created_at": "2025-07-08T13:54:10+00:00",
+        "comment_author": "jieyouxu",
+        "comment_body": "Yeah, so because that const-eval panic has no line info (or because its source location is from outside the main test file?), you need something like:\r\n\r\n```rs\r\n//@ build-fail\r\n//@ ignore-pass\r\n\r\n#![feature(int_format_into)]\r\n\r\nuse std::fmt::NumBuffer;\r\n\r\nfn main() {\r\n    let x = 0u32;\r\n    let mut buf = NumBuffer::<u8>::new();\r\n    x.format_into(&mut buf);\r\n}\r\n\r\n//~? ERROR evaluation panicked: buffer is not big enough\r\n```\r\n\r\n(This is documented in https://rustc-dev-guide.rust-lang.org/tests/ui.html#error-without-line-information and https://rustc-dev-guide.rust-lang.org/tests/ui.html#error-annotations but it's not super obvious, I wanted to revise that a bit)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192612537",
+        "repo_full_name": "rust-lang/rust",
+        "pr_number": 143636,
+        "pr_file": "tests/run-make/num-fmt/rmake.rs",
+        "discussion_id": "2192583685",
+        "commented_code": "@@ -0,0 +1,21 @@\n+// Test to ensure that if you use a `NumBuffer` with a too small integer, it\n+// will fail at compilation time.\n+\n+// FIXME: This test should be a `ui` test, but not possible for the following reasons:\n+// * With the default `--emit`, the compilation succeeds, we can go around by using `--emit=link`\n+//   but then we get the second problem.\n+// * Compilation error is not generated in the JSON output.\n+//\n+// So for not we go around this problem by moving it in `run-make` until we figure out what's\n+// going on.",
+        "comment_created_at": "2025-07-08T13:57:55+00:00",
+        "comment_author": "GuillaumeGomez",
+        "comment_body": "That did the trick, thanks a lot!",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

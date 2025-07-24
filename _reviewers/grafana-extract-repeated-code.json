@@ -72,7 +72,7 @@
         "commented_code": "@@ -0,0 +1,475 @@\n+package server\n+\n+import (\n+\t\"context\"\n+\t\"errors\"\n+\t\"fmt\"\n+\t\"math/rand\"\n+\t\"net\"\n+\t\"net/http\"\n+\t\"strconv\"\n+\t\"sync\"\n+\t\"testing\"\n+\t\"time\"\n+\n+\tclaims \"github.com/grafana/authlib/types\"\n+\t\"github.com/grafana/grafana/pkg/api\"\n+\t\"github.com/grafana/grafana/pkg/apimachinery/identity\"\n+\t\"github.com/grafana/grafana/pkg/modules\"\n+\t\"github.com/grafana/grafana/pkg/services/featuremgmt\"\n+\t\"github.com/grafana/grafana/pkg/services/sqlstore/sqlutil\"\n+\t\"github.com/grafana/grafana/pkg/setting\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/resource\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/resourcepb\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/search\"\n+\t\"github.com/grafana/grafana/pkg/storage/unified/sql\"\n+\t\"github.com/prometheus/client_golang/prometheus\"\n+\t\"github.com/stretchr/testify/require\"\n+\t\"go.opentelemetry.io/otel/trace/noop\"\n+\t\"google.golang.org/grpc\"\n+\t\"google.golang.org/grpc/credentials/insecure\"\n+\t\"google.golang.org/grpc/health/grpc_health_v1\"\n+\t\"google.golang.org/grpc/metadata\"\n+\t\"k8s.io/component-base/metrics/legacyregistry\"\n+)\n+\n+var (\n+\ttestIndexFileThreshold  = 200 // just needs to be bigger than max playlist number, so the indexer don't use the filesystem\n+\tnamespaceCount          = 250 // how many stacks we're simulating\n+\tmaxPlaylistPerNamespace = 50  // upper bound on how many playlists we will seed to each stack.\n+)\n+\n+//nolint:gocyclo\n+func TestIntegrationDistributor(t *testing.T) {\n+\tif testing.Short() {\n+\t\tt.Skip(\"skipping integration test\")\n+\t}\n+\n+\tdbType := sqlutil.GetTestDBType()\n+\tif dbType != \"mysql\" {\n+\t\tt.Skip()\n+\t}\n+\n+\t// this next line is to avoid double registration when registering sprinkles metrics\n+\tlegacyregistry.Registerer = func() prometheus.Registerer { return prometheus.NewRegistry() }\n+\n+\tdb, err := sqlutil.GetTestDB(dbType)\n+\trequire.NoError(t, err)\n+\n+\ttestNamespaces := make([]string, 0, namespaceCount)\n+\tfor i := range namespaceCount {\n+\t\ttestNamespaces = append(testNamespaces, \"stacks-\"+strconv.Itoa(i))\n+\t}\n+\n+\tbaselineServer := createBaselineServer(t, dbType, db.ConnStr, testNamespaces)\n+\n+\trunErrs := make(map[string]error)\n+\ttestServers := make([]testModuleServer, 0, 2)\n+\tdistributorServer := initDistributorServerForTest(t)\n+\ttestServers = append(testServers, createStorageServerApi(t, 1, dbType, db.ConnStr))\n+\ttestServers = append(testServers, createStorageServerApi(t, 2, dbType, db.ConnStr))\n+\n+\tstartAndWaitHealthy(t, distributorServer, runErrs)\n+\n+\tfor _, testServer := range testServers {\n+\t\tstartAndWaitHealthy(t, testServer, runErrs)\n+\t}\n+\n+\tt.Run(\"should expose ring endpoint\", func(t *testing.T) {\n+\t\tclient := http.Client{}\n+\t\tres, err := client.Get(\"http://localhost:13000/ring\")\n+\t\trequire.NoError(t, err)\n+\n+\t\trequire.Equal(t, res.StatusCode, http.StatusOK)\n+\t\t_ = res.Body.Close()\n+\t})\n+\n+\tt.Run(\"should expose memberlist endpoint\", func(t *testing.T) {\n+\t\tclient := http.Client{}\n+\t\tres, err := client.Get(\"http://localhost:13000/memberlist\")\n+\t\trequire.NoError(t, err)\n+\n+\t\trequire.Equal(t, res.StatusCode, http.StatusOK)\n+\t\t_ = res.Body.Close()\n+\t})\n+\n+\tt.Run(\"GetStats\", func(t *testing.T) {",
         "comment_created_at": "2025-06-27T16:27:51+00:00",
         "comment_author": "gassiss",
-        "comment_body": "aha thanks! i knew there was something with generics I could do to remove all this repetition but couldn't figure out how to do it \ud83d\ude04 ",
+        "comment_body": "aha thanks! i knew there was something with generics I could do to remove all this repetition but couldn't figure out how to do it 😄 ",
         "pr_file_module": null
       }
     ]
@@ -107,50 +107,6 @@
         "comment_created_at": "2025-06-25T16:30:19+00:00",
         "comment_author": "gassiss",
         "comment_body": "yes that's a good idea. I'll tweak it",
-        "pr_file_module": null
-      }
-    ]
-  },
-  {
-    "discussion_id": "2155389342",
-    "pr_number": 106739,
-    "pr_file": "pkg/storage/secret/metadata/secure_value_store.go",
-    "created_at": "2025-06-18T19:55:26+00:00",
-    "commented_code": "type secureValueMetadataStorage struct {\n \tdb      contracts.Database\n \tdialect sqltemplate.Dialect\n+\tmetrics *metrics.StorageMetrics\n \ttracer  trace.Tracer\n }\n \n func (s *secureValueMetadataStorage) Create(ctx context.Context, sv *secretv0alpha1.SecureValue, actorUID string) (*secretv0alpha1.SecureValue, error) {\n-\tctx, span := s.tracer.Start(ctx, \"SecureValueMetadataStorage.Create\", trace.WithAttributes(\n-\t\tattribute.String(\"name\", sv.GetName()),\n-\t\tattribute.String(\"namespace\", sv.GetNamespace()),\n-\t\tattribute.String(\"actorUID\", actorUID),\n-\t))\n-\tdefer span.End()\n-\n+\tstart := time.Now()",
-    "repo_full_name": "grafana/grafana",
-    "discussion_comments": [
-      {
-        "comment_id": "2155389342",
-        "repo_full_name": "grafana/grafana",
-        "pr_number": 106739,
-        "pr_file": "pkg/storage/secret/metadata/secure_value_store.go",
-        "discussion_id": "2155389342",
-        "commented_code": "@@ -33,17 +42,12 @@ func ProvideSecureValueMetadataStorage(db contracts.Database, tracer trace.Trace\n type secureValueMetadataStorage struct {\n \tdb      contracts.Database\n \tdialect sqltemplate.Dialect\n+\tmetrics *metrics.StorageMetrics\n \ttracer  trace.Tracer\n }\n \n func (s *secureValueMetadataStorage) Create(ctx context.Context, sv *secretv0alpha1.SecureValue, actorUID string) (*secretv0alpha1.SecureValue, error) {\n-\tctx, span := s.tracer.Start(ctx, \"SecureValueMetadataStorage.Create\", trace.WithAttributes(\n-\t\tattribute.String(\"name\", sv.GetName()),\n-\t\tattribute.String(\"namespace\", sv.GetNamespace()),\n-\t\tattribute.String(\"actorUID\", actorUID),\n-\t))\n-\tdefer span.End()\n-\n+\tstart := time.Now()",
-        "comment_created_at": "2025-06-18T19:55:26+00:00",
-        "comment_author": "Copilot",
-        "comment_body": "Multiple CRUD methods repetitively initialize timing and update metrics. Consider refactoring this pattern into a helper function to reduce code duplication.\n```suggestion\n\n```",
-        "pr_file_module": null
-      }
-    ]
-  },
-  {
-    "discussion_id": "2155389350",
-    "pr_number": 106739,
-    "pr_file": "pkg/storage/secret/metadata/outbox_store.go",
-    "created_at": "2025-06-18T19:55:26+00:00",
-    "commented_code": "assert.True(messageID != \"\", \"outboxStore.Delete: messageID is required\")\n \n+\tstart := time.Now()",
-    "repo_full_name": "grafana/grafana",
-    "discussion_comments": [
-      {
-        "comment_id": "2155389350",
-        "repo_full_name": "grafana/grafana",
-        "pr_number": 106739,
-        "pr_file": "pkg/storage/secret/metadata/outbox_store.go",
-        "discussion_id": "2155389350",
-        "commented_code": "@@ -228,10 +244,14 @@ func (s *outboxStore) Delete(ctx context.Context, messageID string) (err error)\n \n \tassert.True(messageID != \"\", \"outboxStore.Delete: messageID is required\")\n \n+\tstart := time.Now()",
-        "comment_created_at": "2025-06-18T19:55:26+00:00",
-        "comment_author": "Copilot",
-        "comment_body": "Similar timing and metrics update logic is repeated in several outbox operations; extracting a common helper could improve maintainability and reduce potential inconsistencies.",
         "pr_file_module": null
       }
     ]

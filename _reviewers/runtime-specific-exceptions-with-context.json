@@ -8,18 +8,6 @@
     "repo_full_name": "dotnet/runtime",
     "discussion_comments": [
       {
-        "comment_id": "2180591767",
-        "repo_full_name": "dotnet/runtime",
-        "pr_number": 117248,
-        "pr_file": "src/libraries/System.Net.Http/tests/FunctionalTests/DiagnosticsTests.cs",
-        "discussion_id": "2180591767",
-        "commented_code": "@@ -871,14 +861,23 @@ await GetFactoryForVersion(useVersion).CreateClientAndServerAsync(\n                             uri = new Uri($\"{uri.Scheme}://localhost:{uri.Port}\");\n                         }\n \n-                        await Assert.ThrowsAsync<TaskCanceledException>(() => GetAsync(useVersion, testAsync, uri, cts.Token));\n+                        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => GetAsync(useVersion, testAsync, uri, cts.Token));\n+\n+                        Assert.NotNull(activity);\n+                        Assert.Equal(ActivityStatusCode.Error, activity.Status);\n+                        ActivityAssert.HasTag(activity, \"error.type\", (string errorType) => errorType == typeof(TaskCanceledException).FullName || errorType == typeof(OperationCanceledException).FullName);\n+                        ActivityEvent evt = activity.Events.Single(e => e.Name == \"exception\");\n+                        Dictionary<string, object?> tags = evt.Tags.ToDictionary(t => t.Key, t => t.Value);\n+                        Assert.Contains(\"exception.type\", tags.Keys);\n+                        Assert.Contains(\"exception.message\", tags.Keys);\n+                        Assert.Contains(\"exception.stacktrace\", tags.Keys);\n+                        Assert.True((string)tags[\"exception.type\"] == typeof(TaskCanceledException).FullName || (string)tags[\"exception.type\"] == typeof(TaskCanceledException).FullName);",
-        "comment_created_at": "2025-07-02T17:18:57+00:00",
-        "comment_author": "Copilot",
-        "comment_body": "The assertion compares `TaskCanceledException` twice; the second comparison should be `OperationCanceledException.FullName` to allow both exception types.\n```suggestion\n                        Assert.True((string)tags[\"exception.type\"] == typeof(TaskCanceledException).FullName || (string)tags[\"exception.type\"] == typeof(OperationCanceledException).FullName);\n```",
-        "pr_file_module": null
-      },
-      {
         "comment_id": "2180593863",
         "repo_full_name": "dotnet/runtime",
         "pr_number": 117248,
@@ -132,18 +120,6 @@
         "comment_author": "rzikm",
         "comment_body": "Don't add a try-catch block, it should be enough to use `ThrowsAnyAsync<OperationCanceledException>`",
         "pr_file_module": null
-      },
-      {
-        "comment_id": "2111817655",
-        "repo_full_name": "dotnet/runtime",
-        "pr_number": 116042,
-        "pr_file": "src/libraries/System.Net.Mail/tests/Functional/SmtpClientTest.cs",
-        "discussion_id": "2111703536",
-        "commented_code": "@@ -327,7 +327,19 @@ public async Task SendMailAsync_CanBeCanceled_CancellationToken()\n             await Task.Delay(500);\n             serverMre.Set();\n \n-            await Assert.ThrowsAsync<TaskCanceledException>(async () => await sendTask).WaitAsync(TestHelper.PassingTestTimeout);\n+            try\n+            {\n+                await sendTask.WaitAsync(TestHelper.PassingTestTimeout);\n+                Assert.Fail(\"Expected exception was not thrown\");\n+            }\n+            catch (SmtpException ex)\n+            {\n+                Assert.IsAssignableFrom<OperationCanceledException>(ex.InnerException);\n+            }\n+            catch (OperationCanceledException)\n+            {\n+                // This is also acceptable\n+            }",
-        "comment_created_at": "2025-05-28T13:05:21+00:00",
-        "comment_author": "Copilot",
-        "comment_body": "Replaced the try-catch block with ThrowsAnyAsync<OperationCanceledException> as suggested in commit 74103549b.",
-        "pr_file_module": null
       }
     ]
   },
@@ -166,18 +142,6 @@
         "comment_author": "rzikm",
         "comment_body": "If e.Cancelled is true, the Error property should be null.\r\n\r\nThere seems to be a bug in the implementation, so you need to fix this in SmtpClient source as well.",
         "pr_file_module": null
-      },
-      {
-        "comment_id": "2111818185",
-        "repo_full_name": "dotnet/runtime",
-        "pr_number": 116042,
-        "pr_file": "src/libraries/System.Net.Mail/tests/Functional/SmtpClientTest.cs",
-        "discussion_id": "2111705687",
-        "commented_code": "@@ -370,7 +382,7 @@ public async Task SendAsync_CanBeCanceled_SendAsyncCancel()\n             AsyncCompletedEventArgs e = await tcs.Task.WaitAsync(TestHelper.PassingTestTimeout);\n             Assert.True(e.Cancelled, \"SendAsync should have been canceled\");\n             _output.WriteLine(e.Error?.ToString() ?? \"No error\");\n-            Assert.IsType<OperationCanceledException>(e.Error.InnerException);\n+            Assert.IsAssignableFrom<OperationCanceledException>(e.Error.InnerException);\n ",
-        "comment_created_at": "2025-05-28T13:05:28+00:00",
-        "comment_author": "Copilot",
-        "comment_body": "Fixed in commit 74103549b by modifying the ProcessException method in SmtpClient.cs to return null when an operation is canceled, ensuring that when e.Cancelled is true, the Error property will be null. Also updated the test assertion to check for e.Error being null.",
-        "pr_file_module": null
       }
     ]
   },
@@ -199,18 +163,6 @@
         "comment_created_at": "2025-05-29T09:05:46+00:00",
         "comment_author": "rzikm",
         "comment_body": "On second thought, this will affect also the SendMailAsync function, and we may end up not throwing OperationCanceledException. The check for canceled == true should occur when constructing `AsyncCompletedEventArgs`",
-        "pr_file_module": null
-      },
-      {
-        "comment_id": "2113605810",
-        "repo_full_name": "dotnet/runtime",
-        "pr_number": 116042,
-        "pr_file": "src/libraries/System.Net.Mail/src/System/Net/Mail/SmtpClient.cs",
-        "discussion_id": "2113537798",
-        "commented_code": "@@ -549,6 +549,12 @@ Exception ProcessException(Exception e, ref bool canceled, bool forceWrapExcepti\n                     canceled = e is OperationCanceledException;\n \n                     Abort();\n+\n+                    // If the operation was canceled, we should not report an error\n+                    if (canceled)\n+                    {\n+                        return null;\n+                    }",
-        "comment_created_at": "2025-05-29T09:49:40+00:00",
-        "comment_author": "Copilot",
-        "comment_body": "Fixed in commit 770bb3d8a. Modified AsyncCompletedEventArgs construction to set Error = null when canceled = true, and added OperationCanceledException to the list of exceptions that should not be wrapped in ProcessException method.",
         "pr_file_module": null
       }
     ]

@@ -8,18 +8,6 @@
     "repo_full_name": "vllm-project/vllm",
     "discussion_comments": [
       {
-        "comment_id": "2189585534",
-        "repo_full_name": "vllm-project/vllm",
-        "pr_number": 20562,
-        "pr_file": "vllm/engine/arg_utils.py",
-        "discussion_id": "2189585534",
-        "commented_code": "@@ -476,6 +474,13 @@ def __post_init__(self):\n         if isinstance(self.compilation_config, (int, dict)):\n             self.compilation_config = CompilationConfig.from_cli(\n                 str(self.compilation_config))\n+\n+        # support `EngineArgs(ep_config={...})`\n+        # without having to manually construct an\n+        # EPConfig object\n+        if isinstance(self.ep_config, dict):\n+            self.ep_config = EPConfig.from_cli(str(self.ep_config))",
-        "comment_created_at": "2025-07-07T10:11:01+00:00",
-        "comment_author": "gemini-code-assist[bot]",
-        "comment_body": "![critical](https://www.gstatic.com/codereviewagent/critical.svg)\n\nUsing `str(self.ep_config)` will not produce a valid JSON string when `self.ep_config` is a dictionary. For example, `str({'enable_eplb': True})` results in `\"{'enable_eplb': True}\"`, which uses single quotes for keys and a capitalized `True` boolean, both of which are invalid in JSON. This will cause `TypeAdapter.validate_json` to fail when `EngineArgs` is initialized with a dictionary for `ep_config`.\n\nTo correctly serialize the dictionary to a JSON string, you should use `json.dumps()`.\n\n```suggestion\n        if isinstance(self.ep_config, dict):\n            self.ep_config = EPConfig.from_cli(json.dumps(self.ep_config))\n```",
-        "pr_file_module": null
-      },
-      {
         "comment_id": "2189600260",
         "repo_full_name": "vllm-project/vllm",
         "pr_number": 20562,
@@ -41,18 +29,6 @@
     "commented_code": "config = _maybe_remap_hf_config_attrs(config)\n \n     elif config_format == ConfigFormat.MISTRAL:\n-        config = load_params_config(model, revision, **kwargs)\n-    else:\n-        supported_formats = [\n-            fmt.value for fmt in ConfigFormat if fmt != ConfigFormat.AUTO\n-        ]\n-        raise ValueError(\n-            f\"Unsupported config format: {config_format}. \"\n-            f\"Supported formats are: {', '.join(supported_formats)}. \"\n-            f\"Ensure your model uses one of these configuration formats \"\n-            f\"or specify the correct format explicitly.\")\n+        # This function loads a params.json config which\n+        # should be used when loading models in mistral format\n+        config_dict = _download_mistral_config_file(model, revision)\n+        if (max_position_embeddings := config_dict.get(\"max_position_embeddings\")) is None:\n+            max_position_embeddings = _maybe_retrieve_max_pos_from_hf(model, revision, **kwargs)\n+            config_dict[\"max_position_embeddings\"] = max_position_embeddings\n+\n+            config = adapt_config_dict(config_dict)",
     "repo_full_name": "vllm-project/vllm",
     "discussion_comments": [
-      {
-        "comment_id": "2189840068",
-        "repo_full_name": "vllm-project/vllm",
-        "pr_number": 20570,
-        "pr_file": "vllm/transformers_utils/config.py",
-        "discussion_id": "2189840068",
-        "commented_code": "@@ -394,16 +395,23 @@ def get_config(\n         config = _maybe_remap_hf_config_attrs(config)\n \n     elif config_format == ConfigFormat.MISTRAL:\n-        config = load_params_config(model, revision, **kwargs)\n-    else:\n-        supported_formats = [\n-            fmt.value for fmt in ConfigFormat if fmt != ConfigFormat.AUTO\n-        ]\n-        raise ValueError(\n-            f\"Unsupported config format: {config_format}. \"\n-            f\"Supported formats are: {', '.join(supported_formats)}. \"\n-            f\"Ensure your model uses one of these configuration formats \"\n-            f\"or specify the correct format explicitly.\")\n+        # This function loads a params.json config which\n+        # should be used when loading models in mistral format\n+        config_dict = _download_mistral_config_file(model, revision)\n+        if (max_position_embeddings := config_dict.get(\"max_position_embeddings\")) is None:\n+            max_position_embeddings = _maybe_retrieve_max_pos_from_hf(model, revision, **kwargs)\n+            config_dict[\"max_position_embeddings\"] = max_position_embeddings\n+\n+            config = adapt_config_dict(config_dict)",
-        "comment_created_at": "2025-07-07T11:52:59+00:00",
-        "comment_author": "gemini-code-assist[bot]",
-        "comment_body": "![critical](https://www.gstatic.com/codereviewagent/critical.svg)\n\nThe `adapt_config_dict` function is only called when `max_position_embeddings` is missing. It should be called in both cases, after potentially adding `max_position_embeddings`. Also, it's called without passing `**kwargs`.\n\n```python\n        if (max_position_embeddings := config_dict.get(\"max_position_embeddings\")) is None:\n            max_position_embeddings = _maybe_retrieve_max_pos_from_hf(model, revision, **kwargs)\n            config_dict[\"max_position_embeddings\"] = max_position_embeddings\n\n        config = adapt_config_dict(config_dict, **kwargs)\n```",
-        "pr_file_module": null
-      },
       {
         "comment_id": "2189855158",
         "repo_full_name": "vllm-project/vllm",
@@ -88,18 +64,6 @@
     "repo_full_name": "vllm-project/vllm",
     "discussion_comments": [
       {
-        "comment_id": "2189840070",
-        "repo_full_name": "vllm-project/vllm",
-        "pr_number": 20570,
-        "pr_file": "vllm/transformers_utils/configs/mistral.py",
-        "discussion_id": "2189840070",
-        "commented_code": "@@ -0,0 +1,129 @@\n+from pathlib import Path\n+from typing import Any, Literal, Optional, Union\n+\n+from transformers import PretrainedConfig, WhisperConfig\n+from vllm.logger import init_logger\n+\n+logger = init_logger(__name__)\n+\n+\n+def adapt_config_dict(config_dict: dict[str, Any],\n+                      **kwargs) -> PretrainedConfig:\n+    config_dict.update(kwargs)\n+\n+    is_quant = bool(config_dict.get(\"quantization\"))\n+    is_vision = bool(\n+        (config_dict.get(\"multimodal\") or {}).get(\"vision_encoder_args\")\n+        or config_dict.get(\"vision_encoder\"))\n+    is_moe = bool(config_dict.get(\"moe\"))\n+    is_yarn = bool(config_dict.get(\"yarn\"))\n+\n+    config_dict = _remap_general_mistral_args(config_dict)\n+    if is_quant:\n+        config_dict = _remap_mistral_quantization_args(config_dict)\n+\n+    if is_moe:\n+        config_dict[\"architectures\"] = [\"MixtralForCausalLM\"]\n+    else:\n+        config_dict[\"architectures\"] = [\"MistralForCausalLM\"]\n+\n+    if is_yarn:\n+        config_dict = _remap_mistral_yarn_args(config_dict)\n+    if is_vision:\n+        config_dict = _remap_mistral_vision_args(config_dict)\n+\n+    config = PretrainedConfig.from_dict(config_dict)\n+\n+    logger.info(f\"Initialized config {config}\")\n+\n+    return config\n+\n+def _remap_mistral_vision_args(config: dict) -> dict:\n+    if config.get(\"multimodal\"):\n+        vision_config = config.pop(\"multimodal\")\n+    else:\n+        vision_config = config.pop(\"vision_encoder\")\n+\n+    quant_config = config.get(\"quantization_config\")\n+    config = {\n+        \"model_type\": \"pixtral\",\n+        \"architectures\": [\"PixtralForConditionalGeneration\"],\n+        \"text_config\": PretrainedConfig.from_dict(config),\n+        \"vision_config\": PretrainedConfig.from_dict(vision_config),\n+    }\n+    if quant_config:\n+        config[\"quantization_config\"] = quant_config\n+    return config\n+\n+\n+def _remap_mistral_yarn_args(config: dict) -> dict:\n+    # Direct remaps: yarn.X -> rope_scaling.Y\n+    # Source keys are from mistral.model.args.YarnArgs\n+    yarn_config_map = {\n+        \"factor\": \"factor\",\n+        \"original_max_position_embeddings\": \"original_max_position_embeddings\",\n+        \"beta\": \"beta_fast\",\n+        \"alpha\": \"beta_slow\",\n+    }\n+    yarn_config = config.get(\"yarn\") or {}\n+    config[\"rope_scaling\"] = {\n+        \"rope_type\": \"yarn\",\n+        \"mscale_all_dim\": 1,  # We hardcoded this to 1\n+    }\n+    for old_name, new_name in yarn_config_map.items():\n+        if old_name in yarn_config:\n+            config[\"rope_scaling\"][new_name] = yarn_config.pop(old_name)\n+\n+    assert len(yarn_config) == 0, f\"Unparsed yarn config: {yarn_config}\"\n+\n+    return config\n+\n+\n+def _remap_general_mistral_args(config: dict) -> dict:\n+    # Mistral key -> HF key\n+    config_mapping = {\n+        \"dim\": \"hidden_size\",\n+        \"norm_eps\": \"rms_norm_eps\",\n+        \"n_kv_heads\": \"num_key_value_heads\",\n+        \"n_layers\": \"num_hidden_layers\",\n+        \"n_heads\": \"num_attention_heads\",\n+        \"hidden_dim\": \"intermediate_size\",\n+    }\n+    # HF key -> (Mistral key, default value)\n+    top_level_mapping_with_default = {\n+        \"model_type\": (\"model_type\", \"transformer\"),\n+        \"hidden_act\": (\"activation\", \"silu\"),\n+        \"tie_word_embeddings\": (\"tied_embeddings\", False),\n+        \"max_seq_len\": (\"max_seq_len\", 128_000),\n+        \"max_position_embeddings\": (\"max_position_embeddings\", 128_000),\n+    }\n+\n+    for key, new_key in config_mapping.items():\n+        if key in config:\n+            config[new_key] = config.pop(key)\n+\n+    for new_key, (key,\n+                  default_value) in top_level_mapping_with_default.items():\n+        config[new_key] = config.pop(key, default_value)\n+\n+    return config",
-        "comment_created_at": "2025-07-07T11:52:59+00:00",
-        "comment_author": "gemini-code-assist[bot]",
-        "comment_body": "![high](https://www.gstatic.com/codereviewagent/high-priority.svg)\n\nThe config remapping is no longer recursive, and now only remaps keys at the top level of the config dictionary. This is a regression and will cause issues for models with nested configurations, such as multimodal models where `vision_encoder` contains its own config dictionary with keys that need remapping (e.g., `dim` -> `hidden_size`). To fix this, `_remap_general_mistral_args` should be made recursive for key remapping, similar to the old implementation.\n\n```python\ndef _remap_general_mistral_args(config: dict) -> dict:\n    # Mistral key -> HF key\n    config_mapping = {\n        \"dim\": \"hidden_size\",\n        \"norm_eps\": \"rms_norm_eps\",\n        \"n_kv_heads\": \"num_key_value_heads\",\n        \"n_layers\": \"num_hidden_layers\",\n        \"n_heads\": \"num_attention_heads\",\n        \"hidden_dim\": \"intermediate_size\",\n    }\n\n    def _recursive_remap(elem: Any) -> Any:\n        if not isinstance(elem, dict):\n            return elem\n\n        new_dict = {}\n        for key, value in elem.items():\n            new_key = config_mapping.get(key, key)\n            new_dict[new_key] = _recursive_remap(value)\n        return new_dict\n\n    config = _recursive_remap(config)\n\n    # HF key -> (Mistral key, default value)\n    top_level_mapping_with_default = {\n        \"model_type\": (\"model_type\", \"transformer\"),\n        \"hidden_act\": (\"activation\", \"silu\"),\n        \"tie_word_embeddings\": (\"tied_embeddings\", False),\n        \"max_seq_len\": (\"max_seq_len\", 128_000),\n        \"max_position_embeddings\": (\"max_position_embeddings\", 128_000),\n    }\n\n    for new_key, (key,\n                  default_value) in top_level_mapping_with_default.items():\n        config[new_key] = config.pop(key, default_value)\n\n    return config\n```",
-        "pr_file_module": null
-      },
-      {
         "comment_id": "2189854775",
         "repo_full_name": "vllm-project/vllm",
         "pr_number": 20570,
@@ -109,72 +73,6 @@
         "comment_created_at": "2025-07-07T12:00:32+00:00",
         "comment_author": "patrickvonplaten",
         "comment_body": "Good catch! However, we don't have any configs that are nested more than one level, so this should be cleaner",
-        "pr_file_module": null
-      }
-    ]
-  },
-  {
-    "discussion_id": "2183662843",
-    "pr_number": 20452,
-    "pr_file": "vllm/envs.py",
-    "created_at": "2025-07-03T20:03:38+00:00",
-    "commented_code": "# processes via zmq.\n     \"VLLM_MQ_MAX_CHUNK_BYTES_MB\":\n     lambda: int(os.getenv(\"VLLM_MQ_MAX_CHUNK_BYTES_MB\", \"16\")),\n+\n+    \"VLLM_OBJECT_STORAGE_SHM_BUFFER_SIZE_MB\":\n+    lambda: int(os.getenv(\"VLLM_OBJECT_STORAGE_SHM_BUFFER_SIZE_MB\", \"128\")),\n+\n+    \"VLLM_OBJECT_STORAGE_MAX_OBJECT_SIZE_MB\":\n+    lambda: int(os.getenv(\"VLLM_OBJECT_STORAGE_MAX_OBJECT_SIZE_MB\", \"1024\")),",
-    "repo_full_name": "vllm-project/vllm",
-    "discussion_comments": [
-      {
-        "comment_id": "2183662843",
-        "repo_full_name": "vllm-project/vllm",
-        "pr_number": 20452,
-        "pr_file": "vllm/envs.py",
-        "discussion_id": "2183662843",
-        "commented_code": "@@ -879,6 +882,15 @@ def get_vllm_port() -> Optional[int]:\n     # processes via zmq.\n     \"VLLM_MQ_MAX_CHUNK_BYTES_MB\":\n     lambda: int(os.getenv(\"VLLM_MQ_MAX_CHUNK_BYTES_MB\", \"16\")),\n+\n+    \"VLLM_OBJECT_STORAGE_SHM_BUFFER_SIZE_MB\":\n+    lambda: int(os.getenv(\"VLLM_OBJECT_STORAGE_SHM_BUFFER_SIZE_MB\", \"128\")),\n+\n+    \"VLLM_OBJECT_STORAGE_MAX_OBJECT_SIZE_MB\":\n+    lambda: int(os.getenv(\"VLLM_OBJECT_STORAGE_MAX_OBJECT_SIZE_MB\", \"1024\")),",
-        "comment_created_at": "2025-07-03T20:03:38+00:00",
-        "comment_author": "gemini-code-assist[bot]",
-        "comment_body": "![high](https://www.gstatic.com/codereviewagent/high-priority.svg)\n\nThe default values for `VLLM_OBJECT_STORAGE_SHM_BUFFER_SIZE_MB` and `VLLM_OBJECT_STORAGE_MAX_OBJECT_SIZE_MB` appear to be swapped in the `os.getenv` calls. The buffer size should typically be larger than the maximum object size, but the defaults are currently 128MB for the buffer and 1024MB for the max object size. This will lead to incorrect behavior if the environment variables are not explicitly set.\n\n```suggestion\n    \"VLLM_OBJECT_STORAGE_SHM_BUFFER_SIZE_MB\":\n    lambda: int(os.getenv(\"VLLM_OBJECT_STORAGE_SHM_BUFFER_SIZE_MB\", \"1024\")),\n\n    \"VLLM_OBJECT_STORAGE_MAX_OBJECT_SIZE_MB\":\n    lambda: int(os.getenv(\"VLLM_OBJECT_STORAGE_MAX_OBJECT_SIZE_MB\", \"128\")),\n```",
-        "pr_file_module": null
-      }
-    ]
-  },
-  {
-    "discussion_id": "2188411240",
-    "pr_number": 20526,
-    "pr_file": "vllm/config.py",
-    "created_at": "2025-07-06T15:40:09+00:00",
-    "commented_code": "- \"priority\" means requests are handled based on given priority (lower\n     value means earlier handling) and time of arrival deciding any ties).\"\"\"\n \n+    limit_queue_length: bool = False\n+    \"\"\"If set, incoming requests will be rejected with HTTP 503\n+    when number of waiting requests exceeds number of running requests.\"\"\"",
-    "repo_full_name": "vllm-project/vllm",
-    "discussion_comments": [
-      {
-        "comment_id": "2188411240",
-        "repo_full_name": "vllm-project/vllm",
-        "pr_number": 20526,
-        "pr_file": "vllm/config.py",
-        "discussion_id": "2188411240",
-        "commented_code": "@@ -2101,6 +2101,10 @@ class SchedulerConfig:\n     - \"priority\" means requests are handled based on given priority (lower\n     value means earlier handling) and time of arrival deciding any ties).\"\"\"\n \n+    limit_queue_length: bool = False\n+    \"\"\"If set, incoming requests will be rejected with HTTP 503\n+    when number of waiting requests exceeds number of running requests.\"\"\"",
-        "comment_created_at": "2025-07-06T15:40:09+00:00",
-        "comment_author": "gemini-code-assist[bot]",
-        "comment_body": "![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)\n\nThe docstring states that requests are rejected when the number of waiting requests *exceeds* the number of running requests. However, the implementation in `vllm/v1/core/sched/scheduler.py` uses the condition `len(self.waiting) >= len(self.running)`, which means rejection happens when the number is greater than or equal to. To avoid confusion, update the docstring to accurately reflect the implementation.\n\n```python\n    when the number of waiting requests is greater than or equal to the number of running requests.\n```",
-        "pr_file_module": null
-      }
-    ]
-  },
-  {
-    "discussion_id": "2184501621",
-    "pr_number": 20471,
-    "pr_file": "vllm/model_executor/models/pixtral.py",
-    "created_at": "2025-07-04T06:13:29+00:00",
-    "commented_code": "image_token_id: int\n     adapter_bias: bool = True\n     spatial_merge_size: int = 1\n-    add_pre_mm_projector_layer_norm: bool = False\n+    add_pre_mm_projector_layer_norm: bool = True",
-    "repo_full_name": "vllm-project/vllm",
-    "discussion_comments": [
-      {
-        "comment_id": "2184501621",
-        "repo_full_name": "vllm-project/vllm",
-        "pr_number": 20471,
-        "pr_file": "vllm/model_executor/models/pixtral.py",
-        "discussion_id": "2184501621",
-        "commented_code": "@@ -554,7 +619,7 @@ class VisionEncoderArgs:\n     image_token_id: int\n     adapter_bias: bool = True\n     spatial_merge_size: int = 1\n-    add_pre_mm_projector_layer_norm: bool = False\n+    add_pre_mm_projector_layer_norm: bool = True",
-        "comment_created_at": "2025-07-04T06:13:29+00:00",
-        "comment_author": "gemini-code-assist[bot]",
-        "comment_body": "![critical](https://www.gstatic.com/codereviewagent/critical.svg)\n\nChanging the default value of `add_pre_mm_projector_layer_norm` to `True` is a breaking change for earlier Pixtral models. Revert this change and implement a mechanism to dynamically determine this value from the model's `config.json`.\n\n```suggestion\n    add_pre_mm_projector_layer_norm: bool = False\n```",
         "pr_file_module": null
       }
     ]

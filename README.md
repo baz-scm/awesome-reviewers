@@ -64,3 +64,21 @@ This project is maintained by the team at [**Baz**](https://baz.co) as part of o
 
 ## Disclaimer
 Baz projects are community-contributed and while we strive to maintain high quality, we cannot guarantee the accuracy, completeness, or security of all library documentation. Prompts listed in this repo are inspired by their respective code owners, not by Baz. If you encounter any suspicious, inappropriate, or potentially harmful content, please open an issue in thie repo. We take all reports seriously and will review flagged content promptly to maintain the integrity and safety of our platform. By using Awesome Reviewers, you acknowledge that you do so at your own discretion and risk.
+
+## News
+
+*2025-07-27 11:02 UTC*
+
+- 2025-07-27: Add research article and footer nav (#72)
+- 2025-07-27: Add automated trends page (#71)
+- 2025-07-27: Add automated trends page (#70)
+- 2025-07-27: Unify leaderboard update with deploy (#65)
+- 2025-07-25: Add automated trends page (#69)
+
+## Acknowledgement
+
+Thanks to the recent contributors who added reviewers to the DB:
+
+- **guyeisenkot**
+- **internal-baz-ci-app[bot]**
+- **nimrodkor**

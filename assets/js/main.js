@@ -115,3 +115,94 @@ if (menuToggle && headerEl) {
     if (closeIcon) closeIcon.style.display = open ? 'block' : 'none';
   });
 }
+
+// Reviewer bundling functionality
+const bundleBar = document.getElementById('bundle-bar');
+const bundleCountEl = document.getElementById('bundle-count');
+let bundleCart = [];
+
+function updateBundleUI() {
+  const buttons = document.querySelectorAll('.bundle-button');
+  buttons.forEach(btn => {
+    const slug = btn.dataset.slug;
+    if (bundleCart.includes(slug)) {
+      btn.classList.add('added');
+      btn.textContent = 'Added';
+    } else {
+      btn.classList.remove('added');
+      btn.textContent = 'Add';
+    }
+  });
+
+  bundleCountEl.textContent = bundleCart.length;
+  bundleBar.style.display = bundleCart.length > 0 ? 'flex' : 'none';
+}
+
+function toggleBundle(e, slug) {
+  e.stopPropagation();
+  const idx = bundleCart.indexOf(slug);
+  if (idx >= 0) {
+    bundleCart.splice(idx, 1);
+  } else {
+    bundleCart.push(slug);
+  }
+  updateBundleUI();
+}
+
+function clearBundle() {
+  bundleCart = [];
+  updateBundleUI();
+}
+
+async function downloadBundle() {
+  if (bundleCart.length === 0) return;
+
+  const sections = [];
+  for (const slug of bundleCart) {
+    const res = await fetch(`/_reviewers/${slug}.md`);
+    if (!res.ok) continue;
+    const text = await res.text();
+    const parsed = parseFrontMatter(text);
+    sections.push(createSection(parsed.meta, parsed.body));
+  }
+
+  const content = '# Bundled Reviewers\n\n' + sections.join('\n');
+  const blob = new Blob([content], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'AGENTS.md';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function parseFrontMatter(text) {
+  if (text.startsWith('---')) {
+    const end = text.indexOf('---', 3);
+    if (end !== -1) {
+      const yaml = text.slice(3, end).trim();
+      const body = text.slice(end + 3).trim();
+      const meta = {};
+      yaml.split(/\n/).forEach(line => {
+        const sep = line.indexOf(':');
+        if (sep !== -1) {
+          const key = line.slice(0, sep).trim();
+          const val = line.slice(sep + 1).trim();
+          meta[key] = val;
+        }
+      });
+      return { meta, body };
+    }
+  }
+  return { meta: {}, body: text };
+}
+
+function createSection(meta, body) {
+  const title = meta.title || 'Untitled';
+  const description = meta.description ? `${meta.description}\n` : '';
+  return `## ${title}\n${description}\n${body.trim()}\n`;
+}
+
+document.addEventListener('DOMContentLoaded', updateBundleUI);

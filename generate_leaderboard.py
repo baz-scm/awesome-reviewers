@@ -25,12 +25,17 @@ def main():
         'repos': set(),
         'last': None,
         'entry_titles': {},
-        'comments': defaultdict(list)
+        'comments': defaultdict(list),
+        'labels': defaultdict(int),
     })
+    label_map = {}
     for json_path in reviewers_dir.glob('*.json'):
         slug = json_path.stem
         meta = parse_front_matter(reviewers_dir / f'{slug}.md')
         title = meta.get('title', slug)
+        label = meta.get('label')
+        if label:
+            label_map[slug] = label
         with open(json_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         for item in data:
@@ -46,6 +51,8 @@ def main():
                 info = users[author]
                 info['reviewers'].add(slug)
                 info['entry_titles'][slug] = title
+                if label:
+                    info['labels'][label] += 1
                 if repo:
                     info['repos'].add(repo)
                 if text:
@@ -75,10 +82,13 @@ def main():
             {'slug': s, 'title': d['entry_titles'][s]}
             for s in sorted(d['entry_titles'])
         ]
+        label_counts = sorted(d['labels'].items(), key=lambda x: (-x[1], x[0]))
+        top_labels = [l for l, _ in label_counts[:3]]
         contributors[user] = {
             'repos': sorted(d['repos']),
             'entries': entries,
-            'comments': {k: v for k, v in d['comments'].items()}
+            'comments': {k: v for k, v in d['comments'].items()},
+            'labels': top_labels,
         }
 
     data_dir = Path('_data')
@@ -92,6 +102,10 @@ def main():
     with open(assets_dir / 'contributors.json', 'w', encoding='utf-8') as f:
         json.dump(contributors, f, indent=2, ensure_ascii=False)
     print(f'Wrote {len(contributors)} users to assets/data/contributors.json')
+
+    with open(assets_dir / 'reviewer_labels.json', 'w', encoding='utf-8') as f:
+        json.dump(label_map, f, indent=2, ensure_ascii=False)
+    print(f'Wrote {len(label_map)} labels to assets/data/reviewer_labels.json')
 
 if __name__ == '__main__':
     main()

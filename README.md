@@ -67,6 +67,9 @@ Baz projects are community-contributed and while we strive to maintain high qual
 
 ## News
 
+This section is also displayed on [awesomereviewers.com](https://awesomereviewers.com)
+and updates automatically with the latest merged pull requests.
+
 *2025-07-27 11:02 UTC*
 
 - 2025-07-27: Add research article and footer nav (#72)

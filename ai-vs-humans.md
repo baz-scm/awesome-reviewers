@@ -4,14 +4,17 @@ title: AI vs Humans in Code Review
 permalink: /ai-vs-humans/
 ---
 
-# AI vs Humans in Code Review  
-*Which style wins? Let's compare the habits, tone, and focus areas of automated reviewers (Copilot, CI bots) against their human counterparts--powered by live data from our corpus.*
+<section class="hero">
+  <div class="container">
+    <h1>AI vs Humans in Code Review</h1>
+    <p class="lead">
+      This page dynamically fetches <code>/assets/data/trends.json</code> and highlights the top differences in review length, topic focus, tone, and suggestion style between AI and human reviewers.
+    </p>
+  </div>
+</section>
 
-<p class="lead">
-  This page dynamically fetches <code>/assets/data/trends.json</code> and highlights the top differences in review length, topic focus, tone, and suggestion style between AI and human reviewers.
-</p>
-
----
+<main class="main-content">
+  <div class="container">
 
 ## 1. Overall Share & Verbosity  
 
@@ -98,6 +101,9 @@ permalink: /ai-vs-humans/
 3. **Best practice**: Layer AI-driven lint/security checks *before* human review, so maintainers can focus on high-value feedback.  
 
 ---
+
+  </div>
+</main>
 
 <link rel="stylesheet" href="/assets/css/trends.css">
 <script defer src="/assets/js/trends.js"></script>

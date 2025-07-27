@@ -11,6 +11,7 @@ ASSETS_DIR = Path('assets/data')
 
 LEADERBOARD_PATH = DATA_DIR / 'leaderboard.json'
 LOCATIONS_OUT = ASSETS_DIR / 'locations.json'
+PROFILES_OUT = ASSETS_DIR / 'profiles.json'
 
 API_URL = 'https://api.github.com/users/'
 HEADERS = {'Accept': 'application/vnd.github+json'}
@@ -61,6 +62,7 @@ def main():
         return
     users = [u['name'] for u in json.load(open(LEADERBOARD_PATH))]
     locations = {}
+    profiles = {}
     for user in users:
         print('Fetching', user)
         r = requests.get(API_URL + user, headers=HEADERS)
@@ -75,10 +77,24 @@ def main():
             locations[user] = {'location': loc, 'lat': lat, 'lon': lon}
         elif loc:
             locations[user] = {'location': loc}
+        profile = {
+            'location': info.get('location'),
+            'company': info.get('company'),
+            'blog': info.get('blog'),
+            'twitter_username': info.get('twitter_username'),
+            'email': info.get('email'),
+            'site_admin': info.get('site_admin'),
+            'followers': info.get('followers'),
+            'following': info.get('following'),
+        }
+        profiles[user] = {k: v for k, v in profile.items() if v is not None}
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
     with open(LOCATIONS_OUT, 'w', encoding='utf-8') as f:
         json.dump(locations, f, indent=2)
     print('Wrote', len(locations), 'locations to', LOCATIONS_OUT)
+    with open(PROFILES_OUT, 'w', encoding='utf-8') as f:
+        json.dump(profiles, f, indent=2)
+    print('Wrote', len(profiles), 'profiles to', PROFILES_OUT)
 
 
 if __name__ == '__main__':

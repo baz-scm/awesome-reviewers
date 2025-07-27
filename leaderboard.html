@@ -2,6 +2,10 @@
 layout: default
 title: Leaderboard
 description: Top contributors powering Awesome Reviewers
+extra_css:
+  - https://unpkg.com/leaflet@1.9.4/dist/leaflet.css
+extra_js:
+  - https://unpkg.com/leaflet@1.9.4/dist/leaflet.js
 ---
 
 <section class="hero leaderboard-hero">
@@ -25,6 +29,11 @@ description: Top contributors powering Awesome Reviewers
 
 <section class="leaderboard">
   <div class="container">
+    <div class="lb-tabs">
+      <button class="lb-tab active" data-target="table">Leaderboard</button>
+      <button class="lb-tab" id="map-tab" data-target="map" style="display:none">Map</button>
+    </div>
+    <div id="lb-table-pane" class="lb-pane active">
     <table id="leaderboard-table" class="leaderboard-table">
       <thead>
         <tr>
@@ -57,6 +66,10 @@ description: Top contributors powering Awesome Reviewers
         {% endfor %}
       </tbody>
     </table>
+    </div>
+    <div id="lb-map-pane" class="lb-pane">
+      <div id="leader-map" class="leaderboard-map"></div>
+    </div>
   </div>
 </section>
 
@@ -71,6 +84,25 @@ description: Top contributors powering Awesome Reviewers
 </div>
 
 <script>
+let map;
+const markers = {};
+function initMap() {
+  map = L.map('leader-map').setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+}
+
+function addMarker(user, location) {
+  if (markers[user] || !map) return;
+  const info = locationData[user];
+  if (info && info.lat && info.lon) {
+    const m = L.marker([info.lat, info.lon]).addTo(map);
+    m.bindPopup(`<a href="https://github.com/${user}" target="_blank">${user}</a><br>${location}`);
+    markers[user] = m;
+  }
+}
+
 function sortTable(col) {
   const table = document.getElementById('leaderboard-table');
   const tbody = table.tBodies[0];
@@ -95,19 +127,35 @@ document.querySelectorAll('#leaderboard-table th').forEach((th, i) => {
 });
 
 let contributors = {};
-fetch('/assets/data/contributors.json')
-  .then(r => r.json())
-  .then(data => {
-    contributors = data;
-    const hash = location.hash.slice(1);
-    if (hash && contributors[hash]) {
-      openContributorDrawer(hash);
-    }
-    loadProfileData();
-  })
-  .catch(err => {
-    console.error('Failed to load contributors dataset', err);
-  });
+let locationData = {};
+Promise.all([
+  fetch('/assets/data/contributors.json').then(r => r.json()),
+  fetch('/assets/data/locations.json').then(r => r.json())
+]).then(([cData, lData]) => {
+  contributors = cData;
+  locationData = lData;
+  const locUsers = Object.keys(lData);
+  if (locUsers.length) {
+    initMap();
+    locUsers.forEach(u => {
+      const info = lData[u];
+      if (info.lat && info.lon) {
+        const m = L.marker([info.lat, info.lon]).addTo(map);
+        m.bindPopup(`<a href="https://github.com/${u}" target="_blank">${u}</a><br>${info.location}`);
+        markers[u] = m;
+      }
+    });
+    document.getElementById('map-tab').style.display = '';
+  }
+  const hash = location.hash.slice(1);
+  if (hash && contributors[hash]) {
+    openContributorDrawer(hash);
+  }
+  loadProfileData();
+  setupTabs();
+}).catch(err => {
+  console.error('Failed to load datasets', err);
+});
 
 attachContributorEvents();
 
@@ -117,6 +165,21 @@ function attachContributorEvents() {
       if (e.target.tagName.toLowerCase() === 'a') return;
       const user = row.dataset.contributor;
       openContributorDrawer(user);
+    });
+  });
+}
+
+function setupTabs() {
+  document.querySelectorAll('.lb-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.lb-tab').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.lb-pane').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      const pane = document.getElementById(`lb-${btn.dataset.target}-pane`);
+      pane.classList.add('active');
+      if (btn.dataset.target === 'map' && map) {
+        setTimeout(() => map.invalidateSize(), 0);
+      }
     });
   });
 }
@@ -150,6 +213,7 @@ function applyProfile(row, data) {
   if (data.location && locCell) {
     locCell.dataset.sort = data.location;
     locCell.innerHTML = `<svg class="meta-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> ${data.location}`;
+    addMarker(row.dataset.contributor, data.location);
   }
   if (data.company && compCell) {
     compCell.dataset.sort = data.company;

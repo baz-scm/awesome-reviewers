@@ -1,0 +1,190 @@
+[
+  {
+    "discussion_id": "2177497374",
+    "pr_number": 140562,
+    "pr_file": "flang/lib/Parser/openmp-parsers.cpp",
+    "created_at": "2025-07-01T12:35:55+00:00",
+    "commented_code": "TYPE_PARSER(sourced(construct<OpenMPDeclareTargetConstruct>(\n     verbatim(\"DECLARE TARGET\"_tok), Parser<OmpDeclareTargetSpecifier>{})))\n \n+static OmpMapperSpecifier ConstructOmpMapperSpecifier(",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2177497374",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 140562,
+        "pr_file": "flang/lib/Parser/openmp-parsers.cpp",
+        "discussion_id": "2177497374",
+        "commented_code": "@@ -1389,8 +1389,28 @@ TYPE_PARSER(\n TYPE_PARSER(sourced(construct<OpenMPDeclareTargetConstruct>(\n     verbatim(\"DECLARE TARGET\"_tok), Parser<OmpDeclareTargetSpecifier>{})))\n \n+static OmpMapperSpecifier ConstructOmpMapperSpecifier(",
+        "comment_created_at": "2025-07-01T12:35:55+00:00",
+        "comment_author": "skatrak",
+        "comment_body": "Nit: This name seems to follow other existing similar functions better, IMO. In any case, the first letter should be lowercase.\r\n```suggestion\r\nstatic OmpMapperSpecifier makeMapperSpecifier(\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2177694595",
+    "pr_number": 140562,
+    "pr_file": "flang/lib/Lower/OpenMP/OpenMP.cpp",
+    "created_at": "2025-07-01T14:03:50+00:00",
+    "commented_code": "queue, item, clauseOps);\n }\n \n+static mlir::FlatSymbolRefAttr\n+genImplicitDefaultDeclareMapper(lower::AbstractConverter &converter,\n+                                mlir::Location loc, fir::RecordType recordType,\n+                                llvm::StringRef mapperNameStr) {\n+  fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();\n+\n+  // Save current insertion point before moving to the module scope to create\n+  // the DeclareMapperOp\n+  mlir::OpBuilder::InsertionGuard guard(firOpBuilder);\n+\n+  firOpBuilder.setInsertionPointToStart(converter.getModuleOp().getBody());\n+  auto declMapperOp = firOpBuilder.create<mlir::omp::DeclareMapperOp>(\n+      loc, mapperNameStr, recordType);\n+  auto &region = declMapperOp.getRegion();\n+  firOpBuilder.createBlock(&region);\n+  auto mapperArg = region.addArgument(firOpBuilder.getRefType(recordType), loc);\n+\n+  auto declareOp =\n+      firOpBuilder.create<hlfir::DeclareOp>(loc, mapperArg, /*uniq_name=*/\"\");\n+\n+  const auto genBoundsOps = [&](mlir::Value mapVal,\n+                                llvm::SmallVectorImpl<mlir::Value> &bounds) {\n+    fir::ExtendedValue extVal =\n+        hlfir::translateToExtendedValue(mapVal.getLoc(), firOpBuilder,\n+                                        hlfir::Entity{mapVal},\n+                                        /*contiguousHint=*/true)\n+            .first;\n+    fir::factory::AddrAndBoundsInfo info = fir::factory::getDataOperandBaseAddr(\n+        firOpBuilder, mapVal, /*isOptional=*/false, mapVal.getLoc());\n+    bounds = fir::factory::genImplicitBoundsOps<mlir::omp::MapBoundsOp,\n+                                                mlir::omp::MapBoundsType>(\n+        firOpBuilder, info, extVal,\n+        /*dataExvIsAssumedSize=*/false, mapVal.getLoc());\n+  };\n+\n+  // Return a reference to the contents of a derived type with one field.\n+  // Also return the field type.\n+  const auto getFieldRef =\n+      [&](mlir::Value rec,\n+          unsigned index) -> std::tuple<mlir::Value, mlir::Type> {\n+    auto recType = mlir::dyn_cast<fir::RecordType>(\n+        fir::unwrapPassByRefType(rec.getType()));\n+    auto [fieldName, fieldTy] = recType.getTypeList()[index];\n+    mlir::Value field = firOpBuilder.create<fir::FieldIndexOp>(\n+        loc, fir::FieldType::get(recType.getContext()), fieldName, recType,\n+        fir::getTypeParams(rec));\n+    return {firOpBuilder.create<fir::CoordinateOp>(\n+                loc, firOpBuilder.getRefType(fieldTy), rec, field),\n+            fieldTy};\n+  };\n+\n+  mlir::omp::DeclareMapperInfoOperands clauseOps;\n+  llvm::SmallVector<llvm::SmallVector<int64_t>> memberPlacementIndices;\n+  llvm::SmallVector<mlir::Value> memberMapOps;\n+\n+  llvm::omp::OpenMPOffloadMappingFlags mapFlag =\n+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |\n+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM |\n+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT;\n+  mlir::omp::VariableCaptureKind captureKind =\n+      mlir::omp::VariableCaptureKind::ByRef;\n+  int64_t index = 0;\n+\n+  // Populate the declareMapper region with the map information.\n+  for (const auto &[memberName, memberType] :\n+       mlir::dyn_cast<fir::RecordType>(recordType).getTypeList()) {\n+    auto [ref, type] = getFieldRef(declareOp.getBase(), index);\n+    mlir::FlatSymbolRefAttr mapperId;\n+    if (auto recType = mlir::dyn_cast<fir::RecordType>(memberType)) {\n+      std::string mapperIdName =\n+          recType.getName().str() + \".omp.default.mapper\";\n+      if (auto *sym = converter.getCurrentScope().FindSymbol(mapperIdName))\n+        mapperIdName = converter.mangleName(mapperIdName, sym->owner());\n+      else if (auto *sym = converter.getCurrentScope().FindSymbol(memberName))\n+        mapperIdName = converter.mangleName(mapperIdName, sym->owner());\n+\n+      if (converter.getModuleOp().lookupSymbol(mapperIdName))\n+        mapperId = mlir::FlatSymbolRefAttr::get(&converter.getMLIRContext(),\n+                                                mapperIdName);\n+      else\n+        mapperId = genImplicitDefaultDeclareMapper(converter, loc, recType,\n+                                                   mapperIdName);",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2177694595",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 140562,
+        "pr_file": "flang/lib/Lower/OpenMP/OpenMP.cpp",
+        "discussion_id": "2177694595",
+        "commented_code": "@@ -2348,6 +2348,122 @@ genSingleOp(lower::AbstractConverter &converter, lower::SymMap &symTable,\n       queue, item, clauseOps);\n }\n \n+static mlir::FlatSymbolRefAttr\n+genImplicitDefaultDeclareMapper(lower::AbstractConverter &converter,\n+                                mlir::Location loc, fir::RecordType recordType,\n+                                llvm::StringRef mapperNameStr) {\n+  fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();\n+\n+  // Save current insertion point before moving to the module scope to create\n+  // the DeclareMapperOp\n+  mlir::OpBuilder::InsertionGuard guard(firOpBuilder);\n+\n+  firOpBuilder.setInsertionPointToStart(converter.getModuleOp().getBody());\n+  auto declMapperOp = firOpBuilder.create<mlir::omp::DeclareMapperOp>(\n+      loc, mapperNameStr, recordType);\n+  auto &region = declMapperOp.getRegion();\n+  firOpBuilder.createBlock(&region);\n+  auto mapperArg = region.addArgument(firOpBuilder.getRefType(recordType), loc);\n+\n+  auto declareOp =\n+      firOpBuilder.create<hlfir::DeclareOp>(loc, mapperArg, /*uniq_name=*/\"\");\n+\n+  const auto genBoundsOps = [&](mlir::Value mapVal,\n+                                llvm::SmallVectorImpl<mlir::Value> &bounds) {\n+    fir::ExtendedValue extVal =\n+        hlfir::translateToExtendedValue(mapVal.getLoc(), firOpBuilder,\n+                                        hlfir::Entity{mapVal},\n+                                        /*contiguousHint=*/true)\n+            .first;\n+    fir::factory::AddrAndBoundsInfo info = fir::factory::getDataOperandBaseAddr(\n+        firOpBuilder, mapVal, /*isOptional=*/false, mapVal.getLoc());\n+    bounds = fir::factory::genImplicitBoundsOps<mlir::omp::MapBoundsOp,\n+                                                mlir::omp::MapBoundsType>(\n+        firOpBuilder, info, extVal,\n+        /*dataExvIsAssumedSize=*/false, mapVal.getLoc());\n+  };\n+\n+  // Return a reference to the contents of a derived type with one field.\n+  // Also return the field type.\n+  const auto getFieldRef =\n+      [&](mlir::Value rec,\n+          unsigned index) -> std::tuple<mlir::Value, mlir::Type> {\n+    auto recType = mlir::dyn_cast<fir::RecordType>(\n+        fir::unwrapPassByRefType(rec.getType()));\n+    auto [fieldName, fieldTy] = recType.getTypeList()[index];\n+    mlir::Value field = firOpBuilder.create<fir::FieldIndexOp>(\n+        loc, fir::FieldType::get(recType.getContext()), fieldName, recType,\n+        fir::getTypeParams(rec));\n+    return {firOpBuilder.create<fir::CoordinateOp>(\n+                loc, firOpBuilder.getRefType(fieldTy), rec, field),\n+            fieldTy};\n+  };\n+\n+  mlir::omp::DeclareMapperInfoOperands clauseOps;\n+  llvm::SmallVector<llvm::SmallVector<int64_t>> memberPlacementIndices;\n+  llvm::SmallVector<mlir::Value> memberMapOps;\n+\n+  llvm::omp::OpenMPOffloadMappingFlags mapFlag =\n+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |\n+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM |\n+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT;\n+  mlir::omp::VariableCaptureKind captureKind =\n+      mlir::omp::VariableCaptureKind::ByRef;\n+  int64_t index = 0;\n+\n+  // Populate the declareMapper region with the map information.\n+  for (const auto &[memberName, memberType] :\n+       mlir::dyn_cast<fir::RecordType>(recordType).getTypeList()) {\n+    auto [ref, type] = getFieldRef(declareOp.getBase(), index);\n+    mlir::FlatSymbolRefAttr mapperId;\n+    if (auto recType = mlir::dyn_cast<fir::RecordType>(memberType)) {\n+      std::string mapperIdName =\n+          recType.getName().str() + \".omp.default.mapper\";\n+      if (auto *sym = converter.getCurrentScope().FindSymbol(mapperIdName))\n+        mapperIdName = converter.mangleName(mapperIdName, sym->owner());\n+      else if (auto *sym = converter.getCurrentScope().FindSymbol(memberName))\n+        mapperIdName = converter.mangleName(mapperIdName, sym->owner());\n+\n+      if (converter.getModuleOp().lookupSymbol(mapperIdName))\n+        mapperId = mlir::FlatSymbolRefAttr::get(&converter.getMLIRContext(),\n+                                                mapperIdName);\n+      else\n+        mapperId = genImplicitDefaultDeclareMapper(converter, loc, recType,\n+                                                   mapperIdName);",
+        "comment_created_at": "2025-07-01T14:03:50+00:00",
+        "comment_author": "skatrak",
+        "comment_body": "Nit: Since both calls to the new function are wrapped inside of the same logic, perhaps `genImplicitDefaultDeclareMapper` could be `getOrGenImplicitDefaultDeclareMapper` and do the lookup inside of the function. That way we ensure we won't create duplicated `DeclareMapperOp`s, if we decide to call this function from other spots in the future.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2185589980",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 140562,
+        "pr_file": "flang/lib/Lower/OpenMP/OpenMP.cpp",
+        "discussion_id": "2177694595",
+        "commented_code": "@@ -2348,6 +2348,122 @@ genSingleOp(lower::AbstractConverter &converter, lower::SymMap &symTable,\n       queue, item, clauseOps);\n }\n \n+static mlir::FlatSymbolRefAttr\n+genImplicitDefaultDeclareMapper(lower::AbstractConverter &converter,\n+                                mlir::Location loc, fir::RecordType recordType,\n+                                llvm::StringRef mapperNameStr) {\n+  fir::FirOpBuilder &firOpBuilder = converter.getFirOpBuilder();\n+\n+  // Save current insertion point before moving to the module scope to create\n+  // the DeclareMapperOp\n+  mlir::OpBuilder::InsertionGuard guard(firOpBuilder);\n+\n+  firOpBuilder.setInsertionPointToStart(converter.getModuleOp().getBody());\n+  auto declMapperOp = firOpBuilder.create<mlir::omp::DeclareMapperOp>(\n+      loc, mapperNameStr, recordType);\n+  auto &region = declMapperOp.getRegion();\n+  firOpBuilder.createBlock(&region);\n+  auto mapperArg = region.addArgument(firOpBuilder.getRefType(recordType), loc);\n+\n+  auto declareOp =\n+      firOpBuilder.create<hlfir::DeclareOp>(loc, mapperArg, /*uniq_name=*/\"\");\n+\n+  const auto genBoundsOps = [&](mlir::Value mapVal,\n+                                llvm::SmallVectorImpl<mlir::Value> &bounds) {\n+    fir::ExtendedValue extVal =\n+        hlfir::translateToExtendedValue(mapVal.getLoc(), firOpBuilder,\n+                                        hlfir::Entity{mapVal},\n+                                        /*contiguousHint=*/true)\n+            .first;\n+    fir::factory::AddrAndBoundsInfo info = fir::factory::getDataOperandBaseAddr(\n+        firOpBuilder, mapVal, /*isOptional=*/false, mapVal.getLoc());\n+    bounds = fir::factory::genImplicitBoundsOps<mlir::omp::MapBoundsOp,\n+                                                mlir::omp::MapBoundsType>(\n+        firOpBuilder, info, extVal,\n+        /*dataExvIsAssumedSize=*/false, mapVal.getLoc());\n+  };\n+\n+  // Return a reference to the contents of a derived type with one field.\n+  // Also return the field type.\n+  const auto getFieldRef =\n+      [&](mlir::Value rec,\n+          unsigned index) -> std::tuple<mlir::Value, mlir::Type> {\n+    auto recType = mlir::dyn_cast<fir::RecordType>(\n+        fir::unwrapPassByRefType(rec.getType()));\n+    auto [fieldName, fieldTy] = recType.getTypeList()[index];\n+    mlir::Value field = firOpBuilder.create<fir::FieldIndexOp>(\n+        loc, fir::FieldType::get(recType.getContext()), fieldName, recType,\n+        fir::getTypeParams(rec));\n+    return {firOpBuilder.create<fir::CoordinateOp>(\n+                loc, firOpBuilder.getRefType(fieldTy), rec, field),\n+            fieldTy};\n+  };\n+\n+  mlir::omp::DeclareMapperInfoOperands clauseOps;\n+  llvm::SmallVector<llvm::SmallVector<int64_t>> memberPlacementIndices;\n+  llvm::SmallVector<mlir::Value> memberMapOps;\n+\n+  llvm::omp::OpenMPOffloadMappingFlags mapFlag =\n+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_TO |\n+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_FROM |\n+      llvm::omp::OpenMPOffloadMappingFlags::OMP_MAP_IMPLICIT;\n+  mlir::omp::VariableCaptureKind captureKind =\n+      mlir::omp::VariableCaptureKind::ByRef;\n+  int64_t index = 0;\n+\n+  // Populate the declareMapper region with the map information.\n+  for (const auto &[memberName, memberType] :\n+       mlir::dyn_cast<fir::RecordType>(recordType).getTypeList()) {\n+    auto [ref, type] = getFieldRef(declareOp.getBase(), index);\n+    mlir::FlatSymbolRefAttr mapperId;\n+    if (auto recType = mlir::dyn_cast<fir::RecordType>(memberType)) {\n+      std::string mapperIdName =\n+          recType.getName().str() + \".omp.default.mapper\";\n+      if (auto *sym = converter.getCurrentScope().FindSymbol(mapperIdName))\n+        mapperIdName = converter.mangleName(mapperIdName, sym->owner());\n+      else if (auto *sym = converter.getCurrentScope().FindSymbol(memberName))\n+        mapperIdName = converter.mangleName(mapperIdName, sym->owner());\n+\n+      if (converter.getModuleOp().lookupSymbol(mapperIdName))\n+        mapperId = mlir::FlatSymbolRefAttr::get(&converter.getMLIRContext(),\n+                                                mapperIdName);\n+      else\n+        mapperId = genImplicitDefaultDeclareMapper(converter, loc, recType,\n+                                                   mapperIdName);",
+        "comment_created_at": "2025-07-04T15:04:35+00:00",
+        "comment_author": "TIFitis",
+        "comment_body": "Done.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2235197249",
+    "pr_number": 149434,
+    "pr_file": "clang/lib/Driver/ToolChains/MinGW.cpp",
+    "created_at": "2025-07-28T08:02:19+00:00",
+    "commented_code": "CmdArgs.push_back(\"-lmoldname\");\n   CmdArgs.push_back(\"-lmingwex\");\n-  for (auto Lib : Args.getAllArgValues(options::OPT_l))\n+  for (auto Lib : Args.getAllArgValues(options::OPT_l)) {\n     if (StringRef(Lib).starts_with(\"msvcr\") ||\n         StringRef(Lib).starts_with(\"ucrt\") ||\n-        StringRef(Lib).starts_with(\"crtdll\"))\n+        StringRef(Lib).starts_with(\"crtdll\")) {\n+      Lib = (llvm::Twine(\"-l\") + Lib).str();",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2235197249",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 149434,
+        "pr_file": "clang/lib/Driver/ToolChains/MinGW.cpp",
+        "discussion_id": "2235197249",
+        "commented_code": "@@ -85,11 +85,18 @@ void tools::MinGW::Linker::AddLibGCC(const ArgList &Args,\n \n   CmdArgs.push_back(\"-lmoldname\");\n   CmdArgs.push_back(\"-lmingwex\");\n-  for (auto Lib : Args.getAllArgValues(options::OPT_l))\n+  for (auto Lib : Args.getAllArgValues(options::OPT_l)) {\n     if (StringRef(Lib).starts_with(\"msvcr\") ||\n         StringRef(Lib).starts_with(\"ucrt\") ||\n-        StringRef(Lib).starts_with(\"crtdll\"))\n+        StringRef(Lib).starts_with(\"crtdll\")) {\n+      Lib = (llvm::Twine(\"-l\") + Lib).str();",
+        "comment_created_at": "2025-07-28T08:02:19+00:00",
+        "comment_author": "mstorsjo",
+        "comment_body": "I'd kinda prefer to declare a new variable instead of reusing `Lib` here. Especially with `Lib` being declared `auto`, its type is not entirely obvious here, so it would feel clearer if we'd declare the new one e.g. explicitly `std::string` here.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2214119858",
+    "pr_number": 148948,
+    "pr_file": "libc/test/integration/src/pthread/pthread_barrier_test.cpp",
+    "created_at": "2025-07-17T19:26:13+00:00",
+    "commented_code": "+//===-- Tests for pthread_barrier_t ---------------------------------------===//\n+//\n+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.\n+// See https://llvm.org/LICENSE.txt for license information.\n+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\n+//\n+//===----------------------------------------------------------------------===//\n+\n+#include \"src/pthread/pthread_barrier_destroy.h\"\n+#include \"src/pthread/pthread_barrier_init.h\"\n+#include \"src/pthread/pthread_barrier_wait.h\"\n+\n+#include \"src/__support/CPP/atomic.h\"\n+#include \"src/pthread/pthread_create.h\"\n+#include \"src/pthread/pthread_join.h\"\n+#include \"src/pthread/pthread_mutex_destroy.h\"\n+#include \"src/pthread/pthread_mutex_init.h\"\n+#include \"src/pthread/pthread_mutex_lock.h\"\n+#include \"src/pthread/pthread_mutex_unlock.h\"\n+#include \"src/stdio/printf.h\"\n+\n+#include \"test/IntegrationTest/test.h\"\n+\n+#include <pthread.h>\n+\n+pthread_barrier_t barrier;\n+\n+void smoke_test() {\n+  ASSERT_EQ(LIBC_NAMESPACE::pthread_barrier_init(&barrier, nullptr, 1), 0);\n+  ASSERT_EQ(LIBC_NAMESPACE::pthread_barrier_wait(&barrier),\n+            PTHREAD_BARRIER_SERIAL_THREAD);\n+  ASSERT_EQ(LIBC_NAMESPACE::pthread_barrier_destroy(&barrier), 0);\n+}\n+\n+LIBC_NAMESPACE::cpp::Atomic<int> counter;\n+void *increment_counter_and_wait(void *args) {\n+  counter.fetch_add(1);\n+  LIBC_NAMESPACE::pthread_barrier_wait(&barrier);\n+  return 0;\n+}\n+\n+void single_use_barrier() {",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2214119858",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 148948,
+        "pr_file": "libc/test/integration/src/pthread/pthread_barrier_test.cpp",
+        "discussion_id": "2214119858",
+        "commented_code": "@@ -0,0 +1,117 @@\n+//===-- Tests for pthread_barrier_t ---------------------------------------===//\n+//\n+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.\n+// See https://llvm.org/LICENSE.txt for license information.\n+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\n+//\n+//===----------------------------------------------------------------------===//\n+\n+#include \"src/pthread/pthread_barrier_destroy.h\"\n+#include \"src/pthread/pthread_barrier_init.h\"\n+#include \"src/pthread/pthread_barrier_wait.h\"\n+\n+#include \"src/__support/CPP/atomic.h\"\n+#include \"src/pthread/pthread_create.h\"\n+#include \"src/pthread/pthread_join.h\"\n+#include \"src/pthread/pthread_mutex_destroy.h\"\n+#include \"src/pthread/pthread_mutex_init.h\"\n+#include \"src/pthread/pthread_mutex_lock.h\"\n+#include \"src/pthread/pthread_mutex_unlock.h\"\n+#include \"src/stdio/printf.h\"\n+\n+#include \"test/IntegrationTest/test.h\"\n+\n+#include <pthread.h>\n+\n+pthread_barrier_t barrier;\n+\n+void smoke_test() {\n+  ASSERT_EQ(LIBC_NAMESPACE::pthread_barrier_init(&barrier, nullptr, 1), 0);\n+  ASSERT_EQ(LIBC_NAMESPACE::pthread_barrier_wait(&barrier),\n+            PTHREAD_BARRIER_SERIAL_THREAD);\n+  ASSERT_EQ(LIBC_NAMESPACE::pthread_barrier_destroy(&barrier), 0);\n+}\n+\n+LIBC_NAMESPACE::cpp::Atomic<int> counter;\n+void *increment_counter_and_wait(void *args) {\n+  counter.fetch_add(1);\n+  LIBC_NAMESPACE::pthread_barrier_wait(&barrier);\n+  return 0;\n+}\n+\n+void single_use_barrier() {",
+        "comment_created_at": "2025-07-17T19:26:13+00:00",
+        "comment_author": "brooksmoses",
+        "comment_body": "Some of your test functions have a name ending in `test`, and some don't.  This should be consistent, and there should be an LLVM-libc standard for which it is.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2164173014",
+    "pr_number": 140282,
+    "pr_file": "clang/lib/Sema/SemaSYCL.cpp",
+    "created_at": "2025-06-24T14:24:57+00:00",
+    "commented_code": "Diag(AL.getLoc(), diag::err_sycl_attribute_invalid_linkage);\n     return;\n   }\n+  std::string FunctionName = StringRef(FD->getNameInfo().getAsString()).lower();\n+  if (FunctionName.find(\"main\") != std::string::npos) {\n+    Diag(AL.getLoc(), diag::err_sycl_attribute_avoid_main);\n+    return;\n+  }",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2164173014",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 140282,
+        "pr_file": "clang/lib/Sema/SemaSYCL.cpp",
+        "discussion_id": "2164173014",
+        "commented_code": "@@ -208,6 +208,15 @@ void SemaSYCL::handleExternalAttr(Decl *D, const ParsedAttr &AL) {\n     Diag(AL.getLoc(), diag::err_sycl_attribute_invalid_linkage);\n     return;\n   }\n+  std::string FunctionName = StringRef(FD->getNameInfo().getAsString()).lower();\n+  if (FunctionName.find(\"main\") != std::string::npos) {\n+    Diag(AL.getLoc(), diag::err_sycl_attribute_avoid_main);\n+    return;\n+  }",
+        "comment_created_at": "2025-06-24T14:24:57+00:00",
+        "comment_author": "tahonermann",
+        "comment_body": "I think the check for application to `main()` is better done in `Sema::CheckMain()`. See the other diagnostics there that call `Diag` with a `diag::err*` argument. It looks like `FD->setInvalidDecl()` should also be called in that case.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2230637228",
+    "pr_number": 148257,
+    "pr_file": "mlir/lib/Conversion/MemRefToEmitC/MemRefToEmitC.cpp",
+    "created_at": "2025-07-25T09:32:58+00:00",
+    "commented_code": "}\n };\n \n+struct ConvertAlloc final : public OpConversionPattern<memref::AllocOp> {\n+  using OpConversionPattern::OpConversionPattern;\n+  LogicalResult\n+  matchAndRewrite(memref::AllocOp allocOp, OpAdaptor operands,\n+                  ConversionPatternRewriter &rewriter) const override {\n+    mlir::Location loc = allocOp.getLoc();",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2230637228",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 148257,
+        "pr_file": "mlir/lib/Conversion/MemRefToEmitC/MemRefToEmitC.cpp",
+        "discussion_id": "2230637228",
+        "commented_code": "@@ -77,6 +81,75 @@ struct ConvertAlloca final : public OpConversionPattern<memref::AllocaOp> {\n   }\n };\n \n+struct ConvertAlloc final : public OpConversionPattern<memref::AllocOp> {\n+  using OpConversionPattern::OpConversionPattern;\n+  LogicalResult\n+  matchAndRewrite(memref::AllocOp allocOp, OpAdaptor operands,\n+                  ConversionPatternRewriter &rewriter) const override {\n+    mlir::Location loc = allocOp.getLoc();",
+        "comment_created_at": "2025-07-25T09:32:58+00:00",
+        "comment_author": "aniragil",
+        "comment_body": "[Multiple occurrences] No need for the `mlir::` prefix.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2228550628",
+    "pr_number": 148877,
+    "pr_file": "lldb/source/Plugins/TypeSystem/Clang/TypeSystemClang.cpp",
+    "created_at": "2025-07-24T13:37:25+00:00",
+    "commented_code": "LLDB_LOG(log, \"Created new TypeSystem for (ASTContext*){0:x} '{1}'\",\n              &getASTContext(), getDisplayName());\n }\n+\n+// Expected format is:\n+// $__lldb_func:<mangled name>:<module id>:<definition/declaration DIE id>",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2228550628",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 148877,
+        "pr_file": "lldb/source/Plugins/TypeSystem/Clang/TypeSystemClang.cpp",
+        "discussion_id": "2228550628",
+        "commented_code": "@@ -9759,3 +9782,51 @@ void TypeSystemClang::LogCreation() const {\n     LLDB_LOG(log, \"Created new TypeSystem for (ASTContext*){0:x} '{1}'\",\n              &getASTContext(), getDisplayName());\n }\n+\n+// Expected format is:\n+// $__lldb_func:<mangled name>:<module id>:<definition/declaration DIE id>",
+        "comment_created_at": "2025-07-24T13:37:25+00:00",
+        "comment_author": "labath",
+        "comment_body": "Maybe put mangled name last? That way you don't have to worry about it containing `:`s...",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2220641744",
+    "pr_number": 149238,
+    "pr_file": "compiler-rt/lib/asan/asan_mac.cpp",
+    "created_at": "2025-07-22T00:20:48+00:00",
+    "commented_code": "asan_dispatch_call_block_and_release);\n }\n \n-#if !defined(MISSING_BLOCKS_SUPPORT)\n+extern \"C\" void asan_dispatch_apply_f_block(void *context, size_t iteration) {",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2220641744",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 149238,
+        "pr_file": "compiler-rt/lib/asan/asan_mac.cpp",
+        "discussion_id": "2220641744",
+        "commented_code": "@@ -243,7 +245,24 @@ INTERCEPTOR(void, dispatch_group_async_f, dispatch_group_t group,\n                                asan_dispatch_call_block_and_release);\n }\n \n-#if !defined(MISSING_BLOCKS_SUPPORT)\n+extern \"C\" void asan_dispatch_apply_f_block(void *context, size_t iteration) {",
+        "comment_created_at": "2025-07-22T00:20:48+00:00",
+        "comment_author": "wrotki",
+        "comment_body": "But this is not a block (dispatch_apply_f takes regular function, dispatch_apply takes block), which is a bit misguiding. I would rename it to perhaps asan_dispatch_apply_f_work or asan_dispatch_apply_f_callback",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

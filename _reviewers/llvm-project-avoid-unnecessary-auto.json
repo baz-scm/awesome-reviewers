@@ -1,0 +1,270 @@
+[
+  {
+    "discussion_id": "2157491086",
+    "pr_number": 144926,
+    "pr_file": "mlir/lib/Conversion/ComplexToROCDL/ComplexToROCDL.cpp",
+    "created_at": "2025-06-19T18:22:28+00:00",
+    "commented_code": "+//===-- ComplexToROCDL.cpp - conversion from Complex to ROCDL calls -------===//\n+//\n+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.\n+// See https://llvm.org/LICENSE.txt for license information.\n+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\n+//\n+//===----------------------------------------------------------------------===//\n+\n+#include \"mlir/Conversion/ComplexToROCDL/ComplexToROCDL.h\"\n+#include \"mlir/Dialect/Complex/IR/Complex.h\"\n+#include \"mlir/Dialect/Func/IR/FuncOps.h\"\n+#include \"mlir/IR/PatternMatch.h\"\n+#include \"mlir/Transforms/DialectConversion.h\"\n+#include <optional>\n+\n+namespace mlir {\n+#define GEN_PASS_DEF_CONVERTCOMPLEXTOROCDL\n+#include \"mlir/Conversion/Passes.h.inc\"\n+} // namespace mlir\n+\n+using namespace mlir;\n+\n+namespace {\n+struct FloatTypeResolver {\n+  std::optional<bool> operator()(Type type) const {\n+    auto elementType = cast<FloatType>(type);\n+    if (!isa<Float32Type, Float64Type>(elementType))\n+      return {};\n+    return elementType.getIntOrFloatBitWidth() == 64;\n+  }\n+};\n+\n+template <typename Op, typename TypeResolver = FloatTypeResolver>\n+struct ScalarOpToROCDLCall : public OpRewritePattern<Op> {\n+  using OpRewritePattern<Op>::OpRewritePattern;\n+  ScalarOpToROCDLCall(MLIRContext *context, StringRef floatFunc,\n+                      StringRef doubleFunc, PatternBenefit benefit)\n+      : OpRewritePattern<Op>(context, benefit), floatFunc(floatFunc),\n+        doubleFunc(doubleFunc) {}\n+\n+  LogicalResult matchAndRewrite(Op op, PatternRewriter &rewriter) const final {\n+    auto module = SymbolTable::getNearestSymbolTable(op);",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2157491086",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 144926,
+        "pr_file": "mlir/lib/Conversion/ComplexToROCDL/ComplexToROCDL.cpp",
+        "discussion_id": "2157491086",
+        "commented_code": "@@ -0,0 +1,94 @@\n+//===-- ComplexToROCDL.cpp - conversion from Complex to ROCDL calls -------===//\n+//\n+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.\n+// See https://llvm.org/LICENSE.txt for license information.\n+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception\n+//\n+//===----------------------------------------------------------------------===//\n+\n+#include \"mlir/Conversion/ComplexToROCDL/ComplexToROCDL.h\"\n+#include \"mlir/Dialect/Complex/IR/Complex.h\"\n+#include \"mlir/Dialect/Func/IR/FuncOps.h\"\n+#include \"mlir/IR/PatternMatch.h\"\n+#include \"mlir/Transforms/DialectConversion.h\"\n+#include <optional>\n+\n+namespace mlir {\n+#define GEN_PASS_DEF_CONVERTCOMPLEXTOROCDL\n+#include \"mlir/Conversion/Passes.h.inc\"\n+} // namespace mlir\n+\n+using namespace mlir;\n+\n+namespace {\n+struct FloatTypeResolver {\n+  std::optional<bool> operator()(Type type) const {\n+    auto elementType = cast<FloatType>(type);\n+    if (!isa<Float32Type, Float64Type>(elementType))\n+      return {};\n+    return elementType.getIntOrFloatBitWidth() == 64;\n+  }\n+};\n+\n+template <typename Op, typename TypeResolver = FloatTypeResolver>\n+struct ScalarOpToROCDLCall : public OpRewritePattern<Op> {\n+  using OpRewritePattern<Op>::OpRewritePattern;\n+  ScalarOpToROCDLCall(MLIRContext *context, StringRef floatFunc,\n+                      StringRef doubleFunc, PatternBenefit benefit)\n+      : OpRewritePattern<Op>(context, benefit), floatFunc(floatFunc),\n+        doubleFunc(doubleFunc) {}\n+\n+  LogicalResult matchAndRewrite(Op op, PatternRewriter &rewriter) const final {\n+    auto module = SymbolTable::getNearestSymbolTable(op);",
+        "comment_created_at": "2025-06-19T18:22:28+00:00",
+        "comment_author": "ftynse",
+        "comment_body": "Expand `auto` unless the type is obvious from statement-level context or impossible to spell.\r\n\r\nAlso avoid using `module` as a name since it will become a reserved keyword with a C++ version bump.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2216919394",
+    "pr_number": 149579,
+    "pr_file": "flang/lib/Semantics/check-acc-structure.cpp",
+    "created_at": "2025-07-18T21:04:11+00:00",
+    "commented_code": "dirContext_.pop_back();\n }\n \n-void AccStructureChecker::Enter(const parser::AccAtomicUpdate &x) {\n-  const parser::AssignmentStmt &assignment{\n-      std::get<parser::Statement<parser::AssignmentStmt>>(x.t).statement};\n-  const auto &var{std::get<parser::Variable>(assignment.t)};\n-  const auto &expr{std::get<parser::Expr>(assignment.t)};\n+void AccStructureChecker::CheckAtomicStmt(\n+    const parser::AssignmentStmt &assign, std::string &construct) {\n+  const auto &var{std::get<parser::Variable>(assign.t)};\n+  const auto &expr{std::get<parser::Expr>(assign.t)};\n   const auto *rhs{GetExpr(context_, expr)};\n   const auto *lhs{GetExpr(context_, var)};\n-  if (lhs && rhs) {\n-    if (lhs->Rank() != 0)\n+\n+  if (lhs) {\n+    if (lhs->Rank() != 0) {\n       context_.Say(expr.source,\n-          \"LHS of atomic update statement must be scalar\"_err_en_US);\n-    if (rhs->Rank() != 0)\n+          \"LHS of atomic %s statement must be scalar\"_err_en_US, construct);\n+    }\n+    // TODO: Check if lhs is intrinsic type\n+  }\n+  if (rhs) {\n+    if (rhs->Rank() != 0) {\n       context_.Say(var.GetSource(),\n-          \"RHS of atomic update statement must be scalar\"_err_en_US);\n+          \"RHS of atomic %s statement must be scalar\"_err_en_US, construct);\n+    }\n+    // TODO: Check if lhs is intrinsic type\n+  }\n+}\n+\n+void AccStructureChecker::CheckAtomicUpdateStmt(\n+    const parser::AssignmentStmt &assign) {\n+  static std::string construct{\"update\"};\n+  CheckAtomicStmt(assign, construct);\n+}\n+\n+void AccStructureChecker::CheckAtomicWriteStmt(\n+    const parser::AssignmentStmt &assign) {\n+  static std::string construct{\"write\"};\n+  CheckAtomicStmt(assign, construct);\n+}\n+\n+void AccStructureChecker::CheckAtomicCaptureStmt(\n+    const parser::AssignmentStmt &assign) {\n+  static std::string construct{\"capture\"};\n+  CheckAtomicStmt(assign, construct);\n+}\n+\n+const parser::Variable *AccStructureChecker::GetIfAtomicUpdateVar(\n+    const parser::AssignmentStmt &assign) const {\n+  // OpenACC 3.4, 2893-2898\n+  const auto &updatedVar{std::get<parser::Variable>(assign.t)};\n+  const auto &rhs{std::get<parser::Expr>(assign.t)};\n+\n+  // Is the rhs something a valid operations that references the updatedVar?\n+  const auto expr{GetExpr(context_, rhs)};",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2216919394",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 149579,
+        "pr_file": "flang/lib/Semantics/check-acc-structure.cpp",
+        "discussion_id": "2216919394",
+        "commented_code": "@@ -342,21 +347,149 @@ void AccStructureChecker::Leave(const parser::OpenACCAtomicConstruct &x) {\n   dirContext_.pop_back();\n }\n \n-void AccStructureChecker::Enter(const parser::AccAtomicUpdate &x) {\n-  const parser::AssignmentStmt &assignment{\n-      std::get<parser::Statement<parser::AssignmentStmt>>(x.t).statement};\n-  const auto &var{std::get<parser::Variable>(assignment.t)};\n-  const auto &expr{std::get<parser::Expr>(assignment.t)};\n+void AccStructureChecker::CheckAtomicStmt(\n+    const parser::AssignmentStmt &assign, std::string &construct) {\n+  const auto &var{std::get<parser::Variable>(assign.t)};\n+  const auto &expr{std::get<parser::Expr>(assign.t)};\n   const auto *rhs{GetExpr(context_, expr)};\n   const auto *lhs{GetExpr(context_, var)};\n-  if (lhs && rhs) {\n-    if (lhs->Rank() != 0)\n+\n+  if (lhs) {\n+    if (lhs->Rank() != 0) {\n       context_.Say(expr.source,\n-          \"LHS of atomic update statement must be scalar\"_err_en_US);\n-    if (rhs->Rank() != 0)\n+          \"LHS of atomic %s statement must be scalar\"_err_en_US, construct);\n+    }\n+    // TODO: Check if lhs is intrinsic type\n+  }\n+  if (rhs) {\n+    if (rhs->Rank() != 0) {\n       context_.Say(var.GetSource(),\n-          \"RHS of atomic update statement must be scalar\"_err_en_US);\n+          \"RHS of atomic %s statement must be scalar\"_err_en_US, construct);\n+    }\n+    // TODO: Check if lhs is intrinsic type\n+  }\n+}\n+\n+void AccStructureChecker::CheckAtomicUpdateStmt(\n+    const parser::AssignmentStmt &assign) {\n+  static std::string construct{\"update\"};\n+  CheckAtomicStmt(assign, construct);\n+}\n+\n+void AccStructureChecker::CheckAtomicWriteStmt(\n+    const parser::AssignmentStmt &assign) {\n+  static std::string construct{\"write\"};\n+  CheckAtomicStmt(assign, construct);\n+}\n+\n+void AccStructureChecker::CheckAtomicCaptureStmt(\n+    const parser::AssignmentStmt &assign) {\n+  static std::string construct{\"capture\"};\n+  CheckAtomicStmt(assign, construct);\n+}\n+\n+const parser::Variable *AccStructureChecker::GetIfAtomicUpdateVar(\n+    const parser::AssignmentStmt &assign) const {\n+  // OpenACC 3.4, 2893-2898\n+  const auto &updatedVar{std::get<parser::Variable>(assign.t)};\n+  const auto &rhs{std::get<parser::Expr>(assign.t)};\n+\n+  // Is the rhs something a valid operations that references the updatedVar?\n+  const auto expr{GetExpr(context_, rhs)};",
+        "comment_created_at": "2025-07-18T21:04:11+00:00",
+        "comment_author": "klausler",
+        "comment_body": "`const auto *` please, otherwise it makes me wonder whether you omitted a `&`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2226970969",
+    "pr_number": 150331,
+    "pr_file": "lldb/source/API/SBModule.cpp",
+    "created_at": "2025-07-23T23:52:27+00:00",
+    "commented_code": "const bool mandatory = false;\n   ModuleList::RemoveOrphanSharedModules(mandatory);\n }\n+\n+const char *SBModule::GetName() const {\n+  LLDB_INSTRUMENT_VA(this);\n+  if (!m_opaque_sp) {\n+    return nullptr;\n+  }\n+  auto mod_name = m_opaque_sp->GetObjectName();",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2226970969",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 150331,
+        "pr_file": "lldb/source/API/SBModule.cpp",
+        "discussion_id": "2226970969",
+        "commented_code": "@@ -671,3 +671,15 @@ void SBModule::GarbageCollectAllocatedModules() {\n   const bool mandatory = false;\n   ModuleList::RemoveOrphanSharedModules(mandatory);\n }\n+\n+const char *SBModule::GetName() const {\n+  LLDB_INSTRUMENT_VA(this);\n+  if (!m_opaque_sp) {\n+    return nullptr;\n+  }\n+  auto mod_name = m_opaque_sp->GetObjectName();",
+        "comment_created_at": "2025-07-23T23:52:27+00:00",
+        "comment_author": "JDevlieghere",
+        "comment_body": "Don't use `auto` if the type isn't obvious from the right hand side. \n```suggestion\n  ConstString mod_name = m_opaque_sp->GetObjectName();\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2092109948",
+    "pr_number": 140158,
+    "pr_file": "llvm/lib/Transforms/HipStdPar/HipStdPar.cpp",
+    "created_at": "2025-05-15T23:46:19+00:00",
+    "commented_code": "return PreservedAnalyses::none();\n }\n+\n+static constexpr std::pair<StringLiteral, StringLiteral> MathLibToHipStdPar[]{\n+    {\"acosh\", \"__hipstdpar_acosh_f64\"},\n+    {\"acoshf\", \"__hipstdpar_acosh_f32\"},\n+    {\"asinh\", \"__hipstdpar_asinh_f64\"},\n+    {\"asinhf\", \"__hipstdpar_asinh_f32\"},\n+    {\"atanh\", \"__hipstdpar_atanh_f64\"},\n+    {\"atanhf\", \"__hipstdpar_atanh_f32\"},\n+    {\"cbrt\", \"__hipstdpar_cbrt_f64\"},\n+    {\"cbrtf\", \"__hipstdpar_cbrt_f32\"},\n+    {\"erf\", \"__hipstdpar_erf_f64\"},\n+    {\"erff\", \"__hipstdpar_erf_f32\"},\n+    {\"erfc\", \"__hipstdpar_erfc_f64\"},\n+    {\"erfcf\", \"__hipstdpar_erfc_f32\"},\n+    {\"fdim\", \"__hipstdpar_fdim_f64\"},\n+    {\"fdimf\", \"__hipstdpar_fdim_f32\"},\n+    {\"expm1\", \"__hipstdpar_expm1_f64\"},\n+    {\"expm1f\", \"__hipstdpar_expm1_f32\"},\n+    {\"hypot\", \"__hipstdpar_hypot_f64\"},\n+    {\"hypotf\", \"__hipstdpar_hypot_f32\"},\n+    {\"ilogb\", \"__hipstdpar_ilogb_f64\"},\n+    {\"ilogbf\", \"__hipstdpar_ilogb_f32\"},\n+    {\"lgamma\", \"__hipstdpar_lgamma_f64\"},\n+    {\"lgammaf\", \"__hipstdpar_lgamma_f32\"},\n+    {\"log1p\", \"__hipstdpar_log1p_f64\"},\n+    {\"log1pf\", \"__hipstdpar_log1p_f32\"},\n+    {\"logb\", \"__hipstdpar_logb_f64\"},\n+    {\"logbf\", \"__hipstdpar_logb_f32\"},\n+    {\"nextafter\", \"__hipstdpar_nextafter_f64\"},\n+    {\"nextafterf\", \"__hipstdpar_nextafter_f32\"},\n+    {\"nexttoward\", \"__hipstdpar_nexttoward_f64\"},\n+    {\"nexttowardf\", \"__hipstdpar_nexttoward_f32\"},\n+    {\"remainder\", \"__hipstdpar_remainder_f64\"},\n+    {\"remainderf\", \"__hipstdpar_remainder_f32\"},\n+    {\"remquo\", \"__hipstdpar_remquo_f64\"},\n+    {\"remquof\", \"__hipstdpar_remquo_f32\"},\n+    {\"scalbln\", \"__hipstdpar_scalbln_f64\"},\n+    {\"scalblnf\", \"__hipstdpar_scalbln_f32\"},\n+    {\"scalbn\", \"__hipstdpar_scalbn_f64\"},\n+    {\"scalbnf\", \"__hipstdpar_scalbn_f32\"},\n+    {\"tgamma\", \"__hipstdpar_tgamma_f64\"},\n+    {\"tgammaf\", \"__hipstdpar_tgamma_f32\"}};\n+\n+PreservedAnalyses HipStdParMathFixupPass::run(Module &M,\n+                                              ModuleAnalysisManager &) {\n+  if (M.empty())\n+    return PreservedAnalyses::all();\n+\n+  SmallVector<std::pair<Function *, std::string>> ToReplace;\n+  for (auto &&F : M) {\n+    if (!F.hasName())\n+      continue;\n+\n+    auto N = F.getName().str();\n+    auto ID = F.getIntrinsicID();",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2092109948",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 140158,
+        "pr_file": "llvm/lib/Transforms/HipStdPar/HipStdPar.cpp",
+        "discussion_id": "2092109948",
+        "commented_code": "@@ -321,3 +332,110 @@ HipStdParAllocationInterpositionPass::run(Module &M, ModuleAnalysisManager&) {\n \n   return PreservedAnalyses::none();\n }\n+\n+static constexpr std::pair<StringLiteral, StringLiteral> MathLibToHipStdPar[]{\n+    {\"acosh\", \"__hipstdpar_acosh_f64\"},\n+    {\"acoshf\", \"__hipstdpar_acosh_f32\"},\n+    {\"asinh\", \"__hipstdpar_asinh_f64\"},\n+    {\"asinhf\", \"__hipstdpar_asinh_f32\"},\n+    {\"atanh\", \"__hipstdpar_atanh_f64\"},\n+    {\"atanhf\", \"__hipstdpar_atanh_f32\"},\n+    {\"cbrt\", \"__hipstdpar_cbrt_f64\"},\n+    {\"cbrtf\", \"__hipstdpar_cbrt_f32\"},\n+    {\"erf\", \"__hipstdpar_erf_f64\"},\n+    {\"erff\", \"__hipstdpar_erf_f32\"},\n+    {\"erfc\", \"__hipstdpar_erfc_f64\"},\n+    {\"erfcf\", \"__hipstdpar_erfc_f32\"},\n+    {\"fdim\", \"__hipstdpar_fdim_f64\"},\n+    {\"fdimf\", \"__hipstdpar_fdim_f32\"},\n+    {\"expm1\", \"__hipstdpar_expm1_f64\"},\n+    {\"expm1f\", \"__hipstdpar_expm1_f32\"},\n+    {\"hypot\", \"__hipstdpar_hypot_f64\"},\n+    {\"hypotf\", \"__hipstdpar_hypot_f32\"},\n+    {\"ilogb\", \"__hipstdpar_ilogb_f64\"},\n+    {\"ilogbf\", \"__hipstdpar_ilogb_f32\"},\n+    {\"lgamma\", \"__hipstdpar_lgamma_f64\"},\n+    {\"lgammaf\", \"__hipstdpar_lgamma_f32\"},\n+    {\"log1p\", \"__hipstdpar_log1p_f64\"},\n+    {\"log1pf\", \"__hipstdpar_log1p_f32\"},\n+    {\"logb\", \"__hipstdpar_logb_f64\"},\n+    {\"logbf\", \"__hipstdpar_logb_f32\"},\n+    {\"nextafter\", \"__hipstdpar_nextafter_f64\"},\n+    {\"nextafterf\", \"__hipstdpar_nextafter_f32\"},\n+    {\"nexttoward\", \"__hipstdpar_nexttoward_f64\"},\n+    {\"nexttowardf\", \"__hipstdpar_nexttoward_f32\"},\n+    {\"remainder\", \"__hipstdpar_remainder_f64\"},\n+    {\"remainderf\", \"__hipstdpar_remainder_f32\"},\n+    {\"remquo\", \"__hipstdpar_remquo_f64\"},\n+    {\"remquof\", \"__hipstdpar_remquo_f32\"},\n+    {\"scalbln\", \"__hipstdpar_scalbln_f64\"},\n+    {\"scalblnf\", \"__hipstdpar_scalbln_f32\"},\n+    {\"scalbn\", \"__hipstdpar_scalbn_f64\"},\n+    {\"scalbnf\", \"__hipstdpar_scalbn_f32\"},\n+    {\"tgamma\", \"__hipstdpar_tgamma_f64\"},\n+    {\"tgammaf\", \"__hipstdpar_tgamma_f32\"}};\n+\n+PreservedAnalyses HipStdParMathFixupPass::run(Module &M,\n+                                              ModuleAnalysisManager &) {\n+  if (M.empty())\n+    return PreservedAnalyses::all();\n+\n+  SmallVector<std::pair<Function *, std::string>> ToReplace;\n+  for (auto &&F : M) {\n+    if (!F.hasName())\n+      continue;\n+\n+    auto N = F.getName().str();\n+    auto ID = F.getIntrinsicID();",
+        "comment_created_at": "2025-05-15T23:46:19+00:00",
+        "comment_author": "shiltian",
+        "comment_body": "no `auto`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2092134907",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 140158,
+        "pr_file": "llvm/lib/Transforms/HipStdPar/HipStdPar.cpp",
+        "discussion_id": "2092109948",
+        "commented_code": "@@ -321,3 +332,110 @@ HipStdParAllocationInterpositionPass::run(Module &M, ModuleAnalysisManager&) {\n \n   return PreservedAnalyses::none();\n }\n+\n+static constexpr std::pair<StringLiteral, StringLiteral> MathLibToHipStdPar[]{\n+    {\"acosh\", \"__hipstdpar_acosh_f64\"},\n+    {\"acoshf\", \"__hipstdpar_acosh_f32\"},\n+    {\"asinh\", \"__hipstdpar_asinh_f64\"},\n+    {\"asinhf\", \"__hipstdpar_asinh_f32\"},\n+    {\"atanh\", \"__hipstdpar_atanh_f64\"},\n+    {\"atanhf\", \"__hipstdpar_atanh_f32\"},\n+    {\"cbrt\", \"__hipstdpar_cbrt_f64\"},\n+    {\"cbrtf\", \"__hipstdpar_cbrt_f32\"},\n+    {\"erf\", \"__hipstdpar_erf_f64\"},\n+    {\"erff\", \"__hipstdpar_erf_f32\"},\n+    {\"erfc\", \"__hipstdpar_erfc_f64\"},\n+    {\"erfcf\", \"__hipstdpar_erfc_f32\"},\n+    {\"fdim\", \"__hipstdpar_fdim_f64\"},\n+    {\"fdimf\", \"__hipstdpar_fdim_f32\"},\n+    {\"expm1\", \"__hipstdpar_expm1_f64\"},\n+    {\"expm1f\", \"__hipstdpar_expm1_f32\"},\n+    {\"hypot\", \"__hipstdpar_hypot_f64\"},\n+    {\"hypotf\", \"__hipstdpar_hypot_f32\"},\n+    {\"ilogb\", \"__hipstdpar_ilogb_f64\"},\n+    {\"ilogbf\", \"__hipstdpar_ilogb_f32\"},\n+    {\"lgamma\", \"__hipstdpar_lgamma_f64\"},\n+    {\"lgammaf\", \"__hipstdpar_lgamma_f32\"},\n+    {\"log1p\", \"__hipstdpar_log1p_f64\"},\n+    {\"log1pf\", \"__hipstdpar_log1p_f32\"},\n+    {\"logb\", \"__hipstdpar_logb_f64\"},\n+    {\"logbf\", \"__hipstdpar_logb_f32\"},\n+    {\"nextafter\", \"__hipstdpar_nextafter_f64\"},\n+    {\"nextafterf\", \"__hipstdpar_nextafter_f32\"},\n+    {\"nexttoward\", \"__hipstdpar_nexttoward_f64\"},\n+    {\"nexttowardf\", \"__hipstdpar_nexttoward_f32\"},\n+    {\"remainder\", \"__hipstdpar_remainder_f64\"},\n+    {\"remainderf\", \"__hipstdpar_remainder_f32\"},\n+    {\"remquo\", \"__hipstdpar_remquo_f64\"},\n+    {\"remquof\", \"__hipstdpar_remquo_f32\"},\n+    {\"scalbln\", \"__hipstdpar_scalbln_f64\"},\n+    {\"scalblnf\", \"__hipstdpar_scalbln_f32\"},\n+    {\"scalbn\", \"__hipstdpar_scalbn_f64\"},\n+    {\"scalbnf\", \"__hipstdpar_scalbn_f32\"},\n+    {\"tgamma\", \"__hipstdpar_tgamma_f64\"},\n+    {\"tgammaf\", \"__hipstdpar_tgamma_f32\"}};\n+\n+PreservedAnalyses HipStdParMathFixupPass::run(Module &M,\n+                                              ModuleAnalysisManager &) {\n+  if (M.empty())\n+    return PreservedAnalyses::all();\n+\n+  SmallVector<std::pair<Function *, std::string>> ToReplace;\n+  for (auto &&F : M) {\n+    if (!F.hasName())\n+      continue;\n+\n+    auto N = F.getName().str();\n+    auto ID = F.getIntrinsicID();",
+        "comment_created_at": "2025-05-16T00:24:53+00:00",
+        "comment_author": "AlexVlx",
+        "comment_body": "We are already using `auto` in this file, and in general all over the codebase. There's no blanket ban on auto use, and whether something is or isn't more readable is fairly relative. So I don't think I'll incorporate this particular suggestion, if you do not mind.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2092174832",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 140158,
+        "pr_file": "llvm/lib/Transforms/HipStdPar/HipStdPar.cpp",
+        "discussion_id": "2092109948",
+        "commented_code": "@@ -321,3 +332,110 @@ HipStdParAllocationInterpositionPass::run(Module &M, ModuleAnalysisManager&) {\n \n   return PreservedAnalyses::none();\n }\n+\n+static constexpr std::pair<StringLiteral, StringLiteral> MathLibToHipStdPar[]{\n+    {\"acosh\", \"__hipstdpar_acosh_f64\"},\n+    {\"acoshf\", \"__hipstdpar_acosh_f32\"},\n+    {\"asinh\", \"__hipstdpar_asinh_f64\"},\n+    {\"asinhf\", \"__hipstdpar_asinh_f32\"},\n+    {\"atanh\", \"__hipstdpar_atanh_f64\"},\n+    {\"atanhf\", \"__hipstdpar_atanh_f32\"},\n+    {\"cbrt\", \"__hipstdpar_cbrt_f64\"},\n+    {\"cbrtf\", \"__hipstdpar_cbrt_f32\"},\n+    {\"erf\", \"__hipstdpar_erf_f64\"},\n+    {\"erff\", \"__hipstdpar_erf_f32\"},\n+    {\"erfc\", \"__hipstdpar_erfc_f64\"},\n+    {\"erfcf\", \"__hipstdpar_erfc_f32\"},\n+    {\"fdim\", \"__hipstdpar_fdim_f64\"},\n+    {\"fdimf\", \"__hipstdpar_fdim_f32\"},\n+    {\"expm1\", \"__hipstdpar_expm1_f64\"},\n+    {\"expm1f\", \"__hipstdpar_expm1_f32\"},\n+    {\"hypot\", \"__hipstdpar_hypot_f64\"},\n+    {\"hypotf\", \"__hipstdpar_hypot_f32\"},\n+    {\"ilogb\", \"__hipstdpar_ilogb_f64\"},\n+    {\"ilogbf\", \"__hipstdpar_ilogb_f32\"},\n+    {\"lgamma\", \"__hipstdpar_lgamma_f64\"},\n+    {\"lgammaf\", \"__hipstdpar_lgamma_f32\"},\n+    {\"log1p\", \"__hipstdpar_log1p_f64\"},\n+    {\"log1pf\", \"__hipstdpar_log1p_f32\"},\n+    {\"logb\", \"__hipstdpar_logb_f64\"},\n+    {\"logbf\", \"__hipstdpar_logb_f32\"},\n+    {\"nextafter\", \"__hipstdpar_nextafter_f64\"},\n+    {\"nextafterf\", \"__hipstdpar_nextafter_f32\"},\n+    {\"nexttoward\", \"__hipstdpar_nexttoward_f64\"},\n+    {\"nexttowardf\", \"__hipstdpar_nexttoward_f32\"},\n+    {\"remainder\", \"__hipstdpar_remainder_f64\"},\n+    {\"remainderf\", \"__hipstdpar_remainder_f32\"},\n+    {\"remquo\", \"__hipstdpar_remquo_f64\"},\n+    {\"remquof\", \"__hipstdpar_remquo_f32\"},\n+    {\"scalbln\", \"__hipstdpar_scalbln_f64\"},\n+    {\"scalblnf\", \"__hipstdpar_scalbln_f32\"},\n+    {\"scalbn\", \"__hipstdpar_scalbn_f64\"},\n+    {\"scalbnf\", \"__hipstdpar_scalbn_f32\"},\n+    {\"tgamma\", \"__hipstdpar_tgamma_f64\"},\n+    {\"tgammaf\", \"__hipstdpar_tgamma_f32\"}};\n+\n+PreservedAnalyses HipStdParMathFixupPass::run(Module &M,\n+                                              ModuleAnalysisManager &) {\n+  if (M.empty())\n+    return PreservedAnalyses::all();\n+\n+  SmallVector<std::pair<Function *, std::string>> ToReplace;\n+  for (auto &&F : M) {\n+    if (!F.hasName())\n+      continue;\n+\n+    auto N = F.getName().str();\n+    auto ID = F.getIntrinsicID();",
+        "comment_created_at": "2025-05-16T01:23:50+00:00",
+        "comment_author": "shiltian",
+        "comment_body": "I won't insist. This is just a nit. That said, based on my experience and familiarity with the existing codebase, we typically use `auto` only in very clear cases, like iterators or something like `auto *CI = dyn_cast<CallInst>(I)`. In fact, we even use `const auto *CI` when `I` is a `const Instruction *`. Personally, I don't think the two cases here fall into the same category.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2092461536",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 140158,
+        "pr_file": "llvm/lib/Transforms/HipStdPar/HipStdPar.cpp",
+        "discussion_id": "2092109948",
+        "commented_code": "@@ -321,3 +332,110 @@ HipStdParAllocationInterpositionPass::run(Module &M, ModuleAnalysisManager&) {\n \n   return PreservedAnalyses::none();\n }\n+\n+static constexpr std::pair<StringLiteral, StringLiteral> MathLibToHipStdPar[]{\n+    {\"acosh\", \"__hipstdpar_acosh_f64\"},\n+    {\"acoshf\", \"__hipstdpar_acosh_f32\"},\n+    {\"asinh\", \"__hipstdpar_asinh_f64\"},\n+    {\"asinhf\", \"__hipstdpar_asinh_f32\"},\n+    {\"atanh\", \"__hipstdpar_atanh_f64\"},\n+    {\"atanhf\", \"__hipstdpar_atanh_f32\"},\n+    {\"cbrt\", \"__hipstdpar_cbrt_f64\"},\n+    {\"cbrtf\", \"__hipstdpar_cbrt_f32\"},\n+    {\"erf\", \"__hipstdpar_erf_f64\"},\n+    {\"erff\", \"__hipstdpar_erf_f32\"},\n+    {\"erfc\", \"__hipstdpar_erfc_f64\"},\n+    {\"erfcf\", \"__hipstdpar_erfc_f32\"},\n+    {\"fdim\", \"__hipstdpar_fdim_f64\"},\n+    {\"fdimf\", \"__hipstdpar_fdim_f32\"},\n+    {\"expm1\", \"__hipstdpar_expm1_f64\"},\n+    {\"expm1f\", \"__hipstdpar_expm1_f32\"},\n+    {\"hypot\", \"__hipstdpar_hypot_f64\"},\n+    {\"hypotf\", \"__hipstdpar_hypot_f32\"},\n+    {\"ilogb\", \"__hipstdpar_ilogb_f64\"},\n+    {\"ilogbf\", \"__hipstdpar_ilogb_f32\"},\n+    {\"lgamma\", \"__hipstdpar_lgamma_f64\"},\n+    {\"lgammaf\", \"__hipstdpar_lgamma_f32\"},\n+    {\"log1p\", \"__hipstdpar_log1p_f64\"},\n+    {\"log1pf\", \"__hipstdpar_log1p_f32\"},\n+    {\"logb\", \"__hipstdpar_logb_f64\"},\n+    {\"logbf\", \"__hipstdpar_logb_f32\"},\n+    {\"nextafter\", \"__hipstdpar_nextafter_f64\"},\n+    {\"nextafterf\", \"__hipstdpar_nextafter_f32\"},\n+    {\"nexttoward\", \"__hipstdpar_nexttoward_f64\"},\n+    {\"nexttowardf\", \"__hipstdpar_nexttoward_f32\"},\n+    {\"remainder\", \"__hipstdpar_remainder_f64\"},\n+    {\"remainderf\", \"__hipstdpar_remainder_f32\"},\n+    {\"remquo\", \"__hipstdpar_remquo_f64\"},\n+    {\"remquof\", \"__hipstdpar_remquo_f32\"},\n+    {\"scalbln\", \"__hipstdpar_scalbln_f64\"},\n+    {\"scalblnf\", \"__hipstdpar_scalbln_f32\"},\n+    {\"scalbn\", \"__hipstdpar_scalbn_f64\"},\n+    {\"scalbnf\", \"__hipstdpar_scalbn_f32\"},\n+    {\"tgamma\", \"__hipstdpar_tgamma_f64\"},\n+    {\"tgammaf\", \"__hipstdpar_tgamma_f32\"}};\n+\n+PreservedAnalyses HipStdParMathFixupPass::run(Module &M,\n+                                              ModuleAnalysisManager &) {\n+  if (M.empty())\n+    return PreservedAnalyses::all();\n+\n+  SmallVector<std::pair<Function *, std::string>> ToReplace;\n+  for (auto &&F : M) {\n+    if (!F.hasName())\n+      continue;\n+\n+    auto N = F.getName().str();\n+    auto ID = F.getIntrinsicID();",
+        "comment_created_at": "2025-05-16T07:05:16+00:00",
+        "comment_author": "arsenm",
+        "comment_body": "LLVM style is supposed to be almost never auto ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2093559016",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 140158,
+        "pr_file": "llvm/lib/Transforms/HipStdPar/HipStdPar.cpp",
+        "discussion_id": "2092109948",
+        "commented_code": "@@ -321,3 +332,110 @@ HipStdParAllocationInterpositionPass::run(Module &M, ModuleAnalysisManager&) {\n \n   return PreservedAnalyses::none();\n }\n+\n+static constexpr std::pair<StringLiteral, StringLiteral> MathLibToHipStdPar[]{\n+    {\"acosh\", \"__hipstdpar_acosh_f64\"},\n+    {\"acoshf\", \"__hipstdpar_acosh_f32\"},\n+    {\"asinh\", \"__hipstdpar_asinh_f64\"},\n+    {\"asinhf\", \"__hipstdpar_asinh_f32\"},\n+    {\"atanh\", \"__hipstdpar_atanh_f64\"},\n+    {\"atanhf\", \"__hipstdpar_atanh_f32\"},\n+    {\"cbrt\", \"__hipstdpar_cbrt_f64\"},\n+    {\"cbrtf\", \"__hipstdpar_cbrt_f32\"},\n+    {\"erf\", \"__hipstdpar_erf_f64\"},\n+    {\"erff\", \"__hipstdpar_erf_f32\"},\n+    {\"erfc\", \"__hipstdpar_erfc_f64\"},\n+    {\"erfcf\", \"__hipstdpar_erfc_f32\"},\n+    {\"fdim\", \"__hipstdpar_fdim_f64\"},\n+    {\"fdimf\", \"__hipstdpar_fdim_f32\"},\n+    {\"expm1\", \"__hipstdpar_expm1_f64\"},\n+    {\"expm1f\", \"__hipstdpar_expm1_f32\"},\n+    {\"hypot\", \"__hipstdpar_hypot_f64\"},\n+    {\"hypotf\", \"__hipstdpar_hypot_f32\"},\n+    {\"ilogb\", \"__hipstdpar_ilogb_f64\"},\n+    {\"ilogbf\", \"__hipstdpar_ilogb_f32\"},\n+    {\"lgamma\", \"__hipstdpar_lgamma_f64\"},\n+    {\"lgammaf\", \"__hipstdpar_lgamma_f32\"},\n+    {\"log1p\", \"__hipstdpar_log1p_f64\"},\n+    {\"log1pf\", \"__hipstdpar_log1p_f32\"},\n+    {\"logb\", \"__hipstdpar_logb_f64\"},\n+    {\"logbf\", \"__hipstdpar_logb_f32\"},\n+    {\"nextafter\", \"__hipstdpar_nextafter_f64\"},\n+    {\"nextafterf\", \"__hipstdpar_nextafter_f32\"},\n+    {\"nexttoward\", \"__hipstdpar_nexttoward_f64\"},\n+    {\"nexttowardf\", \"__hipstdpar_nexttoward_f32\"},\n+    {\"remainder\", \"__hipstdpar_remainder_f64\"},\n+    {\"remainderf\", \"__hipstdpar_remainder_f32\"},\n+    {\"remquo\", \"__hipstdpar_remquo_f64\"},\n+    {\"remquof\", \"__hipstdpar_remquo_f32\"},\n+    {\"scalbln\", \"__hipstdpar_scalbln_f64\"},\n+    {\"scalblnf\", \"__hipstdpar_scalbln_f32\"},\n+    {\"scalbn\", \"__hipstdpar_scalbn_f64\"},\n+    {\"scalbnf\", \"__hipstdpar_scalbn_f32\"},\n+    {\"tgamma\", \"__hipstdpar_tgamma_f64\"},\n+    {\"tgammaf\", \"__hipstdpar_tgamma_f32\"}};\n+\n+PreservedAnalyses HipStdParMathFixupPass::run(Module &M,\n+                                              ModuleAnalysisManager &) {\n+  if (M.empty())\n+    return PreservedAnalyses::all();\n+\n+  SmallVector<std::pair<Function *, std::string>> ToReplace;\n+  for (auto &&F : M) {\n+    if (!F.hasName())\n+      continue;\n+\n+    auto N = F.getName().str();\n+    auto ID = F.getIntrinsicID();",
+        "comment_created_at": "2025-05-16T19:12:45+00:00",
+        "comment_author": "AlexVlx",
+        "comment_body": "Done.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2237231290",
+    "pr_number": 150978,
+    "pr_file": "mlir/lib/Dialect/SPIRV/Transforms/SPIRVConversion.cpp",
+    "created_at": "2025-07-28T16:42:23+00:00",
+    "commented_code": "}\n   spirv::StorageClass storageClass = attr.getValue();\n \n+  // Images are a special case since they are an opaque type from which elements\n+  // may be accessed via image specific ops or directly through a texture\n+  // pointer.\n+  if (storageClass == spirv::StorageClass::Image) {\n+    const auto rank = type.getRank();",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2237231290",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 150978,
+        "pr_file": "mlir/lib/Dialect/SPIRV/Transforms/SPIRVConversion.cpp",
+        "discussion_id": "2237231290",
+        "commented_code": "@@ -575,6 +575,83 @@ static Type convertMemrefType(const spirv::TargetEnv &targetEnv,\n   }\n   spirv::StorageClass storageClass = attr.getValue();\n \n+  // Images are a special case since they are an opaque type from which elements\n+  // may be accessed via image specific ops or directly through a texture\n+  // pointer.\n+  if (storageClass == spirv::StorageClass::Image) {\n+    const auto rank = type.getRank();",
+        "comment_created_at": "2025-07-28T16:42:23+00:00",
+        "comment_author": "kuhar",
+        "comment_body": "Use the actual type here instead of `auto`, since the type is not obvious outside of the IDE. See https://llvm.org/docs/CodingStandards.html#use-auto-type-deduction-to-make-code-more-readable",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2185581511",
+    "pr_number": 147060,
+    "pr_file": "clang-tools-extra/clang-tidy/readability/QualifiedAutoCheck.cpp",
+    "created_at": "2025-07-04T14:59:15+00:00",
+    "commented_code": "void QualifiedAutoCheck::check(const MatchFinder::MatchResult &Result) {\n   if (const auto *Var = Result.Nodes.getNodeAs<VarDecl>(\"auto\")) {\n+    if (RespectOpaqueTypes) {\n+      auto DeducedType =",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2185581511",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 147060,
+        "pr_file": "clang-tools-extra/clang-tidy/readability/QualifiedAutoCheck.cpp",
+        "discussion_id": "2185581511",
+        "commented_code": "@@ -174,6 +176,21 @@ void QualifiedAutoCheck::registerMatchers(MatchFinder *Finder) {\n \n void QualifiedAutoCheck::check(const MatchFinder::MatchResult &Result) {\n   if (const auto *Var = Result.Nodes.getNodeAs<VarDecl>(\"auto\")) {\n+    if (RespectOpaqueTypes) {\n+      auto DeducedType =",
+        "comment_created_at": "2025-07-04T14:59:15+00:00",
+        "comment_author": "EugeneZelenko",
+        "comment_body": "Please do not use `auto` if type is not spelled explicitly in same statement or iterator.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2205182208",
+    "pr_number": 147961,
+    "pr_file": "mlir/lib/Dialect/Linalg/IR/LinalgOps.cpp",
+    "created_at": "2025-07-14T15:10:59+00:00",
+    "commented_code": "return getGenericSpeculatabilityImpl(cast<LinalgOp>(getOperation()));\n }\n \n+SmallVector<AffineMap> MatmulTransposeAOp::getAffineMaps(OpBuilder &builder) {\n+  AffineExpr d0, d1, d2;\n+  auto context = builder.getContext();\n+  bindDims(context, d0, d1, d2);\n+  AffineMap mapLHS = AffineMap::get(3, 0, {d2, d0}, context);\n+  AffineMap mapRHS = AffineMap::get(3, 0, {d2, d1}, context);\n+  AffineMap mapOut = AffineMap::get(3, 0, {d0, d1}, context);\n+  SmallVector<AffineMap> affineMaps{mapLHS, mapRHS, mapOut};\n+  return affineMaps;\n+}\n+\n+void linalg::MatmulTransposeAOp::build(OpBuilder &builder,\n+                                       OperationState &result,\n+                                       ValueRange inputs, ValueRange outputs,\n+                                       ArrayRef<NamedAttribute> attributes) {\n+  buildMatmulOp(builder, result, std::nullopt, inputs, outputs, attributes,\n+                MatmulOp::getRegionBuilder(), getAffineMaps(builder));\n+}\n+\n+void linalg::MatmulTransposeAOp::build(OpBuilder &builder,\n+                                       OperationState &result,\n+                                       TypeRange resultTensorTypes,\n+                                       ValueRange inputs, ValueRange outputs,\n+                                       ArrayRef<NamedAttribute> attributes) {\n+  buildMatmulOp(builder, result, resultTensorTypes, inputs, outputs, attributes,\n+                MatmulOp::getRegionBuilder(), getAffineMaps(builder));\n+}\n+\n+void linalg::MatmulTransposeAOp::build(OpBuilder &builder,\n+                                       OperationState &result,\n+                                       TypeRange resultTensorTypes,\n+                                       ValueRange inputs, ValueRange outputs,\n+                                       Attribute cast,\n+                                       ArrayRef<NamedAttribute> attributes) {\n+  result.addAttribute(\"cast\", cast);\n+  buildMatmulOp(builder, result, resultTensorTypes, inputs, outputs, attributes,\n+                MatmulOp::getRegionBuilder(), getAffineMaps(builder));\n+}\n+\n+bool MatmulTransposeAOp::classof(Operation *op) {\n+  return dyn_cast_or_null<linalg::MatmulOp>(op);\n+}\n+\n+SmallVector<AffineMap> MatmulTransposeBOp::getAffineMaps(OpBuilder &builder) {\n+  AffineExpr d0, d1, d2;\n+  auto context = builder.getContext();",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2205182208",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 147961,
+        "pr_file": "mlir/lib/Dialect/Linalg/IR/LinalgOps.cpp",
+        "discussion_id": "2205182208",
+        "commented_code": "@@ -3881,6 +3882,172 @@ Speculation::Speculatability MatmulOp::getSpeculatability() {\n   return getGenericSpeculatabilityImpl(cast<LinalgOp>(getOperation()));\n }\n \n+SmallVector<AffineMap> MatmulTransposeAOp::getAffineMaps(OpBuilder &builder) {\n+  AffineExpr d0, d1, d2;\n+  auto context = builder.getContext();\n+  bindDims(context, d0, d1, d2);\n+  AffineMap mapLHS = AffineMap::get(3, 0, {d2, d0}, context);\n+  AffineMap mapRHS = AffineMap::get(3, 0, {d2, d1}, context);\n+  AffineMap mapOut = AffineMap::get(3, 0, {d0, d1}, context);\n+  SmallVector<AffineMap> affineMaps{mapLHS, mapRHS, mapOut};\n+  return affineMaps;\n+}\n+\n+void linalg::MatmulTransposeAOp::build(OpBuilder &builder,\n+                                       OperationState &result,\n+                                       ValueRange inputs, ValueRange outputs,\n+                                       ArrayRef<NamedAttribute> attributes) {\n+  buildMatmulOp(builder, result, std::nullopt, inputs, outputs, attributes,\n+                MatmulOp::getRegionBuilder(), getAffineMaps(builder));\n+}\n+\n+void linalg::MatmulTransposeAOp::build(OpBuilder &builder,\n+                                       OperationState &result,\n+                                       TypeRange resultTensorTypes,\n+                                       ValueRange inputs, ValueRange outputs,\n+                                       ArrayRef<NamedAttribute> attributes) {\n+  buildMatmulOp(builder, result, resultTensorTypes, inputs, outputs, attributes,\n+                MatmulOp::getRegionBuilder(), getAffineMaps(builder));\n+}\n+\n+void linalg::MatmulTransposeAOp::build(OpBuilder &builder,\n+                                       OperationState &result,\n+                                       TypeRange resultTensorTypes,\n+                                       ValueRange inputs, ValueRange outputs,\n+                                       Attribute cast,\n+                                       ArrayRef<NamedAttribute> attributes) {\n+  result.addAttribute(\"cast\", cast);\n+  buildMatmulOp(builder, result, resultTensorTypes, inputs, outputs, attributes,\n+                MatmulOp::getRegionBuilder(), getAffineMaps(builder));\n+}\n+\n+bool MatmulTransposeAOp::classof(Operation *op) {\n+  return dyn_cast_or_null<linalg::MatmulOp>(op);\n+}\n+\n+SmallVector<AffineMap> MatmulTransposeBOp::getAffineMaps(OpBuilder &builder) {\n+  AffineExpr d0, d1, d2;\n+  auto context = builder.getContext();",
+        "comment_created_at": "2025-07-14T15:10:59+00:00",
+        "comment_author": "kuhar",
+        "comment_body": "nit\r\n```suggestion\r\n  MLIRContext *context = builder.getContext();\r\n```\r\nfollowing https://llvm.org/docs/CodingStandards.html#use-auto-type-deduction-to-make-code-more-readable",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2007309624",
+    "pr_number": 128938,
+    "pr_file": "llvm/lib/Transforms/Vectorize/VectorCombine.cpp",
+    "created_at": "2025-03-21T10:40:30+00:00",
+    "commented_code": "return true;\n }\n \n+// Attempt to shrink loads that are only used by shufflevector instructions.\n+bool VectorCombine::shrinkLoadForShuffles(Instruction &I) {\n+  auto *InputShuffle = dyn_cast<ShuffleVectorInst>(&I);\n+  if (!InputShuffle)\n+    return {};\n+\n+  auto *OldLoad = dyn_cast<LoadInst>(InputShuffle->getOperand(0u));\n+  if (!OldLoad || !OldLoad->isSimple())\n+    return false;\n+\n+  auto *VecTy = dyn_cast<FixedVectorType>(I.getType());\n+  if (!VecTy)\n+    return false;\n+\n+  auto IsPoisonOrUndef = [](Value *V) -> bool {\n+    if (auto *C = dyn_cast<Constant>(V)) {\n+      return isa<PoisonValue>(C) || isa<UndefValue>(C);\n+    }\n+    return false;\n+  };\n+\n+  using IndexRange = std::pair<int, int>;\n+  auto GetIndexRangeInShuffles = [&]() -> std::optional<IndexRange> {\n+    auto OutputRange = IndexRange(VecTy->getNumElements(), -1);\n+    for (auto &Use : I.uses()) {\n+      // All uses must be ShuffleVector instructions.\n+      auto *Shuffle = dyn_cast<ShuffleVectorInst>(Use.getUser());\n+      if (!Shuffle)\n+        return {};\n+\n+      // Get index range for value.\n+      auto *Op0 = Shuffle->getOperand(0u);\n+      auto *Op1 = Shuffle->getOperand(1u);\n+      if (!IsPoisonOrUndef(Op1))\n+        return {};\n+\n+      // Find the min and max indices used by the ShuffleVector instruction.\n+      auto Mask = Shuffle->getShuffleMask();\n+      auto *Op0Ty = cast<FixedVectorType>(Op0->getType());\n+      auto NumElems = int(Op0Ty->getNumElements());\n+\n+      for (auto Index : Mask) {\n+        if (Index >= 0) {\n+          Index %= NumElems;\n+          OutputRange.first = std::min(Index, OutputRange.first);\n+          OutputRange.second = std::max(Index, OutputRange.second);\n+        }\n+      }\n+    }\n+\n+    if (OutputRange.second < OutputRange.first)\n+      return {};\n+\n+    return OutputRange;\n+  };\n+\n+  if (auto Indices = GetIndexRangeInShuffles()) {\n+    auto OldSize = VecTy->getNumElements();\n+    auto NewSize = Indices->second + 1u;",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2007309624",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 128938,
+        "pr_file": "llvm/lib/Transforms/Vectorize/VectorCombine.cpp",
+        "discussion_id": "2007309624",
+        "commented_code": "@@ -3398,6 +3401,131 @@ bool VectorCombine::foldInterleaveIntrinsics(Instruction &I) {\n   return true;\n }\n \n+// Attempt to shrink loads that are only used by shufflevector instructions.\n+bool VectorCombine::shrinkLoadForShuffles(Instruction &I) {\n+  auto *InputShuffle = dyn_cast<ShuffleVectorInst>(&I);\n+  if (!InputShuffle)\n+    return {};\n+\n+  auto *OldLoad = dyn_cast<LoadInst>(InputShuffle->getOperand(0u));\n+  if (!OldLoad || !OldLoad->isSimple())\n+    return false;\n+\n+  auto *VecTy = dyn_cast<FixedVectorType>(I.getType());\n+  if (!VecTy)\n+    return false;\n+\n+  auto IsPoisonOrUndef = [](Value *V) -> bool {\n+    if (auto *C = dyn_cast<Constant>(V)) {\n+      return isa<PoisonValue>(C) || isa<UndefValue>(C);\n+    }\n+    return false;\n+  };\n+\n+  using IndexRange = std::pair<int, int>;\n+  auto GetIndexRangeInShuffles = [&]() -> std::optional<IndexRange> {\n+    auto OutputRange = IndexRange(VecTy->getNumElements(), -1);\n+    for (auto &Use : I.uses()) {\n+      // All uses must be ShuffleVector instructions.\n+      auto *Shuffle = dyn_cast<ShuffleVectorInst>(Use.getUser());\n+      if (!Shuffle)\n+        return {};\n+\n+      // Get index range for value.\n+      auto *Op0 = Shuffle->getOperand(0u);\n+      auto *Op1 = Shuffle->getOperand(1u);\n+      if (!IsPoisonOrUndef(Op1))\n+        return {};\n+\n+      // Find the min and max indices used by the ShuffleVector instruction.\n+      auto Mask = Shuffle->getShuffleMask();\n+      auto *Op0Ty = cast<FixedVectorType>(Op0->getType());\n+      auto NumElems = int(Op0Ty->getNumElements());\n+\n+      for (auto Index : Mask) {\n+        if (Index >= 0) {\n+          Index %= NumElems;\n+          OutputRange.first = std::min(Index, OutputRange.first);\n+          OutputRange.second = std::max(Index, OutputRange.second);\n+        }\n+      }\n+    }\n+\n+    if (OutputRange.second < OutputRange.first)\n+      return {};\n+\n+    return OutputRange;\n+  };\n+\n+  if (auto Indices = GetIndexRangeInShuffles()) {\n+    auto OldSize = VecTy->getNumElements();\n+    auto NewSize = Indices->second + 1u;",
+        "comment_created_at": "2025-03-21T10:40:30+00:00",
+        "comment_author": "RKSimon",
+        "comment_body": "(style) avoid auto apart from explicit casts",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2075856873",
+    "pr_number": 128938,
+    "pr_file": "llvm/lib/Transforms/Vectorize/VectorCombine.cpp",
+    "created_at": "2025-05-06T16:29:55+00:00",
+    "commented_code": "return true;\n }\n \n+// Attempt to shrink loads that are only used by shufflevector instructions.\n+bool VectorCombine::shrinkLoadForShuffles(Instruction &I) {\n+  auto *OldLoad = dyn_cast<LoadInst>(&I);\n+  if (!OldLoad || !OldLoad->isSimple())\n+    return false;\n+\n+  auto *VecTy = dyn_cast<FixedVectorType>(OldLoad->getType());\n+  if (!VecTy)\n+    return false;\n+\n+  // Search all uses of load. If all uses are shufflevector instructions, and\n+  // the second operands are all poison values, find the minimum and maximum\n+  // indices of the vector elements referenced by all shuffle masks.\n+  // Otherwise return `std::nullopt`.\n+  using IndexRange = std::pair<int, int>;\n+  auto GetIndexRangeInShuffles = [&]() -> std::optional<IndexRange> {\n+    IndexRange OutputRange = IndexRange(VecTy->getNumElements(), -1);\n+    for (auto &Use : I.uses()) {\n+      // All uses must be shufflevector instructions.\n+      auto *Shuffle = dyn_cast<ShuffleVectorInst>(Use.getUser());\n+      if (!Shuffle)\n+        return std::nullopt;\n+\n+      // Ignore shufflevector instructions that have no uses.\n+      if (!Shuffle->hasNUsesOrMore(1u))\n+        continue;\n+\n+      // Ensure second operand is a poison value.\n+      auto *Op0 = Shuffle->getOperand(0);\n+      auto *Op1 = Shuffle->getOperand(1);",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2075856873",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 128938,
+        "pr_file": "llvm/lib/Transforms/Vectorize/VectorCombine.cpp",
+        "discussion_id": "2075856873",
+        "commented_code": "@@ -3483,6 +3487,131 @@ bool VectorCombine::foldInterleaveIntrinsics(Instruction &I) {\n   return true;\n }\n \n+// Attempt to shrink loads that are only used by shufflevector instructions.\n+bool VectorCombine::shrinkLoadForShuffles(Instruction &I) {\n+  auto *OldLoad = dyn_cast<LoadInst>(&I);\n+  if (!OldLoad || !OldLoad->isSimple())\n+    return false;\n+\n+  auto *VecTy = dyn_cast<FixedVectorType>(OldLoad->getType());\n+  if (!VecTy)\n+    return false;\n+\n+  // Search all uses of load. If all uses are shufflevector instructions, and\n+  // the second operands are all poison values, find the minimum and maximum\n+  // indices of the vector elements referenced by all shuffle masks.\n+  // Otherwise return `std::nullopt`.\n+  using IndexRange = std::pair<int, int>;\n+  auto GetIndexRangeInShuffles = [&]() -> std::optional<IndexRange> {\n+    IndexRange OutputRange = IndexRange(VecTy->getNumElements(), -1);\n+    for (auto &Use : I.uses()) {\n+      // All uses must be shufflevector instructions.\n+      auto *Shuffle = dyn_cast<ShuffleVectorInst>(Use.getUser());\n+      if (!Shuffle)\n+        return std::nullopt;\n+\n+      // Ignore shufflevector instructions that have no uses.\n+      if (!Shuffle->hasNUsesOrMore(1u))\n+        continue;\n+\n+      // Ensure second operand is a poison value.\n+      auto *Op0 = Shuffle->getOperand(0);\n+      auto *Op1 = Shuffle->getOperand(1);",
+        "comment_created_at": "2025-05-06T16:29:55+00:00",
+        "comment_author": "RKSimon",
+        "comment_body": "(style) avoid auto apart from casts",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2139519587",
+    "pr_number": 128938,
+    "pr_file": "llvm/lib/Transforms/Vectorize/VectorCombine.cpp",
+    "created_at": "2025-06-11T08:23:42+00:00",
+    "commented_code": "return true;\n }\n \n+// Attempt to shrink loads that are only used by shufflevector instructions.\n+bool VectorCombine::shrinkLoadForShuffles(Instruction &I) {\n+  auto *OldLoad = dyn_cast<LoadInst>(&I);\n+  if (!OldLoad || !OldLoad->isSimple())\n+    return false;\n+\n+  auto *OldLoadTy = dyn_cast<FixedVectorType>(OldLoad->getType());\n+  if (!OldLoadTy)\n+    return false;\n+\n+  unsigned const OldNumElements = OldLoadTy->getNumElements();\n+\n+  // Search all uses of load. If all uses are shufflevector instructions, and\n+  // the second operands are all poison values, find the minimum and maximum\n+  // indices of the vector elements referenced by all shuffle masks.\n+  // Otherwise return `std::nullopt`.\n+  using IndexRange = std::pair<int, int>;\n+  auto GetIndexRangeInShuffles = [&]() -> std::optional<IndexRange> {\n+    IndexRange OutputRange = IndexRange(OldNumElements, -1);\n+    for (auto &Use : I.uses()) {\n+      // Ensure all uses match the required pattern.\n+      User *Shuffle = Use.getUser();\n+      ArrayRef<int> Mask;\n+\n+      if (!match(Shuffle,\n+                 m_Shuffle(m_Specific(OldLoad), m_Undef(), m_Mask(Mask))))\n+        return std::nullopt;\n+\n+      // Ignore shufflevector instructions that have no uses.\n+      if (Shuffle->use_empty())\n+        continue;\n+\n+      // Find the min and max indices used by the shufflevector instruction.\n+      for (int Index : Mask) {\n+        if (Index >= 0 && Index < static_cast<int>(OldNumElements)) {\n+          OutputRange.first = std::min(Index, OutputRange.first);\n+          OutputRange.second = std::max(Index, OutputRange.second);\n+        }\n+      }\n+    }\n+\n+    if (OutputRange.second < OutputRange.first)\n+      return std::nullopt;\n+\n+    return OutputRange;\n+  };\n+\n+  // Get the range of vector elements used by shufflevector instructions.\n+  if (auto Indices = GetIndexRangeInShuffles()) {\n+    unsigned const NewNumElements = Indices->second + 1u;\n+\n+    // If the range of vector elements is smaller than the full load, attempt\n+    // to create a smaller load.\n+    if (NewNumElements < OldNumElements) {\n+      auto Builder = IRBuilder(&I);\n+      Builder.SetCurrentDebugLocation(I.getDebugLoc());\n+\n+      // Calculate costs of old and new ops.\n+      Type *ElemTy = OldLoadTy->getElementType();\n+      FixedVectorType *NewLoadTy = FixedVectorType::get(ElemTy, NewNumElements);\n+      Value *PtrOp = OldLoad->getPointerOperand();\n+\n+      InstructionCost OldCost = TTI.getMemoryOpCost(\n+          Instruction::Load, OldLoad->getType(), OldLoad->getAlign(),\n+          OldLoad->getPointerAddressSpace(), CostKind);\n+      InstructionCost NewCost =\n+          TTI.getMemoryOpCost(Instruction::Load, NewLoadTy, OldLoad->getAlign(),\n+                              OldLoad->getPointerAddressSpace(), CostKind);\n+\n+      using UseEntry = std::pair<ShuffleVectorInst *, std::vector<int>>;\n+      auto NewUses = SmallVector<UseEntry, 4u>();\n+      auto SizeDiff = OldNumElements - NewNumElements;",
+    "repo_full_name": "llvm/llvm-project",
+    "discussion_comments": [
+      {
+        "comment_id": "2139519587",
+        "repo_full_name": "llvm/llvm-project",
+        "pr_number": 128938,
+        "pr_file": "llvm/lib/Transforms/Vectorize/VectorCombine.cpp",
+        "discussion_id": "2139519587",
+        "commented_code": "@@ -3483,6 +3487,125 @@ bool VectorCombine::foldInterleaveIntrinsics(Instruction &I) {\n   return true;\n }\n \n+// Attempt to shrink loads that are only used by shufflevector instructions.\n+bool VectorCombine::shrinkLoadForShuffles(Instruction &I) {\n+  auto *OldLoad = dyn_cast<LoadInst>(&I);\n+  if (!OldLoad || !OldLoad->isSimple())\n+    return false;\n+\n+  auto *OldLoadTy = dyn_cast<FixedVectorType>(OldLoad->getType());\n+  if (!OldLoadTy)\n+    return false;\n+\n+  unsigned const OldNumElements = OldLoadTy->getNumElements();\n+\n+  // Search all uses of load. If all uses are shufflevector instructions, and\n+  // the second operands are all poison values, find the minimum and maximum\n+  // indices of the vector elements referenced by all shuffle masks.\n+  // Otherwise return `std::nullopt`.\n+  using IndexRange = std::pair<int, int>;\n+  auto GetIndexRangeInShuffles = [&]() -> std::optional<IndexRange> {\n+    IndexRange OutputRange = IndexRange(OldNumElements, -1);\n+    for (auto &Use : I.uses()) {\n+      // Ensure all uses match the required pattern.\n+      User *Shuffle = Use.getUser();\n+      ArrayRef<int> Mask;\n+\n+      if (!match(Shuffle,\n+                 m_Shuffle(m_Specific(OldLoad), m_Undef(), m_Mask(Mask))))\n+        return std::nullopt;\n+\n+      // Ignore shufflevector instructions that have no uses.\n+      if (Shuffle->use_empty())\n+        continue;\n+\n+      // Find the min and max indices used by the shufflevector instruction.\n+      for (int Index : Mask) {\n+        if (Index >= 0 && Index < static_cast<int>(OldNumElements)) {\n+          OutputRange.first = std::min(Index, OutputRange.first);\n+          OutputRange.second = std::max(Index, OutputRange.second);\n+        }\n+      }\n+    }\n+\n+    if (OutputRange.second < OutputRange.first)\n+      return std::nullopt;\n+\n+    return OutputRange;\n+  };\n+\n+  // Get the range of vector elements used by shufflevector instructions.\n+  if (auto Indices = GetIndexRangeInShuffles()) {\n+    unsigned const NewNumElements = Indices->second + 1u;\n+\n+    // If the range of vector elements is smaller than the full load, attempt\n+    // to create a smaller load.\n+    if (NewNumElements < OldNumElements) {\n+      auto Builder = IRBuilder(&I);\n+      Builder.SetCurrentDebugLocation(I.getDebugLoc());\n+\n+      // Calculate costs of old and new ops.\n+      Type *ElemTy = OldLoadTy->getElementType();\n+      FixedVectorType *NewLoadTy = FixedVectorType::get(ElemTy, NewNumElements);\n+      Value *PtrOp = OldLoad->getPointerOperand();\n+\n+      InstructionCost OldCost = TTI.getMemoryOpCost(\n+          Instruction::Load, OldLoad->getType(), OldLoad->getAlign(),\n+          OldLoad->getPointerAddressSpace(), CostKind);\n+      InstructionCost NewCost =\n+          TTI.getMemoryOpCost(Instruction::Load, NewLoadTy, OldLoad->getAlign(),\n+                              OldLoad->getPointerAddressSpace(), CostKind);\n+\n+      using UseEntry = std::pair<ShuffleVectorInst *, std::vector<int>>;\n+      auto NewUses = SmallVector<UseEntry, 4u>();\n+      auto SizeDiff = OldNumElements - NewNumElements;",
+        "comment_created_at": "2025-06-11T08:23:42+00:00",
+        "comment_author": "RKSimon",
+        "comment_body": "(style) don't use auto except for casts/iterators",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

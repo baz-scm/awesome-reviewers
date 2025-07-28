@@ -1,0 +1,102 @@
+[
+  {
+    "discussion_id": "2223415193",
+    "pr_number": 51577,
+    "pr_file": "sql/core/src/test/scala/org/apache/spark/sql/execution/command/v2/DescribeTableSuite.scala",
+    "created_at": "2025-07-22T18:06:47+00:00",
+    "commented_code": "assert(\"\"\"\\d+\\s+bytes,\\s+4\\s+rows\"\"\".r.matches(stats))\n     }\n   }\n+\n+  test(\"desc table constraints\") {\n+    withNamespaceAndTable(\"ns\", \"pk_table\", nonPartitionCatalog) { tbl =>\n+      withTable(\"fk_table\") {\n+        sql(\n+          s\"\"\"\n+             |CREATE TABLE fk_table (id INT PRIMARY KEY) USING parquet\n+        \"\"\".stripMargin)\n+        sql(\n+          s\"\"\"\n+             |CREATE TABLE $tbl (\n+             |  id INT,\n+             |  a INT,\n+             |  b STRING,\n+             |  c STRING,\n+             |  PRIMARY KEY (id),\n+             |  CONSTRAINT fk_a FOREIGN KEY (a) REFERENCES fk_table(id) RELY,\n+             |  CONSTRAINT uk_b UNIQUE (b),\n+             |  CONSTRAINT uk_a_c UNIQUE (a, c),\n+             |  CONSTRAINT c1 CHECK (c IS NOT NULL),\n+             |  CONSTRAINT c2 CHECK (id > 0)\n+             |)\n+             |$defaultUsing\n+        \"\"\".stripMargin)\n+\n+        var expectedConstraintsDdl = Array(\n+          \"pk_table_pk,CONSTRAINT pk_table_pk PRIMARY KEY (id) NOT ENFORCED NORELY,\",\n+          \"fk_a,CONSTRAINT fk_a FOREIGN KEY (a) REFERENCES fk_table (id) NOT ENFORCED RELY,\",\n+          \"uk_b,CONSTRAINT uk_b UNIQUE (b) NOT ENFORCED NORELY,\",\n+          \"uk_a_c,CONSTRAINT uk_a_c UNIQUE (a, c) NOT ENFORCED NORELY,\",\n+          \"c1,CONSTRAINT c1 CHECK (c IS NOT NULL) ENFORCED NORELY,\",\n+          \"c2,CONSTRAINT c2 CHECK (id > 0) ENFORCED NORELY,\"\n+        )\n+        var descDdL = sql(s\"DESCRIBE EXTENDED $tbl\").collect().map(_.mkString(\",\"))",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2223415193",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51577,
+        "pr_file": "sql/core/src/test/scala/org/apache/spark/sql/execution/command/v2/DescribeTableSuite.scala",
+        "discussion_id": "2223415193",
+        "commented_code": "@@ -213,4 +213,56 @@ class DescribeTableSuite extends command.DescribeTableSuiteBase\n       assert(\"\"\"\\d+\\s+bytes,\\s+4\\s+rows\"\"\".r.matches(stats))\n     }\n   }\n+\n+  test(\"desc table constraints\") {\n+    withNamespaceAndTable(\"ns\", \"pk_table\", nonPartitionCatalog) { tbl =>\n+      withTable(\"fk_table\") {\n+        sql(\n+          s\"\"\"\n+             |CREATE TABLE fk_table (id INT PRIMARY KEY) USING parquet\n+        \"\"\".stripMargin)\n+        sql(\n+          s\"\"\"\n+             |CREATE TABLE $tbl (\n+             |  id INT,\n+             |  a INT,\n+             |  b STRING,\n+             |  c STRING,\n+             |  PRIMARY KEY (id),\n+             |  CONSTRAINT fk_a FOREIGN KEY (a) REFERENCES fk_table(id) RELY,\n+             |  CONSTRAINT uk_b UNIQUE (b),\n+             |  CONSTRAINT uk_a_c UNIQUE (a, c),\n+             |  CONSTRAINT c1 CHECK (c IS NOT NULL),\n+             |  CONSTRAINT c2 CHECK (id > 0)\n+             |)\n+             |$defaultUsing\n+        \"\"\".stripMargin)\n+\n+        var expectedConstraintsDdl = Array(\n+          \"pk_table_pk,CONSTRAINT pk_table_pk PRIMARY KEY (id) NOT ENFORCED NORELY,\",\n+          \"fk_a,CONSTRAINT fk_a FOREIGN KEY (a) REFERENCES fk_table (id) NOT ENFORCED RELY,\",\n+          \"uk_b,CONSTRAINT uk_b UNIQUE (b) NOT ENFORCED NORELY,\",\n+          \"uk_a_c,CONSTRAINT uk_a_c UNIQUE (a, c) NOT ENFORCED NORELY,\",\n+          \"c1,CONSTRAINT c1 CHECK (c IS NOT NULL) ENFORCED NORELY,\",\n+          \"c2,CONSTRAINT c2 CHECK (id > 0) ENFORCED NORELY,\"\n+        )\n+        var descDdL = sql(s\"DESCRIBE EXTENDED $tbl\").collect().map(_.mkString(\",\"))",
+        "comment_created_at": "2025-07-22T18:06:47+00:00",
+        "comment_author": "gengliangwang",
+        "comment_body": "<img width=\"880\" height=\"188\" alt=\"image\" src=\"https://github.com/user-attachments/assets/f4b73441-5ada-4815-bae9-bc7f8745a564\" />\r\nI realize that DDL contains the constraint name, which is quite duplicated. Also, we can skip showing \"NOT ENFORCED\"/\"NORELY\" if these clause are the default. \r\nI would suggest adding a `toDescription` method in `Constraint` for describing table purpose.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2071086704",
+    "pr_number": 50595,
+    "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStore.scala",
+    "created_at": "2025-05-02T04:43:25+00:00",
+    "commented_code": "}\n   }\n \n+  // Wait until this partition can be processed\n+  private def awaitProcessThisPartition(\n+      id: StateStoreProviderId,\n+      timeoutMs: Long): Boolean = maintenanceThreadPoolLock synchronized  {\n+    val startTime = System.currentTimeMillis()\n+    val endTime = startTime + timeoutMs\n+\n+    // If immediate processing fails, wait with timeout\n+    var canProcessThisPartition = processThisPartition(id)\n+    while (!canProcessThisPartition && System.currentTimeMillis() < endTime) {\n+      canProcessThisPartition = processThisPartition(id)\n+      maintenanceThreadPoolLock.wait(timeoutMs)\n+    }\n+    val elapsedTime = System.currentTimeMillis() - startTime\n+    logInfo(log\"Waited for ${MDC(LogKeys.TOTAL_TIME, elapsedTime)} ms to be able to process \" +\n+      log\"maintenance for partition ${MDC(LogKeys.STATE_STORE_PROVIDER_ID, id)}\")\n+    canProcessThisPartition\n+  }\n+\n+  private def doMaintenance(): Unit = doMaintenance(StateStoreConf.empty)\n+\n   /**\n    * Execute background maintenance task in all the loaded store providers if they are still\n    * the active instances according to the coordinator.\n    */\n-  private def doMaintenance(): Unit = {\n+  private def doMaintenance(storeConf: StateStoreConf): Unit = {\n     logDebug(\"Doing maintenance\")\n     if (SparkEnv.get == null) {\n       throw new IllegalStateException(\"SparkEnv not active, cannot do maintenance on StateStores\")\n     }\n+\n+    // Providers that couldn't be processed now and need to be added back to the queue\n+    val providersToRequeue = new ArrayBuffer[(StateStoreProviderId, StateStoreProvider)]()\n+\n+    while (!unloadedProvidersToClose.isEmpty) {",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2071086704",
+        "repo_full_name": "apache/spark",
+        "pr_number": 50595,
+        "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStore.scala",
+        "discussion_id": "2071086704",
+        "commented_code": "@@ -1111,60 +1159,64 @@ object StateStore extends Logging {\n     }\n   }\n \n+  // Wait until this partition can be processed\n+  private def awaitProcessThisPartition(\n+      id: StateStoreProviderId,\n+      timeoutMs: Long): Boolean = maintenanceThreadPoolLock synchronized  {\n+    val startTime = System.currentTimeMillis()\n+    val endTime = startTime + timeoutMs\n+\n+    // If immediate processing fails, wait with timeout\n+    var canProcessThisPartition = processThisPartition(id)\n+    while (!canProcessThisPartition && System.currentTimeMillis() < endTime) {\n+      canProcessThisPartition = processThisPartition(id)\n+      maintenanceThreadPoolLock.wait(timeoutMs)\n+    }\n+    val elapsedTime = System.currentTimeMillis() - startTime\n+    logInfo(log\"Waited for ${MDC(LogKeys.TOTAL_TIME, elapsedTime)} ms to be able to process \" +\n+      log\"maintenance for partition ${MDC(LogKeys.STATE_STORE_PROVIDER_ID, id)}\")\n+    canProcessThisPartition\n+  }\n+\n+  private def doMaintenance(): Unit = doMaintenance(StateStoreConf.empty)\n+\n   /**\n    * Execute background maintenance task in all the loaded store providers if they are still\n    * the active instances according to the coordinator.\n    */\n-  private def doMaintenance(): Unit = {\n+  private def doMaintenance(storeConf: StateStoreConf): Unit = {\n     logDebug(\"Doing maintenance\")\n     if (SparkEnv.get == null) {\n       throw new IllegalStateException(\"SparkEnv not active, cannot do maintenance on StateStores\")\n     }\n+\n+    // Providers that couldn't be processed now and need to be added back to the queue\n+    val providersToRequeue = new ArrayBuffer[(StateStoreProviderId, StateStoreProvider)]()\n+\n+    while (!unloadedProvidersToClose.isEmpty) {",
+        "comment_created_at": "2025-05-02T04:43:25+00:00",
+        "comment_author": "micheal-o",
+        "comment_body": "nit: add comment about what providers will be in the `unloadedProvidersToClose` for future readers",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2211579906",
+    "pr_number": 51507,
+    "pr_file": "sql/connect/server/src/main/scala/org/apache/spark/sql/connect/pipelines/PipelinesHandler.scala",
+    "created_at": "2025-07-16T20:49:23+00:00",
+    "commented_code": "sessionHolder: SessionHolder): Unit = {\n     val dataflowGraphId = cmd.getDataflowGraphId\n     val graphElementRegistry = DataflowGraphRegistry.getDataflowGraphOrThrow(dataflowGraphId)\n+",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2211579906",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51507,
+        "pr_file": "sql/connect/server/src/main/scala/org/apache/spark/sql/connect/pipelines/PipelinesHandler.scala",
+        "discussion_id": "2211579906",
+        "commented_code": "@@ -224,6 +225,64 @@ private[connect] object PipelinesHandler extends Logging {\n       sessionHolder: SessionHolder): Unit = {\n     val dataflowGraphId = cmd.getDataflowGraphId\n     val graphElementRegistry = DataflowGraphRegistry.getDataflowGraphOrThrow(dataflowGraphId)\n+",
+        "comment_created_at": "2025-07-16T20:49:23+00:00",
+        "comment_author": "AnishMahto",
+        "comment_body": "Can we extract all this added logic to deduce the full refresh and regular refresh table filters into its own function? And then as part of the scala docs, map the expected filter results depending on what combination of full refresh and partial refresh is selected",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2213864934",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51507,
+        "pr_file": "sql/connect/server/src/main/scala/org/apache/spark/sql/connect/pipelines/PipelinesHandler.scala",
+        "discussion_id": "2211579906",
+        "commented_code": "@@ -224,6 +225,64 @@ private[connect] object PipelinesHandler extends Logging {\n       sessionHolder: SessionHolder): Unit = {\n     val dataflowGraphId = cmd.getDataflowGraphId\n     val graphElementRegistry = DataflowGraphRegistry.getDataflowGraphOrThrow(dataflowGraphId)\n+",
+        "comment_created_at": "2025-07-17T17:03:24+00:00",
+        "comment_author": "JiaqiWang18",
+        "comment_body": "extracted a [createTableFilters](https://github.com/apache/spark/pull/51507/commits/1693ac546225c8a6be1d96eb5e64fcf03f77a344#diff-44e47ef13083c7fae6bd89d2774a8141eec6e76874424aaf4d9dc93f59362210R315) function",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2202311789",
+    "pr_number": 51445,
+    "pr_file": "sql/pipelines/src/main/scala/org/apache/spark/sql/pipelines/graph/GraphRegistrationContext.scala",
+    "created_at": "2025-07-12T04:30:41+00:00",
+    "commented_code": "}\n \n   def toDataflowGraph: DataflowGraph = {\n+    // throw exception if pipeline does not have table or persisted view",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2202311789",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51445,
+        "pr_file": "sql/pipelines/src/main/scala/org/apache/spark/sql/pipelines/graph/GraphRegistrationContext.scala",
+        "discussion_id": "2202311789",
+        "commented_code": "@@ -50,6 +50,14 @@ class GraphRegistrationContext(\n   }\n \n   def toDataflowGraph: DataflowGraph = {\n+    // throw exception if pipeline does not have table or persisted view",
+        "comment_created_at": "2025-07-12T04:30:41+00:00",
+        "comment_author": "AnishMahto",
+        "comment_body": "super small nit: Let's just omit the comment, the exception message should be clear enough that it's self documenting.\r\n\r\nThis comment is prone to becoming stale anyway, when we add sinks for example.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,180 @@
+[
+  {
+    "discussion_id": "2218636403",
+    "pr_number": 51559,
+    "pr_file": "sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/WindowResolution.scala",
+    "created_at": "2025-07-21T09:27:21+00:00",
+    "commented_code": "*\n    * By checking the type and configuration of [[WindowExpression.windowFunction]] it enforces the\n    * following rules:\n+   * - Disallows [[FrameLessOffsetWindowFunction]] (e.g. [[Lag]]) without defined ordering or\n+   *   one with a frame which is defined as something other than an offset frame (e.g.\n+   *   `ROWS BETWEEN` is logically incompatible with offset functions).\n    * - Disallows distinct aggregate expressions in window functions.\n-   * - Disallows use of certain aggregate functions - [[ListaAgg]], [[PercentileCont]],\n+   * - Disallows use of certain aggregate functions - [[ListAgg]], [[PercentileCont]],\n    *   [[PercentileDisc]], [[Median]]\n    * - Allows only window functions of following types:\n    *   - [[AggregateExpression]] (non-distinct)\n    *   - [[FrameLessOffsetWindowFunction]]\n    *   - [[AggregateWindowFunction]]\n    */\n   def validateResolvedWindowExpression(windowExpression: WindowExpression): Unit = {\n-    windowExpression.windowFunction match {\n-      case AggregateExpression(_, _, true, _, _) =>\n+    windowExpression match {",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2218636403",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51559,
+        "pr_file": "sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/WindowResolution.scala",
+        "discussion_id": "2218636403",
+        "commented_code": "@@ -107,44 +107,76 @@ object WindowResolution {\n    *\n    * By checking the type and configuration of [[WindowExpression.windowFunction]] it enforces the\n    * following rules:\n+   * - Disallows [[FrameLessOffsetWindowFunction]] (e.g. [[Lag]]) without defined ordering or\n+   *   one with a frame which is defined as something other than an offset frame (e.g.\n+   *   `ROWS BETWEEN` is logically incompatible with offset functions).\n    * - Disallows distinct aggregate expressions in window functions.\n-   * - Disallows use of certain aggregate functions - [[ListaAgg]], [[PercentileCont]],\n+   * - Disallows use of certain aggregate functions - [[ListAgg]], [[PercentileCont]],\n    *   [[PercentileDisc]], [[Median]]\n    * - Allows only window functions of following types:\n    *   - [[AggregateExpression]] (non-distinct)\n    *   - [[FrameLessOffsetWindowFunction]]\n    *   - [[AggregateWindowFunction]]\n    */\n   def validateResolvedWindowExpression(windowExpression: WindowExpression): Unit = {\n-    windowExpression.windowFunction match {\n-      case AggregateExpression(_, _, true, _, _) =>\n+    windowExpression match {",
+        "comment_created_at": "2025-07-21T09:27:21+00:00",
+        "comment_author": "mihailotim-db",
+        "comment_body": "Let's have these be consecutive instead of nested, since this is a failing check. We can avoid this huge diff this way. We can also move to separate methods, something like `checkWindowFunction` and `checkWindowFunctionAndFrameMismatch`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2192401173",
+    "pr_number": 50921,
+    "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/jdbc/JDBCScanBuilder.scala",
+    "created_at": "2025-07-08T12:36:21+00:00",
+    "commented_code": "}\n   }\n \n+  override def isOtherSideCompatibleForJoin(other: SupportsPushDownJoin): Boolean = {\n+    if (!jdbcOptions.pushDownJoin || !dialect.supportsJoin) return false\n+\n+    other.isInstanceOf[JDBCScanBuilder] &&\n+      jdbcOptions.url == other.asInstanceOf[JDBCScanBuilder].jdbcOptions.url\n+  };\n+\n+\n+  /**\n+   * Helper method to calculate StructType based on the SupportsPushDownJoin.ColumnWithAlias and\n+   * the given schema.\n+   *\n+   * If ColumnWithAlias object has defined alias, new field with new name being equal to alias\n+   * should be returned. Otherwise, original field is returned.\n+   */\n+  private def calculateJoinOutputSchema(\n+      columnsWithAliases: Array[SupportsPushDownJoin.ColumnWithAlias],\n+      schema: StructType): StructType = {\n+    var newSchema = StructType(Seq())\n+    columnsWithAliases.foreach { columnWithAlias =>\n+      val colName = columnWithAlias.getColName\n+      val alias = columnWithAlias.getAlias\n+      val field = schema(colName)\n+\n+      val newName = if (alias == null) colName else alias\n+      newSchema = newSchema.add(newName, field.dataType, field.nullable, field.metadata)\n+    }\n+\n+    newSchema\n+  }\n+\n+  override def pushDownJoin(\n+      other: SupportsPushDownJoin,\n+      joinType: JoinType,\n+      leftSideRequiredColumnWithAliases: Array[SupportsPushDownJoin.ColumnWithAlias],\n+      rightSideRequiredColumnWithAliases: Array[SupportsPushDownJoin.ColumnWithAlias],\n+      condition: Predicate ): Boolean = {\n+    if (!jdbcOptions.pushDownJoin || !dialect.supportsJoin) return false",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2192401173",
+        "repo_full_name": "apache/spark",
+        "pr_number": 50921,
+        "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/jdbc/JDBCScanBuilder.scala",
+        "discussion_id": "2192401173",
+        "commented_code": "@@ -121,6 +123,114 @@ case class JDBCScanBuilder(\n     }\n   }\n \n+  override def isOtherSideCompatibleForJoin(other: SupportsPushDownJoin): Boolean = {\n+    if (!jdbcOptions.pushDownJoin || !dialect.supportsJoin) return false\n+\n+    other.isInstanceOf[JDBCScanBuilder] &&\n+      jdbcOptions.url == other.asInstanceOf[JDBCScanBuilder].jdbcOptions.url\n+  };\n+\n+\n+  /**\n+   * Helper method to calculate StructType based on the SupportsPushDownJoin.ColumnWithAlias and\n+   * the given schema.\n+   *\n+   * If ColumnWithAlias object has defined alias, new field with new name being equal to alias\n+   * should be returned. Otherwise, original field is returned.\n+   */\n+  private def calculateJoinOutputSchema(\n+      columnsWithAliases: Array[SupportsPushDownJoin.ColumnWithAlias],\n+      schema: StructType): StructType = {\n+    var newSchema = StructType(Seq())\n+    columnsWithAliases.foreach { columnWithAlias =>\n+      val colName = columnWithAlias.getColName\n+      val alias = columnWithAlias.getAlias\n+      val field = schema(colName)\n+\n+      val newName = if (alias == null) colName else alias\n+      newSchema = newSchema.add(newName, field.dataType, field.nullable, field.metadata)\n+    }\n+\n+    newSchema\n+  }\n+\n+  override def pushDownJoin(\n+      other: SupportsPushDownJoin,\n+      joinType: JoinType,\n+      leftSideRequiredColumnWithAliases: Array[SupportsPushDownJoin.ColumnWithAlias],\n+      rightSideRequiredColumnWithAliases: Array[SupportsPushDownJoin.ColumnWithAlias],\n+      condition: Predicate ): Boolean = {\n+    if (!jdbcOptions.pushDownJoin || !dialect.supportsJoin) return false",
+        "comment_created_at": "2025-07-08T12:36:21+00:00",
+        "comment_author": "urosstan-db",
+        "comment_body": "It would be more readable if we put return in next line\r\n```suggestion\r\n    if (!jdbcOptions.pushDownJoin || !dialect.supportsJoin)\r\n      return false\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2192407720",
+    "pr_number": 50921,
+    "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/jdbc/JDBCScanBuilder.scala",
+    "created_at": "2025-07-08T12:39:33+00:00",
+    "commented_code": "}\n   }\n \n+  override def isOtherSideCompatibleForJoin(other: SupportsPushDownJoin): Boolean = {\n+    if (!jdbcOptions.pushDownJoin || !dialect.supportsJoin) return false\n+\n+    other.isInstanceOf[JDBCScanBuilder] &&\n+      jdbcOptions.url == other.asInstanceOf[JDBCScanBuilder].jdbcOptions.url\n+  };\n+\n+\n+  /**\n+   * Helper method to calculate StructType based on the SupportsPushDownJoin.ColumnWithAlias and\n+   * the given schema.\n+   *\n+   * If ColumnWithAlias object has defined alias, new field with new name being equal to alias\n+   * should be returned. Otherwise, original field is returned.\n+   */\n+  private def calculateJoinOutputSchema(\n+      columnsWithAliases: Array[SupportsPushDownJoin.ColumnWithAlias],\n+      schema: StructType): StructType = {\n+    var newSchema = StructType(Seq())\n+    columnsWithAliases.foreach { columnWithAlias =>\n+      val colName = columnWithAlias.getColName\n+      val alias = columnWithAlias.getAlias\n+      val field = schema(colName)\n+\n+      val newName = if (alias == null) colName else alias\n+      newSchema = newSchema.add(newName, field.dataType, field.nullable, field.metadata)\n+    }\n+\n+    newSchema\n+  }\n+\n+  override def pushDownJoin(\n+      other: SupportsPushDownJoin,\n+      joinType: JoinType,\n+      leftSideRequiredColumnWithAliases: Array[SupportsPushDownJoin.ColumnWithAlias],\n+      rightSideRequiredColumnWithAliases: Array[SupportsPushDownJoin.ColumnWithAlias],\n+      condition: Predicate ): Boolean = {\n+    if (!jdbcOptions.pushDownJoin || !dialect.supportsJoin) return false\n+    val otherJdbcScanBuilder = other.asInstanceOf[JDBCScanBuilder]\n+\n+    // Get left side and right side of join sql queries. These will be used as subqueries in final\n+    // join query.\n+    val sqlQuery = buildSQLQueryUsedInJoinPushDown(leftSideRequiredColumnWithAliases)\n+    val otherSideSqlQuery = otherJdbcScanBuilder\n+      .buildSQLQueryUsedInJoinPushDown(rightSideRequiredColumnWithAliases)\n+\n+    // requiredSchema will become the finalSchema of this JDBCScanBuilder\n+    var requiredSchema = StructType(Seq())\n+    requiredSchema = calculateJoinOutputSchema(leftSideRequiredColumnWithAliases, finalSchema)\n+    requiredSchema = requiredSchema.merge(\n+      calculateJoinOutputSchema(\n+        rightSideRequiredColumnWithAliases,\n+        otherJdbcScanBuilder.finalSchema\n+      )\n+    )\n+\n+    val joinOutputColumnsString =\n+      requiredSchema.fields.map(f => dialect.quoteIdentifier(f.name)).mkString(\",\")\n+\n+    val joinTypeStringOption = joinType match {\n+      case JoinType.INNER_JOIN => Some(\"INNER JOIN\")\n+      case _ => None\n+    }\n+\n+    if (!joinTypeStringOption.isDefined) return false",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2192407720",
+        "repo_full_name": "apache/spark",
+        "pr_number": 50921,
+        "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/jdbc/JDBCScanBuilder.scala",
+        "discussion_id": "2192407720",
+        "commented_code": "@@ -121,6 +123,114 @@ case class JDBCScanBuilder(\n     }\n   }\n \n+  override def isOtherSideCompatibleForJoin(other: SupportsPushDownJoin): Boolean = {\n+    if (!jdbcOptions.pushDownJoin || !dialect.supportsJoin) return false\n+\n+    other.isInstanceOf[JDBCScanBuilder] &&\n+      jdbcOptions.url == other.asInstanceOf[JDBCScanBuilder].jdbcOptions.url\n+  };\n+\n+\n+  /**\n+   * Helper method to calculate StructType based on the SupportsPushDownJoin.ColumnWithAlias and\n+   * the given schema.\n+   *\n+   * If ColumnWithAlias object has defined alias, new field with new name being equal to alias\n+   * should be returned. Otherwise, original field is returned.\n+   */\n+  private def calculateJoinOutputSchema(\n+      columnsWithAliases: Array[SupportsPushDownJoin.ColumnWithAlias],\n+      schema: StructType): StructType = {\n+    var newSchema = StructType(Seq())\n+    columnsWithAliases.foreach { columnWithAlias =>\n+      val colName = columnWithAlias.getColName\n+      val alias = columnWithAlias.getAlias\n+      val field = schema(colName)\n+\n+      val newName = if (alias == null) colName else alias\n+      newSchema = newSchema.add(newName, field.dataType, field.nullable, field.metadata)\n+    }\n+\n+    newSchema\n+  }\n+\n+  override def pushDownJoin(\n+      other: SupportsPushDownJoin,\n+      joinType: JoinType,\n+      leftSideRequiredColumnWithAliases: Array[SupportsPushDownJoin.ColumnWithAlias],\n+      rightSideRequiredColumnWithAliases: Array[SupportsPushDownJoin.ColumnWithAlias],\n+      condition: Predicate ): Boolean = {\n+    if (!jdbcOptions.pushDownJoin || !dialect.supportsJoin) return false\n+    val otherJdbcScanBuilder = other.asInstanceOf[JDBCScanBuilder]\n+\n+    // Get left side and right side of join sql queries. These will be used as subqueries in final\n+    // join query.\n+    val sqlQuery = buildSQLQueryUsedInJoinPushDown(leftSideRequiredColumnWithAliases)\n+    val otherSideSqlQuery = otherJdbcScanBuilder\n+      .buildSQLQueryUsedInJoinPushDown(rightSideRequiredColumnWithAliases)\n+\n+    // requiredSchema will become the finalSchema of this JDBCScanBuilder\n+    var requiredSchema = StructType(Seq())\n+    requiredSchema = calculateJoinOutputSchema(leftSideRequiredColumnWithAliases, finalSchema)\n+    requiredSchema = requiredSchema.merge(\n+      calculateJoinOutputSchema(\n+        rightSideRequiredColumnWithAliases,\n+        otherJdbcScanBuilder.finalSchema\n+      )\n+    )\n+\n+    val joinOutputColumnsString =\n+      requiredSchema.fields.map(f => dialect.quoteIdentifier(f.name)).mkString(\",\")\n+\n+    val joinTypeStringOption = joinType match {\n+      case JoinType.INNER_JOIN => Some(\"INNER JOIN\")\n+      case _ => None\n+    }\n+\n+    if (!joinTypeStringOption.isDefined) return false",
+        "comment_created_at": "2025-07-08T12:39:33+00:00",
+        "comment_author": "urosstan-db",
+        "comment_body": "We have a lot of exit points here. Can you move some of these on the beginning? I would shift compilation of join type and condition before output schema calculation",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2212799812",
+    "pr_number": 51521,
+    "pr_file": "sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/hash.scala",
+    "created_at": "2025-07-17T09:15:07+00:00",
+    "commented_code": "val numBytes = s\"$input.numBytes()\"\n       s\"$result = $hasherClassName.hashUnsafeBytes($baseObject, $baseOffset, $numBytes, $result);\"\n     } else {\n-      val stringHash = ctx.freshName(\"stringHash\")\n-      s\"\"\"\n-        long $stringHash = CollationFactory.fetchCollation(${stringType.collationId})\n-          .hashFunction.applyAsLong($input);\n-        $result = $hasherClassName.hashLong($stringHash, $result);\n-      \"\"\"\n+      if (isAlwaysCollationAwareBug && !isCollationAware) {",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2212799812",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51521,
+        "pr_file": "sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/hash.scala",
+        "discussion_id": "2212799812",
+        "commented_code": "@@ -429,14 +434,43 @@ abstract class HashExpression[E] extends Expression {\n       val numBytes = s\"$input.numBytes()\"\n       s\"$result = $hasherClassName.hashUnsafeBytes($baseObject, $baseOffset, $numBytes, $result);\"\n     } else {\n-      val stringHash = ctx.freshName(\"stringHash\")\n-      s\"\"\"\n-        long $stringHash = CollationFactory.fetchCollation(${stringType.collationId})\n-          .hashFunction.applyAsLong($input);\n-        $result = $hasherClassName.hashLong($stringHash, $result);\n-      \"\"\"\n+      if (isAlwaysCollationAwareBug && !isCollationAware) {",
+        "comment_created_at": "2025-07-17T09:15:07+00:00",
+        "comment_author": "cloud-fan",
+        "comment_body": "to make the branching logic clearer, how about\r\n```\r\nif (collationAware) {\r\n  ... the proper collation aware behavior\r\n} else if (legacyEnabled) {\r\n  ... the legacy behavior that is also collation aware\r\n} else {\r\n  ... the proper collation agnostic behavior\r\n}\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2213610161",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51521,
+        "pr_file": "sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/hash.scala",
+        "discussion_id": "2212799812",
+        "commented_code": "@@ -429,14 +434,43 @@ abstract class HashExpression[E] extends Expression {\n       val numBytes = s\"$input.numBytes()\"\n       s\"$result = $hasherClassName.hashUnsafeBytes($baseObject, $baseOffset, $numBytes, $result);\"\n     } else {\n-      val stringHash = ctx.freshName(\"stringHash\")\n-      s\"\"\"\n-        long $stringHash = CollationFactory.fetchCollation(${stringType.collationId})\n-          .hashFunction.applyAsLong($input);\n-        $result = $hasherClassName.hashLong($stringHash, $result);\n-      \"\"\"\n+      if (isAlwaysCollationAwareBug && !isCollationAware) {",
+        "comment_created_at": "2025-07-17T15:05:05+00:00",
+        "comment_author": "uros-db",
+        "comment_body": "Updated.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2064468828",
+    "pr_number": 50595,
+    "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStore.scala",
+    "created_at": "2025-04-28T20:10:54+00:00",
+    "commented_code": "}\n   }\n \n+  // Block until we can process this partition\n+  private def awaitProcessThisPartition(\n+      id: StateStoreProviderId,\n+      storeConf: StateStoreConf): Boolean = {\n+    maintenanceThreadPoolLock.synchronized {\n+      val timeoutMs = storeConf.stateStoreMaintenanceProcessingTimeout * 1000\n+      val endTime = System.currentTimeMillis() + timeoutMs\n+\n+      // Try to process immediately first\n+      if (processThisPartition(id)) return true\n+\n+      // Wait with timeout and process after notification\n+      def timeRemaining: Long = endTime - System.currentTimeMillis()\n+\n+      while (timeRemaining > 0) {\n+        maintenanceThreadPoolLock.wait(Math.min(timeRemaining, 10000))\n+        if (processThisPartition(id)) return true",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2064468828",
+        "repo_full_name": "apache/spark",
+        "pr_number": 50595,
+        "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStore.scala",
+        "discussion_id": "2064468828",
+        "commented_code": "@@ -1111,60 +1149,52 @@ object StateStore extends Logging {\n     }\n   }\n \n+  // Block until we can process this partition\n+  private def awaitProcessThisPartition(\n+      id: StateStoreProviderId,\n+      storeConf: StateStoreConf): Boolean = {\n+    maintenanceThreadPoolLock.synchronized {\n+      val timeoutMs = storeConf.stateStoreMaintenanceProcessingTimeout * 1000\n+      val endTime = System.currentTimeMillis() + timeoutMs\n+\n+      // Try to process immediately first\n+      if (processThisPartition(id)) return true\n+\n+      // Wait with timeout and process after notification\n+      def timeRemaining: Long = endTime - System.currentTimeMillis()\n+\n+      while (timeRemaining > 0) {\n+        maintenanceThreadPoolLock.wait(Math.min(timeRemaining, 10000))\n+        if (processThisPartition(id)) return true",
+        "comment_created_at": "2025-04-28T20:10:54+00:00",
+        "comment_author": "anishshri-db",
+        "comment_body": "Can we remove the returns and just use the conditionals and return true/false as needed ?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2064469022",
+    "pr_number": 50595,
+    "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStore.scala",
+    "created_at": "2025-04-28T20:11:01+00:00",
+    "commented_code": "}\n   }\n \n+  // Block until we can process this partition\n+  private def awaitProcessThisPartition(\n+      id: StateStoreProviderId,\n+      storeConf: StateStoreConf): Boolean = {\n+    maintenanceThreadPoolLock.synchronized {\n+      val timeoutMs = storeConf.stateStoreMaintenanceProcessingTimeout * 1000\n+      val endTime = System.currentTimeMillis() + timeoutMs\n+\n+      // Try to process immediately first\n+      if (processThisPartition(id)) return true\n+\n+      // Wait with timeout and process after notification\n+      def timeRemaining: Long = endTime - System.currentTimeMillis()\n+\n+      while (timeRemaining > 0) {\n+        maintenanceThreadPoolLock.wait(Math.min(timeRemaining, 10000))\n+        if (processThisPartition(id)) return true",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2064469022",
+        "repo_full_name": "apache/spark",
+        "pr_number": 50595,
+        "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStore.scala",
+        "discussion_id": "2064469022",
+        "commented_code": "@@ -1111,60 +1149,52 @@ object StateStore extends Logging {\n     }\n   }\n \n+  // Block until we can process this partition\n+  private def awaitProcessThisPartition(\n+      id: StateStoreProviderId,\n+      storeConf: StateStoreConf): Boolean = {\n+    maintenanceThreadPoolLock.synchronized {\n+      val timeoutMs = storeConf.stateStoreMaintenanceProcessingTimeout * 1000\n+      val endTime = System.currentTimeMillis() + timeoutMs\n+\n+      // Try to process immediately first\n+      if (processThisPartition(id)) return true\n+\n+      // Wait with timeout and process after notification\n+      def timeRemaining: Long = endTime - System.currentTimeMillis()\n+\n+      while (timeRemaining > 0) {\n+        maintenanceThreadPoolLock.wait(Math.min(timeRemaining, 10000))\n+        if (processThisPartition(id)) return true",
+        "comment_created_at": "2025-04-28T20:11:01+00:00",
+        "comment_author": "anishshri-db",
+        "comment_body": "Can we remove the returns and just use the conditionals and return true/false as needed ?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2211609339",
+    "pr_number": 51507,
+    "pr_file": "sql/connect/server/src/main/scala/org/apache/spark/sql/connect/pipelines/PipelinesHandler.scala",
+    "created_at": "2025-07-16T21:04:38+00:00",
+    "commented_code": "sessionHolder: SessionHolder): Unit = {\n     val dataflowGraphId = cmd.getDataflowGraphId\n     val graphElementRegistry = DataflowGraphRegistry.getDataflowGraphOrThrow(dataflowGraphId)\n+\n+    // Extract refresh parameters from protobuf command\n+    val fullRefreshTables = cmd.getFullRefreshList.asScala.toSeq\n+    val fullRefreshAll = cmd.getFullRefreshAll\n+    val refreshTables = cmd.getRefreshList.asScala.toSeq\n+\n+    // Convert table names to fully qualified TableIdentifier objects\n+    def parseTableNames(tableNames: Seq[String]): Set[TableIdentifier] = {\n+      tableNames.map { name =>\n+        GraphIdentifierManager\n+          .parseAndQualifyTableIdentifier(\n+            rawTableIdentifier =\n+              GraphIdentifierManager.parseTableIdentifier(name, sessionHolder.session),\n+            currentCatalog = Some(graphElementRegistry.defaultCatalog),\n+            currentDatabase = Some(graphElementRegistry.defaultDatabase))\n+          .identifier\n+      }.toSet\n+    }\n+\n+    if (fullRefreshTables.nonEmpty && fullRefreshAll) {\n+      throw new IllegalArgumentException(\n+        \"Cannot specify a subset to refresh when full refresh all is set to true.\")\n+    }\n+\n+    if (refreshTables.nonEmpty && fullRefreshAll) {\n+      throw new IllegalArgumentException(\n+        \"Cannot specify a subset to full refresh when full refresh all is set to true.\")\n+    }\n+    val refreshTableNames = parseTableNames(refreshTables)\n+    val fullRefreshTableNames = parseTableNames(fullRefreshTables)\n+\n+    if (refreshTables.nonEmpty && fullRefreshTables.nonEmpty) {\n+      // check if there is an intersection between the subset\n+      val intersection = refreshTableNames.intersect(fullRefreshTableNames)\n+      if (intersection.nonEmpty) {\n+        throw new IllegalArgumentException(\n+          \"Datasets specified for refresh and full refresh cannot overlap: \" +\n+            s\"${intersection.mkString(\", \")}\")\n+      }\n+    }\n+\n+    val fullRefreshTablesFilter: TableFilter = if (fullRefreshAll) {\n+      AllTables\n+    } else if (fullRefreshTables.nonEmpty) {\n+      SomeTables(fullRefreshTableNames)\n+    } else {\n+      NoTables\n+    }\n+\n+    val refreshTablesFilter: TableFilter =\n+      if (refreshTables.nonEmpty) {\n+        SomeTables(refreshTableNames)\n+      } else if (fullRefreshTablesFilter != NoTables) {\n+        NoTables\n+      } else {\n+        AllTables\n+      }",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2211609339",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51507,
+        "pr_file": "sql/connect/server/src/main/scala/org/apache/spark/sql/connect/pipelines/PipelinesHandler.scala",
+        "discussion_id": "2211609339",
+        "commented_code": "@@ -224,6 +225,64 @@ private[connect] object PipelinesHandler extends Logging {\n       sessionHolder: SessionHolder): Unit = {\n     val dataflowGraphId = cmd.getDataflowGraphId\n     val graphElementRegistry = DataflowGraphRegistry.getDataflowGraphOrThrow(dataflowGraphId)\n+\n+    // Extract refresh parameters from protobuf command\n+    val fullRefreshTables = cmd.getFullRefreshList.asScala.toSeq\n+    val fullRefreshAll = cmd.getFullRefreshAll\n+    val refreshTables = cmd.getRefreshList.asScala.toSeq\n+\n+    // Convert table names to fully qualified TableIdentifier objects\n+    def parseTableNames(tableNames: Seq[String]): Set[TableIdentifier] = {\n+      tableNames.map { name =>\n+        GraphIdentifierManager\n+          .parseAndQualifyTableIdentifier(\n+            rawTableIdentifier =\n+              GraphIdentifierManager.parseTableIdentifier(name, sessionHolder.session),\n+            currentCatalog = Some(graphElementRegistry.defaultCatalog),\n+            currentDatabase = Some(graphElementRegistry.defaultDatabase))\n+          .identifier\n+      }.toSet\n+    }\n+\n+    if (fullRefreshTables.nonEmpty && fullRefreshAll) {\n+      throw new IllegalArgumentException(\n+        \"Cannot specify a subset to refresh when full refresh all is set to true.\")\n+    }\n+\n+    if (refreshTables.nonEmpty && fullRefreshAll) {\n+      throw new IllegalArgumentException(\n+        \"Cannot specify a subset to full refresh when full refresh all is set to true.\")\n+    }\n+    val refreshTableNames = parseTableNames(refreshTables)\n+    val fullRefreshTableNames = parseTableNames(fullRefreshTables)\n+\n+    if (refreshTables.nonEmpty && fullRefreshTables.nonEmpty) {\n+      // check if there is an intersection between the subset\n+      val intersection = refreshTableNames.intersect(fullRefreshTableNames)\n+      if (intersection.nonEmpty) {\n+        throw new IllegalArgumentException(\n+          \"Datasets specified for refresh and full refresh cannot overlap: \" +\n+            s\"${intersection.mkString(\", \")}\")\n+      }\n+    }\n+\n+    val fullRefreshTablesFilter: TableFilter = if (fullRefreshAll) {\n+      AllTables\n+    } else if (fullRefreshTables.nonEmpty) {\n+      SomeTables(fullRefreshTableNames)\n+    } else {\n+      NoTables\n+    }\n+\n+    val refreshTablesFilter: TableFilter =\n+      if (refreshTables.nonEmpty) {\n+        SomeTables(refreshTableNames)\n+      } else if (fullRefreshTablesFilter != NoTables) {\n+        NoTables\n+      } else {\n+        AllTables\n+      }",
+        "comment_created_at": "2025-07-16T21:04:38+00:00",
+        "comment_author": "AnishMahto",
+        "comment_body": "just an optional nit, but as a code reader it's difficult for me to reason about the combinations of `fullRefreshTables` and `refreshTables` when reading them as sequential but related validation here.\r\n\r\nMy suggestion would be to restructure this as a match statement, that explicitly handles each combination. Ex.\r\n```\r\n(fullRefreshTables, refreshTableNames) match {\r\n      case (Nil, Nil) => ...\r\n      case (fullRefreshTables, Nil) => ...\r\n      case ...\r\n}\r\n```\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2213865684",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51507,
+        "pr_file": "sql/connect/server/src/main/scala/org/apache/spark/sql/connect/pipelines/PipelinesHandler.scala",
+        "discussion_id": "2211609339",
+        "commented_code": "@@ -224,6 +225,64 @@ private[connect] object PipelinesHandler extends Logging {\n       sessionHolder: SessionHolder): Unit = {\n     val dataflowGraphId = cmd.getDataflowGraphId\n     val graphElementRegistry = DataflowGraphRegistry.getDataflowGraphOrThrow(dataflowGraphId)\n+\n+    // Extract refresh parameters from protobuf command\n+    val fullRefreshTables = cmd.getFullRefreshList.asScala.toSeq\n+    val fullRefreshAll = cmd.getFullRefreshAll\n+    val refreshTables = cmd.getRefreshList.asScala.toSeq\n+\n+    // Convert table names to fully qualified TableIdentifier objects\n+    def parseTableNames(tableNames: Seq[String]): Set[TableIdentifier] = {\n+      tableNames.map { name =>\n+        GraphIdentifierManager\n+          .parseAndQualifyTableIdentifier(\n+            rawTableIdentifier =\n+              GraphIdentifierManager.parseTableIdentifier(name, sessionHolder.session),\n+            currentCatalog = Some(graphElementRegistry.defaultCatalog),\n+            currentDatabase = Some(graphElementRegistry.defaultDatabase))\n+          .identifier\n+      }.toSet\n+    }\n+\n+    if (fullRefreshTables.nonEmpty && fullRefreshAll) {\n+      throw new IllegalArgumentException(\n+        \"Cannot specify a subset to refresh when full refresh all is set to true.\")\n+    }\n+\n+    if (refreshTables.nonEmpty && fullRefreshAll) {\n+      throw new IllegalArgumentException(\n+        \"Cannot specify a subset to full refresh when full refresh all is set to true.\")\n+    }\n+    val refreshTableNames = parseTableNames(refreshTables)\n+    val fullRefreshTableNames = parseTableNames(fullRefreshTables)\n+\n+    if (refreshTables.nonEmpty && fullRefreshTables.nonEmpty) {\n+      // check if there is an intersection between the subset\n+      val intersection = refreshTableNames.intersect(fullRefreshTableNames)\n+      if (intersection.nonEmpty) {\n+        throw new IllegalArgumentException(\n+          \"Datasets specified for refresh and full refresh cannot overlap: \" +\n+            s\"${intersection.mkString(\", \")}\")\n+      }\n+    }\n+\n+    val fullRefreshTablesFilter: TableFilter = if (fullRefreshAll) {\n+      AllTables\n+    } else if (fullRefreshTables.nonEmpty) {\n+      SomeTables(fullRefreshTableNames)\n+    } else {\n+      NoTables\n+    }\n+\n+    val refreshTablesFilter: TableFilter =\n+      if (refreshTables.nonEmpty) {\n+        SomeTables(refreshTableNames)\n+      } else if (fullRefreshTablesFilter != NoTables) {\n+        NoTables\n+      } else {\n+        AllTables\n+      }",
+        "comment_created_at": "2025-07-17T17:03:52+00:00",
+        "comment_author": "JiaqiWang18",
+        "comment_body": "extracted a [createTableFilters](https://github.com/apache/spark/pull/51507/commits/1693ac546225c8a6be1d96eb5e64fcf03f77a344#diff-44e47ef13083c7fae6bd89d2774a8141eec6e76874424aaf4d9dc93f59362210R315) function",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

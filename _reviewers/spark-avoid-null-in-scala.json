@@ -1,0 +1,138 @@
+[
+  {
+    "discussion_id": "2192372062",
+    "pr_number": 50921,
+    "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/V2ScanRelationPushDown.scala",
+    "created_at": "2025-07-08T12:24:42+00:00",
+    "commented_code": "filterCondition.map(Filter(_, sHolder)).getOrElse(sHolder)\n   }\n \n+  def pushDownJoin(plan: LogicalPlan): LogicalPlan = plan.transformUp {\n+    // Join can be attempted to be pushed down only if left and right side of join are\n+    // compatible (same data source, for example). Also, another requirement is that if\n+    // there are projections between Join and ScanBuilderHolder, these projections need to be\n+    // AttributeReferences. We could probably support Alias as well, but this should be on\n+    // TODO list.\n+    // Alias can exist between Join and sHolder node because the query below is not valid:\n+    // SELECT * FROM\n+    // (SELECT * FROM tbl t1 JOIN tbl2 t2) p\n+    // JOIN\n+    // (SELECT * FROM tbl t3 JOIN tbl3 t4) q\n+    // ON p.t1.col = q.t3.col (this is not possible)\n+    // It's because there are 2 same tables in both sides of top level join and it not possible\n+    // to fully qualified the column names in condition. Therefore, query should be rewritten so\n+    // that each of the outputs of child joins are aliased, so there would be a projection\n+    // with aliases between top level join and scanBuilderHolder (that has pushed child joins).\n+    case node @ Join(\n+      PhysicalOperation(\n+        leftProjections,\n+        Nil,\n+        leftHolder @ ScanBuilderHolder(_, _, lBuilder: SupportsPushDownJoin)\n+      ),\n+      PhysicalOperation(\n+        rightProjections,\n+        Nil,\n+        rightHolder @ ScanBuilderHolder(_, _, rBuilder: SupportsPushDownJoin)\n+      ),\n+      joinType,\n+      condition,\n+    _) if conf.dataSourceV2JoinPushdown &&\n+      // We do not support pushing down anything besides AttributeReference.\n+      leftProjections.forall(_.isInstanceOf[AttributeReference]) &&\n+      rightProjections.forall(_.isInstanceOf[AttributeReference]) &&\n+      // Cross joins are not supported because they increase the amount of data.\n+      condition.isDefined &&\n+      // Joins on top of sampled tables are not supported\n+      leftHolder.pushedSample.isEmpty &&\n+      rightHolder.pushedSample.isEmpty &&\n+      lBuilder.isOtherSideCompatibleForJoin(rBuilder) =>\n+\n+      // projections' names are maybe not up to date if the joins have been previously pushed down.\n+      // For this reason, we need to use pushedJoinOutputMap to get up to date names.\n+      def getRequiredColumnNames(\n+          projections: Seq[NamedExpression],\n+          sHolder: ScanBuilderHolder): Array[String] = {\n+        val normalizedProjections = DataSourceStrategy.normalizeExprs(\n+          projections,\n+          sHolder.output.map { a =>\n+            sHolder.pushedJoinOutputMap.getOrElse(a, a).asInstanceOf[AttributeReference]\n+          }\n+        ).asInstanceOf[Seq[AttributeReference]]\n+\n+        normalizedProjections.map(_.name).toArray\n+      }\n+\n+      def generateJoinOutputAlias(name: String): String =\n+        s\"${name}_${java.util.UUID.randomUUID().toString.replace(\"-\", \"_\")}\"\n+\n+      val leftSideRequiredColumnNames = getRequiredColumnNames(leftProjections, leftHolder)\n+      val rightSideRequiredColumnNames = getRequiredColumnNames(rightProjections, rightHolder)\n+\n+      // Alias the duplicated columns from left side of the join.\n+      val leftSideRequiredColumnsWithAliases = leftSideRequiredColumnNames.map { name =>\n+        val aliasName = if (rightSideRequiredColumnNames.contains(name)) {\n+          generateJoinOutputAlias(name)\n+        } else {\n+          null",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2192372062",
+        "repo_full_name": "apache/spark",
+        "pr_number": 50921,
+        "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/V2ScanRelationPushDown.scala",
+        "discussion_id": "2192372062",
+        "commented_code": "@@ -98,6 +100,132 @@ object V2ScanRelationPushDown extends Rule[LogicalPlan] with PredicateHelper {\n       filterCondition.map(Filter(_, sHolder)).getOrElse(sHolder)\n   }\n \n+  def pushDownJoin(plan: LogicalPlan): LogicalPlan = plan.transformUp {\n+    // Join can be attempted to be pushed down only if left and right side of join are\n+    // compatible (same data source, for example). Also, another requirement is that if\n+    // there are projections between Join and ScanBuilderHolder, these projections need to be\n+    // AttributeReferences. We could probably support Alias as well, but this should be on\n+    // TODO list.\n+    // Alias can exist between Join and sHolder node because the query below is not valid:\n+    // SELECT * FROM\n+    // (SELECT * FROM tbl t1 JOIN tbl2 t2) p\n+    // JOIN\n+    // (SELECT * FROM tbl t3 JOIN tbl3 t4) q\n+    // ON p.t1.col = q.t3.col (this is not possible)\n+    // It's because there are 2 same tables in both sides of top level join and it not possible\n+    // to fully qualified the column names in condition. Therefore, query should be rewritten so\n+    // that each of the outputs of child joins are aliased, so there would be a projection\n+    // with aliases between top level join and scanBuilderHolder (that has pushed child joins).\n+    case node @ Join(\n+      PhysicalOperation(\n+        leftProjections,\n+        Nil,\n+        leftHolder @ ScanBuilderHolder(_, _, lBuilder: SupportsPushDownJoin)\n+      ),\n+      PhysicalOperation(\n+        rightProjections,\n+        Nil,\n+        rightHolder @ ScanBuilderHolder(_, _, rBuilder: SupportsPushDownJoin)\n+      ),\n+      joinType,\n+      condition,\n+    _) if conf.dataSourceV2JoinPushdown &&\n+      // We do not support pushing down anything besides AttributeReference.\n+      leftProjections.forall(_.isInstanceOf[AttributeReference]) &&\n+      rightProjections.forall(_.isInstanceOf[AttributeReference]) &&\n+      // Cross joins are not supported because they increase the amount of data.\n+      condition.isDefined &&\n+      // Joins on top of sampled tables are not supported\n+      leftHolder.pushedSample.isEmpty &&\n+      rightHolder.pushedSample.isEmpty &&\n+      lBuilder.isOtherSideCompatibleForJoin(rBuilder) =>\n+\n+      // projections' names are maybe not up to date if the joins have been previously pushed down.\n+      // For this reason, we need to use pushedJoinOutputMap to get up to date names.\n+      def getRequiredColumnNames(\n+          projections: Seq[NamedExpression],\n+          sHolder: ScanBuilderHolder): Array[String] = {\n+        val normalizedProjections = DataSourceStrategy.normalizeExprs(\n+          projections,\n+          sHolder.output.map { a =>\n+            sHolder.pushedJoinOutputMap.getOrElse(a, a).asInstanceOf[AttributeReference]\n+          }\n+        ).asInstanceOf[Seq[AttributeReference]]\n+\n+        normalizedProjections.map(_.name).toArray\n+      }\n+\n+      def generateJoinOutputAlias(name: String): String =\n+        s\"${name}_${java.util.UUID.randomUUID().toString.replace(\"-\", \"_\")}\"\n+\n+      val leftSideRequiredColumnNames = getRequiredColumnNames(leftProjections, leftHolder)\n+      val rightSideRequiredColumnNames = getRequiredColumnNames(rightProjections, rightHolder)\n+\n+      // Alias the duplicated columns from left side of the join.\n+      val leftSideRequiredColumnsWithAliases = leftSideRequiredColumnNames.map { name =>\n+        val aliasName = if (rightSideRequiredColumnNames.contains(name)) {\n+          generateJoinOutputAlias(name)\n+        } else {\n+          null",
+        "comment_created_at": "2025-07-08T12:24:42+00:00",
+        "comment_author": "urosstan-db",
+        "comment_body": "Avoid using null in Scala, you can use Option instead and None",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192842396",
+        "repo_full_name": "apache/spark",
+        "pr_number": 50921,
+        "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/V2ScanRelationPushDown.scala",
+        "discussion_id": "2192372062",
+        "commented_code": "@@ -98,6 +100,132 @@ object V2ScanRelationPushDown extends Rule[LogicalPlan] with PredicateHelper {\n       filterCondition.map(Filter(_, sHolder)).getOrElse(sHolder)\n   }\n \n+  def pushDownJoin(plan: LogicalPlan): LogicalPlan = plan.transformUp {\n+    // Join can be attempted to be pushed down only if left and right side of join are\n+    // compatible (same data source, for example). Also, another requirement is that if\n+    // there are projections between Join and ScanBuilderHolder, these projections need to be\n+    // AttributeReferences. We could probably support Alias as well, but this should be on\n+    // TODO list.\n+    // Alias can exist between Join and sHolder node because the query below is not valid:\n+    // SELECT * FROM\n+    // (SELECT * FROM tbl t1 JOIN tbl2 t2) p\n+    // JOIN\n+    // (SELECT * FROM tbl t3 JOIN tbl3 t4) q\n+    // ON p.t1.col = q.t3.col (this is not possible)\n+    // It's because there are 2 same tables in both sides of top level join and it not possible\n+    // to fully qualified the column names in condition. Therefore, query should be rewritten so\n+    // that each of the outputs of child joins are aliased, so there would be a projection\n+    // with aliases between top level join and scanBuilderHolder (that has pushed child joins).\n+    case node @ Join(\n+      PhysicalOperation(\n+        leftProjections,\n+        Nil,\n+        leftHolder @ ScanBuilderHolder(_, _, lBuilder: SupportsPushDownJoin)\n+      ),\n+      PhysicalOperation(\n+        rightProjections,\n+        Nil,\n+        rightHolder @ ScanBuilderHolder(_, _, rBuilder: SupportsPushDownJoin)\n+      ),\n+      joinType,\n+      condition,\n+    _) if conf.dataSourceV2JoinPushdown &&\n+      // We do not support pushing down anything besides AttributeReference.\n+      leftProjections.forall(_.isInstanceOf[AttributeReference]) &&\n+      rightProjections.forall(_.isInstanceOf[AttributeReference]) &&\n+      // Cross joins are not supported because they increase the amount of data.\n+      condition.isDefined &&\n+      // Joins on top of sampled tables are not supported\n+      leftHolder.pushedSample.isEmpty &&\n+      rightHolder.pushedSample.isEmpty &&\n+      lBuilder.isOtherSideCompatibleForJoin(rBuilder) =>\n+\n+      // projections' names are maybe not up to date if the joins have been previously pushed down.\n+      // For this reason, we need to use pushedJoinOutputMap to get up to date names.\n+      def getRequiredColumnNames(\n+          projections: Seq[NamedExpression],\n+          sHolder: ScanBuilderHolder): Array[String] = {\n+        val normalizedProjections = DataSourceStrategy.normalizeExprs(\n+          projections,\n+          sHolder.output.map { a =>\n+            sHolder.pushedJoinOutputMap.getOrElse(a, a).asInstanceOf[AttributeReference]\n+          }\n+        ).asInstanceOf[Seq[AttributeReference]]\n+\n+        normalizedProjections.map(_.name).toArray\n+      }\n+\n+      def generateJoinOutputAlias(name: String): String =\n+        s\"${name}_${java.util.UUID.randomUUID().toString.replace(\"-\", \"_\")}\"\n+\n+      val leftSideRequiredColumnNames = getRequiredColumnNames(leftProjections, leftHolder)\n+      val rightSideRequiredColumnNames = getRequiredColumnNames(rightProjections, rightHolder)\n+\n+      // Alias the duplicated columns from left side of the join.\n+      val leftSideRequiredColumnsWithAliases = leftSideRequiredColumnNames.map { name =>\n+        val aliasName = if (rightSideRequiredColumnNames.contains(name)) {\n+          generateJoinOutputAlias(name)\n+        } else {\n+          null",
+        "comment_created_at": "2025-07-08T15:30:39+00:00",
+        "comment_author": "PetarVasiljevic-DB",
+        "comment_body": "I am working with Java class so I can either have nulls in scala or Optional<String> in Java. I have seen in our codebase that when dealing with Java objects we are using nulls, so I just went with it (plus I don't like conversion to Optional in Java).\r\n\r\nIf required, I can change it",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2195140234",
+        "repo_full_name": "apache/spark",
+        "pr_number": 50921,
+        "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/v2/V2ScanRelationPushDown.scala",
+        "discussion_id": "2192372062",
+        "commented_code": "@@ -98,6 +100,132 @@ object V2ScanRelationPushDown extends Rule[LogicalPlan] with PredicateHelper {\n       filterCondition.map(Filter(_, sHolder)).getOrElse(sHolder)\n   }\n \n+  def pushDownJoin(plan: LogicalPlan): LogicalPlan = plan.transformUp {\n+    // Join can be attempted to be pushed down only if left and right side of join are\n+    // compatible (same data source, for example). Also, another requirement is that if\n+    // there are projections between Join and ScanBuilderHolder, these projections need to be\n+    // AttributeReferences. We could probably support Alias as well, but this should be on\n+    // TODO list.\n+    // Alias can exist between Join and sHolder node because the query below is not valid:\n+    // SELECT * FROM\n+    // (SELECT * FROM tbl t1 JOIN tbl2 t2) p\n+    // JOIN\n+    // (SELECT * FROM tbl t3 JOIN tbl3 t4) q\n+    // ON p.t1.col = q.t3.col (this is not possible)\n+    // It's because there are 2 same tables in both sides of top level join and it not possible\n+    // to fully qualified the column names in condition. Therefore, query should be rewritten so\n+    // that each of the outputs of child joins are aliased, so there would be a projection\n+    // with aliases between top level join and scanBuilderHolder (that has pushed child joins).\n+    case node @ Join(\n+      PhysicalOperation(\n+        leftProjections,\n+        Nil,\n+        leftHolder @ ScanBuilderHolder(_, _, lBuilder: SupportsPushDownJoin)\n+      ),\n+      PhysicalOperation(\n+        rightProjections,\n+        Nil,\n+        rightHolder @ ScanBuilderHolder(_, _, rBuilder: SupportsPushDownJoin)\n+      ),\n+      joinType,\n+      condition,\n+    _) if conf.dataSourceV2JoinPushdown &&\n+      // We do not support pushing down anything besides AttributeReference.\n+      leftProjections.forall(_.isInstanceOf[AttributeReference]) &&\n+      rightProjections.forall(_.isInstanceOf[AttributeReference]) &&\n+      // Cross joins are not supported because they increase the amount of data.\n+      condition.isDefined &&\n+      // Joins on top of sampled tables are not supported\n+      leftHolder.pushedSample.isEmpty &&\n+      rightHolder.pushedSample.isEmpty &&\n+      lBuilder.isOtherSideCompatibleForJoin(rBuilder) =>\n+\n+      // projections' names are maybe not up to date if the joins have been previously pushed down.\n+      // For this reason, we need to use pushedJoinOutputMap to get up to date names.\n+      def getRequiredColumnNames(\n+          projections: Seq[NamedExpression],\n+          sHolder: ScanBuilderHolder): Array[String] = {\n+        val normalizedProjections = DataSourceStrategy.normalizeExprs(\n+          projections,\n+          sHolder.output.map { a =>\n+            sHolder.pushedJoinOutputMap.getOrElse(a, a).asInstanceOf[AttributeReference]\n+          }\n+        ).asInstanceOf[Seq[AttributeReference]]\n+\n+        normalizedProjections.map(_.name).toArray\n+      }\n+\n+      def generateJoinOutputAlias(name: String): String =\n+        s\"${name}_${java.util.UUID.randomUUID().toString.replace(\"-\", \"_\")}\"\n+\n+      val leftSideRequiredColumnNames = getRequiredColumnNames(leftProjections, leftHolder)\n+      val rightSideRequiredColumnNames = getRequiredColumnNames(rightProjections, rightHolder)\n+\n+      // Alias the duplicated columns from left side of the join.\n+      val leftSideRequiredColumnsWithAliases = leftSideRequiredColumnNames.map { name =>\n+        val aliasName = if (rightSideRequiredColumnNames.contains(name)) {\n+          generateJoinOutputAlias(name)\n+        } else {\n+          null",
+        "comment_created_at": "2025-07-09T14:09:57+00:00",
+        "comment_author": "urosstan-db",
+        "comment_body": "What do you think about using None, and then when you call Java function, you can use `opt.orNull`?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2196275862",
+    "pr_number": 51431,
+    "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreConf.scala",
+    "created_at": "2025-07-10T00:58:31+00:00",
+    "commented_code": "/** A class that contains configuration parameters for [[StateStore]]s. */\n class StateStoreConf(\n-    @transient private[state] val sqlConf: SQLConf,\n+    // Must be private to avoid serialization issues with transient annotation\n+    @transient private val sqlConf: SQLConf,",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2196275862",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51431,
+        "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreConf.scala",
+        "discussion_id": "2196275862",
+        "commented_code": "@@ -22,7 +22,8 @@ import org.apache.spark.sql.internal.SQLConf\n \n /** A class that contains configuration parameters for [[StateStore]]s. */\n class StateStoreConf(\n-    @transient private[state] val sqlConf: SQLConf,\n+    // Must be private to avoid serialization issues with transient annotation\n+    @transient private val sqlConf: SQLConf,",
+        "comment_created_at": "2025-07-10T00:58:31+00:00",
+        "comment_author": "anishshri-db",
+        "comment_body": "Was this needed to add the test ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198240864",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51431,
+        "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreConf.scala",
+        "discussion_id": "2196275862",
+        "commented_code": "@@ -22,7 +22,8 @@ import org.apache.spark.sql.internal.SQLConf\n \n /** A class that contains configuration parameters for [[StateStore]]s. */\n class StateStoreConf(\n-    @transient private[state] val sqlConf: SQLConf,\n+    // Must be private to avoid serialization issues with transient annotation\n+    @transient private val sqlConf: SQLConf,",
+        "comment_created_at": "2025-07-10T16:52:45+00:00",
+        "comment_author": "liviazhu",
+        "comment_body": "This is to prevent future usages of sqlConf and potential NPEs.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2198244512",
+    "pr_number": 51431,
+    "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreConf.scala",
+    "created_at": "2025-07-10T16:54:58+00:00",
+    "commented_code": "/** A class that contains configuration parameters for [[StateStore]]s. */\n class StateStoreConf(\n-    @transient private[state] val sqlConf: SQLConf,\n+    // Must be private to avoid serialization issues with transient annotation",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2198244512",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51431,
+        "pr_file": "sql/core/src/main/scala/org/apache/spark/sql/execution/streaming/state/StateStoreConf.scala",
+        "discussion_id": "2198244512",
+        "commented_code": "@@ -22,7 +22,8 @@ import org.apache.spark.sql.internal.SQLConf\n \n /** A class that contains configuration parameters for [[StateStore]]s. */\n class StateStoreConf(\n-    @transient private[state] val sqlConf: SQLConf,\n+    // Must be private to avoid serialization issues with transient annotation",
+        "comment_created_at": "2025-07-10T16:54:58+00:00",
+        "comment_author": "liviazhu",
+        "comment_body": "```suggestion\r\n    // Should be private because it could be null under serialization (due to\r\n    // the transient annotation)\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2217238005",
+    "pr_number": 51549,
+    "pr_file": "sql/api/src/main/scala/org/apache/spark/sql/catalyst/util/SparkDateTimeUtils.scala",
+    "created_at": "2025-07-19T08:31:04+00:00",
+    "commented_code": "*/\n   def stringToTime(s: UTF8String): Option[Long] = {\n     try {\n-      val (segments, zoneIdOpt, justTime) = parseTimestampString(s)\n+      // Check for the AM/PM suffix.\n+      val trimmed = s.trimRight\n+      val numChars = trimmed.numChars()\n+      var (isAM, isPM) = (false, false)\n+      val (lc, slc) = (trimmed.getChar(numChars - 1), trimmed.getChar(numChars - 2))\n+      if (numChars > 2 && lc == 'M' || lc == 'm') {\n+        isAM = slc == 'A' || slc == 'a'\n+        isPM = slc == 'P' || slc == 'p'\n+      }\n+      val hasSuffix = isAM || isPM",
+    "repo_full_name": "apache/spark",
+    "discussion_comments": [
+      {
+        "comment_id": "2217238005",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51549,
+        "pr_file": "sql/api/src/main/scala/org/apache/spark/sql/catalyst/util/SparkDateTimeUtils.scala",
+        "discussion_id": "2217238005",
+        "commented_code": "@@ -717,14 +717,59 @@ trait SparkDateTimeUtils {\n    */\n   def stringToTime(s: UTF8String): Option[Long] = {\n     try {\n-      val (segments, zoneIdOpt, justTime) = parseTimestampString(s)\n+      // Check for the AM/PM suffix.\n+      val trimmed = s.trimRight\n+      val numChars = trimmed.numChars()\n+      var (isAM, isPM) = (false, false)\n+      val (lc, slc) = (trimmed.getChar(numChars - 1), trimmed.getChar(numChars - 2))\n+      if (numChars > 2 && lc == 'M' || lc == 'm') {\n+        isAM = slc == 'A' || slc == 'a'\n+        isPM = slc == 'P' || slc == 'p'\n+      }\n+      val hasSuffix = isAM || isPM",
+        "comment_created_at": "2025-07-19T08:31:04+00:00",
+        "comment_author": "MaxGekk",
+        "comment_body": "I do understand that you expect to get the index out of bound exception when the number of chars is less than 2, but I would avoid such implicit assumptions, and check bounds before access to elements:\r\n\r\nLet's do that:\r\n```suggestion\r\n      var (isAM, isPM, hasSuffix) = (false, false, false)\r\n      if (numChars > 2) {\r\n        val lc = trimmed.getChar(numChars - 1)\r\n        if (lc == 'M' || lc == 'm') {\r\n          val slc = trimmed.getChar(numChars - 2)\r\n          isAM = slc == 'A' || slc == 'a'\r\n          isPM = slc == 'P' || slc == 'p'\r\n          hasSuffix = isAM || isPM\r\n        }\r\n      }\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2217286529",
+        "repo_full_name": "apache/spark",
+        "pr_number": 51549,
+        "pr_file": "sql/api/src/main/scala/org/apache/spark/sql/catalyst/util/SparkDateTimeUtils.scala",
+        "discussion_id": "2217238005",
+        "commented_code": "@@ -717,14 +717,59 @@ trait SparkDateTimeUtils {\n    */\n   def stringToTime(s: UTF8String): Option[Long] = {\n     try {\n-      val (segments, zoneIdOpt, justTime) = parseTimestampString(s)\n+      // Check for the AM/PM suffix.\n+      val trimmed = s.trimRight\n+      val numChars = trimmed.numChars()\n+      var (isAM, isPM) = (false, false)\n+      val (lc, slc) = (trimmed.getChar(numChars - 1), trimmed.getChar(numChars - 2))\n+      if (numChars > 2 && lc == 'M' || lc == 'm') {\n+        isAM = slc == 'A' || slc == 'a'\n+        isPM = slc == 'P' || slc == 'p'\n+      }\n+      val hasSuffix = isAM || isPM",
+        "comment_created_at": "2025-07-19T11:06:41+00:00",
+        "comment_author": "uros-db",
+        "comment_body": "Makes sense, this is the better way. Adopting your suggestion.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

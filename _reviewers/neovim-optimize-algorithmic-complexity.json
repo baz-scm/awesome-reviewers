@@ -1,0 +1,140 @@
+[
+  {
+    "discussion_id": "2143124450",
+    "pr_number": 34014,
+    "pr_file": "runtime/lua/vim/diagnostic.lua",
+    "created_at": "2025-06-12T15:56:52+00:00",
+    "commented_code": "-- Adjust row to be 0-indexed\n   position[1] = position[1] - 1\n \n+  -- Clamp column\n+  position[2] = math.max(0, position[2])\n+\n   local wrap = if_nil(opts.wrap, true)\n \n-  local diagnostics = get_diagnostics(bufnr, opts, true)\n+  local diagnostics = {} ---@type vim.Diagnostic[]\n+  ---ns -> extmark_id -> Diagnostic[]\n+  local extmarks_index = {} ---@type table<integer, table<integer, vim.api.keyset.get_extmark_item>>\n+  for namespace in pairs(diagnostic_cache[bufnr]) do",
+    "repo_full_name": "neovim/neovim",
+    "discussion_comments": [
+      {
+        "comment_id": "2143124450",
+        "repo_full_name": "neovim/neovim",
+        "pr_number": 34014,
+        "pr_file": "runtime/lua/vim/diagnostic.lua",
+        "discussion_id": "2143124450",
+        "commented_code": "@@ -1028,15 +1029,60 @@ local function next_diagnostic(search_forward, opts)\n   -- Adjust row to be 0-indexed\n   position[1] = position[1] - 1\n \n+  -- Clamp column\n+  position[2] = math.max(0, position[2])\n+\n   local wrap = if_nil(opts.wrap, true)\n \n-  local diagnostics = get_diagnostics(bufnr, opts, true)\n+  local diagnostics = {} ---@type vim.Diagnostic[]\n+  ---ns -> extmark_id -> Diagnostic[]\n+  local extmarks_index = {} ---@type table<integer, table<integer, vim.api.keyset.get_extmark_item>>\n+  for namespace in pairs(diagnostic_cache[bufnr]) do",
+        "comment_created_at": "2025-06-12T15:56:52+00:00",
+        "comment_author": "justinmk",
+        "comment_body": "this has triple-nested for-loops and doesn't say even 1 comment giving a hint about what it does.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2144284146",
+        "repo_full_name": "neovim/neovim",
+        "pr_number": 34014,
+        "pr_file": "runtime/lua/vim/diagnostic.lua",
+        "discussion_id": "2143124450",
+        "commented_code": "@@ -1028,15 +1029,60 @@ local function next_diagnostic(search_forward, opts)\n   -- Adjust row to be 0-indexed\n   position[1] = position[1] - 1\n \n+  -- Clamp column\n+  position[2] = math.max(0, position[2])\n+\n   local wrap = if_nil(opts.wrap, true)\n \n-  local diagnostics = get_diagnostics(bufnr, opts, true)\n+  local diagnostics = {} ---@type vim.Diagnostic[]\n+  ---ns -> extmark_id -> Diagnostic[]\n+  local extmarks_index = {} ---@type table<integer, table<integer, vim.api.keyset.get_extmark_item>>\n+  for namespace in pairs(diagnostic_cache[bufnr]) do",
+        "comment_created_at": "2025-06-13T06:17:51+00:00",
+        "comment_author": "faergeek",
+        "comment_body": "Looking at it now, I think I've messed up and this nesting is completely unnecessary. Currently this loop does two things:\r\n\r\n1. Fills in `extmarks_index` with extmarks indexed first by namespace and then extmark id. It's just a cache to avoid calling `nvim_buf_get_extmark_by_id` in multiple loops below (`line_diagnostics` filling, `sort_diagnostics`, `is_next`). I've assumed calling `nvim_buf_get_extmark_by_id` every time instead of looking it up in the cache would negatively affect performance. For no any real reason other than that I saw cache being used on top of `nvim_buf_get_lines` in `get_diagnostics`.\r\n2. Regarding two loops below `filter_by_severity`. I think it should actually just be a concatenation of `filter_by_severity` results across all namespaces and nothing else. I initially wrote it hoping I would be able to get rid of two loops below by using extmark ranges to find next/prev diagnostics, but I couldn't figure out how to properly take severity filtering into account. And I've forgot to clean that up.\r\n\r\nAt a minimum I will drop these nested loops inside.\r\n\r\nI'll also try to figure out again if the loops after this one can be replaced with extmark lookups and if so I think `extmarks_index` will be gone.\r\n\r\nBut if I won't figure that out, does it make sense to keep `extmarks_index` or should I just call `nvim_buf_get_extmark_by_id` directly where needed instead?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2148246689",
+        "repo_full_name": "neovim/neovim",
+        "pr_number": 34014,
+        "pr_file": "runtime/lua/vim/diagnostic.lua",
+        "discussion_id": "2143124450",
+        "commented_code": "@@ -1028,15 +1029,60 @@ local function next_diagnostic(search_forward, opts)\n   -- Adjust row to be 0-indexed\n   position[1] = position[1] - 1\n \n+  -- Clamp column\n+  position[2] = math.max(0, position[2])\n+\n   local wrap = if_nil(opts.wrap, true)\n \n-  local diagnostics = get_diagnostics(bufnr, opts, true)\n+  local diagnostics = {} ---@type vim.Diagnostic[]\n+  ---ns -> extmark_id -> Diagnostic[]\n+  local extmarks_index = {} ---@type table<integer, table<integer, vim.api.keyset.get_extmark_item>>\n+  for namespace in pairs(diagnostic_cache[bufnr]) do",
+        "comment_created_at": "2025-06-15T15:11:06+00:00",
+        "comment_author": "faergeek",
+        "comment_body": "I completely removed these loops.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2222336242",
+    "pr_number": 35027,
+    "pr_file": "runtime/lua/vim/_ssh/parser.lua",
+    "created_at": "2025-07-22T12:17:12+00:00",
+    "commented_code": "+-- Converted into Lua from https://github.com/cyjake/ssh-config\n+-- TODO (siddhantdev): deal with include directives\n+\n+local M = {}\n+\n+local WHITESPACE_PATTERN = '%s'\n+local LINE_BREAK_PATTERN = '[\\r\n]'\n+\n+---@param param string\n+local function is_multi_value_directive(param)\n+  local multi_value_directives = {\n+    'globalknownhostsfile',\n+    'host',\n+    'ipqos',\n+    'sendenv',\n+    'userknownhostsfile',\n+    'proxycommand',\n+    'match',\n+    'canonicaldomains',\n+  }\n+\n+  return vim.tbl_contains(multi_value_directives, param:lower())\n+end\n+\n+---@param text string The ssh configuration which needs to be parsed\n+---@return string[] The parsed host names in the configuration\n+function M.parse_ssh_config(text)\n+  local i = 1\n+  local line = 1\n+\n+  local function consume()\n+    if i <= #text then\n+      local char = text:sub(i, i)\n+      i = i + 1\n+      return char\n+    end\n+    return nil\n+  end\n+\n+  local chr = consume()\n+\n+  local function parse_spaces()\n+    local spaces = ''\n+    while chr and chr:match(WHITESPACE_PATTERN) do\n+      spaces = spaces .. chr\n+      chr = consume()\n+    end\n+    return spaces\n+  end\n+\n+  local function parse_linebreaks()\n+    local breaks = ''\n+    while chr and chr:match(LINE_BREAK_PATTERN) do\n+      line = line + 1\n+      breaks = breaks .. chr\n+      chr = consume()\n+    end\n+    return breaks\n+  end\n+\n+  local function parse_parameter_name()\n+    local param = ''\n+    while chr and not chr:match('[ \\t=]') do\n+      param = param .. chr\n+      chr = consume()\n+    end\n+    return param\n+  end\n+\n+  local function parse_separator()\n+    local sep = parse_spaces()\n+    if chr == '=' then\n+      sep = sep .. chr\n+      chr = consume()\n+    end\n+    return sep .. parse_spaces()\n+  end\n+\n+  local function parse_value()\n+    local val = ''\n+    local quoted = false\n+    local escaped = false\n+\n+    while chr and not chr:match(LINE_BREAK_PATTERN) do\n+      if escaped then\n+        if chr == '\"' then\n+          val = val .. chr\n+        else\n+          val = val .. '\\\\' .. chr\n+        end\n+        escaped = false\n+      elseif chr == '\"' and (val == '' or quoted) then\n+        quoted = not quoted\n+      elseif chr == '\\\\' then\n+        escaped = true\n+      elseif chr == '#' and not quoted then\n+        break\n+      else\n+        val = val .. chr\n+      end\n+      chr = consume()\n+    end\n+\n+    if quoted or escaped then\n+      error('Unexpected line break at line ' .. line)\n+    end\n+\n+    return vim.trim(val)\n+  end",
+    "repo_full_name": "neovim/neovim",
+    "discussion_comments": [
+      {
+        "comment_id": "2222336242",
+        "repo_full_name": "neovim/neovim",
+        "pr_number": 35027,
+        "pr_file": "runtime/lua/vim/_ssh/parser.lua",
+        "discussion_id": "2222336242",
+        "commented_code": "@@ -0,0 +1,238 @@\n+-- Converted into Lua from https://github.com/cyjake/ssh-config\n+-- TODO (siddhantdev): deal with include directives\n+\n+local M = {}\n+\n+local WHITESPACE_PATTERN = '%s'\n+local LINE_BREAK_PATTERN = '[\\r\\n]'\n+\n+---@param param string\n+local function is_multi_value_directive(param)\n+  local multi_value_directives = {\n+    'globalknownhostsfile',\n+    'host',\n+    'ipqos',\n+    'sendenv',\n+    'userknownhostsfile',\n+    'proxycommand',\n+    'match',\n+    'canonicaldomains',\n+  }\n+\n+  return vim.tbl_contains(multi_value_directives, param:lower())\n+end\n+\n+---@param text string The ssh configuration which needs to be parsed\n+---@return string[] The parsed host names in the configuration\n+function M.parse_ssh_config(text)\n+  local i = 1\n+  local line = 1\n+\n+  local function consume()\n+    if i <= #text then\n+      local char = text:sub(i, i)\n+      i = i + 1\n+      return char\n+    end\n+    return nil\n+  end\n+\n+  local chr = consume()\n+\n+  local function parse_spaces()\n+    local spaces = ''\n+    while chr and chr:match(WHITESPACE_PATTERN) do\n+      spaces = spaces .. chr\n+      chr = consume()\n+    end\n+    return spaces\n+  end\n+\n+  local function parse_linebreaks()\n+    local breaks = ''\n+    while chr and chr:match(LINE_BREAK_PATTERN) do\n+      line = line + 1\n+      breaks = breaks .. chr\n+      chr = consume()\n+    end\n+    return breaks\n+  end\n+\n+  local function parse_parameter_name()\n+    local param = ''\n+    while chr and not chr:match('[ \\t=]') do\n+      param = param .. chr\n+      chr = consume()\n+    end\n+    return param\n+  end\n+\n+  local function parse_separator()\n+    local sep = parse_spaces()\n+    if chr == '=' then\n+      sep = sep .. chr\n+      chr = consume()\n+    end\n+    return sep .. parse_spaces()\n+  end\n+\n+  local function parse_value()\n+    local val = ''\n+    local quoted = false\n+    local escaped = false\n+\n+    while chr and not chr:match(LINE_BREAK_PATTERN) do\n+      if escaped then\n+        if chr == '\"' then\n+          val = val .. chr\n+        else\n+          val = val .. '\\\\' .. chr\n+        end\n+        escaped = false\n+      elseif chr == '\"' and (val == '' or quoted) then\n+        quoted = not quoted\n+      elseif chr == '\\\\' then\n+        escaped = true\n+      elseif chr == '#' and not quoted then\n+        break\n+      else\n+        val = val .. chr\n+      end\n+      chr = consume()\n+    end\n+\n+    if quoted or escaped then\n+      error('Unexpected line break at line ' .. line)\n+    end\n+\n+    return vim.trim(val)\n+  end",
+        "comment_created_at": "2025-07-22T12:17:12+00:00",
+        "comment_author": "glepnir",
+        "comment_body": "generate string at last.\r\n\r\n```suggestion\r\n  local function parse_value()\r\n    local val = {}\r\n    local quoted, escaped = false, false\r\n\r\n    while chr and not chr:match(LINE_BREAK_PATTERN) do\r\n      if escaped then\r\n        if chr == '\"' then\r\n          table.insert(val, chr)\r\n        else\r\n          table.insert(val, '\\\\' .. chr)\r\n        end\r\n        escaped = false\r\n      elseif chr == '\"' then\r\n        quoted = not quoted\r\n      elseif chr == '\\\\' then\r\n        escaped = true\r\n      elseif chr == '#' and not quoted then\r\n        break\r\n      else\r\n        table.insert(val, chr)\r\n      end\r\n      chr = consume()\r\n    end\r\n\r\n    if quoted or escaped then\r\n      error('Unexpected line break at line ' .. line)\r\n    end\r\n\r\n    return vim.trim(table.concat(val))\r\n  end\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2222839021",
+        "repo_full_name": "neovim/neovim",
+        "pr_number": 35027,
+        "pr_file": "runtime/lua/vim/_ssh/parser.lua",
+        "discussion_id": "2222336242",
+        "commented_code": "@@ -0,0 +1,238 @@\n+-- Converted into Lua from https://github.com/cyjake/ssh-config\n+-- TODO (siddhantdev): deal with include directives\n+\n+local M = {}\n+\n+local WHITESPACE_PATTERN = '%s'\n+local LINE_BREAK_PATTERN = '[\\r\\n]'\n+\n+---@param param string\n+local function is_multi_value_directive(param)\n+  local multi_value_directives = {\n+    'globalknownhostsfile',\n+    'host',\n+    'ipqos',\n+    'sendenv',\n+    'userknownhostsfile',\n+    'proxycommand',\n+    'match',\n+    'canonicaldomains',\n+  }\n+\n+  return vim.tbl_contains(multi_value_directives, param:lower())\n+end\n+\n+---@param text string The ssh configuration which needs to be parsed\n+---@return string[] The parsed host names in the configuration\n+function M.parse_ssh_config(text)\n+  local i = 1\n+  local line = 1\n+\n+  local function consume()\n+    if i <= #text then\n+      local char = text:sub(i, i)\n+      i = i + 1\n+      return char\n+    end\n+    return nil\n+  end\n+\n+  local chr = consume()\n+\n+  local function parse_spaces()\n+    local spaces = ''\n+    while chr and chr:match(WHITESPACE_PATTERN) do\n+      spaces = spaces .. chr\n+      chr = consume()\n+    end\n+    return spaces\n+  end\n+\n+  local function parse_linebreaks()\n+    local breaks = ''\n+    while chr and chr:match(LINE_BREAK_PATTERN) do\n+      line = line + 1\n+      breaks = breaks .. chr\n+      chr = consume()\n+    end\n+    return breaks\n+  end\n+\n+  local function parse_parameter_name()\n+    local param = ''\n+    while chr and not chr:match('[ \\t=]') do\n+      param = param .. chr\n+      chr = consume()\n+    end\n+    return param\n+  end\n+\n+  local function parse_separator()\n+    local sep = parse_spaces()\n+    if chr == '=' then\n+      sep = sep .. chr\n+      chr = consume()\n+    end\n+    return sep .. parse_spaces()\n+  end\n+\n+  local function parse_value()\n+    local val = ''\n+    local quoted = false\n+    local escaped = false\n+\n+    while chr and not chr:match(LINE_BREAK_PATTERN) do\n+      if escaped then\n+        if chr == '\"' then\n+          val = val .. chr\n+        else\n+          val = val .. '\\\\' .. chr\n+        end\n+        escaped = false\n+      elseif chr == '\"' and (val == '' or quoted) then\n+        quoted = not quoted\n+      elseif chr == '\\\\' then\n+        escaped = true\n+      elseif chr == '#' and not quoted then\n+        break\n+      else\n+        val = val .. chr\n+      end\n+      chr = consume()\n+    end\n+\n+    if quoted or escaped then\n+      error('Unexpected line break at line ' .. line)\n+    end\n+\n+    return vim.trim(val)\n+  end",
+        "comment_created_at": "2025-07-22T15:01:48+00:00",
+        "comment_author": "siddhantdev",
+        "comment_body": "Is there any particular reason to generate the string at the end? My best guess is that it might perform better, I couldn't think of anything else.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2223217437",
+        "repo_full_name": "neovim/neovim",
+        "pr_number": 35027,
+        "pr_file": "runtime/lua/vim/_ssh/parser.lua",
+        "discussion_id": "2222336242",
+        "commented_code": "@@ -0,0 +1,238 @@\n+-- Converted into Lua from https://github.com/cyjake/ssh-config\n+-- TODO (siddhantdev): deal with include directives\n+\n+local M = {}\n+\n+local WHITESPACE_PATTERN = '%s'\n+local LINE_BREAK_PATTERN = '[\\r\\n]'\n+\n+---@param param string\n+local function is_multi_value_directive(param)\n+  local multi_value_directives = {\n+    'globalknownhostsfile',\n+    'host',\n+    'ipqos',\n+    'sendenv',\n+    'userknownhostsfile',\n+    'proxycommand',\n+    'match',\n+    'canonicaldomains',\n+  }\n+\n+  return vim.tbl_contains(multi_value_directives, param:lower())\n+end\n+\n+---@param text string The ssh configuration which needs to be parsed\n+---@return string[] The parsed host names in the configuration\n+function M.parse_ssh_config(text)\n+  local i = 1\n+  local line = 1\n+\n+  local function consume()\n+    if i <= #text then\n+      local char = text:sub(i, i)\n+      i = i + 1\n+      return char\n+    end\n+    return nil\n+  end\n+\n+  local chr = consume()\n+\n+  local function parse_spaces()\n+    local spaces = ''\n+    while chr and chr:match(WHITESPACE_PATTERN) do\n+      spaces = spaces .. chr\n+      chr = consume()\n+    end\n+    return spaces\n+  end\n+\n+  local function parse_linebreaks()\n+    local breaks = ''\n+    while chr and chr:match(LINE_BREAK_PATTERN) do\n+      line = line + 1\n+      breaks = breaks .. chr\n+      chr = consume()\n+    end\n+    return breaks\n+  end\n+\n+  local function parse_parameter_name()\n+    local param = ''\n+    while chr and not chr:match('[ \\t=]') do\n+      param = param .. chr\n+      chr = consume()\n+    end\n+    return param\n+  end\n+\n+  local function parse_separator()\n+    local sep = parse_spaces()\n+    if chr == '=' then\n+      sep = sep .. chr\n+      chr = consume()\n+    end\n+    return sep .. parse_spaces()\n+  end\n+\n+  local function parse_value()\n+    local val = ''\n+    local quoted = false\n+    local escaped = false\n+\n+    while chr and not chr:match(LINE_BREAK_PATTERN) do\n+      if escaped then\n+        if chr == '\"' then\n+          val = val .. chr\n+        else\n+          val = val .. '\\\\' .. chr\n+        end\n+        escaped = false\n+      elseif chr == '\"' and (val == '' or quoted) then\n+        quoted = not quoted\n+      elseif chr == '\\\\' then\n+        escaped = true\n+      elseif chr == '#' and not quoted then\n+        break\n+      else\n+        val = val .. chr\n+      end\n+      chr = consume()\n+    end\n+\n+    if quoted or escaped then\n+      error('Unexpected line break at line ' .. line)\n+    end\n+\n+    return vim.trim(val)\n+  end",
+        "comment_created_at": "2025-07-22T16:50:31+00:00",
+        "comment_author": "nenahp",
+        "comment_body": "https://www.lua.org/pil/11.6.html",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2223474334",
+        "repo_full_name": "neovim/neovim",
+        "pr_number": 35027,
+        "pr_file": "runtime/lua/vim/_ssh/parser.lua",
+        "discussion_id": "2222336242",
+        "commented_code": "@@ -0,0 +1,238 @@\n+-- Converted into Lua from https://github.com/cyjake/ssh-config\n+-- TODO (siddhantdev): deal with include directives\n+\n+local M = {}\n+\n+local WHITESPACE_PATTERN = '%s'\n+local LINE_BREAK_PATTERN = '[\\r\\n]'\n+\n+---@param param string\n+local function is_multi_value_directive(param)\n+  local multi_value_directives = {\n+    'globalknownhostsfile',\n+    'host',\n+    'ipqos',\n+    'sendenv',\n+    'userknownhostsfile',\n+    'proxycommand',\n+    'match',\n+    'canonicaldomains',\n+  }\n+\n+  return vim.tbl_contains(multi_value_directives, param:lower())\n+end\n+\n+---@param text string The ssh configuration which needs to be parsed\n+---@return string[] The parsed host names in the configuration\n+function M.parse_ssh_config(text)\n+  local i = 1\n+  local line = 1\n+\n+  local function consume()\n+    if i <= #text then\n+      local char = text:sub(i, i)\n+      i = i + 1\n+      return char\n+    end\n+    return nil\n+  end\n+\n+  local chr = consume()\n+\n+  local function parse_spaces()\n+    local spaces = ''\n+    while chr and chr:match(WHITESPACE_PATTERN) do\n+      spaces = spaces .. chr\n+      chr = consume()\n+    end\n+    return spaces\n+  end\n+\n+  local function parse_linebreaks()\n+    local breaks = ''\n+    while chr and chr:match(LINE_BREAK_PATTERN) do\n+      line = line + 1\n+      breaks = breaks .. chr\n+      chr = consume()\n+    end\n+    return breaks\n+  end\n+\n+  local function parse_parameter_name()\n+    local param = ''\n+    while chr and not chr:match('[ \\t=]') do\n+      param = param .. chr\n+      chr = consume()\n+    end\n+    return param\n+  end\n+\n+  local function parse_separator()\n+    local sep = parse_spaces()\n+    if chr == '=' then\n+      sep = sep .. chr\n+      chr = consume()\n+    end\n+    return sep .. parse_spaces()\n+  end\n+\n+  local function parse_value()\n+    local val = ''\n+    local quoted = false\n+    local escaped = false\n+\n+    while chr and not chr:match(LINE_BREAK_PATTERN) do\n+      if escaped then\n+        if chr == '\"' then\n+          val = val .. chr\n+        else\n+          val = val .. '\\\\' .. chr\n+        end\n+        escaped = false\n+      elseif chr == '\"' and (val == '' or quoted) then\n+        quoted = not quoted\n+      elseif chr == '\\\\' then\n+        escaped = true\n+      elseif chr == '#' and not quoted then\n+        break\n+      else\n+        val = val .. chr\n+      end\n+      chr = consume()\n+    end\n+\n+    if quoted or escaped then\n+      error('Unexpected line break at line ' .. line)\n+    end\n+\n+    return vim.trim(val)\n+  end",
+        "comment_created_at": "2025-07-22T18:30:01+00:00",
+        "comment_author": "siddhantdev",
+        "comment_body": "Thanks! I've updated the code.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2169116839",
+    "pr_number": 34657,
+    "pr_file": "runtime/lua/vim/iter.lua",
+    "created_at": "2025-06-26T13:45:43+00:00",
+    "commented_code": "--- -- 2\n --- it:next()\n --- -- nil\n+---\n+--- local function pred(x) return x < 2 end\n+--- local it2 = vim.iter({ 1, 2, 3, 4 }):take(pred)\n+--- it2:next()\n+--- -- 1\n+--- it2:next()\n+--- -- nil\n --- ```\n ---\n----@param n integer\n+---@generic A\n+---\n+---@param f integer|fun(a:A, i:integer):boolean Either the number if values to\n+---                                             take or a predicate which takes\n+---                                             a value and it's index.\n ---@return Iter\n-function Iter:take(n)\n+function Iter:take(f)\n+  if type(f) ~= 'function' then\n+    local n = f\n+    f = function(_, i)\n+      return i <= n\n+    end\n+  end\n+\n   local next = self.next\n-  local i = 0\n+  local i = 1\n   self.next = function()\n-    if i < n then\n+    local val = next(self)\n+    if f(val, i) then\n       i = i + 1\n-      return next(self)\n+      return val",
+    "repo_full_name": "neovim/neovim",
+    "discussion_comments": [
+      {
+        "comment_id": "2169116839",
+        "repo_full_name": "neovim/neovim",
+        "pr_number": 34657,
+        "pr_file": "runtime/lua/vim/iter.lua",
+        "discussion_id": "2169116839",
+        "commented_code": "@@ -693,24 +694,54 @@ end\n --- -- 2\n --- it:next()\n --- -- nil\n+---\n+--- local function pred(x) return x < 2 end\n+--- local it2 = vim.iter({ 1, 2, 3, 4 }):take(pred)\n+--- it2:next()\n+--- -- 1\n+--- it2:next()\n+--- -- nil\n --- ```\n ---\n----@param n integer\n+---@generic A\n+---\n+---@param f integer|fun(a:A, i:integer):boolean Either the number if values to\n+---                                             take or a predicate which takes\n+---                                             a value and it's index.\n ---@return Iter\n-function Iter:take(n)\n+function Iter:take(f)\n+  if type(f) ~= 'function' then\n+    local n = f\n+    f = function(_, i)\n+      return i <= n\n+    end\n+  end\n+\n   local next = self.next\n-  local i = 0\n+  local i = 1\n   self.next = function()\n-    if i < n then\n+    local val = next(self)\n+    if f(val, i) then\n       i = i + 1\n-      return next(self)\n+      return val",
+        "comment_created_at": "2025-06-26T13:45:43+00:00",
+        "comment_author": "gpanders",
+        "comment_body": "This is not quite right because `next()` can return multiple values. So you could pack it into a table first, and then unpack it. But this is pretty bad for performance. You'll note that the implementations of `filter()` and `map()` have a similar problem and they go to great contortions to address it.\r\n\r\nAlso we shouldn't pass the index to the function, we don't do that for any other method. If the user wants the index they can call `enumerate()` first which includes the index as one of the iterator values. Staying consistent makes everything more composable.\r\n\r\nSimple (but possibly slow) implementation:\r\n\r\n```suggestion\r\n    local val = pack(next(self))\r\n    if f(unpack(val)) then\r\n      return unpack(val)\r\n```\r\n\r\nFor a solution that avoids the `pack` and `unpack` dance you can look at what `map()` does.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2171495007",
+        "repo_full_name": "neovim/neovim",
+        "pr_number": 34657,
+        "pr_file": "runtime/lua/vim/iter.lua",
+        "discussion_id": "2169116839",
+        "commented_code": "@@ -693,24 +694,54 @@ end\n --- -- 2\n --- it:next()\n --- -- nil\n+---\n+--- local function pred(x) return x < 2 end\n+--- local it2 = vim.iter({ 1, 2, 3, 4 }):take(pred)\n+--- it2:next()\n+--- -- 1\n+--- it2:next()\n+--- -- nil\n --- ```\n ---\n----@param n integer\n+---@generic A\n+---\n+---@param f integer|fun(a:A, i:integer):boolean Either the number if values to\n+---                                             take or a predicate which takes\n+---                                             a value and it's index.\n ---@return Iter\n-function Iter:take(n)\n+function Iter:take(f)\n+  if type(f) ~= 'function' then\n+    local n = f\n+    f = function(_, i)\n+      return i <= n\n+    end\n+  end\n+\n   local next = self.next\n-  local i = 0\n+  local i = 1\n   self.next = function()\n-    if i < n then\n+    local val = next(self)\n+    if f(val, i) then\n       i = i + 1\n-      return next(self)\n+      return val",
+        "comment_created_at": "2025-06-27T10:09:12+00:00",
+        "comment_author": "mart-mihkel",
+        "comment_body": "Thanks for the feedback, I tried a solution without the packing/unpacking similar to `map()` .",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

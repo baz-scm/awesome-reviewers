@@ -1,0 +1,152 @@
+[
+  {
+    "discussion_id": "1568299021",
+    "pr_number": 2666,
+    "pr_file": "execution.py",
+    "created_at": "2024-04-17T06:36:14+00:00",
+    "commented_code": "import threading\n import heapq\n import traceback\n+from enum import Enum\n import inspect\n from typing import List, Literal, NamedTuple, Optional\n \n import torch\n import nodes\n \n import comfy.model_management\n+import comfy.graph_utils\n+from comfy.graph import get_input_info, ExecutionList, DynamicPrompt, ExecutionBlocker\n+from comfy.graph_utils import is_link, GraphBuilder\n+from comfy.caching import HierarchicalCache, LRUCache, CacheKeySetInputSignature, CacheKeySetInputSignatureWithID, CacheKeySetID\n+from comfy.cli_args import args\n+\n+class ExecutionResult(Enum):\n+    SUCCESS = 0\n+    FAILURE = 1\n+    SLEEPING = 2\n+\n+class IsChangedCache:\n+    def __init__(self, dynprompt, outputs_cache):\n+        self.dynprompt = dynprompt\n+        self.outputs_cache = outputs_cache\n+        self.is_changed = {}\n+\n+    def get(self, node_id):\n+        if node_id not in self.is_changed:\n+            node = self.dynprompt.get_node(node_id)\n+            class_type = node[\"class_type\"]\n+            class_def = nodes.NODE_CLASS_MAPPINGS[class_type]\n+            if hasattr(class_def, \"IS_CHANGED\"):\n+                if \"is_changed\" in node:",
+    "repo_full_name": "comfyanonymous/ComfyUI",
+    "discussion_comments": [
+      {
+        "comment_id": "1568299021",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 2666,
+        "pr_file": "execution.py",
+        "discussion_id": "1568299021",
+        "commented_code": "@@ -4,43 +4,115 @@\n import threading\n import heapq\n import traceback\n+from enum import Enum\n import inspect\n from typing import List, Literal, NamedTuple, Optional\n \n import torch\n import nodes\n \n import comfy.model_management\n+import comfy.graph_utils\n+from comfy.graph import get_input_info, ExecutionList, DynamicPrompt, ExecutionBlocker\n+from comfy.graph_utils import is_link, GraphBuilder\n+from comfy.caching import HierarchicalCache, LRUCache, CacheKeySetInputSignature, CacheKeySetInputSignatureWithID, CacheKeySetID\n+from comfy.cli_args import args\n+\n+class ExecutionResult(Enum):\n+    SUCCESS = 0\n+    FAILURE = 1\n+    SLEEPING = 2\n+\n+class IsChangedCache:\n+    def __init__(self, dynprompt, outputs_cache):\n+        self.dynprompt = dynprompt\n+        self.outputs_cache = outputs_cache\n+        self.is_changed = {}\n+\n+    def get(self, node_id):\n+        if node_id not in self.is_changed:\n+            node = self.dynprompt.get_node(node_id)\n+            class_type = node[\"class_type\"]\n+            class_def = nodes.NODE_CLASS_MAPPINGS[class_type]\n+            if hasattr(class_def, \"IS_CHANGED\"):\n+                if \"is_changed\" in node:",
+        "comment_created_at": "2024-04-17T06:36:14+00:00",
+        "comment_author": "kvochko",
+        "comment_body": "Do you still need \"is_changed\" in the node at all?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1573167231",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 2666,
+        "pr_file": "execution.py",
+        "discussion_id": "1568299021",
+        "commented_code": "@@ -4,43 +4,115 @@\n import threading\n import heapq\n import traceback\n+from enum import Enum\n import inspect\n from typing import List, Literal, NamedTuple, Optional\n \n import torch\n import nodes\n \n import comfy.model_management\n+import comfy.graph_utils\n+from comfy.graph import get_input_info, ExecutionList, DynamicPrompt, ExecutionBlocker\n+from comfy.graph_utils import is_link, GraphBuilder\n+from comfy.caching import HierarchicalCache, LRUCache, CacheKeySetInputSignature, CacheKeySetInputSignatureWithID, CacheKeySetID\n+from comfy.cli_args import args\n+\n+class ExecutionResult(Enum):\n+    SUCCESS = 0\n+    FAILURE = 1\n+    SLEEPING = 2\n+\n+class IsChangedCache:\n+    def __init__(self, dynprompt, outputs_cache):\n+        self.dynprompt = dynprompt\n+        self.outputs_cache = outputs_cache\n+        self.is_changed = {}\n+\n+    def get(self, node_id):\n+        if node_id not in self.is_changed:\n+            node = self.dynprompt.get_node(node_id)\n+            class_type = node[\"class_type\"]\n+            class_def = nodes.NODE_CLASS_MAPPINGS[class_type]\n+            if hasattr(class_def, \"IS_CHANGED\"):\n+                if \"is_changed\" in node:",
+        "comment_created_at": "2024-04-20T05:48:12+00:00",
+        "comment_author": "guill",
+        "comment_body": "Yes. Custom `is_changed` values are still necessary when a node depends on input that is external to the graph that's actually submitted. The most common example is a node loading a file from disk (e.g. a model or a mask). In addition to considering the cached output stale if the file path (which acts as input to the node) is changed, we want the cached output to be considered stale if the file pointed at by that file path is modified. In this case, someone would want the file modification date to serve as the additional `is_changed` value.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1573726455",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 2666,
+        "pr_file": "execution.py",
+        "discussion_id": "1568299021",
+        "commented_code": "@@ -4,43 +4,115 @@\n import threading\n import heapq\n import traceback\n+from enum import Enum\n import inspect\n from typing import List, Literal, NamedTuple, Optional\n \n import torch\n import nodes\n \n import comfy.model_management\n+import comfy.graph_utils\n+from comfy.graph import get_input_info, ExecutionList, DynamicPrompt, ExecutionBlocker\n+from comfy.graph_utils import is_link, GraphBuilder\n+from comfy.caching import HierarchicalCache, LRUCache, CacheKeySetInputSignature, CacheKeySetInputSignatureWithID, CacheKeySetID\n+from comfy.cli_args import args\n+\n+class ExecutionResult(Enum):\n+    SUCCESS = 0\n+    FAILURE = 1\n+    SLEEPING = 2\n+\n+class IsChangedCache:\n+    def __init__(self, dynprompt, outputs_cache):\n+        self.dynprompt = dynprompt\n+        self.outputs_cache = outputs_cache\n+        self.is_changed = {}\n+\n+    def get(self, node_id):\n+        if node_id not in self.is_changed:\n+            node = self.dynprompt.get_node(node_id)\n+            class_type = node[\"class_type\"]\n+            class_def = nodes.NODE_CLASS_MAPPINGS[class_type]\n+            if hasattr(class_def, \"IS_CHANGED\"):\n+                if \"is_changed\" in node:",
+        "comment_created_at": "2024-04-21T11:54:05+00:00",
+        "comment_author": "kvochko",
+        "comment_body": "Yes, that's a valid point. I'm not arguing about the `IS_CHANGED` method in custom nodes, I was asking about the `is_changed` key in the prompt's node, i.e. `node[\"is_changed\"]`. It looks like this key has been factored out into the `IsChangedCache`, so I'm wondering if we still need the \"old\" way of remembering previous `is_changed` values.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1573952926",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 2666,
+        "pr_file": "execution.py",
+        "discussion_id": "1568299021",
+        "commented_code": "@@ -4,43 +4,115 @@\n import threading\n import heapq\n import traceback\n+from enum import Enum\n import inspect\n from typing import List, Literal, NamedTuple, Optional\n \n import torch\n import nodes\n \n import comfy.model_management\n+import comfy.graph_utils\n+from comfy.graph import get_input_info, ExecutionList, DynamicPrompt, ExecutionBlocker\n+from comfy.graph_utils import is_link, GraphBuilder\n+from comfy.caching import HierarchicalCache, LRUCache, CacheKeySetInputSignature, CacheKeySetInputSignatureWithID, CacheKeySetID\n+from comfy.cli_args import args\n+\n+class ExecutionResult(Enum):\n+    SUCCESS = 0\n+    FAILURE = 1\n+    SLEEPING = 2\n+\n+class IsChangedCache:\n+    def __init__(self, dynprompt, outputs_cache):\n+        self.dynprompt = dynprompt\n+        self.outputs_cache = outputs_cache\n+        self.is_changed = {}\n+\n+    def get(self, node_id):\n+        if node_id not in self.is_changed:\n+            node = self.dynprompt.get_node(node_id)\n+            class_type = node[\"class_type\"]\n+            class_def = nodes.NODE_CLASS_MAPPINGS[class_type]\n+            if hasattr(class_def, \"IS_CHANGED\"):\n+                if \"is_changed\" in node:",
+        "comment_created_at": "2024-04-21T22:54:38+00:00",
+        "comment_author": "guill",
+        "comment_body": "Oh, I see.\r\n\r\nTechnically, people submitting prompts can include their own `is_changed` values  on nodes that will be honored instead of evaluating the `IS_CHANGED` function. I'm not entirely sure what the use-case is for that, but since it's existing functionality, I was hesitant to remove it without having a good reason to do so. I'll bring it up in Matrix and see what people think.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1568548958",
+    "pr_number": 2666,
+    "pr_file": "execution.py",
+    "created_at": "2024-04-17T09:43:31+00:00",
+    "commented_code": "import threading\n import heapq\n import traceback\n+from enum import Enum\n import inspect\n from typing import List, Literal, NamedTuple, Optional\n \n import torch\n import nodes\n \n import comfy.model_management\n+import comfy.graph_utils\n+from comfy.graph import get_input_info, ExecutionList, DynamicPrompt, ExecutionBlocker\n+from comfy.graph_utils import is_link, GraphBuilder\n+from comfy.caching import HierarchicalCache, LRUCache, CacheKeySetInputSignature, CacheKeySetInputSignatureWithID, CacheKeySetID\n+from comfy.cli_args import args\n+\n+class ExecutionResult(Enum):\n+    SUCCESS = 0\n+    FAILURE = 1\n+    SLEEPING = 2\n+\n+class IsChangedCache:\n+    def __init__(self, dynprompt, outputs_cache):\n+        self.dynprompt = dynprompt\n+        self.outputs_cache = outputs_cache\n+        self.is_changed = {}\n+\n+    def get(self, node_id):\n+        if node_id not in self.is_changed:\n+            node = self.dynprompt.get_node(node_id)\n+            class_type = node[\"class_type\"]\n+            class_def = nodes.NODE_CLASS_MAPPINGS[class_type]\n+            if hasattr(class_def, \"IS_CHANGED\"):\n+                if \"is_changed\" in node:\n+                    self.is_changed[node_id] = node[\"is_changed\"]\n+                else:\n+                    input_data_all = get_input_data(node[\"inputs\"], class_def, node_id, self.outputs_cache)\n+                    try:\n+                        is_changed = map_node_over_list(class_def, input_data_all, \"IS_CHANGED\")\n+                        node[\"is_changed\"] = [None if isinstance(x, ExecutionBlocker) else x for x in is_changed]\n+                        self.is_changed[node_id] = node[\"is_changed\"]\n+                    except:\n+                        node[\"is_changed\"] = float(\"NaN\")\n+                        self.is_changed[node_id] = node[\"is_changed\"]\n+            else:\n+                self.is_changed[node_id] = False\n+        return self.is_changed[node_id]\n+\n+class CacheSet:\n+    def __init__(self, lru_size=None):\n+        if lru_size is None or lru_size == 0:\n+            self.init_classic_cache() \n+        else:\n+            self.init_lru_cache(lru_size)\n+        self.all = [self.outputs, self.ui, self.objects]\n+\n+    # Useful for those with ample RAM/VRAM -- allows experimenting without\n+    # blowing away the cache every time\n+    def init_lru_cache(self, cache_size):\n+        self.outputs = LRUCache(CacheKeySetInputSignature, max_size=cache_size)\n+        self.ui = LRUCache(CacheKeySetInputSignatureWithID, max_size=cache_size)\n+        self.objects = HierarchicalCache(CacheKeySetID)\n+\n+    # Performs like the old cache -- dump data ASAP\n+    def init_classic_cache(self):\n+        self.outputs = HierarchicalCache(CacheKeySetInputSignature)\n+        self.ui = HierarchicalCache(CacheKeySetInputSignatureWithID)\n+        self.objects = HierarchicalCache(CacheKeySetID)\n+\n+    def recursive_debug_dump(self):\n+        result = {\n+            \"outputs\": self.outputs.recursive_debug_dump(),\n+            \"ui\": self.ui.recursive_debug_dump(),\n+        }\n+        return result\n \n-def get_input_data(inputs, class_def, unique_id, outputs={}, prompt={}, extra_data={}):\n+def get_input_data(inputs, class_def, unique_id, outputs=None, prompt={}, dynprompt=None, extra_data={}):\n     valid_inputs = class_def.INPUT_TYPES()\n     input_data_all = {}\n     for x in inputs:\n         input_data = inputs[x]\n-        if isinstance(input_data, list):\n+        input_type, input_category, input_info = get_input_info(class_def, x)\n+        if is_link(input_data) and (not input_info or not input_info.get(\"rawLink\", False)):",
+    "repo_full_name": "comfyanonymous/ComfyUI",
+    "discussion_comments": [
+      {
+        "comment_id": "1568548958",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 2666,
+        "pr_file": "execution.py",
+        "discussion_id": "1568548958",
+        "commented_code": "@@ -4,43 +4,115 @@\n import threading\n import heapq\n import traceback\n+from enum import Enum\n import inspect\n from typing import List, Literal, NamedTuple, Optional\n \n import torch\n import nodes\n \n import comfy.model_management\n+import comfy.graph_utils\n+from comfy.graph import get_input_info, ExecutionList, DynamicPrompt, ExecutionBlocker\n+from comfy.graph_utils import is_link, GraphBuilder\n+from comfy.caching import HierarchicalCache, LRUCache, CacheKeySetInputSignature, CacheKeySetInputSignatureWithID, CacheKeySetID\n+from comfy.cli_args import args\n+\n+class ExecutionResult(Enum):\n+    SUCCESS = 0\n+    FAILURE = 1\n+    SLEEPING = 2\n+\n+class IsChangedCache:\n+    def __init__(self, dynprompt, outputs_cache):\n+        self.dynprompt = dynprompt\n+        self.outputs_cache = outputs_cache\n+        self.is_changed = {}\n+\n+    def get(self, node_id):\n+        if node_id not in self.is_changed:\n+            node = self.dynprompt.get_node(node_id)\n+            class_type = node[\"class_type\"]\n+            class_def = nodes.NODE_CLASS_MAPPINGS[class_type]\n+            if hasattr(class_def, \"IS_CHANGED\"):\n+                if \"is_changed\" in node:\n+                    self.is_changed[node_id] = node[\"is_changed\"]\n+                else:\n+                    input_data_all = get_input_data(node[\"inputs\"], class_def, node_id, self.outputs_cache)\n+                    try:\n+                        is_changed = map_node_over_list(class_def, input_data_all, \"IS_CHANGED\")\n+                        node[\"is_changed\"] = [None if isinstance(x, ExecutionBlocker) else x for x in is_changed]\n+                        self.is_changed[node_id] = node[\"is_changed\"]\n+                    except:\n+                        node[\"is_changed\"] = float(\"NaN\")\n+                        self.is_changed[node_id] = node[\"is_changed\"]\n+            else:\n+                self.is_changed[node_id] = False\n+        return self.is_changed[node_id]\n+\n+class CacheSet:\n+    def __init__(self, lru_size=None):\n+        if lru_size is None or lru_size == 0:\n+            self.init_classic_cache() \n+        else:\n+            self.init_lru_cache(lru_size)\n+        self.all = [self.outputs, self.ui, self.objects]\n+\n+    # Useful for those with ample RAM/VRAM -- allows experimenting without\n+    # blowing away the cache every time\n+    def init_lru_cache(self, cache_size):\n+        self.outputs = LRUCache(CacheKeySetInputSignature, max_size=cache_size)\n+        self.ui = LRUCache(CacheKeySetInputSignatureWithID, max_size=cache_size)\n+        self.objects = HierarchicalCache(CacheKeySetID)\n+\n+    # Performs like the old cache -- dump data ASAP\n+    def init_classic_cache(self):\n+        self.outputs = HierarchicalCache(CacheKeySetInputSignature)\n+        self.ui = HierarchicalCache(CacheKeySetInputSignatureWithID)\n+        self.objects = HierarchicalCache(CacheKeySetID)\n+\n+    def recursive_debug_dump(self):\n+        result = {\n+            \"outputs\": self.outputs.recursive_debug_dump(),\n+            \"ui\": self.ui.recursive_debug_dump(),\n+        }\n+        return result\n \n-def get_input_data(inputs, class_def, unique_id, outputs={}, prompt={}, extra_data={}):\n+def get_input_data(inputs, class_def, unique_id, outputs=None, prompt={}, dynprompt=None, extra_data={}):\n     valid_inputs = class_def.INPUT_TYPES()\n     input_data_all = {}\n     for x in inputs:\n         input_data = inputs[x]\n-        if isinstance(input_data, list):\n+        input_type, input_category, input_info = get_input_info(class_def, x)\n+        if is_link(input_data) and (not input_info or not input_info.get(\"rawLink\", False)):",
+        "comment_created_at": "2024-04-17T09:43:31+00:00",
+        "comment_author": "kvochko",
+        "comment_body": "I'm pretty sure you don't need this \"rawLink\" flag. In a node that returns FLOW_CONTROL you can always tell the node id with `UNIQUE_ID` input and the socket index by the index in the output tuple. I think you may need it only if you want to pass control to an arbitrary node, kind of like in a goto statement, and the thought of allowing it makes me a bit nervous.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1573172565",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 2666,
+        "pr_file": "execution.py",
+        "discussion_id": "1568548958",
+        "commented_code": "@@ -4,43 +4,115 @@\n import threading\n import heapq\n import traceback\n+from enum import Enum\n import inspect\n from typing import List, Literal, NamedTuple, Optional\n \n import torch\n import nodes\n \n import comfy.model_management\n+import comfy.graph_utils\n+from comfy.graph import get_input_info, ExecutionList, DynamicPrompt, ExecutionBlocker\n+from comfy.graph_utils import is_link, GraphBuilder\n+from comfy.caching import HierarchicalCache, LRUCache, CacheKeySetInputSignature, CacheKeySetInputSignatureWithID, CacheKeySetID\n+from comfy.cli_args import args\n+\n+class ExecutionResult(Enum):\n+    SUCCESS = 0\n+    FAILURE = 1\n+    SLEEPING = 2\n+\n+class IsChangedCache:\n+    def __init__(self, dynprompt, outputs_cache):\n+        self.dynprompt = dynprompt\n+        self.outputs_cache = outputs_cache\n+        self.is_changed = {}\n+\n+    def get(self, node_id):\n+        if node_id not in self.is_changed:\n+            node = self.dynprompt.get_node(node_id)\n+            class_type = node[\"class_type\"]\n+            class_def = nodes.NODE_CLASS_MAPPINGS[class_type]\n+            if hasattr(class_def, \"IS_CHANGED\"):\n+                if \"is_changed\" in node:\n+                    self.is_changed[node_id] = node[\"is_changed\"]\n+                else:\n+                    input_data_all = get_input_data(node[\"inputs\"], class_def, node_id, self.outputs_cache)\n+                    try:\n+                        is_changed = map_node_over_list(class_def, input_data_all, \"IS_CHANGED\")\n+                        node[\"is_changed\"] = [None if isinstance(x, ExecutionBlocker) else x for x in is_changed]\n+                        self.is_changed[node_id] = node[\"is_changed\"]\n+                    except:\n+                        node[\"is_changed\"] = float(\"NaN\")\n+                        self.is_changed[node_id] = node[\"is_changed\"]\n+            else:\n+                self.is_changed[node_id] = False\n+        return self.is_changed[node_id]\n+\n+class CacheSet:\n+    def __init__(self, lru_size=None):\n+        if lru_size is None or lru_size == 0:\n+            self.init_classic_cache() \n+        else:\n+            self.init_lru_cache(lru_size)\n+        self.all = [self.outputs, self.ui, self.objects]\n+\n+    # Useful for those with ample RAM/VRAM -- allows experimenting without\n+    # blowing away the cache every time\n+    def init_lru_cache(self, cache_size):\n+        self.outputs = LRUCache(CacheKeySetInputSignature, max_size=cache_size)\n+        self.ui = LRUCache(CacheKeySetInputSignatureWithID, max_size=cache_size)\n+        self.objects = HierarchicalCache(CacheKeySetID)\n+\n+    # Performs like the old cache -- dump data ASAP\n+    def init_classic_cache(self):\n+        self.outputs = HierarchicalCache(CacheKeySetInputSignature)\n+        self.ui = HierarchicalCache(CacheKeySetInputSignatureWithID)\n+        self.objects = HierarchicalCache(CacheKeySetID)\n+\n+    def recursive_debug_dump(self):\n+        result = {\n+            \"outputs\": self.outputs.recursive_debug_dump(),\n+            \"ui\": self.ui.recursive_debug_dump(),\n+        }\n+        return result\n \n-def get_input_data(inputs, class_def, unique_id, outputs={}, prompt={}, extra_data={}):\n+def get_input_data(inputs, class_def, unique_id, outputs=None, prompt={}, dynprompt=None, extra_data={}):\n     valid_inputs = class_def.INPUT_TYPES()\n     input_data_all = {}\n     for x in inputs:\n         input_data = inputs[x]\n-        if isinstance(input_data, list):\n+        input_type, input_category, input_info = get_input_info(class_def, x)\n+        if is_link(input_data) and (not input_info or not input_info.get(\"rawLink\", False)):",
+        "comment_created_at": "2024-04-20T06:10:22+00:00",
+        "comment_author": "guill",
+        "comment_body": "You're right that `rawLink` could be replaced by a combination of `UNIQUE_ID` and `DYNPROMPT` hidden inputs. (Instead of getting the `rawLink` through this flag, people could look up the current node in the DynamicPrompt object.)\r\n\r\nUltimately, this is another place where I'm trying to make it easy to do the 'right' thing due to subtle issues caused by doing the 'wrong' thing.\r\n\r\nThe issue here revolves around the fact that when actual values are forwarded to dynamically instantiated nodes (rather than links being forwarded), those values themselves become part of the process of determining what cached values are still in date. This can become an issue in two cases:\r\n\r\n1. If the value passed as a literal is unhashable (like a `MODEL`), the node will always be considered 'dirty' and be re-evaluated.\r\n2. If the value is large (like an image), the actual value of that image becomes part of the hash key for all objects downstream on the graph.\r\n\r\nWhen the link from the previous node is simply forwarded to a dynamically instantiated node, both of those problems go away.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1755917214",
+    "pr_number": 4871,
+    "pr_file": "comfy_execution/caching.py",
+    "created_at": "2024-09-12T00:42:27+00:00",
+    "commented_code": "super().__init__(dynprompt, node_ids, is_changed_cache)\n         self.dynprompt = dynprompt\n         self.is_changed_cache = is_changed_cache\n+        self.immediate_node_signature = {}",
+    "repo_full_name": "comfyanonymous/ComfyUI",
+    "discussion_comments": [
+      {
+        "comment_id": "1755917214",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 4871,
+        "pr_file": "comfy_execution/caching.py",
+        "discussion_id": "1755917214",
+        "commented_code": "@@ -67,6 +67,7 @@ def __init__(self, dynprompt, node_ids, is_changed_cache):\n         super().__init__(dynprompt, node_ids, is_changed_cache)\n         self.dynprompt = dynprompt\n         self.is_changed_cache = is_changed_cache\n+        self.immediate_node_signature = {}",
+        "comment_created_at": "2024-09-12T00:42:27+00:00",
+        "comment_author": "guill",
+        "comment_body": "We can't persist the signatures in the cache keyed by ID. The whole point of the cache is that it persists between executions and there's no guarantee that node signatures will be the same from one execution to the next.\r\n\r\nLong term, I think the right solution is to cache entire node definitions somewhere. I have that change locally, but it's grouped with a bunch of others and I won't be able to split it out until this weekend.\r\n\r\nShorter term, if you just reset the `.immediate_node_signature` at the beginning of each execution, that should work.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1756015825",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 4871,
+        "pr_file": "comfy_execution/caching.py",
+        "discussion_id": "1755917214",
+        "commented_code": "@@ -67,6 +67,7 @@ def __init__(self, dynprompt, node_ids, is_changed_cache):\n         super().__init__(dynprompt, node_ids, is_changed_cache)\n         self.dynprompt = dynprompt\n         self.is_changed_cache = is_changed_cache\n+        self.immediate_node_signature = {}",
+        "comment_created_at": "2024-09-12T02:45:19+00:00",
+        "comment_author": "Trung0246",
+        "comment_body": "My current hot fix right now is caching I/O calls within `folder_paths.py` (i.e `os.path.*`), which the I/O cache can reset whenever `object_info` api are called and it seems to work so far.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1756038199",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 4871,
+        "pr_file": "comfy_execution/caching.py",
+        "discussion_id": "1755917214",
+        "commented_code": "@@ -67,6 +67,7 @@ def __init__(self, dynprompt, node_ids, is_changed_cache):\n         super().__init__(dynprompt, node_ids, is_changed_cache)\n         self.dynprompt = dynprompt\n         self.is_changed_cache = is_changed_cache\n+        self.immediate_node_signature = {}",
+        "comment_created_at": "2024-09-12T03:14:15+00:00",
+        "comment_author": "JettHu",
+        "comment_body": "> We can't persist the signatures in the cache keyed by ID. The whole point of the cache is that it persists between executions and there's no guarantee that node signatures will be the same from one execution to the next.\r\n> \r\n> Long term, I think the right solution is to cache entire node definitions somewhere. I have that change locally, but it's grouped with a bunch of others and I won't be able to split it out until this weekend.\r\n> \r\n> Shorter term, if you just reset the `.immediate_node_signature` at the beginning of each execution, that should work.\r\n\r\nCurrently, `cache.set_prompt` will reinitialize a `cache_key_set` each time [see](https://github.com/comfyanonymous/ComfyUI/blob/9f4daca9d9994c600ef713856e0182d0177b9a1e/comfy_execution/caching.py#L145). \r\n\r\nThat is, the `cache_key_set` between each execution is two independent objects. So from the current implementation, `.immediate_node_signature` is indeed reset for each execution, because the `cache_key_set` is different.\r\n\r\nThis variable is added only to avoid repeated `get_immediate_node_signature` in `get_node_signature` of one workflow execution, and has nothing to do with other executions.\r\n\r\nOf course, it would be better if this call could be further reduced, because the current implementation can only reduce one `cache` to be executed at a time, and there are also repeated `get_immediate_node_signature` between `caches.outputs` and `caches.ui`.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1756040002",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 4871,
+        "pr_file": "comfy_execution/caching.py",
+        "discussion_id": "1755917214",
+        "commented_code": "@@ -67,6 +67,7 @@ def __init__(self, dynprompt, node_ids, is_changed_cache):\n         super().__init__(dynprompt, node_ids, is_changed_cache)\n         self.dynprompt = dynprompt\n         self.is_changed_cache = is_changed_cache\n+        self.immediate_node_signature = {}",
+        "comment_created_at": "2024-09-12T03:16:56+00:00",
+        "comment_author": "JettHu",
+        "comment_body": "> My current hot fix right now is caching I/O calls within `folder_paths.py` (i.e `os.path.*`), which the I/O cache can reset whenever `object_info` api are called and it seems to work so far.\r\n\r\nThis is also a good approach. This PR takes into account more time-consuming `INPUT_TYPES` issues. I think I/O calls within `folder_paths.py` is just one of the exposed.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

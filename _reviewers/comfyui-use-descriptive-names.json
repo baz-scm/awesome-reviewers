@@ -1,0 +1,206 @@
+[
+  {
+    "discussion_id": "2147374953",
+    "pr_number": 8351,
+    "pr_file": "sandbox/windows_sandbox.py",
+    "created_at": "2025-06-14T23:25:44+00:00",
+    "commented_code": "+import logging\n+import win32con\n+import win32process\n+import win32security\n+import subprocess\n+import os\n+from win32com.shell import shellcon, shell\n+import win32api\n+import win32event\n+import folder_paths\n+\n+\n+LOW_INTEGRITY_SID_STRING = \"S-1-16-4096\"\n+\n+# Use absolute path to prevent command injection\n+ICACLS_PATH = r\"C:\\Windows\\System32\\icacls.exe\"\n+\n+\n+def set_process_integrity_level_to_low():\n+    current_process = win32process.GetCurrentProcess()\n+    token = win32security.OpenProcessToken(\n+        current_process,\n+        win32con.TOKEN_ALL_ACCESS,\n+    )\n+\n+    low_integrity_sid = win32security.ConvertStringSidToSid(LOW_INTEGRITY_SID_STRING)\n+    win32security.SetTokenInformation(\n+        token, win32security.TokenIntegrityLevel, (low_integrity_sid, 0)\n+    )\n+\n+    logging.info(\"Sandbox enabled: Process now running with low integrity token\")\n+\n+    win32api.CloseHandle(token)\n+\n+\n+def does_permit_low_integrity_write(icacls_output):\n+    \"\"\"\n+    Checks if an icacls output indicates that the path is writable by low\n+    integrity processes.\n+\n+    Note that currently it is a bit of a crude check - it is possible for\n+    a low integrity process to have write access to a directory without\n+    having these exact ACLs reported by icacls. Implement a more robust\n+    check if this situation ever occurs.\n+    \"\"\"\n+    permissions = [l.strip() for l in icacls_output.split(\"\n\")]\n+    LOW_INTEGRITY_LABEL = r\"Mandatory Label\\Low Mandatory Level\"\n+\n+    for p in permissions:\n+        if LOW_INTEGRITY_LABEL not in p:\n+            continue\n+\n+        # Check the Low integrity label line - it should be something like\n+        # Mandatory Label\\Low Mandatory Level:(OI)(CI)(NW) or\n+        # Mandatory Label\\Low Mandatory Level:(I)(OI)(CI)(NW)\n+        return all(\n+            [\n+                # OI: Object Inheritance - all files in the directory with have low\n+                # integrity\n+                \"(OI)\" in p,\n+                # CI: Container Inheritance - all subdirectories will have low\n+                # integrity\n+                \"(CI)\" in p,\n+                # NW: No Writeup - processes with lower integrity cannot write to\n+                # this directory\n+                \"(NW)\" in p,\n+            ]\n+        )\n+\n+\n+def path_is_low_integrity_writable(path):\n+    \"\"\"Check if the path has a writable ACL by low integrity process\"\"\"\n+    result = subprocess.run([ICACLS_PATH, path], capture_output=True, text=True)\n+\n+    if result.returncode != 0:\n+        # icacls command failed. Can happen because path doesn't exist\n+        # or we're not allowed to access acl information of the path.\n+        return False\n+\n+    return does_permit_low_integrity_write(result.stdout)\n+\n+\n+def ensure_directories_exist(dirs):\n+    for dir in dirs:\n+        os.makedirs(dir, exist_ok=True)\n+\n+\n+def check_directory_acls(dirs):\n+    acls_correct = True\n+    for dir in dirs:\n+        if not path_is_low_integrity_writable(dir):\n+            logging.info(\n+                f'Directory \"{dir}\" must be writable by low integrity '\n+                \"processes for sandbox mode.\"\n+            )\n+            acls_correct = False\n+\n+    return acls_correct\n+\n+\n+def setup_permissions(dirs):\n+    \"\"\"\n+    Sets the correct low integrity write permissions for the given directories\n+    using an UAC elevation prompt. We need admin elevation because if the Comfy\n+    directory is not under the user's profile directory (e.g. any location in a\n+    non-C: drive), the regular user does not have permission to set the\n+    integrity level ACLs.\n+    \"\"\"\n+    script_dir = os.path.dirname(os.path.abspath(__file__))\n+    bat_path = os.path.join(script_dir, \"setup_sandbox_permissions.bat\")\n+\n+    execute_info = {\n+        \"lpVerb\": \"runas\",  # Run as administrator\n+        \"lpFile\": bat_path,\n+        \"lpParameters\": \" \".join(dirs),\n+        \"nShow\": win32con.SW_SHOWNORMAL,\n+        # This flag is necessary to wait for the process to finish.\n+        \"fMask\": shellcon.SEE_MASK_NOCLOSEPROCESS,\n+    }\n+\n+    # This is equivalent to right-clicking the bat file and selecting \"Run as\n+    # administrator\"\n+    proc_info = shell.ShellExecuteEx(**execute_info)\n+    hProcess = proc_info[\"hProcess\"]\n+\n+    # Setup script should less than a second. Time out at 10 seconds.\n+    win32event.WaitForSingleObject(hProcess, 10 * 1000)",
+    "repo_full_name": "comfyanonymous/ComfyUI",
+    "discussion_comments": [
+      {
+        "comment_id": "2147374953",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 8351,
+        "pr_file": "sandbox/windows_sandbox.py",
+        "discussion_id": "2147374953",
+        "commented_code": "@@ -0,0 +1,172 @@\n+import logging\n+import win32con\n+import win32process\n+import win32security\n+import subprocess\n+import os\n+from win32com.shell import shellcon, shell\n+import win32api\n+import win32event\n+import folder_paths\n+\n+\n+LOW_INTEGRITY_SID_STRING = \"S-1-16-4096\"\n+\n+# Use absolute path to prevent command injection\n+ICACLS_PATH = r\"C:\\Windows\\System32\\icacls.exe\"\n+\n+\n+def set_process_integrity_level_to_low():\n+    current_process = win32process.GetCurrentProcess()\n+    token = win32security.OpenProcessToken(\n+        current_process,\n+        win32con.TOKEN_ALL_ACCESS,\n+    )\n+\n+    low_integrity_sid = win32security.ConvertStringSidToSid(LOW_INTEGRITY_SID_STRING)\n+    win32security.SetTokenInformation(\n+        token, win32security.TokenIntegrityLevel, (low_integrity_sid, 0)\n+    )\n+\n+    logging.info(\"Sandbox enabled: Process now running with low integrity token\")\n+\n+    win32api.CloseHandle(token)\n+\n+\n+def does_permit_low_integrity_write(icacls_output):\n+    \"\"\"\n+    Checks if an icacls output indicates that the path is writable by low\n+    integrity processes.\n+\n+    Note that currently it is a bit of a crude check - it is possible for\n+    a low integrity process to have write access to a directory without\n+    having these exact ACLs reported by icacls. Implement a more robust\n+    check if this situation ever occurs.\n+    \"\"\"\n+    permissions = [l.strip() for l in icacls_output.split(\"\\n\")]\n+    LOW_INTEGRITY_LABEL = r\"Mandatory Label\\Low Mandatory Level\"\n+\n+    for p in permissions:\n+        if LOW_INTEGRITY_LABEL not in p:\n+            continue\n+\n+        # Check the Low integrity label line - it should be something like\n+        # Mandatory Label\\Low Mandatory Level:(OI)(CI)(NW) or\n+        # Mandatory Label\\Low Mandatory Level:(I)(OI)(CI)(NW)\n+        return all(\n+            [\n+                # OI: Object Inheritance - all files in the directory with have low\n+                # integrity\n+                \"(OI)\" in p,\n+                # CI: Container Inheritance - all subdirectories will have low\n+                # integrity\n+                \"(CI)\" in p,\n+                # NW: No Writeup - processes with lower integrity cannot write to\n+                # this directory\n+                \"(NW)\" in p,\n+            ]\n+        )\n+\n+\n+def path_is_low_integrity_writable(path):\n+    \"\"\"Check if the path has a writable ACL by low integrity process\"\"\"\n+    result = subprocess.run([ICACLS_PATH, path], capture_output=True, text=True)\n+\n+    if result.returncode != 0:\n+        # icacls command failed. Can happen because path doesn't exist\n+        # or we're not allowed to access acl information of the path.\n+        return False\n+\n+    return does_permit_low_integrity_write(result.stdout)\n+\n+\n+def ensure_directories_exist(dirs):\n+    for dir in dirs:\n+        os.makedirs(dir, exist_ok=True)\n+\n+\n+def check_directory_acls(dirs):\n+    acls_correct = True\n+    for dir in dirs:\n+        if not path_is_low_integrity_writable(dir):\n+            logging.info(\n+                f'Directory \"{dir}\" must be writable by low integrity '\n+                \"processes for sandbox mode.\"\n+            )\n+            acls_correct = False\n+\n+    return acls_correct\n+\n+\n+def setup_permissions(dirs):\n+    \"\"\"\n+    Sets the correct low integrity write permissions for the given directories\n+    using an UAC elevation prompt. We need admin elevation because if the Comfy\n+    directory is not under the user's profile directory (e.g. any location in a\n+    non-C: drive), the regular user does not have permission to set the\n+    integrity level ACLs.\n+    \"\"\"\n+    script_dir = os.path.dirname(os.path.abspath(__file__))\n+    bat_path = os.path.join(script_dir, \"setup_sandbox_permissions.bat\")\n+\n+    execute_info = {\n+        \"lpVerb\": \"runas\",  # Run as administrator\n+        \"lpFile\": bat_path,\n+        \"lpParameters\": \" \".join(dirs),\n+        \"nShow\": win32con.SW_SHOWNORMAL,\n+        # This flag is necessary to wait for the process to finish.\n+        \"fMask\": shellcon.SEE_MASK_NOCLOSEPROCESS,\n+    }\n+\n+    # This is equivalent to right-clicking the bat file and selecting \"Run as\n+    # administrator\"\n+    proc_info = shell.ShellExecuteEx(**execute_info)\n+    hProcess = proc_info[\"hProcess\"]\n+\n+    # Setup script should less than a second. Time out at 10 seconds.\n+    win32event.WaitForSingleObject(hProcess, 10 * 1000)",
+        "comment_created_at": "2025-06-14T23:25:44+00:00",
+        "comment_author": "maludwig",
+        "comment_body": "Consider a named constant like:\r\n\r\n```python\r\nTEN_SECONDS_MS = 10 * 1000\r\n\r\nwin32event.WaitForSingleObject(hProcess, 10 * 1000)\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2061877475",
+    "pr_number": 7815,
+    "pr_file": "comfy_extras/nodes_preview_any.py",
+    "created_at": "2025-04-27T00:36:44+00:00",
+    "commented_code": "+import json\n+\n+# Preview Any - original implement from\n+# https://github.com/rgthree/rgthree-comfy/blob/main/py/display_any.py\n+# upstream requested in https://github.com/Kosinkadink/rfcs/blob/main/rfcs/0000-corenodes.md#preview-nodes\n+class PreviewAny():\n+    @classmethod\n+    def INPUT_TYPES(cls):\n+        return {\n+            \"required\": {\"source\": (\"*\", {})},",
+    "repo_full_name": "comfyanonymous/ComfyUI",
+    "discussion_comments": [
+      {
+        "comment_id": "2061877475",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 7815,
+        "pr_file": "comfy_extras/nodes_preview_any.py",
+        "discussion_id": "2061877475",
+        "commented_code": "@@ -0,0 +1,46 @@\n+import json\n+\n+# Preview Any - original implement from\n+# https://github.com/rgthree/rgthree-comfy/blob/main/py/display_any.py\n+# upstream requested in https://github.com/Kosinkadink/rfcs/blob/main/rfcs/0000-corenodes.md#preview-nodes\n+class PreviewAny():\n+    @classmethod\n+    def INPUT_TYPES(cls):\n+        return {\n+            \"required\": {\"source\": (\"*\", {})},",
+        "comment_created_at": "2025-04-27T00:36:44+00:00",
+        "comment_author": "huchenlei",
+        "comment_body": "nit: Use `node_typing.IO.ANY` to replace `\"*\"` here.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2065244089",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 7815,
+        "pr_file": "comfy_extras/nodes_preview_any.py",
+        "discussion_id": "2061877475",
+        "commented_code": "@@ -0,0 +1,46 @@\n+import json\n+\n+# Preview Any - original implement from\n+# https://github.com/rgthree/rgthree-comfy/blob/main/py/display_any.py\n+# upstream requested in https://github.com/Kosinkadink/rfcs/blob/main/rfcs/0000-corenodes.md#preview-nodes\n+class PreviewAny():\n+    @classmethod\n+    def INPUT_TYPES(cls):\n+        return {\n+            \"required\": {\"source\": (\"*\", {})},",
+        "comment_created_at": "2025-04-29T02:14:03+00:00",
+        "comment_author": "jtydhr88",
+        "comment_body": "done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1683594385",
+    "pr_number": 4054,
+    "pr_file": "folder_paths.py",
+    "created_at": "2024-07-18T23:14:30+00:00",
+    "commented_code": "return get_input_directory()\n     return None\n \n+def filter_files_content_types(files: List[str], content_types: List[str]) -> List[str]:",
+    "repo_full_name": "comfyanonymous/ComfyUI",
+    "discussion_comments": [
+      {
+        "comment_id": "1683594385",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 4054,
+        "pr_file": "folder_paths.py",
+        "discussion_id": "1683594385",
+        "commented_code": "@@ -85,6 +89,28 @@ def get_directory_by_type(type_name):\n         return get_input_directory()\n     return None\n \n+def filter_files_content_types(files: List[str], content_types: List[str]) -> List[str]:",
+        "comment_created_at": "2024-07-18T23:14:30+00:00",
+        "comment_author": "huchenlei",
+        "comment_body": "Can we annotate `content_types` as `Literal[\"image\", \"video\", \"audio\"]`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1684593851",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 4054,
+        "pr_file": "folder_paths.py",
+        "discussion_id": "1683594385",
+        "commented_code": "@@ -85,6 +89,28 @@ def get_directory_by_type(type_name):\n         return get_input_directory()\n     return None\n \n+def filter_files_content_types(files: List[str], content_types: List[str]) -> List[str]:",
+        "comment_created_at": "2024-07-19T16:10:27+00:00",
+        "comment_author": "christian-byrne",
+        "comment_body": "Yes absolutely, thanks for the feedback. The other mimetype types are \"text\", \"application\", \"multipart\", \"font\", \"model\", \"message\", and \"x-type.\" Do you think I should I include them all in the type def since all would technically be possible?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1684918860",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 4054,
+        "pr_file": "folder_paths.py",
+        "discussion_id": "1683594385",
+        "commented_code": "@@ -85,6 +89,28 @@ def get_directory_by_type(type_name):\n         return get_input_directory()\n     return None\n \n+def filter_files_content_types(files: List[str], content_types: List[str]) -> List[str]:",
+        "comment_created_at": "2024-07-19T19:53:33+00:00",
+        "comment_author": "huchenlei",
+        "comment_body": "It is meant to be called with \"image\"/\"video\"/\"audio\" types, I think it is fine to keep the list short for now.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1707805458",
+    "pr_number": 4248,
+    "pr_file": "model_filemanager/download_models.py",
+    "created_at": "2024-08-07T20:05:00+00:00",
+    "commented_code": "+import aiohttp\n+import os\n+import traceback\n+import logging\n+from folder_paths import models_dir\n+import re\n+from typing import Callable, Any, Optional, Awaitable, Tuple\n+from enum import Enum\n+import time\n+from dataclasses import dataclass\n+\n+class DownloadStatusType(Enum):\n+    PENDING = \"pending\"\n+    IN_PROGRESS = \"in_progress\"\n+    COMPLETED = \"completed\"\n+    ERROR = \"error\"\n+\n+@dataclass\n+class DownloadStatus():\n+    status: str\n+    progress_percentage: float\n+    message: str\n+\n+    def __init__(self, status: DownloadStatusType, progress_percentage: float, message: str):\n+        self.status = status.value  # Store the string value of the Enum\n+        self.progress_percentage = progress_percentage\n+        self.message = message\n+\n+@dataclass\n+class DownloadModelResult():",
+    "repo_full_name": "comfyanonymous/ComfyUI",
+    "discussion_comments": [
+      {
+        "comment_id": "1707805458",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 4248,
+        "pr_file": "model_filemanager/download_models.py",
+        "discussion_id": "1707805458",
+        "commented_code": "@@ -0,0 +1,173 @@\n+import aiohttp\n+import os\n+import traceback\n+import logging\n+from folder_paths import models_dir\n+import re\n+from typing import Callable, Any, Optional, Awaitable, Tuple\n+from enum import Enum\n+import time\n+from dataclasses import dataclass\n+\n+class DownloadStatusType(Enum):\n+    PENDING = \"pending\"\n+    IN_PROGRESS = \"in_progress\"\n+    COMPLETED = \"completed\"\n+    ERROR = \"error\"\n+\n+@dataclass\n+class DownloadStatus():\n+    status: str\n+    progress_percentage: float\n+    message: str\n+\n+    def __init__(self, status: DownloadStatusType, progress_percentage: float, message: str):\n+        self.status = status.value  # Store the string value of the Enum\n+        self.progress_percentage = progress_percentage\n+        self.message = message\n+\n+@dataclass\n+class DownloadModelResult():",
+        "comment_created_at": "2024-08-07T20:05:00+00:00",
+        "comment_author": "huchenlei",
+        "comment_body": "It's wield that the `DownloadModelResult` is returned by `download_model` but then discarded. The `already_existed` field never reaches the API caller.\r\n\r\n`already_existed` is only referenced in test. I would propose we just drop this result structure and move the `already_existed` field to `DownloadStatus`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1708108505",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 4248,
+        "pr_file": "model_filemanager/download_models.py",
+        "discussion_id": "1707805458",
+        "commented_code": "@@ -0,0 +1,173 @@\n+import aiohttp\n+import os\n+import traceback\n+import logging\n+from folder_paths import models_dir\n+import re\n+from typing import Callable, Any, Optional, Awaitable, Tuple\n+from enum import Enum\n+import time\n+from dataclasses import dataclass\n+\n+class DownloadStatusType(Enum):\n+    PENDING = \"pending\"\n+    IN_PROGRESS = \"in_progress\"\n+    COMPLETED = \"completed\"\n+    ERROR = \"error\"\n+\n+@dataclass\n+class DownloadStatus():\n+    status: str\n+    progress_percentage: float\n+    message: str\n+\n+    def __init__(self, status: DownloadStatusType, progress_percentage: float, message: str):\n+        self.status = status.value  # Store the string value of the Enum\n+        self.progress_percentage = progress_percentage\n+        self.message = message\n+\n+@dataclass\n+class DownloadModelResult():",
+        "comment_created_at": "2024-08-07T23:38:39+00:00",
+        "comment_author": "robinjhuang",
+        "comment_body": "Makes sense!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1661566288",
+    "pr_number": 3903,
+    "pr_file": "nodes.py",
+    "created_at": "2024-07-01T21:37:46+00:00",
+    "commented_code": "logging.info(\"{:6.1f} seconds{}: {}\".format(n[0], import_message, n[1]))\n         logging.info(\"\")\n \n-def init_custom_nodes():\n+def init_builtin_custom_nodes():",
+    "repo_full_name": "comfyanonymous/ComfyUI",
+    "discussion_comments": [
+      {
+        "comment_id": "1661566288",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 3903,
+        "pr_file": "nodes.py",
+        "discussion_id": "1661566288",
+        "commented_code": "@@ -1952,7 +1961,16 @@ def load_custom_nodes():\n             logging.info(\"{:6.1f} seconds{}: {}\".format(n[0], import_message, n[1]))\n         logging.info(\"\")\n \n-def init_custom_nodes():\n+def init_builtin_custom_nodes():",
+        "comment_created_at": "2024-07-01T21:37:46+00:00",
+        "comment_author": "comfyanonymous",
+        "comment_body": "This should be called `init_builtin_extra_nodes`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1661570974",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 3903,
+        "pr_file": "nodes.py",
+        "discussion_id": "1661566288",
+        "commented_code": "@@ -1952,7 +1961,16 @@ def load_custom_nodes():\n             logging.info(\"{:6.1f} seconds{}: {}\".format(n[0], import_message, n[1]))\n         logging.info(\"\")\n \n-def init_custom_nodes():\n+def init_builtin_custom_nodes():",
+        "comment_created_at": "2024-07-01T21:44:43+00:00",
+        "comment_author": "huchenlei",
+        "comment_body": "Done.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1661566955",
+    "pr_number": 3903,
+    "pr_file": "comfy/cli_args.py",
+    "created_at": "2024-07-01T21:38:44+00:00",
+    "commented_code": "parser.add_argument(\"--windows-standalone-build\", action=\"store_true\", help=\"Windows standalone build: Enable convenient things that most people using the standalone windows build will probably enjoy (like auto opening the page on startup).\")\n \n parser.add_argument(\"--disable-metadata\", action=\"store_true\", help=\"Disable saving prompt metadata in files.\")\n+parser.add_argument(\"--no-custom-node\", action=\"store_true\", help=\"Disable loading custom nodes.\")",
+    "repo_full_name": "comfyanonymous/ComfyUI",
+    "discussion_comments": [
+      {
+        "comment_id": "1661566955",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 3903,
+        "pr_file": "comfy/cli_args.py",
+        "discussion_id": "1661566955",
+        "commented_code": "@@ -118,6 +118,7 @@ class LatentPreviewMethod(enum.Enum):\n parser.add_argument(\"--windows-standalone-build\", action=\"store_true\", help=\"Windows standalone build: Enable convenient things that most people using the standalone windows build will probably enjoy (like auto opening the page on startup).\")\n \n parser.add_argument(\"--disable-metadata\", action=\"store_true\", help=\"Disable saving prompt metadata in files.\")\n+parser.add_argument(\"--no-custom-node\", action=\"store_true\", help=\"Disable loading custom nodes.\")",
+        "comment_created_at": "2024-07-01T21:38:44+00:00",
+        "comment_author": "comfyanonymous",
+        "comment_body": "I think this should be: `--disable-custom-nodes`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1661568864",
+        "repo_full_name": "comfyanonymous/ComfyUI",
+        "pr_number": 3903,
+        "pr_file": "comfy/cli_args.py",
+        "discussion_id": "1661566955",
+        "commented_code": "@@ -118,6 +118,7 @@ class LatentPreviewMethod(enum.Enum):\n parser.add_argument(\"--windows-standalone-build\", action=\"store_true\", help=\"Windows standalone build: Enable convenient things that most people using the standalone windows build will probably enjoy (like auto opening the page on startup).\")\n \n parser.add_argument(\"--disable-metadata\", action=\"store_true\", help=\"Disable saving prompt metadata in files.\")\n+parser.add_argument(\"--no-custom-node\", action=\"store_true\", help=\"Disable loading custom nodes.\")",
+        "comment_created_at": "2024-07-01T21:41:29+00:00",
+        "comment_author": "huchenlei",
+        "comment_body": "Renamed `--disable-all-custom-nodes`, as `--disable-custom-nodes` feels like you can pass a list of nodes to disable as argument.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

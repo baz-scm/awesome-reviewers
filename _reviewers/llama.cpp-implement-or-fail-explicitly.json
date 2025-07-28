@@ -1,0 +1,238 @@
+[
+  {
+    "discussion_id": "2074833518",
+    "pr_number": 13206,
+    "pr_file": "gguf-py/gguf/quants.py",
+    "created_at": "2025-05-06T06:53:09+00:00",
+    "commented_code": "def quantize(data: np.ndarray, qtype: GGMLQuantizationType) -> np.ndarray:\n+    from gguf.tmac_utils import is_tmac_dtype\n     if qtype == GGMLQuantizationType.F32:\n         return data.astype(np.float32, copy=False)\n     elif qtype == GGMLQuantizationType.F16:\n         return data.astype(np.float16, copy=False)\n     elif (q := _type_traits.get(qtype)) is not None:\n         return q.quantize(data)\n+    # Do nothing for I1/2/3/4, as they are already quantized\n+    elif is_tmac_dtype(qtype):\n+        return data",
+    "repo_full_name": "ggml-org/llama.cpp",
+    "discussion_comments": [
+      {
+        "comment_id": "2074833518",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13206,
+        "pr_file": "gguf-py/gguf/quants.py",
+        "discussion_id": "2074833518",
+        "commented_code": "@@ -54,12 +54,16 @@ class QuantError(Exception): ...\n \n \n def quantize(data: np.ndarray, qtype: GGMLQuantizationType) -> np.ndarray:\n+    from gguf.tmac_utils import is_tmac_dtype\n     if qtype == GGMLQuantizationType.F32:\n         return data.astype(np.float32, copy=False)\n     elif qtype == GGMLQuantizationType.F16:\n         return data.astype(np.float16, copy=False)\n     elif (q := _type_traits.get(qtype)) is not None:\n         return q.quantize(data)\n+    # Do nothing for I1/2/3/4, as they are already quantized\n+    elif is_tmac_dtype(qtype):\n+        return data",
+        "comment_created_at": "2025-05-06T06:53:09+00:00",
+        "comment_author": "compilade",
+        "comment_body": "Repeating from <https://github.com/ggml-org/llama.cpp/pull/10181#discussion_r2070381547>, this defeats the purpose of this `quantize` function at least when interacting with these types.\r\n\r\nThe correct behavior would be to throw an error for quant types which can't be quantized (yet), or to implement quantization from F32 to the new types. If that causes problems, then this function is misused. The intended use of this function is to quantize F32 or F16 tensors to the given type.\r\n\r\nAnswering to <https://github.com/ggml-org/llama.cpp/pull/10181#discussion_r2090910417>\r\n\r\n> in what cases will this logic cause errors?\r\n\r\nThe main case is when third party code uses `gguf.quantize` to convert a tensor to a corresponding GGUF type.\r\n\r\nFor example, let's say someone provides a `F16` tensor and wants to convert it to a tmac type. With the current logic, there won't be an error, but the tensor won't have the correct type.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2198680909",
+    "pr_number": 13550,
+    "pr_file": "gguf-py/gguf/gguf_writer.py",
+    "created_at": "2025-07-10T20:39:17+00:00",
+    "commented_code": "self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+    "repo_full_name": "ggml-org/llama.cpp",
+    "discussion_comments": [
+      {
+        "comment_id": "2198680909",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T20:39:17+00:00",
+        "comment_author": "compilade",
+        "comment_body": "My concern with this is how this would hide redundant overrides (meaning they might not get noticed to be removed).\r\n\r\nIn a way, the warnings kind of encourage making `set_gguf_parameters` easier to follow (so that the overrides don't happen). I could be wrong, though.\r\n\r\nFor example, these seem to be the duplicate keys for which warnings are hidden by this section:\r\n\r\n```diff\r\ndiff --git a/convert_hf_to_gguf.py b/convert_hf_to_gguf.py\r\nindex 2df43ba11..28188b43d 100755\r\n--- a/convert_hf_to_gguf.py\r\n+++ b/convert_hf_to_gguf.py\r\n@@ -6550,13 +6550,6 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):\r\n     def set_gguf_parameters(self):\r\n         GraniteMoeModel.set_gguf_parameters(self)\r\n \r\n-        ## General Params ##\r\n-        self.gguf_writer.add_embedding_length(self.d_model)\r\n-        self.gguf_writer.add_block_count(self.block_count)\r\n-        self.gguf_writer.add_context_length(self.hparams.get(\"max_position_embeddings\", 0))\r\n-        self.gguf_writer.add_vocab_size(self.hparams[\"vocab_size\"])\r\n-        self.gguf_writer.add_feed_forward_length(self.hparams[\"intermediate_size\"])\r\n-\r\n         ## Mamba mixer params ##\r\n         self.gguf_writer.add_ssm_conv_kernel(self.find_hparam([\"conv_kernel\", \"d_conv\"]))\r\n         self.gguf_writer.add_ssm_state_size(self.find_hparam([\"state_size\", \"d_state\"]))\r\n@@ -6573,14 +6566,8 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):\r\n         ]\r\n         if rope_dim := self.hparams.get(\"attn_rotary_emb\"):\r\n             self.gguf_writer.add_rope_dimension_count(rope_dim)\r\n-        self.gguf_writer.add_head_count(self.hparams[\"num_attention_heads\"])\r\n         self.gguf_writer.add_head_count_kv(head_count_kv_vec)\r\n \r\n-        ## Feed Forward Params ##\r\n-        self.gguf_writer.add_layer_norm_rms_eps(\r\n-            self.find_hparam([\"layer_norm_epsilon\", \"rms_norm_eps\"], optional=True) or 1e-5\r\n-        )\r\n-\r\n         ## If Bamba, use rope, otherwise don't\r\n         use_rope = \"BambaForCausalLM\" in self.hparams[\"architectures\"]\r\n         self.gguf_writer.add_rope_scaling_finetuned(use_rope)\r\n```\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198724414",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T20:54:48+00:00",
+        "comment_author": "gabe-l-hart",
+        "comment_body": "Yeah, that's a good point. I think given that we've moved pretty significantly away from the complex inheritance on the c++ side, it ight make sense to see about doing something similar here since the multiple inheritance is definitely causing confusing code here as well. Let me take a look at how to simplify this.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198737384",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:01:48+00:00",
+        "comment_author": "compilade",
+        "comment_body": "This part isn't really made confusing by multiple inheritance, but by the long (but linear) family tree of `GraniteMoeModel(GraniteModel(LlamaModel(TextModel)))` for the inheritance of the `set_gguf_parameters` method.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198739685",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:02:58+00:00",
+        "comment_author": "CISC",
+        "comment_body": "It's a dual edged sword, since we are getting more layers of inheritance it's easy to add duplicates below without noticing, and then adding lots of noise above about something that isn't really an issue. Noise leads to complacency.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198750452",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:09:12+00:00",
+        "comment_author": "gabe-l-hart",
+        "comment_body": "Yeah, agreed. I guess the real question is whether we want to support using parents directly for gguf params in a multiple-inheritance situation. If it's single inheritance, there should be no reason to overwrite what a parent did. It's possible that a child uses a different key for the same value as a parent, but that would cause the parent's lookup to not find the key and the child's lookup would have a different value (which I think is actually happening here).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198751729",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:09:52+00:00",
+        "comment_author": "compilade",
+        "comment_body": "What bothers me here is mostly the keys set twice in the same function, not necessarily the inheritance (although that *could* be simplified by inlining the necessary parts of the `set_gguf_parameters` call and sub-calls).\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198755545",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:11:58+00:00",
+        "comment_author": "gabe-l-hart",
+        "comment_body": ">set twice in the same function\r\n\r\nDo you mean once by a parent and once by a child? I don't _think_ I'm setting the same key twice in the body of the function, but I've rebased / merge-resolved this branch enough times that I definitely wouldn't be surprised if i botched something.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198763848",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:15:56+00:00",
+        "comment_author": "compilade",
+        "comment_body": "> > set twice in the same function\r\n>\r\n> Do you mean once by a parent and once by a child?\r\n\r\nYes (sorry, I should have worded this better).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198775823",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:21:16+00:00",
+        "comment_author": "gabe-l-hart",
+        "comment_body": "So I think there are two real options:\r\n\r\n1. Expect model classes that deviate from the setting logic for any of their parents to explicitly set everything and not use their parents\r\n\r\n2. Expect models classes to maximally rely on parents and _only_ override where they deviate\r\n\r\nRight now, the implementation is 1.5 (uses `GraniteMoeModel` but doesn't use `Mamba2Model`) which is bad in both directions! If we prefer (2), I think there should be some way to explicitly denote that it's a known override of a parent to suppress the warning.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198795502",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:32:36+00:00",
+        "comment_author": "gabe-l-hart",
+        "comment_body": "One thought towards (2):\r\n\r\n```py\r\n\r\nclass GGUFWriter:\r\n    ...\r\n    _overwriting: bool = False\r\n    ...\r\n\r\n    @contextmanager\r\n    def overwrite(self):\r\n        self._overwriting = True\r\n        yield\r\n        self._overwriting = False\r\n\r\n    def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\r\n        if any(key in kv_data for kv_data in self.kv_data) and not self._overwriting:\r\n            logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')\r\n\r\n        self.kv_data[0][key] = GGUFValue(value=val, type=vtype, sub_type=sub_type)\r\n```\r\n\r\nthen something like\r\n\r\n```py\r\nclass FooModel(BarModel, BazModel):\r\n\r\n    def set_gguf_parameters(self):\r\n        BarModel.set_gguf_parameters(self)\r\n        with self.gguf_writer.override():\r\n            BazModel.set_gguf_parameters(self)\r\n            # Override some other val\r\n            self.gguf_writer.add_context_length(2**100)\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198799207",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:34:40+00:00",
+        "comment_author": "gabe-l-hart",
+        "comment_body": "We could also give optional keys to the `override` contextmanager so that it isn't a blanket suppression for the second parent",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198800548",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:35:49+00:00",
+        "comment_author": "CISC",
+        "comment_body": "This is a separate discussion and PR though. :)\r\n\r\nPerhaps just remove the check for now.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198801687",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:36:55+00:00",
+        "comment_author": "gabe-l-hart",
+        "comment_body": "Heh, very good point! Scope creep for sure",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198815368",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:45:42+00:00",
+        "comment_author": "gabe-l-hart",
+        "comment_body": "Ok removed. That leaves a few known override warnings:\r\n\r\n```\r\nWARNING:gguf.gguf_writer:Duplicated key name 'granitehybrid.embedding_length', overwriting it with new value 1536 of type UINT32\r\nWARNING:gguf.gguf_writer:Duplicated key name 'granitehybrid.block_count', overwriting it with new value 40 of type UINT32\r\nWARNING:gguf.gguf_writer:Duplicated key name 'granitehybrid.vocab_size', overwriting it with new value 49160 of type UINT32\r\nWARNING:gguf.gguf_writer:Duplicated key name 'granitehybrid.feed_forward_length', overwriting it with new value 512 of type UINT32\r\nWARNING:gguf.gguf_writer:Duplicated key name 'granitehybrid.attention.head_count', overwriting it with new value 12 of type UINT32\r\nWARNING:gguf.gguf_writer:Duplicated key name 'granitehybrid.attention.head_count_kv', overwriting it with new value [0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0] of type ARRAY\r\nWARNING:gguf.gguf_writer:Duplicated key name 'granitehybrid.attention.layer_norm_rms_epsilon', overwriting it with new value 1e-05 of type FLOAT32\r\nWARNING:gguf.gguf_writer:Duplicated key name 'granitehybrid.context_length', overwriting it with new value 1048576 of type UINT32\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198820867",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:49:47+00:00",
+        "comment_author": "gabe-l-hart",
+        "comment_body": "I think this can be resolved here with a comment in the converter and the warnings reinstanted?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198838351",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T21:59:55+00:00",
+        "comment_author": "compilade",
+        "comment_body": "> Ok removed. That leaves a few known override warnings\r\n\r\nAll of these (except the `head_count_kv` one (and the context length, I forgot that)) can be avoided by applying the patch from <https://github.com/ggml-org/llama.cpp/pull/13550#discussion_r2198680909>.\r\n\r\nThe source `hparams` fields seem to be mostly the same both times they are set (small difference with `layer_norm_epsilon`, but both times the actually-used field is `rms_norm_eps` (for granite-4.0-tiny-random at least)).\r\n\r\nIf you think it's clearer to keep it this way, this is fine with me too.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2198853291",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13550,
+        "pr_file": "gguf-py/gguf/gguf_writer.py",
+        "discussion_id": "2198680909",
+        "commented_code": "@@ -270,7 +270,14 @@ def write_ti_data_to_file(self) -> None:\n         self.state = WriterState.TI_DATA\n \n     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:\n-        if any(key in kv_data for kv_data in self.kv_data):\n+        # Warn about duplicate keys if they differ by value or type\n+        if any(\n+            (\n+                key in kv_data\n+                and (kv_data[key].value != val or kv_data[key].type != vtype)\n+            )\n+            for kv_data in self.kv_data\n+        ):\n             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')",
+        "comment_created_at": "2025-07-10T22:06:55+00:00",
+        "comment_author": "gabe-l-hart",
+        "comment_body": "\ud83e\udd26 Nope, you're totally right. I'm concurrently trying to update [my draft](https://github.com/ollama/ollama/pull/11195) of bumping `llama.cpp` in `ollama` and multitasking poorly. I'll push with those removed.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

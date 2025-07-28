@@ -1,0 +1,256 @@
+[
+  {
+    "discussion_id": "2116378048",
+    "pr_number": 13873,
+    "pr_file": "ggml/src/ggml-opt.cpp",
+    "created_at": "2025-05-30T18:17:21+00:00",
+    "commented_code": "// beta1, beta2 after applying warmup\n         const float beta1h = 1.0f/(1.0f - powf(opt_pars.adamw.beta1, opt_ctx->iter));\n         const float beta2h = 1.0f/(1.0f - powf(opt_pars.adamw.beta2, opt_ctx->iter));\n-\n+        const float keep           = 1.0f - opt_pars.adamw.alpha * opt_pars.adamw.wd;",
+    "repo_full_name": "ggml-org/llama.cpp",
+    "discussion_comments": [
+      {
+        "comment_id": "2116378048",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13873,
+        "pr_file": "ggml/src/ggml-opt.cpp",
+        "discussion_id": "2116378048",
+        "commented_code": "@@ -770,7 +814,7 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {\n         // beta1, beta2 after applying warmup\n         const float beta1h = 1.0f/(1.0f - powf(opt_pars.adamw.beta1, opt_ctx->iter));\n         const float beta2h = 1.0f/(1.0f - powf(opt_pars.adamw.beta2, opt_ctx->iter));\n-\n+        const float keep           = 1.0f - opt_pars.adamw.alpha * opt_pars.adamw.wd;",
+        "comment_created_at": "2025-05-30T18:17:21+00:00",
+        "comment_author": "JohannesGaessler",
+        "comment_body": "Optimizer steps are going to be I/O bound and optimizing compute is not going to make a meaningful difference for the runtime of the steps, for the runtime of the total probram it's completely negligible. So please revert this change, I think the other variant is easier to understand.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2116427445",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13873,
+        "pr_file": "ggml/src/ggml-opt.cpp",
+        "discussion_id": "2116378048",
+        "commented_code": "@@ -770,7 +814,7 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {\n         // beta1, beta2 after applying warmup\n         const float beta1h = 1.0f/(1.0f - powf(opt_pars.adamw.beta1, opt_ctx->iter));\n         const float beta2h = 1.0f/(1.0f - powf(opt_pars.adamw.beta2, opt_ctx->iter));\n-\n+        const float keep           = 1.0f - opt_pars.adamw.alpha * opt_pars.adamw.wd;",
+        "comment_created_at": "2025-05-30T18:35:20+00:00",
+        "comment_author": "graehl",
+        "comment_body": "I agree that it's not *likely* to matter, but it's 1. per parameter per epoch (ok, does seem unimportant now that I think further) and 2. i'm not confident cuda CC optimizes this and was hoping to learn more - would seem possible that w/o this we're loading repeatedly two floats instead of one - and mostly 3. this is exactly following precedent established for beta1h and beta2h, which are stored in the tensor just as i stored this quantity.\r\n\r\nAnyway, totally willing, just curious what you think about the existing practice of saving beta1h and beta2h in light of this opinion that we're not compute bound.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2116863331",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13873,
+        "pr_file": "ggml/src/ggml-opt.cpp",
+        "discussion_id": "2116378048",
+        "commented_code": "@@ -770,7 +814,7 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {\n         // beta1, beta2 after applying warmup\n         const float beta1h = 1.0f/(1.0f - powf(opt_pars.adamw.beta1, opt_ctx->iter));\n         const float beta2h = 1.0f/(1.0f - powf(opt_pars.adamw.beta2, opt_ctx->iter));\n-\n+        const float keep           = 1.0f - opt_pars.adamw.alpha * opt_pars.adamw.wd;",
+        "comment_created_at": "2025-05-30T23:34:23+00:00",
+        "comment_author": "graehl",
+        "comment_body": "i checked it out - doesn't seem to change runtime noticeably as you predicted",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2118986352",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13873,
+        "pr_file": "ggml/src/ggml-opt.cpp",
+        "discussion_id": "2116378048",
+        "commented_code": "@@ -770,7 +814,7 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {\n         // beta1, beta2 after applying warmup\n         const float beta1h = 1.0f/(1.0f - powf(opt_pars.adamw.beta1, opt_ctx->iter));\n         const float beta2h = 1.0f/(1.0f - powf(opt_pars.adamw.beta2, opt_ctx->iter));\n-\n+        const float keep           = 1.0f - opt_pars.adamw.alpha * opt_pars.adamw.wd;",
+        "comment_created_at": "2025-06-01T10:12:06+00:00",
+        "comment_author": "JohannesGaessler",
+        "comment_body": "My biggest concern with the code is the amount of effort needed to maintain it, particularly when it comes to debugging and asserting that the code on master works correctly. It is quite likely that I will at some point be in a situation where a user reports bad training results and I will not know whether that is the due to a bug in ggml or due to bad hyperparamters or something similar. So it is very important to me that the data layout is consistent across multiple levels. \r\n\r\nThe correct way to implement the micro-optimization of pre-computing a parameter derived from the human-interpretable parameters is as follows:\r\n\r\n1. Pass the human-interpretable parameters to `ggml_opt_step_adamw` / `ggml_opt_step_sdg`.\r\n2. In the CUDA host code, pre-compute some derived parameters from the human-interpretable parameters.\r\n3. Change the CUDA device code to accept the derived parameters instead.\r\n\r\nThe way CUDA works is that the CPU schedules the GPU kernels in a CUDA stream and then waits for said stream to finish all kernels. Scheduling the kernels is of course much faster and it doesn't matter how fast you are as long as you are fast enough to keep the GPU busy. So adding a bit of overhead to the scheduling has essentially no impact on the runtime of a CUDA program even if you do it once per CUDA kernel launch instead of once per epoch.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2119314867",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 13873,
+        "pr_file": "ggml/src/ggml-opt.cpp",
+        "discussion_id": "2116378048",
+        "commented_code": "@@ -770,7 +814,7 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {\n         // beta1, beta2 after applying warmup\n         const float beta1h = 1.0f/(1.0f - powf(opt_pars.adamw.beta1, opt_ctx->iter));\n         const float beta2h = 1.0f/(1.0f - powf(opt_pars.adamw.beta2, opt_ctx->iter));\n-\n+        const float keep           = 1.0f - opt_pars.adamw.alpha * opt_pars.adamw.wd;",
+        "comment_created_at": "2025-06-01T16:31:07+00:00",
+        "comment_author": "graehl",
+        "comment_body": "Thanks for explaining all that, the bottom line for me is that you were right and the micro-optimization has no visible benefit in this case.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2187666903",
+    "pr_number": 14482,
+    "pr_file": "common/arg.cpp",
+    "created_at": "2025-07-05T20:17:54+00:00",
+    "commented_code": "params.swa_full = true;\n         }\n     ).set_env(\"LLAMA_ARG_SWA_FULL\"));\n+    add_opt(common_arg(\n+        {\"--graph-reuse\", \"-gr\"},\n+        string_format(\"reuse previous compute graphs when possible (default: %s)\"\n+            \"[(more info)](https://github.com/ggml-org/llama.cpp/pull/14482)\", params.graph_reuse ? \"true\" : \"false\"),\n+        [](common_params & params) {\n+            params.graph_reuse = true;\n+        }\n+    ).set_env(\"LLAMA_ARG_GRAPH_REUSE\"));",
+    "repo_full_name": "ggml-org/llama.cpp",
+    "discussion_comments": [
+      {
+        "comment_id": "2187666903",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14482,
+        "pr_file": "common/arg.cpp",
+        "discussion_id": "2187666903",
+        "commented_code": "@@ -1464,6 +1464,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex\n             params.swa_full = true;\n         }\n     ).set_env(\"LLAMA_ARG_SWA_FULL\"));\n+    add_opt(common_arg(\n+        {\"--graph-reuse\", \"-gr\"},\n+        string_format(\"reuse previous compute graphs when possible (default: %s)\"\n+            \"[(more info)](https://github.com/ggml-org/llama.cpp/pull/14482)\", params.graph_reuse ? \"true\" : \"false\"),\n+        [](common_params & params) {\n+            params.graph_reuse = true;\n+        }\n+    ).set_env(\"LLAMA_ARG_GRAPH_REUSE\"));",
+        "comment_created_at": "2025-07-05T20:17:54+00:00",
+        "comment_author": "slaren",
+        "comment_body": "Are there any downsides of enabling this option, besides the removal of the preemptive scheduler reset?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192948743",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14482,
+        "pr_file": "common/arg.cpp",
+        "discussion_id": "2187666903",
+        "commented_code": "@@ -1464,6 +1464,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex\n             params.swa_full = true;\n         }\n     ).set_env(\"LLAMA_ARG_SWA_FULL\"));\n+    add_opt(common_arg(\n+        {\"--graph-reuse\", \"-gr\"},\n+        string_format(\"reuse previous compute graphs when possible (default: %s)\"\n+            \"[(more info)](https://github.com/ggml-org/llama.cpp/pull/14482)\", params.graph_reuse ? \"true\" : \"false\"),\n+        [](common_params & params) {\n+            params.graph_reuse = true;\n+        }\n+    ).set_env(\"LLAMA_ARG_GRAPH_REUSE\"));",
+        "comment_created_at": "2025-07-08T16:24:51+00:00",
+        "comment_author": "ggerganov",
+        "comment_body": "I think it's OK to enable by default. It requires the `LLAMA_SET_ROWS` anyway for the majority of models (except cacheless embedding models such as BERT), so it will take some time before it gets actually enabled. Should be enough to spot any potential problems until then.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192969119",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14482,
+        "pr_file": "common/arg.cpp",
+        "discussion_id": "2187666903",
+        "commented_code": "@@ -1464,6 +1464,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex\n             params.swa_full = true;\n         }\n     ).set_env(\"LLAMA_ARG_SWA_FULL\"));\n+    add_opt(common_arg(\n+        {\"--graph-reuse\", \"-gr\"},\n+        string_format(\"reuse previous compute graphs when possible (default: %s)\"\n+            \"[(more info)](https://github.com/ggml-org/llama.cpp/pull/14482)\", params.graph_reuse ? \"true\" : \"false\"),\n+        [](common_params & params) {\n+            params.graph_reuse = true;\n+        }\n+    ).set_env(\"LLAMA_ARG_GRAPH_REUSE\"));",
+        "comment_created_at": "2025-07-08T16:34:39+00:00",
+        "comment_author": "slaren",
+        "comment_body": "I believe the cost of the scheduler reset is not very high, so it should be ok to just remove the option and always enable it if possible. The main cost of resetting the scheduler was clearing some hash tables, but now they have an `used` field that is much faster (only 1 bit per slot needs to be cleared instead of 64).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192975483",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14482,
+        "pr_file": "common/arg.cpp",
+        "discussion_id": "2187666903",
+        "commented_code": "@@ -1464,6 +1464,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex\n             params.swa_full = true;\n         }\n     ).set_env(\"LLAMA_ARG_SWA_FULL\"));\n+    add_opt(common_arg(\n+        {\"--graph-reuse\", \"-gr\"},\n+        string_format(\"reuse previous compute graphs when possible (default: %s)\"\n+            \"[(more info)](https://github.com/ggml-org/llama.cpp/pull/14482)\", params.graph_reuse ? \"true\" : \"false\"),\n+        [](common_params & params) {\n+            params.graph_reuse = true;\n+        }\n+    ).set_env(\"LLAMA_ARG_GRAPH_REUSE\"));",
+        "comment_created_at": "2025-07-08T16:38:26+00:00",
+        "comment_author": "ggerganov",
+        "comment_body": "Yes, the time for reset is microscopic. I will simplify as suggested.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2209862639",
+    "pr_number": 14710,
+    "pr_file": "tools/server/server.cpp",
+    "created_at": "2025-07-16T09:59:34+00:00",
+    "commented_code": "}\n                 }\n             }\n+\n+            params.sampling.ignore_eos = json_value(data, \"ignore_eos\", params_base.sampling.ignore_eos);\n+            if (params.sampling.ignore_eos) {\n+                for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {\n+                    if (llama_vocab_is_eog(vocab, i)) {\n+                        //SRV_DBG(\"%s: added %s logit bias = %f\n\", __func__, common_token_to_piece(ctx, i).c_str(), -INFINITY);\n+                        params.sampling.logit_bias.push_back({i, -INFINITY});\n+                    }\n+                }",
+    "repo_full_name": "ggml-org/llama.cpp",
+    "discussion_comments": [
+      {
+        "comment_id": "2209862639",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14710,
+        "pr_file": "tools/server/server.cpp",
+        "discussion_id": "2209862639",
+        "commented_code": "@@ -472,6 +470,16 @@ struct server_task {\n                     }\n                 }\n             }\n+\n+            params.sampling.ignore_eos = json_value(data, \"ignore_eos\", params_base.sampling.ignore_eos);\n+            if (params.sampling.ignore_eos) {\n+                for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {\n+                    if (llama_vocab_is_eog(vocab, i)) {\n+                        //SRV_DBG(\"%s: added %s logit bias = %f\\n\", __func__, common_token_to_piece(ctx, i).c_str(), -INFINITY);\n+                        params.sampling.logit_bias.push_back({i, -INFINITY});\n+                    }\n+                }",
+        "comment_created_at": "2025-07-16T09:59:34+00:00",
+        "comment_author": "slaren",
+        "comment_body": "If this is done for every token during generation, I suspect it is going to have a significant performance impact.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2209871810",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14710,
+        "pr_file": "tools/server/server.cpp",
+        "discussion_id": "2209862639",
+        "commented_code": "@@ -472,6 +470,16 @@ struct server_task {\n                     }\n                 }\n             }\n+\n+            params.sampling.ignore_eos = json_value(data, \"ignore_eos\", params_base.sampling.ignore_eos);\n+            if (params.sampling.ignore_eos) {\n+                for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {\n+                    if (llama_vocab_is_eog(vocab, i)) {\n+                        //SRV_DBG(\"%s: added %s logit bias = %f\\n\", __func__, common_token_to_piece(ctx, i).c_str(), -INFINITY);\n+                        params.sampling.logit_bias.push_back({i, -INFINITY});\n+                    }\n+                }",
+        "comment_created_at": "2025-07-16T10:03:46+00:00",
+        "comment_author": "ggerganov",
+        "comment_body": "It's done once per completion request, at the beginning, upon processing the input json parameters.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2209880315",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14710,
+        "pr_file": "tools/server/server.cpp",
+        "discussion_id": "2209862639",
+        "commented_code": "@@ -472,6 +470,16 @@ struct server_task {\n                     }\n                 }\n             }\n+\n+            params.sampling.ignore_eos = json_value(data, \"ignore_eos\", params_base.sampling.ignore_eos);\n+            if (params.sampling.ignore_eos) {\n+                for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {\n+                    if (llama_vocab_is_eog(vocab, i)) {\n+                        //SRV_DBG(\"%s: added %s logit bias = %f\\n\", __func__, common_token_to_piece(ctx, i).c_str(), -INFINITY);\n+                        params.sampling.logit_bias.push_back({i, -INFINITY});\n+                    }\n+                }",
+        "comment_created_at": "2025-07-16T10:08:00+00:00",
+        "comment_author": "JohannesGaessler",
+        "comment_body": "If performance is a concern we could maybe provide a list of EoG tokens to iterate over instead of iterating over all tokens and checking whether each one is EoG. Although I think iterating over all tokens once per request is going to be negligible vs. iterating over all tokens once per generated token as is being done for sampling.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2209891314",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14710,
+        "pr_file": "tools/server/server.cpp",
+        "discussion_id": "2209862639",
+        "commented_code": "@@ -472,6 +470,16 @@ struct server_task {\n                     }\n                 }\n             }\n+\n+            params.sampling.ignore_eos = json_value(data, \"ignore_eos\", params_base.sampling.ignore_eos);\n+            if (params.sampling.ignore_eos) {\n+                for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {\n+                    if (llama_vocab_is_eog(vocab, i)) {\n+                        //SRV_DBG(\"%s: added %s logit bias = %f\\n\", __func__, common_token_to_piece(ctx, i).c_str(), -INFINITY);\n+                        params.sampling.logit_bias.push_back({i, -INFINITY});\n+                    }\n+                }",
+        "comment_created_at": "2025-07-16T10:12:30+00:00",
+        "comment_author": "slaren",
+        "comment_body": "In my system this takes about 0.3 ms for a 150k vocab model, so I suppose it is not that bad.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2209978415",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14710,
+        "pr_file": "tools/server/server.cpp",
+        "discussion_id": "2209862639",
+        "commented_code": "@@ -472,6 +470,16 @@ struct server_task {\n                     }\n                 }\n             }\n+\n+            params.sampling.ignore_eos = json_value(data, \"ignore_eos\", params_base.sampling.ignore_eos);\n+            if (params.sampling.ignore_eos) {\n+                for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {\n+                    if (llama_vocab_is_eog(vocab, i)) {\n+                        //SRV_DBG(\"%s: added %s logit bias = %f\\n\", __func__, common_token_to_piece(ctx, i).c_str(), -INFINITY);\n+                        params.sampling.logit_bias.push_back({i, -INFINITY});\n+                    }\n+                }",
+        "comment_created_at": "2025-07-16T10:48:33+00:00",
+        "comment_author": "ggerganov",
+        "comment_body": "I fixed this anyway: https://github.com/ggml-org/llama.cpp/pull/14721",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2205339551",
+    "pr_number": 14635,
+    "pr_file": "ggml/src/ggml-opencl/ggml-opencl.cpp",
+    "created_at": "2025-07-14T16:30:08+00:00",
+    "commented_code": "backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);\n }\n \n+static void ggml_cl_mul_mat_f16_f32_image(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {\n+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;\n+    cl_context context = backend_ctx->context;\n+    cl_command_queue queue = backend_ctx->queue;\n+    cl_int err = 0;\n+\n+    const int M = src0->ne[1];\n+    const int N = src1->ne[1];\n+    const int K = src0->ne[0];\n+    const int K_4 = (K + 3) / 4;\n+    const int N_4 = (N + 3) / 4;\n+\n+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;\n+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;\n+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;\n+\n+    cl_ulong offset0 = extra0->offset + src0->view_offs;\n+    cl_ulong offset1 = extra1->offset + src1->view_offs;\n+    cl_ulong offsetd = extrad->offset + dst->view_offs;\n+\n+    cl_mem a_image = NULL, b_image = NULL;\n+    cl_event pack_events[2];\n+    cl_event matmul_event;\n+\n+    // Create image for A\n+    cl_image_format format_A = {CL_RGBA, CL_HALF_FLOAT};\n+    cl_image_desc desc_A = {};\n+    desc_A.image_type = CL_MEM_OBJECT_IMAGE2D;\n+    desc_A.image_width = K_4;\n+    desc_A.image_height = M;\n+    a_image = clCreateImage(context, CL_MEM_READ_WRITE, &format_A, &desc_A, NULL, &err);\n+    CL_CHECK(err);\n+\n+    // Create image for B\n+    cl_image_format format_B = {CL_RGBA, CL_HALF_FLOAT};\n+    cl_image_desc desc_B = {};\n+    desc_B.image_type = CL_MEM_OBJECT_IMAGE2D;\n+    desc_B.image_width = N_4;\n+    desc_B.image_height = K;\n+    b_image = clCreateImage(context, CL_MEM_READ_WRITE, &format_B, &desc_B, NULL, &err);\n+    CL_CHECK(err);\n+\n+    // Launch packing kernel for A\n+    cl_kernel pack_a_kernel = backend_ctx->kernel_pack_a_for_image;\n+    CL_CHECK(clSetKernelArg(pack_a_kernel, 0, sizeof(cl_mem),   &extra0->data_device));\n+    CL_CHECK(clSetKernelArg(pack_a_kernel, 1, sizeof(cl_ulong), &offset0));\n+    CL_CHECK(clSetKernelArg(pack_a_kernel, 2, sizeof(cl_mem),   &a_image));\n+    CL_CHECK(clSetKernelArg(pack_a_kernel, 3, sizeof(int),      &M));\n+    CL_CHECK(clSetKernelArg(pack_a_kernel, 4, sizeof(int),      &K));\n+    const size_t pack_a_gws[2] = { (size_t)K_4, (size_t)M };\n+    CL_CHECK(clEnqueueNDRangeKernel(queue, pack_a_kernel, 2, NULL, pack_a_gws, NULL, 0, NULL, &pack_events[0]));\n+\n+    // Launch packing kernel for B\n+    cl_kernel pack_b_kernel = backend_ctx->kernel_pack_b_for_image;\n+    CL_CHECK(clSetKernelArg(pack_b_kernel, 0, sizeof(cl_mem),   &extra1->data_device));\n+    CL_CHECK(clSetKernelArg(pack_b_kernel, 1, sizeof(cl_ulong), &offset1));\n+    CL_CHECK(clSetKernelArg(pack_b_kernel, 2, sizeof(cl_mem),   &b_image));\n+    CL_CHECK(clSetKernelArg(pack_b_kernel, 3, sizeof(int),      &K));\n+    CL_CHECK(clSetKernelArg(pack_b_kernel, 4, sizeof(int),      &N));\n+    const size_t pack_b_gws[2] = { (size_t)N_4, (size_t)K };\n+    CL_CHECK(clEnqueueNDRangeKernel(queue, pack_b_kernel, 2, NULL, pack_b_gws, NULL, 0, NULL, &pack_events[1]));\n+\n+    // Launch matmul kernel\n+    cl_kernel matmul_kernel = backend_ctx->kernel_mul_mat_f16_f32_image;\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 0, sizeof(cl_mem),   &a_image));\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 1, sizeof(cl_mem),   &b_image));\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 2, sizeof(cl_mem),   &extrad->data_device));\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 3, sizeof(cl_ulong), &offsetd));\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 4, sizeof(int),      &M));\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 5, sizeof(int),      &N));\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 6, sizeof(int),      &K));\n+\n+    const int OPWM = 64;\n+    const int OPWN = 64;\n+    const size_t lws[2] = { 16, 8 }; // WG_M, WG_N\n+    const size_t gws[2] = { (size_t)ceil((float)M / OPWM) * lws[0], (size_t)ceil((float)N / OPWN) * lws[1] };\n+    CL_CHECK(clEnqueueNDRangeKernel(queue, matmul_kernel, 2, NULL, gws, lws, 2, pack_events, &matmul_event));",
+    "repo_full_name": "ggml-org/llama.cpp",
+    "discussion_comments": [
+      {
+        "comment_id": "2205339551",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14635,
+        "pr_file": "ggml/src/ggml-opencl/ggml-opencl.cpp",
+        "discussion_id": "2205339551",
+        "commented_code": "@@ -4997,6 +5059,93 @@ static void ggml_cl_mul_mat_f16_f32_tiled(ggml_backend_t backend, const ggml_ten\n     backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);\n }\n \n+static void ggml_cl_mul_mat_f16_f32_image(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {\n+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;\n+    cl_context context = backend_ctx->context;\n+    cl_command_queue queue = backend_ctx->queue;\n+    cl_int err = 0;\n+\n+    const int M = src0->ne[1];\n+    const int N = src1->ne[1];\n+    const int K = src0->ne[0];\n+    const int K_4 = (K + 3) / 4;\n+    const int N_4 = (N + 3) / 4;\n+\n+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;\n+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;\n+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;\n+\n+    cl_ulong offset0 = extra0->offset + src0->view_offs;\n+    cl_ulong offset1 = extra1->offset + src1->view_offs;\n+    cl_ulong offsetd = extrad->offset + dst->view_offs;\n+\n+    cl_mem a_image = NULL, b_image = NULL;\n+    cl_event pack_events[2];\n+    cl_event matmul_event;\n+\n+    // Create image for A\n+    cl_image_format format_A = {CL_RGBA, CL_HALF_FLOAT};\n+    cl_image_desc desc_A = {};\n+    desc_A.image_type = CL_MEM_OBJECT_IMAGE2D;\n+    desc_A.image_width = K_4;\n+    desc_A.image_height = M;\n+    a_image = clCreateImage(context, CL_MEM_READ_WRITE, &format_A, &desc_A, NULL, &err);\n+    CL_CHECK(err);\n+\n+    // Create image for B\n+    cl_image_format format_B = {CL_RGBA, CL_HALF_FLOAT};\n+    cl_image_desc desc_B = {};\n+    desc_B.image_type = CL_MEM_OBJECT_IMAGE2D;\n+    desc_B.image_width = N_4;\n+    desc_B.image_height = K;\n+    b_image = clCreateImage(context, CL_MEM_READ_WRITE, &format_B, &desc_B, NULL, &err);\n+    CL_CHECK(err);\n+\n+    // Launch packing kernel for A\n+    cl_kernel pack_a_kernel = backend_ctx->kernel_pack_a_for_image;\n+    CL_CHECK(clSetKernelArg(pack_a_kernel, 0, sizeof(cl_mem),   &extra0->data_device));\n+    CL_CHECK(clSetKernelArg(pack_a_kernel, 1, sizeof(cl_ulong), &offset0));\n+    CL_CHECK(clSetKernelArg(pack_a_kernel, 2, sizeof(cl_mem),   &a_image));\n+    CL_CHECK(clSetKernelArg(pack_a_kernel, 3, sizeof(int),      &M));\n+    CL_CHECK(clSetKernelArg(pack_a_kernel, 4, sizeof(int),      &K));\n+    const size_t pack_a_gws[2] = { (size_t)K_4, (size_t)M };\n+    CL_CHECK(clEnqueueNDRangeKernel(queue, pack_a_kernel, 2, NULL, pack_a_gws, NULL, 0, NULL, &pack_events[0]));\n+\n+    // Launch packing kernel for B\n+    cl_kernel pack_b_kernel = backend_ctx->kernel_pack_b_for_image;\n+    CL_CHECK(clSetKernelArg(pack_b_kernel, 0, sizeof(cl_mem),   &extra1->data_device));\n+    CL_CHECK(clSetKernelArg(pack_b_kernel, 1, sizeof(cl_ulong), &offset1));\n+    CL_CHECK(clSetKernelArg(pack_b_kernel, 2, sizeof(cl_mem),   &b_image));\n+    CL_CHECK(clSetKernelArg(pack_b_kernel, 3, sizeof(int),      &K));\n+    CL_CHECK(clSetKernelArg(pack_b_kernel, 4, sizeof(int),      &N));\n+    const size_t pack_b_gws[2] = { (size_t)N_4, (size_t)K };\n+    CL_CHECK(clEnqueueNDRangeKernel(queue, pack_b_kernel, 2, NULL, pack_b_gws, NULL, 0, NULL, &pack_events[1]));\n+\n+    // Launch matmul kernel\n+    cl_kernel matmul_kernel = backend_ctx->kernel_mul_mat_f16_f32_image;\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 0, sizeof(cl_mem),   &a_image));\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 1, sizeof(cl_mem),   &b_image));\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 2, sizeof(cl_mem),   &extrad->data_device));\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 3, sizeof(cl_ulong), &offsetd));\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 4, sizeof(int),      &M));\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 5, sizeof(int),      &N));\n+    CL_CHECK(clSetKernelArg(matmul_kernel, 6, sizeof(int),      &K));\n+\n+    const int OPWM = 64;\n+    const int OPWN = 64;\n+    const size_t lws[2] = { 16, 8 }; // WG_M, WG_N\n+    const size_t gws[2] = { (size_t)ceil((float)M / OPWM) * lws[0], (size_t)ceil((float)N / OPWN) * lws[1] };\n+    CL_CHECK(clEnqueueNDRangeKernel(queue, matmul_kernel, 2, NULL, gws, lws, 2, pack_events, &matmul_event));",
+        "comment_created_at": "2025-07-14T16:30:08+00:00",
+        "comment_author": "lhez",
+        "comment_body": "I think it's better to use `enqueue_nd_range` from backend context so that we can dump the kernel timing with profiling turned on. The same for the packing kernels.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1350357652",
+    "pr_number": 2059,
+    "pr_file": "ggml-vulkan.cpp",
+    "created_at": "2023-10-09T14:06:32+00:00",
+    "commented_code": "+#include \"ggml-vulkan.h\"\n+\n+#ifdef VK_CHK_KERNEL\n+#include <cblas.h>\n+#include <chrono>\n+#endif\n+\n+#ifdef VK_PROFILE\n+#define PROFILE(name, block) do { \\\n+    auto begin = std::chrono::high_resolution_clock::now(); \\",
+    "repo_full_name": "ggml-org/llama.cpp",
+    "discussion_comments": [
+      {
+        "comment_id": "1350357652",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 2059,
+        "pr_file": "ggml-vulkan.cpp",
+        "discussion_id": "1350357652",
+        "commented_code": "@@ -0,0 +1,3095 @@\n+#include \"ggml-vulkan.h\"\n+\n+#ifdef VK_CHK_KERNEL\n+#include <cblas.h>\n+#include <chrono>\n+#endif\n+\n+#ifdef VK_PROFILE\n+#define PROFILE(name, block) do { \\\n+    auto begin = std::chrono::high_resolution_clock::now(); \\",
+        "comment_created_at": "2023-10-09T14:06:32+00:00",
+        "comment_author": "Green-Sky",
+        "comment_body": "never use `high_resolution_clock`, always use `steady_clock` instead",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1350670470",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 2059,
+        "pr_file": "ggml-vulkan.cpp",
+        "discussion_id": "1350357652",
+        "commented_code": "@@ -0,0 +1,3095 @@\n+#include \"ggml-vulkan.h\"\n+\n+#ifdef VK_CHK_KERNEL\n+#include <cblas.h>\n+#include <chrono>\n+#endif\n+\n+#ifdef VK_PROFILE\n+#define PROFILE(name, block) do { \\\n+    auto begin = std::chrono::high_resolution_clock::now(); \\",
+        "comment_created_at": "2023-10-09T18:31:14+00:00",
+        "comment_author": "0cc4m",
+        "comment_body": "This code isn't used anymore, I may just remove it. But thanks for the hint.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

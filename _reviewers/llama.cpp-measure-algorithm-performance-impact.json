@@ -1,0 +1,176 @@
+[
+  {
+    "discussion_id": "2160098698",
+    "pr_number": 14316,
+    "pr_file": "ggml/src/ggml-vulkan/vulkan-shaders/conv2d_mm.comp",
+    "created_at": "2025-06-21T17:41:16+00:00",
+    "commented_code": "+#version 450\n+\n+#extension GL_EXT_control_flow_attributes : enable\n+\n+#include \"types.comp\"\n+\n+// shape notation: [dim(N), ..., dim(0)] -- stride(dim(j)) >= stride(dim(i)) if i > j\n+layout (binding = 0) readonly buffer A {A_TYPE knl_data[];};    // src0 - kernel:   [KW, KH, Cin, Cout] \n+layout (binding = 1) readonly buffer B {B_TYPE src_data[];};    // src1 - input:    [W, H, Cin, N] -- channel_first format\n+layout (binding = 2) writeonly buffer D {D_TYPE dst_data[];};   // dst - result:    [OW, OH, Cout, N]\n+\n+layout (push_constant) uniform parameter {\n+    // I/O channels, batch size\n+    uint32_t Cout;\n+    uint32_t Cin;\n+    uint32_t N;\n+    \n+    // Tensor spatial sizes: kernel, input, output\n+    uint32_t KW;\n+    uint32_t KH;\n+    uint32_t W;\n+    uint32_t H;\n+    uint32_t OW;\n+    uint32_t OH;\n+\n+    // Parameters: stride, padding, dilation - 0=y, 1=x\n+    uint32_t s0;\n+    uint32_t s1;\n+    uint32_t p0;\n+    uint32_t p1;\n+    uint32_t d0;\n+    uint32_t d1;\n+\n+    // Strides in elements\n+    uint32_t nb01;\n+    uint32_t nb02;\n+    uint32_t nb03;\n+\n+    uint32_t nb11;\n+    uint32_t nb12;\n+    uint32_t nb13;\n+\n+    uint32_t nb1;\n+    uint32_t nb2;\n+    uint32_t nb3;\n+} p;\n+\n+#define WG_SIZE 256\n+\n+layout(local_size_x = WG_SIZE, local_size_y = 1, local_size_z = 1) in;\n+\n+uint32_t tid = gl_LocalInvocationID.x;\n+const uint32_t bs = gl_WorkGroupSize.x;\n+\n+uint splitWork(uint work_size, uint block_size){\n+    return (block_size + work_size -1) / block_size;\n+}\n+\n+uint32_t K = p.Cout;\n+uint32_t CRS = p.Cin*p.KH*p.KW;\n+uint32_t NPQ = p.N*p.OH*p.OW;\n+\n+uint32_t n_elems_out = K*NPQ;\n+\n+// Blocktile sizes\n+const uint32_t BS_K = 128;\n+const uint32_t BS_CRS = 16;\n+const uint32_t BS_NPQ = 128;\n+\n+// Number of blocktiles per input\n+uint32_t NB_CRS = splitWork(CRS, BS_CRS);\n+\n+const uint32_t Ash_stride = BS_CRS+1;\n+const uint32_t Bsh_stride = BS_NPQ+1;\n+\n+const uint32_t Ash_numel = BS_K*BS_CRS;\n+const uint32_t Bsh_numel = BS_CRS*BS_NPQ;\n+\n+const uint32_t Ash_len = BS_K*Ash_stride;\n+const uint32_t Bsh_len = BS_CRS*Bsh_stride;\n+\n+shared float Ash[Ash_len];  // K x CRS\n+shared float Bsh[Bsh_len];  // CRS x NPQ\n+\n+// Threadtile sizes\n+const uint32_t TS_K = 16;\n+const uint32_t TS_NPQ = BS_K*BS_NPQ / WG_SIZE / TS_K;\n+\n+// Number of threadtiles per blocktile\n+const uint32_t NT_K = BS_K / TS_K;\n+const uint32_t NT_NPQ = BS_NPQ / TS_NPQ;\n+\n+float regA[TS_K];\n+float regB[TS_NPQ];\n+float regC[TS_K][TS_NPQ];\n+\n+/*\n+Compute\n+KxCRS @ CRSxNPQ = K x NPQ\n+K=Cout\n+C=Cin\n+R,S=KH,KW\n+P,Q=OH,OW\n+*/\n+\n+uint32_t B_idx_K = gl_WorkGroupID.x;\n+uint32_t B_idx_NPQ = gl_WorkGroupID.y;\n+\n+uint32_t T_y = tid / NT_NPQ;\n+uint32_t T_x = tid % NT_NPQ;\n+\n+uint32_t Ar = tid / BS_CRS;\n+uint32_t Ac = tid % BS_CRS;\n+uint32_t ArpWg = WG_SIZE / BS_CRS;\n+\n+uint32_t Br = tid / BS_NPQ;\n+uint32_t Bc = tid % BS_NPQ;\n+uint32_t BrpWg = WG_SIZE / BS_NPQ;\n+\n+void initReg(){\n+    for(uint32_t T_ly = 0; T_ly < TS_K; T_ly++){\n+        for(uint32_t T_lx = 0; T_lx < TS_NPQ; T_lx++){\n+            regC[T_ly][T_lx] = 0.0;\n+        }\n+    }\n+}\n+\n+void outProdReg(){\n+    for(uint32_t CRS_lidx = 0; CRS_lidx < BS_CRS; CRS_lidx++){",
+    "repo_full_name": "ggml-org/llama.cpp",
+    "discussion_comments": [
+      {
+        "comment_id": "2160098698",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14316,
+        "pr_file": "ggml/src/ggml-vulkan/vulkan-shaders/conv2d_mm.comp",
+        "discussion_id": "2160098698",
+        "commented_code": "@@ -0,0 +1,244 @@\n+#version 450\n+\n+#extension GL_EXT_control_flow_attributes : enable\n+\n+#include \"types.comp\"\n+\n+// shape notation: [dim(N), ..., dim(0)] -- stride(dim(j)) >= stride(dim(i)) if i > j\n+layout (binding = 0) readonly buffer A {A_TYPE knl_data[];};    // src0 - kernel:   [KW, KH, Cin, Cout] \n+layout (binding = 1) readonly buffer B {B_TYPE src_data[];};    // src1 - input:    [W, H, Cin, N] -- channel_first format\n+layout (binding = 2) writeonly buffer D {D_TYPE dst_data[];};   // dst - result:    [OW, OH, Cout, N]\n+\n+layout (push_constant) uniform parameter {\n+    // I/O channels, batch size\n+    uint32_t Cout;\n+    uint32_t Cin;\n+    uint32_t N;\n+    \n+    // Tensor spatial sizes: kernel, input, output\n+    uint32_t KW;\n+    uint32_t KH;\n+    uint32_t W;\n+    uint32_t H;\n+    uint32_t OW;\n+    uint32_t OH;\n+\n+    // Parameters: stride, padding, dilation - 0=y, 1=x\n+    uint32_t s0;\n+    uint32_t s1;\n+    uint32_t p0;\n+    uint32_t p1;\n+    uint32_t d0;\n+    uint32_t d1;\n+\n+    // Strides in elements\n+    uint32_t nb01;\n+    uint32_t nb02;\n+    uint32_t nb03;\n+\n+    uint32_t nb11;\n+    uint32_t nb12;\n+    uint32_t nb13;\n+\n+    uint32_t nb1;\n+    uint32_t nb2;\n+    uint32_t nb3;\n+} p;\n+\n+#define WG_SIZE 256\n+\n+layout(local_size_x = WG_SIZE, local_size_y = 1, local_size_z = 1) in;\n+\n+uint32_t tid = gl_LocalInvocationID.x;\n+const uint32_t bs = gl_WorkGroupSize.x;\n+\n+uint splitWork(uint work_size, uint block_size){\n+    return (block_size + work_size -1) / block_size;\n+}\n+\n+uint32_t K = p.Cout;\n+uint32_t CRS = p.Cin*p.KH*p.KW;\n+uint32_t NPQ = p.N*p.OH*p.OW;\n+\n+uint32_t n_elems_out = K*NPQ;\n+\n+// Blocktile sizes\n+const uint32_t BS_K = 128;\n+const uint32_t BS_CRS = 16;\n+const uint32_t BS_NPQ = 128;\n+\n+// Number of blocktiles per input\n+uint32_t NB_CRS = splitWork(CRS, BS_CRS);\n+\n+const uint32_t Ash_stride = BS_CRS+1;\n+const uint32_t Bsh_stride = BS_NPQ+1;\n+\n+const uint32_t Ash_numel = BS_K*BS_CRS;\n+const uint32_t Bsh_numel = BS_CRS*BS_NPQ;\n+\n+const uint32_t Ash_len = BS_K*Ash_stride;\n+const uint32_t Bsh_len = BS_CRS*Bsh_stride;\n+\n+shared float Ash[Ash_len];  // K x CRS\n+shared float Bsh[Bsh_len];  // CRS x NPQ\n+\n+// Threadtile sizes\n+const uint32_t TS_K = 16;\n+const uint32_t TS_NPQ = BS_K*BS_NPQ / WG_SIZE / TS_K;\n+\n+// Number of threadtiles per blocktile\n+const uint32_t NT_K = BS_K / TS_K;\n+const uint32_t NT_NPQ = BS_NPQ / TS_NPQ;\n+\n+float regA[TS_K];\n+float regB[TS_NPQ];\n+float regC[TS_K][TS_NPQ];\n+\n+/*\n+Compute\n+KxCRS @ CRSxNPQ = K x NPQ\n+K=Cout\n+C=Cin\n+R,S=KH,KW\n+P,Q=OH,OW\n+*/\n+\n+uint32_t B_idx_K = gl_WorkGroupID.x;\n+uint32_t B_idx_NPQ = gl_WorkGroupID.y;\n+\n+uint32_t T_y = tid / NT_NPQ;\n+uint32_t T_x = tid % NT_NPQ;\n+\n+uint32_t Ar = tid / BS_CRS;\n+uint32_t Ac = tid % BS_CRS;\n+uint32_t ArpWg = WG_SIZE / BS_CRS;\n+\n+uint32_t Br = tid / BS_NPQ;\n+uint32_t Bc = tid % BS_NPQ;\n+uint32_t BrpWg = WG_SIZE / BS_NPQ;\n+\n+void initReg(){\n+    for(uint32_t T_ly = 0; T_ly < TS_K; T_ly++){\n+        for(uint32_t T_lx = 0; T_lx < TS_NPQ; T_lx++){\n+            regC[T_ly][T_lx] = 0.0;\n+        }\n+    }\n+}\n+\n+void outProdReg(){\n+    for(uint32_t CRS_lidx = 0; CRS_lidx < BS_CRS; CRS_lidx++){",
+        "comment_created_at": "2025-06-21T17:41:16+00:00",
+        "comment_author": "jeffbolznv",
+        "comment_body": "Can you use coopmat here to do the outer products in parallel?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2160099420",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14316,
+        "pr_file": "ggml/src/ggml-vulkan/vulkan-shaders/conv2d_mm.comp",
+        "discussion_id": "2160098698",
+        "commented_code": "@@ -0,0 +1,244 @@\n+#version 450\n+\n+#extension GL_EXT_control_flow_attributes : enable\n+\n+#include \"types.comp\"\n+\n+// shape notation: [dim(N), ..., dim(0)] -- stride(dim(j)) >= stride(dim(i)) if i > j\n+layout (binding = 0) readonly buffer A {A_TYPE knl_data[];};    // src0 - kernel:   [KW, KH, Cin, Cout] \n+layout (binding = 1) readonly buffer B {B_TYPE src_data[];};    // src1 - input:    [W, H, Cin, N] -- channel_first format\n+layout (binding = 2) writeonly buffer D {D_TYPE dst_data[];};   // dst - result:    [OW, OH, Cout, N]\n+\n+layout (push_constant) uniform parameter {\n+    // I/O channels, batch size\n+    uint32_t Cout;\n+    uint32_t Cin;\n+    uint32_t N;\n+    \n+    // Tensor spatial sizes: kernel, input, output\n+    uint32_t KW;\n+    uint32_t KH;\n+    uint32_t W;\n+    uint32_t H;\n+    uint32_t OW;\n+    uint32_t OH;\n+\n+    // Parameters: stride, padding, dilation - 0=y, 1=x\n+    uint32_t s0;\n+    uint32_t s1;\n+    uint32_t p0;\n+    uint32_t p1;\n+    uint32_t d0;\n+    uint32_t d1;\n+\n+    // Strides in elements\n+    uint32_t nb01;\n+    uint32_t nb02;\n+    uint32_t nb03;\n+\n+    uint32_t nb11;\n+    uint32_t nb12;\n+    uint32_t nb13;\n+\n+    uint32_t nb1;\n+    uint32_t nb2;\n+    uint32_t nb3;\n+} p;\n+\n+#define WG_SIZE 256\n+\n+layout(local_size_x = WG_SIZE, local_size_y = 1, local_size_z = 1) in;\n+\n+uint32_t tid = gl_LocalInvocationID.x;\n+const uint32_t bs = gl_WorkGroupSize.x;\n+\n+uint splitWork(uint work_size, uint block_size){\n+    return (block_size + work_size -1) / block_size;\n+}\n+\n+uint32_t K = p.Cout;\n+uint32_t CRS = p.Cin*p.KH*p.KW;\n+uint32_t NPQ = p.N*p.OH*p.OW;\n+\n+uint32_t n_elems_out = K*NPQ;\n+\n+// Blocktile sizes\n+const uint32_t BS_K = 128;\n+const uint32_t BS_CRS = 16;\n+const uint32_t BS_NPQ = 128;\n+\n+// Number of blocktiles per input\n+uint32_t NB_CRS = splitWork(CRS, BS_CRS);\n+\n+const uint32_t Ash_stride = BS_CRS+1;\n+const uint32_t Bsh_stride = BS_NPQ+1;\n+\n+const uint32_t Ash_numel = BS_K*BS_CRS;\n+const uint32_t Bsh_numel = BS_CRS*BS_NPQ;\n+\n+const uint32_t Ash_len = BS_K*Ash_stride;\n+const uint32_t Bsh_len = BS_CRS*Bsh_stride;\n+\n+shared float Ash[Ash_len];  // K x CRS\n+shared float Bsh[Bsh_len];  // CRS x NPQ\n+\n+// Threadtile sizes\n+const uint32_t TS_K = 16;\n+const uint32_t TS_NPQ = BS_K*BS_NPQ / WG_SIZE / TS_K;\n+\n+// Number of threadtiles per blocktile\n+const uint32_t NT_K = BS_K / TS_K;\n+const uint32_t NT_NPQ = BS_NPQ / TS_NPQ;\n+\n+float regA[TS_K];\n+float regB[TS_NPQ];\n+float regC[TS_K][TS_NPQ];\n+\n+/*\n+Compute\n+KxCRS @ CRSxNPQ = K x NPQ\n+K=Cout\n+C=Cin\n+R,S=KH,KW\n+P,Q=OH,OW\n+*/\n+\n+uint32_t B_idx_K = gl_WorkGroupID.x;\n+uint32_t B_idx_NPQ = gl_WorkGroupID.y;\n+\n+uint32_t T_y = tid / NT_NPQ;\n+uint32_t T_x = tid % NT_NPQ;\n+\n+uint32_t Ar = tid / BS_CRS;\n+uint32_t Ac = tid % BS_CRS;\n+uint32_t ArpWg = WG_SIZE / BS_CRS;\n+\n+uint32_t Br = tid / BS_NPQ;\n+uint32_t Bc = tid % BS_NPQ;\n+uint32_t BrpWg = WG_SIZE / BS_NPQ;\n+\n+void initReg(){\n+    for(uint32_t T_ly = 0; T_ly < TS_K; T_ly++){\n+        for(uint32_t T_lx = 0; T_lx < TS_NPQ; T_lx++){\n+            regC[T_ly][T_lx] = 0.0;\n+        }\n+    }\n+}\n+\n+void outProdReg(){\n+    for(uint32_t CRS_lidx = 0; CRS_lidx < BS_CRS; CRS_lidx++){",
+        "comment_created_at": "2025-06-21T17:45:00+00:00",
+        "comment_author": "etasnadi",
+        "comment_body": "If you ask if the alg supports coopmats -- then yes, we can add it later, but now I focus on achieving good enough flops relative to what can be achieved with the scalar matmul kernel.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2203630320",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14316,
+        "pr_file": "ggml/src/ggml-vulkan/vulkan-shaders/conv2d_mm.comp",
+        "discussion_id": "2160098698",
+        "commented_code": "@@ -0,0 +1,244 @@\n+#version 450\n+\n+#extension GL_EXT_control_flow_attributes : enable\n+\n+#include \"types.comp\"\n+\n+// shape notation: [dim(N), ..., dim(0)] -- stride(dim(j)) >= stride(dim(i)) if i > j\n+layout (binding = 0) readonly buffer A {A_TYPE knl_data[];};    // src0 - kernel:   [KW, KH, Cin, Cout] \n+layout (binding = 1) readonly buffer B {B_TYPE src_data[];};    // src1 - input:    [W, H, Cin, N] -- channel_first format\n+layout (binding = 2) writeonly buffer D {D_TYPE dst_data[];};   // dst - result:    [OW, OH, Cout, N]\n+\n+layout (push_constant) uniform parameter {\n+    // I/O channels, batch size\n+    uint32_t Cout;\n+    uint32_t Cin;\n+    uint32_t N;\n+    \n+    // Tensor spatial sizes: kernel, input, output\n+    uint32_t KW;\n+    uint32_t KH;\n+    uint32_t W;\n+    uint32_t H;\n+    uint32_t OW;\n+    uint32_t OH;\n+\n+    // Parameters: stride, padding, dilation - 0=y, 1=x\n+    uint32_t s0;\n+    uint32_t s1;\n+    uint32_t p0;\n+    uint32_t p1;\n+    uint32_t d0;\n+    uint32_t d1;\n+\n+    // Strides in elements\n+    uint32_t nb01;\n+    uint32_t nb02;\n+    uint32_t nb03;\n+\n+    uint32_t nb11;\n+    uint32_t nb12;\n+    uint32_t nb13;\n+\n+    uint32_t nb1;\n+    uint32_t nb2;\n+    uint32_t nb3;\n+} p;\n+\n+#define WG_SIZE 256\n+\n+layout(local_size_x = WG_SIZE, local_size_y = 1, local_size_z = 1) in;\n+\n+uint32_t tid = gl_LocalInvocationID.x;\n+const uint32_t bs = gl_WorkGroupSize.x;\n+\n+uint splitWork(uint work_size, uint block_size){\n+    return (block_size + work_size -1) / block_size;\n+}\n+\n+uint32_t K = p.Cout;\n+uint32_t CRS = p.Cin*p.KH*p.KW;\n+uint32_t NPQ = p.N*p.OH*p.OW;\n+\n+uint32_t n_elems_out = K*NPQ;\n+\n+// Blocktile sizes\n+const uint32_t BS_K = 128;\n+const uint32_t BS_CRS = 16;\n+const uint32_t BS_NPQ = 128;\n+\n+// Number of blocktiles per input\n+uint32_t NB_CRS = splitWork(CRS, BS_CRS);\n+\n+const uint32_t Ash_stride = BS_CRS+1;\n+const uint32_t Bsh_stride = BS_NPQ+1;\n+\n+const uint32_t Ash_numel = BS_K*BS_CRS;\n+const uint32_t Bsh_numel = BS_CRS*BS_NPQ;\n+\n+const uint32_t Ash_len = BS_K*Ash_stride;\n+const uint32_t Bsh_len = BS_CRS*Bsh_stride;\n+\n+shared float Ash[Ash_len];  // K x CRS\n+shared float Bsh[Bsh_len];  // CRS x NPQ\n+\n+// Threadtile sizes\n+const uint32_t TS_K = 16;\n+const uint32_t TS_NPQ = BS_K*BS_NPQ / WG_SIZE / TS_K;\n+\n+// Number of threadtiles per blocktile\n+const uint32_t NT_K = BS_K / TS_K;\n+const uint32_t NT_NPQ = BS_NPQ / TS_NPQ;\n+\n+float regA[TS_K];\n+float regB[TS_NPQ];\n+float regC[TS_K][TS_NPQ];\n+\n+/*\n+Compute\n+KxCRS @ CRSxNPQ = K x NPQ\n+K=Cout\n+C=Cin\n+R,S=KH,KW\n+P,Q=OH,OW\n+*/\n+\n+uint32_t B_idx_K = gl_WorkGroupID.x;\n+uint32_t B_idx_NPQ = gl_WorkGroupID.y;\n+\n+uint32_t T_y = tid / NT_NPQ;\n+uint32_t T_x = tid % NT_NPQ;\n+\n+uint32_t Ar = tid / BS_CRS;\n+uint32_t Ac = tid % BS_CRS;\n+uint32_t ArpWg = WG_SIZE / BS_CRS;\n+\n+uint32_t Br = tid / BS_NPQ;\n+uint32_t Bc = tid % BS_NPQ;\n+uint32_t BrpWg = WG_SIZE / BS_NPQ;\n+\n+void initReg(){\n+    for(uint32_t T_ly = 0; T_ly < TS_K; T_ly++){\n+        for(uint32_t T_lx = 0; T_lx < TS_NPQ; T_lx++){\n+            regC[T_ly][T_lx] = 0.0;\n+        }\n+    }\n+}\n+\n+void outProdReg(){\n+    for(uint32_t CRS_lidx = 0; CRS_lidx < BS_CRS; CRS_lidx++){",
+        "comment_created_at": "2025-07-13T23:43:56+00:00",
+        "comment_author": "etasnadi",
+        "comment_body": "Subsequent PR will add this functionality.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2194270669",
+    "pr_number": 14560,
+    "pr_file": "src/llama-vocab.h",
+    "created_at": "2025-07-09T07:26:25+00:00",
+    "commented_code": "struct impl;\n     std::unique_ptr<impl> pimpl;\n };\n+\n+// PLaMo-2 Aho-Corasick tokenizer\n+class llama_vocab_plamo2 {\n+public:",
+    "repo_full_name": "ggml-org/llama.cpp",
+    "discussion_comments": [
+      {
+        "comment_id": "2194270669",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14560,
+        "pr_file": "src/llama-vocab.h",
+        "discussion_id": "2194270669",
+        "commented_code": "@@ -130,3 +131,68 @@ struct llama_vocab {\n     struct impl;\n     std::unique_ptr<impl> pimpl;\n };\n+\n+// PLaMo-2 Aho-Corasick tokenizer\n+class llama_vocab_plamo2 {\n+public:",
+        "comment_created_at": "2025-07-09T07:26:25+00:00",
+        "comment_author": "ggerganov",
+        "comment_body": "I am not convinced that we have to add this new implementation.\r\n\r\nCan you provide a reference for the PlaMo-2 tokenizer so we can understand how it differs from the existing tokenizer algorithms?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2197235933",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14560,
+        "pr_file": "src/llama-vocab.h",
+        "discussion_id": "2194270669",
+        "commented_code": "@@ -130,3 +131,68 @@ struct llama_vocab {\n     struct impl;\n     std::unique_ptr<impl> pimpl;\n };\n+\n+// PLaMo-2 Aho-Corasick tokenizer\n+class llama_vocab_plamo2 {\n+public:",
+        "comment_created_at": "2025-07-10T10:11:11+00:00",
+        "comment_author": "mitmul",
+        "comment_body": "I appreciate you asking for a reference for the PlaMo-2 tokenizer to better understand how it differs from existing algorithms. The original implementation can be found at the following Hugging Face repository:\r\n\r\nOriginal PlaMo-2 Tokenizer Implementation:\r\nhttps://huggingface.co/pfnet/plamo-2-8b/blob/main/tokenization_plamo.py\r\n\r\nI hope this clarifies the unique aspects of this tokenizer. I'm happy to discuss the necessity of this new implementation further.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2203254362",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14560,
+        "pr_file": "src/llama-vocab.h",
+        "discussion_id": "2194270669",
+        "commented_code": "@@ -130,3 +131,68 @@ struct llama_vocab {\n     struct impl;\n     std::unique_ptr<impl> pimpl;\n };\n+\n+// PLaMo-2 Aho-Corasick tokenizer\n+class llama_vocab_plamo2 {\n+public:",
+        "comment_created_at": "2025-07-13T09:19:41+00:00",
+        "comment_author": "imos",
+        "comment_body": "Hello. I am the developer of the PLaMo 2 tokenizer.\r\n\r\nLet me explain the differences between the Unigram tokenizer and our implementation. The most significant difference is that while the Unigram tokenizer algorithm is non-deterministic in how it splits sequences like \"AAA\" into either \"A\"+\"AA\" or \"AA\"+\"A\", the PLaMo 2 tokenizer strictly guarantees that the longer token is always selected first (\"AA\"+\"A\" would be chosen). Additionally, since the Unigram tokenizer performs calculations using floating-point numbers, these splitting decisions can vary depending on circumstances, whereas the PLaMo 2 tokenizer performs all computations using integer arithmetic, making it deterministic.\r\n\r\nWhile there are many commonalities with the Unigram tokenizer, the PLaMo 2 tokenizer intentionally discards certain digits by design to maintain integer-based operations. Consequently, aligning the Unigram tokenizer with the PLaMo 2 tokenizer approach risks eliminating distinctions that were previously made with subtle differences in existing Unigram implementations. Conversely, the Unigram tokenizer exhibits various computational instabilities that make it unsuitable for our PLaMo 2 tokenizer. https://colab.research.google.com/drive/1zQEpQkOY9oIcLNSsyDzPE0jrmOMcBvsy demonstrates part of the instabilities.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2203877172",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14560,
+        "pr_file": "src/llama-vocab.h",
+        "discussion_id": "2194270669",
+        "commented_code": "@@ -130,3 +131,68 @@ struct llama_vocab {\n     struct impl;\n     std::unique_ptr<impl> pimpl;\n };\n+\n+// PLaMo-2 Aho-Corasick tokenizer\n+class llama_vocab_plamo2 {\n+public:",
+        "comment_created_at": "2025-07-14T05:28:54+00:00",
+        "comment_author": "ggerganov",
+        "comment_body": "Regarding the implementation here - it has to follow the existing pattern for all other tokenizers. No need to create a new `class llama_vocab_plamo2`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2203988946",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14560,
+        "pr_file": "src/llama-vocab.h",
+        "discussion_id": "2194270669",
+        "commented_code": "@@ -130,3 +131,68 @@ struct llama_vocab {\n     struct impl;\n     std::unique_ptr<impl> pimpl;\n };\n+\n+// PLaMo-2 Aho-Corasick tokenizer\n+class llama_vocab_plamo2 {\n+public:",
+        "comment_created_at": "2025-07-14T06:54:48+00:00",
+        "comment_author": "mitmul",
+        "comment_body": "@ggerganov Thank you for your advise and I removed `llama_vocab_plamo2` class and replace it with `llm_tokenizer_plamo2_session` to follow the other tokenizer implementation patterns in  https://github.com/ggml-org/llama.cpp/pull/14560/commits/eea696e461ac819b471d788faa8deb8a4edfb4dd. I'd appreciate if you would check this PR again.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1822190433",
+    "pr_number": 9639,
+    "pr_file": "common/common.h",
+    "created_at": "2024-10-30T09:20:18+00:00",
+    "commented_code": "// On error, returns {-1, empty}\n common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos);\n \n+//\n+// Antiprompt utils\n+//\n+\n+class llama_antiprompts {\n+  public:\n+\n+    struct llama_antiprompt {\n+        std::string value;\n+        bool is_grammar_trigger;\n+    };\n+\n+    std::vector<std::string> stop_words;\n+    std::vector<std::string> grammar_trigger_words;\n+\n+private:\n+    // The Aho\u2013Corasick algorithm allows efficient string matching with multiple patterns.\n+    // See https://en.wikipedia.org/wiki/Aho%E2%80%93Corasick_algorithm\n+    struct TrieNode {",
+    "repo_full_name": "ggml-org/llama.cpp",
+    "discussion_comments": [
+      {
+        "comment_id": "1822190433",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 9639,
+        "pr_file": "common/common.h",
+        "discussion_id": "1822190433",
+        "commented_code": "@@ -556,6 +570,215 @@ struct common_control_vector_load_info {\n // On error, returns {-1, empty}\n common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos);\n \n+//\n+// Antiprompt utils\n+//\n+\n+class llama_antiprompts {\n+  public:\n+\n+    struct llama_antiprompt {\n+        std::string value;\n+        bool is_grammar_trigger;\n+    };\n+\n+    std::vector<std::string> stop_words;\n+    std::vector<std::string> grammar_trigger_words;\n+\n+private:\n+    // The Aho\u2013Corasick algorithm allows efficient string matching with multiple patterns.\n+    // See https://en.wikipedia.org/wiki/Aho%E2%80%93Corasick_algorithm\n+    struct TrieNode {",
+        "comment_created_at": "2024-10-30T09:20:18+00:00",
+        "comment_author": "ggerganov",
+        "comment_body": "> ... handle multiple stop words efficiently - with grammar trigger words we may have many\r\n\r\nCan you clarify why is that and how many stop words we could have in typical use cases?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1823653767",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 9639,
+        "pr_file": "common/common.h",
+        "discussion_id": "1822190433",
+        "commented_code": "@@ -556,6 +570,215 @@ struct common_control_vector_load_info {\n // On error, returns {-1, empty}\n common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos);\n \n+//\n+// Antiprompt utils\n+//\n+\n+class llama_antiprompts {\n+  public:\n+\n+    struct llama_antiprompt {\n+        std::string value;\n+        bool is_grammar_trigger;\n+    };\n+\n+    std::vector<std::string> stop_words;\n+    std::vector<std::string> grammar_trigger_words;\n+\n+private:\n+    // The Aho\u2013Corasick algorithm allows efficient string matching with multiple patterns.\n+    // See https://en.wikipedia.org/wiki/Aho%E2%80%93Corasick_algorithm\n+    struct TrieNode {",
+        "comment_created_at": "2024-10-31T01:14:40+00:00",
+        "comment_author": "ochafik",
+        "comment_body": "With functionary-v3.2 ([template](https://github.com/ochafik/llama.cpp/blob/e4d5449638b3c54957619d5dcc3a13f8a0b4324c/tests/chat/templates/meetkai-functionary-medium-v3.2.jinja#L276), [example prompt](https://github.com/ochafik/llama.cpp/blob/e4d5449638b3c54957619d5dcc3a13f8a0b4324c/tests/chat/goldens/meetkai-functionary-medium-v3.2-tool_use.txt#L62), I had to make both `tool_name\\n` and `>>>tool_name\\n` a trigger **for each tool** (the latter should be made to only match at the very beginning - still todo; the >>>fn occurs if the response started with a `>>>all` normal content, and/or if there's parallel tool calls). I suppose that could quickly mean a few dozen triggers.\r\n\r\nBut in less extreme / most cases, there should be only a handful of them (cf. `grammar_trigger_words.push_back` in [tool-call.cpp](https://github.com/ochafik/llama.cpp/blob/e4d5449638b3c54957619d5dcc3a13f8a0b4324c/common/tool-call.cpp#L347)).\r\n\r\nWhere the algorithm above might become more useful though is for streaming, as I'm thinking to pipe tokens into it / let it update its state machine / simplify process_token in the process maybe.\r\n\r\nAnother design option would have been to add a reluctant, non-backtracking `.*?` prefix to grammars but I couldn't find a nice way to fit it (and I dislike that it wouldn't quite work like a regexp). I also considered using the grammar to both constrain *and parse* tool calls (e.g. using naming conventions on grammar rules), but stuck to something simpler for now.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1824105652",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 9639,
+        "pr_file": "common/common.h",
+        "discussion_id": "1822190433",
+        "commented_code": "@@ -556,6 +570,215 @@ struct common_control_vector_load_info {\n // On error, returns {-1, empty}\n common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos);\n \n+//\n+// Antiprompt utils\n+//\n+\n+class llama_antiprompts {\n+  public:\n+\n+    struct llama_antiprompt {\n+        std::string value;\n+        bool is_grammar_trigger;\n+    };\n+\n+    std::vector<std::string> stop_words;\n+    std::vector<std::string> grammar_trigger_words;\n+\n+private:\n+    // The Aho\u2013Corasick algorithm allows efficient string matching with multiple patterns.\n+    // See https://en.wikipedia.org/wiki/Aho%E2%80%93Corasick_algorithm\n+    struct TrieNode {",
+        "comment_created_at": "2024-10-31T09:00:01+00:00",
+        "comment_author": "ggerganov",
+        "comment_body": "I see. I don't have a good sense of the computation complexity for finding the trigger words in typical use cases. If we can show that the algorithm improves the performance in a measurable way, then it's ok. If not, we might want to fallback to some simpler brute-force approach.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1924615706",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 9639,
+        "pr_file": "common/common.h",
+        "discussion_id": "1822190433",
+        "commented_code": "@@ -556,6 +570,215 @@ struct common_control_vector_load_info {\n // On error, returns {-1, empty}\n common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos);\n \n+//\n+// Antiprompt utils\n+//\n+\n+class llama_antiprompts {\n+  public:\n+\n+    struct llama_antiprompt {\n+        std::string value;\n+        bool is_grammar_trigger;\n+    };\n+\n+    std::vector<std::string> stop_words;\n+    std::vector<std::string> grammar_trigger_words;\n+\n+private:\n+    // The Aho\u2013Corasick algorithm allows efficient string matching with multiple patterns.\n+    // See https://en.wikipedia.org/wiki/Aho%E2%80%93Corasick_algorithm\n+    struct TrieNode {",
+        "comment_created_at": "2025-01-22T02:40:57+00:00",
+        "comment_author": "ochafik",
+        "comment_body": "Going brute force for now, thanks!",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,82 @@
+[
+  {
+    "discussion_id": "2223423845",
+    "pr_number": 14624,
+    "pr_file": "ggml/src/ggml-cuda/mmq.cuh",
+    "created_at": "2025-07-22T18:09:38+00:00",
+    "commented_code": "const float * y_df = (const float *) y;\n \n // #pragma unroll\n-    for (int k01 = 0; k01 < WARP_SIZE; k01 += QI8_0) {\n+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {\n         const int k0 = k00 + k01;\n \n #pragma unroll\n         for (int j0 = 0; j0 < mmq_x; j0 += nwarps) {\n             const int j = j0 + threadIdx.y;\n \n #pragma unroll\n-            for (int i0 = 0; i0 < mmq_y; i0 += WARP_SIZE) {\n+            for (int i0 = 0; i0 < mmq_y; i0 += warp_size) {\n                 const int i = i0 + threadIdx.x;\n \n-                sum[j0/nwarps*mmq_y/WARP_SIZE + i0/WARP_SIZE] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(\n-                    &x_qs[i*(2*WARP_SIZE + 1) + k0],\n+                sum[j0/nwarps*mmq_y/warp_size + i0/warp_size] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(\n+                    &x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0],\n                     &y_qs[j*MMQ_TILE_Y_K + k01],\n-                    &x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + k0/(QI8_0/2)],\n+                    &x_df[i*(2*MMQ_TILE_NE_K*2/QI8_0) + i/(QI8_0/4) + k0/(QI8_0/2)],\n                     y_df[j*MMQ_TILE_Y_K + k01/QI8_1]);\n             }\n         }\n     }\n }\n \n-template <int mmq_x, int mmq_y, int nwarps>\n+template <int mmq_x, int mmq_y>\n static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(\n     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {\n-#ifdef NEW_MMA_AVAILABLE\n+#if defined(AMD_MFMA_AVAILABLE)\n+    typedef tile<32,  4, int> tile_A;\n+    typedef tile<32,  4, int> tile_B;\n+    typedef tile<32, 32, int> tile_C;\n+\n+    constexpr int granularity = mmq_get_granularity_device(GGML_TYPE_Q3_K, mmq_x);\n+    constexpr int rows_per_warp = granularity;\n+    constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.\n+\n+    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);",
+    "repo_full_name": "ggml-org/llama.cpp",
+    "discussion_comments": [
+      {
+        "comment_id": "2223423845",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14624,
+        "pr_file": "ggml/src/ggml-cuda/mmq.cuh",
+        "discussion_id": "2223423845",
+        "commented_code": "@@ -849,45 +1131,93 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_dp4a(\n     const float * y_df = (const float *) y;\n \n // #pragma unroll\n-    for (int k01 = 0; k01 < WARP_SIZE; k01 += QI8_0) {\n+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {\n         const int k0 = k00 + k01;\n \n #pragma unroll\n         for (int j0 = 0; j0 < mmq_x; j0 += nwarps) {\n             const int j = j0 + threadIdx.y;\n \n #pragma unroll\n-            for (int i0 = 0; i0 < mmq_y; i0 += WARP_SIZE) {\n+            for (int i0 = 0; i0 < mmq_y; i0 += warp_size) {\n                 const int i = i0 + threadIdx.x;\n \n-                sum[j0/nwarps*mmq_y/WARP_SIZE + i0/WARP_SIZE] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(\n-                    &x_qs[i*(2*WARP_SIZE + 1) + k0],\n+                sum[j0/nwarps*mmq_y/warp_size + i0/warp_size] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(\n+                    &x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0],\n                     &y_qs[j*MMQ_TILE_Y_K + k01],\n-                    &x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + k0/(QI8_0/2)],\n+                    &x_df[i*(2*MMQ_TILE_NE_K*2/QI8_0) + i/(QI8_0/4) + k0/(QI8_0/2)],\n                     y_df[j*MMQ_TILE_Y_K + k01/QI8_1]);\n             }\n         }\n     }\n }\n \n-template <int mmq_x, int mmq_y, int nwarps>\n+template <int mmq_x, int mmq_y>\n static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(\n     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {\n-#ifdef NEW_MMA_AVAILABLE\n+#if defined(AMD_MFMA_AVAILABLE)\n+    typedef tile<32,  4, int> tile_A;\n+    typedef tile<32,  4, int> tile_B;\n+    typedef tile<32, 32, int> tile_C;\n+\n+    constexpr int granularity = mmq_get_granularity_device(GGML_TYPE_Q3_K, mmq_x);\n+    constexpr int rows_per_warp = granularity;\n+    constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.\n+\n+    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);",
+        "comment_created_at": "2025-07-22T18:09:38+00:00",
+        "comment_author": "JohannesGaessler",
+        "comment_body": "```suggestion\r\n    y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);\r\n```\r\n\r\nYou were right that it's fine to use either `tile_B::I` or `tile_C::J`. We should consistently use one of them.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2224177579",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14624,
+        "pr_file": "ggml/src/ggml-cuda/mmq.cuh",
+        "discussion_id": "2223423845",
+        "commented_code": "@@ -849,45 +1131,93 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_dp4a(\n     const float * y_df = (const float *) y;\n \n // #pragma unroll\n-    for (int k01 = 0; k01 < WARP_SIZE; k01 += QI8_0) {\n+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {\n         const int k0 = k00 + k01;\n \n #pragma unroll\n         for (int j0 = 0; j0 < mmq_x; j0 += nwarps) {\n             const int j = j0 + threadIdx.y;\n \n #pragma unroll\n-            for (int i0 = 0; i0 < mmq_y; i0 += WARP_SIZE) {\n+            for (int i0 = 0; i0 < mmq_y; i0 += warp_size) {\n                 const int i = i0 + threadIdx.x;\n \n-                sum[j0/nwarps*mmq_y/WARP_SIZE + i0/WARP_SIZE] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(\n-                    &x_qs[i*(2*WARP_SIZE + 1) + k0],\n+                sum[j0/nwarps*mmq_y/warp_size + i0/warp_size] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(\n+                    &x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0],\n                     &y_qs[j*MMQ_TILE_Y_K + k01],\n-                    &x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + k0/(QI8_0/2)],\n+                    &x_df[i*(2*MMQ_TILE_NE_K*2/QI8_0) + i/(QI8_0/4) + k0/(QI8_0/2)],\n                     y_df[j*MMQ_TILE_Y_K + k01/QI8_1]);\n             }\n         }\n     }\n }\n \n-template <int mmq_x, int mmq_y, int nwarps>\n+template <int mmq_x, int mmq_y>\n static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(\n     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {\n-#ifdef NEW_MMA_AVAILABLE\n+#if defined(AMD_MFMA_AVAILABLE)\n+    typedef tile<32,  4, int> tile_A;\n+    typedef tile<32,  4, int> tile_B;\n+    typedef tile<32, 32, int> tile_C;\n+\n+    constexpr int granularity = mmq_get_granularity_device(GGML_TYPE_Q3_K, mmq_x);\n+    constexpr int rows_per_warp = granularity;\n+    constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.\n+\n+    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);",
+        "comment_created_at": "2025-07-23T02:24:54+00:00",
+        "comment_author": "deepsek",
+        "comment_body": "Changing instances of `tile_C::J` to `tile_B::I` instead due to lesser occurrence (convenience in editing). Waiting for confirmation before pushing commit",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2225071218",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14624,
+        "pr_file": "ggml/src/ggml-cuda/mmq.cuh",
+        "discussion_id": "2223423845",
+        "commented_code": "@@ -849,45 +1131,93 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_dp4a(\n     const float * y_df = (const float *) y;\n \n // #pragma unroll\n-    for (int k01 = 0; k01 < WARP_SIZE; k01 += QI8_0) {\n+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {\n         const int k0 = k00 + k01;\n \n #pragma unroll\n         for (int j0 = 0; j0 < mmq_x; j0 += nwarps) {\n             const int j = j0 + threadIdx.y;\n \n #pragma unroll\n-            for (int i0 = 0; i0 < mmq_y; i0 += WARP_SIZE) {\n+            for (int i0 = 0; i0 < mmq_y; i0 += warp_size) {\n                 const int i = i0 + threadIdx.x;\n \n-                sum[j0/nwarps*mmq_y/WARP_SIZE + i0/WARP_SIZE] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(\n-                    &x_qs[i*(2*WARP_SIZE + 1) + k0],\n+                sum[j0/nwarps*mmq_y/warp_size + i0/warp_size] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(\n+                    &x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0],\n                     &y_qs[j*MMQ_TILE_Y_K + k01],\n-                    &x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + k0/(QI8_0/2)],\n+                    &x_df[i*(2*MMQ_TILE_NE_K*2/QI8_0) + i/(QI8_0/4) + k0/(QI8_0/2)],\n                     y_df[j*MMQ_TILE_Y_K + k01/QI8_1]);\n             }\n         }\n     }\n }\n \n-template <int mmq_x, int mmq_y, int nwarps>\n+template <int mmq_x, int mmq_y>\n static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(\n     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {\n-#ifdef NEW_MMA_AVAILABLE\n+#if defined(AMD_MFMA_AVAILABLE)\n+    typedef tile<32,  4, int> tile_A;\n+    typedef tile<32,  4, int> tile_B;\n+    typedef tile<32, 32, int> tile_C;\n+\n+    constexpr int granularity = mmq_get_granularity_device(GGML_TYPE_Q3_K, mmq_x);\n+    constexpr int rows_per_warp = granularity;\n+    constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.\n+\n+    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);",
+        "comment_created_at": "2025-07-23T10:15:38+00:00",
+        "comment_author": "JohannesGaessler",
+        "comment_body": "Either way is fine, it should just be consistent. I have a slight preference towards `tile_C::J` since that is what is used for the iteration over  `ntx`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2226150929",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14624,
+        "pr_file": "ggml/src/ggml-cuda/mmq.cuh",
+        "discussion_id": "2223423845",
+        "commented_code": "@@ -849,45 +1131,93 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_dp4a(\n     const float * y_df = (const float *) y;\n \n // #pragma unroll\n-    for (int k01 = 0; k01 < WARP_SIZE; k01 += QI8_0) {\n+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {\n         const int k0 = k00 + k01;\n \n #pragma unroll\n         for (int j0 = 0; j0 < mmq_x; j0 += nwarps) {\n             const int j = j0 + threadIdx.y;\n \n #pragma unroll\n-            for (int i0 = 0; i0 < mmq_y; i0 += WARP_SIZE) {\n+            for (int i0 = 0; i0 < mmq_y; i0 += warp_size) {\n                 const int i = i0 + threadIdx.x;\n \n-                sum[j0/nwarps*mmq_y/WARP_SIZE + i0/WARP_SIZE] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(\n-                    &x_qs[i*(2*WARP_SIZE + 1) + k0],\n+                sum[j0/nwarps*mmq_y/warp_size + i0/warp_size] += vec_dot_q8_0_16_q8_1_impl<QI8_0>(\n+                    &x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0],\n                     &y_qs[j*MMQ_TILE_Y_K + k01],\n-                    &x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + k0/(QI8_0/2)],\n+                    &x_df[i*(2*MMQ_TILE_NE_K*2/QI8_0) + i/(QI8_0/4) + k0/(QI8_0/2)],\n                     y_df[j*MMQ_TILE_Y_K + k01/QI8_1]);\n             }\n         }\n     }\n }\n \n-template <int mmq_x, int mmq_y, int nwarps>\n+template <int mmq_x, int mmq_y>\n static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(\n     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {\n-#ifdef NEW_MMA_AVAILABLE\n+#if defined(AMD_MFMA_AVAILABLE)\n+    typedef tile<32,  4, int> tile_A;\n+    typedef tile<32,  4, int> tile_B;\n+    typedef tile<32, 32, int> tile_C;\n+\n+    constexpr int granularity = mmq_get_granularity_device(GGML_TYPE_Q3_K, mmq_x);\n+    constexpr int rows_per_warp = granularity;\n+    constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.\n+\n+    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);",
+        "comment_created_at": "2025-07-23T16:48:21+00:00",
+        "comment_author": "deepsek",
+        "comment_body": "Switched to `tile_C::J`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2202548260",
+    "pr_number": 14551,
+    "pr_file": "ggml/src/ggml-cuda/set-rows.cu",
+    "created_at": "2025-07-12T11:46:38+00:00",
+    "commented_code": "+#include \"set-rows.cuh\"\n+\n+typedef void (*set_rows_kernel_t)(const char * src, char * dst);\n+\n+template<typename src_t, typename dst_t>\n+__device__ void set_rows_1(const src_t * src_f, dst_t * dst_f) {}\n+\n+template<>\n+__device__ __forceinline__ void set_rows_1<float, half>(const float * src_f, half * dst_h) {\n+    *dst_h = __float2half(*src_f);\n+}\n+\n+template<>\n+__device__ __forceinline__ void set_rows_1<float, float>(const float * src_f, float * dst_f) {\n+    *dst_f = *src_f;\n+}\n+\n+template<typename src_t, typename dst_t>\n+static __global__ void k_set_rows(\n+        const src_t * __restrict__ src0, const int64_t * __restrict__ src1, dst_t * __restrict__ dst,\n+        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,\n+        const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t ne13,\n+        const size_t nb01, const size_t nb02, const size_t nb03,\n+        const size_t nb10, const size_t nb11, const size_t nb12,\n+        const size_t nb1, const size_t nb2, const size_t nb3) {",
+    "repo_full_name": "ggml-org/llama.cpp",
+    "discussion_comments": [
+      {
+        "comment_id": "2202548260",
+        "repo_full_name": "ggml-org/llama.cpp",
+        "pr_number": 14551,
+        "pr_file": "ggml/src/ggml-cuda/set-rows.cu",
+        "discussion_id": "2202548260",
+        "commented_code": "@@ -0,0 +1,130 @@\n+#include \"set-rows.cuh\"\n+\n+typedef void (*set_rows_kernel_t)(const char * src, char * dst);\n+\n+template<typename src_t, typename dst_t>\n+__device__ void set_rows_1(const src_t * src_f, dst_t * dst_f) {}\n+\n+template<>\n+__device__ __forceinline__ void set_rows_1<float, half>(const float * src_f, half * dst_h) {\n+    *dst_h = __float2half(*src_f);\n+}\n+\n+template<>\n+__device__ __forceinline__ void set_rows_1<float, float>(const float * src_f, float * dst_f) {\n+    *dst_f = *src_f;\n+}\n+\n+template<typename src_t, typename dst_t>\n+static __global__ void k_set_rows(\n+        const src_t * __restrict__ src0, const int64_t * __restrict__ src1, dst_t * __restrict__ dst,\n+        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,\n+        const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t ne13,\n+        const size_t nb01, const size_t nb02, const size_t nb03,\n+        const size_t nb10, const size_t nb11, const size_t nb12,\n+        const size_t nb1, const size_t nb2, const size_t nb3) {",
+        "comment_created_at": "2025-07-12T11:46:38+00:00",
+        "comment_author": "JohannesGaessler",
+        "comment_body": "Rename the arguments to e.g. `s01` to avoid confusion with the offsets in bytes. Preferably use `int64_t` since that is the data type used in host code.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

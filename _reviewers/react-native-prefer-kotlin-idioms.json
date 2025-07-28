@@ -1,0 +1,260 @@
+[
+  {
+    "discussion_id": "2143271710",
+    "pr_number": 51930,
+    "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/bridge/JavaMethodWrapper.kt",
+    "created_at": "2025-06-12T17:24:22+00:00",
+    "commented_code": "+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react.bridge\n+\n+import androidx.annotation.Nullable\n+import com.facebook.debug.holder.PrinterHolder\n+import com.facebook.debug.tags.ReactDebugOverlayTags\n+import com.facebook.react.common.annotations.internal.LegacyArchitecture\n+import com.facebook.react.common.annotations.internal.LegacyArchitectureLogLevel\n+import com.facebook.react.common.annotations.internal.LegacyArchitectureLogger\n+import com.facebook.systrace.SystraceMessage\n+import com.facebook.systrace.Systrace.TRACE_TAG_REACT\n+import java.lang.reflect.InvocationTargetException\n+import java.lang.reflect.Method\n+\n+@LegacyArchitecture(logLevel = LegacyArchitectureLogLevel.ERROR)\n+internal class JavaMethodWrapper(\n+    private val moduleWrapper: JavaModuleWrapper,\n+    val method: Method,\n+    isSync: Boolean\n+) : JavaModuleWrapper.NativeMethod {\n+  private abstract class ArgumentExtractor<T> {\n+    open fun getJSArgumentsNeeded(): Int = 1\n+\n+    abstract fun extractArgument(\n+        jsInstance: JSInstance, jsArguments: ReadableArray, atIndex: Int\n+    ): T?\n+  }\n+\n+  private val parameterTypes: Array<Class<*>>\n+  private val paramLength: Int\n+\n+  /**\n+   * Determines how the method is exported in JavaScript: METHOD_TYPE_ASYNC for regular methods\n+   * METHOD_TYPE_PROMISE for methods that return a promise object to the caller. METHOD_TYPE_SYNC\n+   * for sync methods\n+   */\n+  override var type: String = BaseJavaModule.METHOD_TYPE_ASYNC\n+  private var argumentsProcessed = false\n+  private var argumentExtractors: Array<ArgumentExtractor<*>>? = null\n+  private var internalSignature: String? = null\n+  private var arguments: Array<Any?>? = null\n+  private var jsArgumentsNeeded = 0\n+\n+  init {\n+    method.isAccessible = true\n+    parameterTypes = method.parameterTypes\n+    paramLength = parameterTypes.size\n+\n+    if (isSync) {\n+      type = BaseJavaModule.METHOD_TYPE_SYNC\n+    } else if (paramLength > 0 && (parameterTypes[paramLength - 1] == Promise::class.java)) {\n+      type = BaseJavaModule.METHOD_TYPE_PROMISE\n+    }\n+  }\n+\n+  private fun processArguments() {\n+    if (argumentsProcessed) {\n+      return\n+    }\n+    SystraceMessage.beginSection(TRACE_TAG_REACT, \"processArguments\")\n+      .arg(\"method\", moduleWrapper.name + \".\" + method.name)\n+      .flush()\n+    try {\n+      argumentsProcessed = true\n+      argumentExtractors = buildArgumentExtractors(parameterTypes)\n+      internalSignature =\n+          buildSignature(method, parameterTypes, (type == BaseJavaModule.METHOD_TYPE_SYNC))\n+      // Since native methods are invoked from a message queue executed on a single thread, it is\n+      // safe to allocate only one arguments object per method that can be reused across calls\n+      arguments = arrayOfNulls(parameterTypes.size)\n+      jsArgumentsNeeded = calculateJSArgumentsNeeded()\n+    } finally {\n+      SystraceMessage.endSection(TRACE_TAG_REACT).flush()\n+    }\n+  }\n+\n+  val signature: String?\n+    get() {\n+      if (!argumentsProcessed) {\n+        processArguments()\n+      }\n+      return checkNotNull(internalSignature)\n+    }\n+\n+  private fun buildSignature(\n+      method: Method,\n+      paramTypes: Array<Class<*>>,\n+      isSync: Boolean\n+  ): String {\n+    val builder = StringBuilder(paramTypes.size + 2)",
+    "repo_full_name": "facebook/react-native",
+    "discussion_comments": [
+      {
+        "comment_id": "2143271710",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 51930,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/bridge/JavaMethodWrapper.kt",
+        "discussion_id": "2143271710",
+        "commented_code": "@@ -0,0 +1,403 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react.bridge\n+\n+import androidx.annotation.Nullable\n+import com.facebook.debug.holder.PrinterHolder\n+import com.facebook.debug.tags.ReactDebugOverlayTags\n+import com.facebook.react.common.annotations.internal.LegacyArchitecture\n+import com.facebook.react.common.annotations.internal.LegacyArchitectureLogLevel\n+import com.facebook.react.common.annotations.internal.LegacyArchitectureLogger\n+import com.facebook.systrace.SystraceMessage\n+import com.facebook.systrace.Systrace.TRACE_TAG_REACT\n+import java.lang.reflect.InvocationTargetException\n+import java.lang.reflect.Method\n+\n+@LegacyArchitecture(logLevel = LegacyArchitectureLogLevel.ERROR)\n+internal class JavaMethodWrapper(\n+    private val moduleWrapper: JavaModuleWrapper,\n+    val method: Method,\n+    isSync: Boolean\n+) : JavaModuleWrapper.NativeMethod {\n+  private abstract class ArgumentExtractor<T> {\n+    open fun getJSArgumentsNeeded(): Int = 1\n+\n+    abstract fun extractArgument(\n+        jsInstance: JSInstance, jsArguments: ReadableArray, atIndex: Int\n+    ): T?\n+  }\n+\n+  private val parameterTypes: Array<Class<*>>\n+  private val paramLength: Int\n+\n+  /**\n+   * Determines how the method is exported in JavaScript: METHOD_TYPE_ASYNC for regular methods\n+   * METHOD_TYPE_PROMISE for methods that return a promise object to the caller. METHOD_TYPE_SYNC\n+   * for sync methods\n+   */\n+  override var type: String = BaseJavaModule.METHOD_TYPE_ASYNC\n+  private var argumentsProcessed = false\n+  private var argumentExtractors: Array<ArgumentExtractor<*>>? = null\n+  private var internalSignature: String? = null\n+  private var arguments: Array<Any?>? = null\n+  private var jsArgumentsNeeded = 0\n+\n+  init {\n+    method.isAccessible = true\n+    parameterTypes = method.parameterTypes\n+    paramLength = parameterTypes.size\n+\n+    if (isSync) {\n+      type = BaseJavaModule.METHOD_TYPE_SYNC\n+    } else if (paramLength > 0 && (parameterTypes[paramLength - 1] == Promise::class.java)) {\n+      type = BaseJavaModule.METHOD_TYPE_PROMISE\n+    }\n+  }\n+\n+  private fun processArguments() {\n+    if (argumentsProcessed) {\n+      return\n+    }\n+    SystraceMessage.beginSection(TRACE_TAG_REACT, \"processArguments\")\n+      .arg(\"method\", moduleWrapper.name + \".\" + method.name)\n+      .flush()\n+    try {\n+      argumentsProcessed = true\n+      argumentExtractors = buildArgumentExtractors(parameterTypes)\n+      internalSignature =\n+          buildSignature(method, parameterTypes, (type == BaseJavaModule.METHOD_TYPE_SYNC))\n+      // Since native methods are invoked from a message queue executed on a single thread, it is\n+      // safe to allocate only one arguments object per method that can be reused across calls\n+      arguments = arrayOfNulls(parameterTypes.size)\n+      jsArgumentsNeeded = calculateJSArgumentsNeeded()\n+    } finally {\n+      SystraceMessage.endSection(TRACE_TAG_REACT).flush()\n+    }\n+  }\n+\n+  val signature: String?\n+    get() {\n+      if (!argumentsProcessed) {\n+        processArguments()\n+      }\n+      return checkNotNull(internalSignature)\n+    }\n+\n+  private fun buildSignature(\n+      method: Method,\n+      paramTypes: Array<Class<*>>,\n+      isSync: Boolean\n+  ): String {\n+    val builder = StringBuilder(paramTypes.size + 2)",
+        "comment_created_at": "2025-06-12T17:24:22+00:00",
+        "comment_author": "cortinico",
+        "comment_body": "this should be replaced by `buildString {`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2123309907",
+    "pr_number": 51756,
+    "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/ReactFragment.kt",
+    "created_at": "2025-06-03T09:47:47+00:00",
+    "commented_code": "+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react\n+\n+import android.app.Activity\n+import android.content.Intent\n+import android.os.Bundle\n+import android.view.KeyEvent\n+import android.view.LayoutInflater\n+import android.view.View\n+import android.view.ViewGroup\n+import androidx.fragment.app.Fragment\n+import com.facebook.react.internal.featureflags.ReactNativeNewArchitectureFeatureFlags\n+import com.facebook.react.modules.core.PermissionAwareActivity\n+import com.facebook.react.modules.core.PermissionListener\n+\n+/**\n+ * Fragment for creating a React View. This allows the developer to \"embed\" a React Application\n+ * inside native components such as a Drawer, ViewPager, etc.\n+ */\n+public class ReactFragment : Fragment(), PermissionAwareActivity {\n+  protected var reactDelegate: ReactDelegate? = null\n+  private var disableHostLifecycleEvents = false\n+  private var permissionListener: PermissionListener? = null\n+\n+  public override fun onCreate(savedInstanceState: Bundle?) {\n+    super.onCreate(savedInstanceState)\n+    var mainComponentName: String? = null\n+    var launchOptions: Bundle? = null\n+    var fabricEnabled: Boolean? = null\n+    getArguments()?.let {\n+      mainComponentName = it.getString(ARG_COMPONENT_NAME)\n+      launchOptions = it.getBundle(ARG_LAUNCH_OPTIONS)\n+      fabricEnabled = it.getBoolean(ARG_FABRIC_ENABLED)\n+      @Suppress(\"DEPRECATION\")\n+      disableHostLifecycleEvents = it.getBoolean(ARG_DISABLE_HOST_LIFECYCLE_EVENTS)\n+    }\n+    checkNotNull(mainComponentName) { \"Cannot loadApp if component name is null\" }\n+    if (ReactNativeNewArchitectureFeatureFlags.enableBridgelessArchitecture()) {\n+      reactDelegate =\n+          ReactDelegate(getActivity(), reactHost, mainComponentName, launchOptions)\n+    } else {\n+      reactDelegate =",
+    "repo_full_name": "facebook/react-native",
+    "discussion_comments": [
+      {
+        "comment_id": "2123309907",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 51756,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/ReactFragment.kt",
+        "discussion_id": "2123309907",
+        "commented_code": "@@ -0,0 +1,251 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react\n+\n+import android.app.Activity\n+import android.content.Intent\n+import android.os.Bundle\n+import android.view.KeyEvent\n+import android.view.LayoutInflater\n+import android.view.View\n+import android.view.ViewGroup\n+import androidx.fragment.app.Fragment\n+import com.facebook.react.internal.featureflags.ReactNativeNewArchitectureFeatureFlags\n+import com.facebook.react.modules.core.PermissionAwareActivity\n+import com.facebook.react.modules.core.PermissionListener\n+\n+/**\n+ * Fragment for creating a React View. This allows the developer to \"embed\" a React Application\n+ * inside native components such as a Drawer, ViewPager, etc.\n+ */\n+public class ReactFragment : Fragment(), PermissionAwareActivity {\n+  protected var reactDelegate: ReactDelegate? = null\n+  private var disableHostLifecycleEvents = false\n+  private var permissionListener: PermissionListener? = null\n+\n+  public override fun onCreate(savedInstanceState: Bundle?) {\n+    super.onCreate(savedInstanceState)\n+    var mainComponentName: String? = null\n+    var launchOptions: Bundle? = null\n+    var fabricEnabled: Boolean? = null\n+    getArguments()?.let {\n+      mainComponentName = it.getString(ARG_COMPONENT_NAME)\n+      launchOptions = it.getBundle(ARG_LAUNCH_OPTIONS)\n+      fabricEnabled = it.getBoolean(ARG_FABRIC_ENABLED)\n+      @Suppress(\"DEPRECATION\")\n+      disableHostLifecycleEvents = it.getBoolean(ARG_DISABLE_HOST_LIFECYCLE_EVENTS)\n+    }\n+    checkNotNull(mainComponentName) { \"Cannot loadApp if component name is null\" }\n+    if (ReactNativeNewArchitectureFeatureFlags.enableBridgelessArchitecture()) {\n+      reactDelegate =\n+          ReactDelegate(getActivity(), reactHost, mainComponentName, launchOptions)\n+    } else {\n+      reactDelegate =",
+        "comment_created_at": "2025-06-03T09:47:47+00:00",
+        "comment_author": "cortinico",
+        "comment_body": "can we filter the assignment out of the if-then-else?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2124396563",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 51756,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/ReactFragment.kt",
+        "discussion_id": "2123309907",
+        "commented_code": "@@ -0,0 +1,251 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react\n+\n+import android.app.Activity\n+import android.content.Intent\n+import android.os.Bundle\n+import android.view.KeyEvent\n+import android.view.LayoutInflater\n+import android.view.View\n+import android.view.ViewGroup\n+import androidx.fragment.app.Fragment\n+import com.facebook.react.internal.featureflags.ReactNativeNewArchitectureFeatureFlags\n+import com.facebook.react.modules.core.PermissionAwareActivity\n+import com.facebook.react.modules.core.PermissionListener\n+\n+/**\n+ * Fragment for creating a React View. This allows the developer to \"embed\" a React Application\n+ * inside native components such as a Drawer, ViewPager, etc.\n+ */\n+public class ReactFragment : Fragment(), PermissionAwareActivity {\n+  protected var reactDelegate: ReactDelegate? = null\n+  private var disableHostLifecycleEvents = false\n+  private var permissionListener: PermissionListener? = null\n+\n+  public override fun onCreate(savedInstanceState: Bundle?) {\n+    super.onCreate(savedInstanceState)\n+    var mainComponentName: String? = null\n+    var launchOptions: Bundle? = null\n+    var fabricEnabled: Boolean? = null\n+    getArguments()?.let {\n+      mainComponentName = it.getString(ARG_COMPONENT_NAME)\n+      launchOptions = it.getBundle(ARG_LAUNCH_OPTIONS)\n+      fabricEnabled = it.getBoolean(ARG_FABRIC_ENABLED)\n+      @Suppress(\"DEPRECATION\")\n+      disableHostLifecycleEvents = it.getBoolean(ARG_DISABLE_HOST_LIFECYCLE_EVENTS)\n+    }\n+    checkNotNull(mainComponentName) { \"Cannot loadApp if component name is null\" }\n+    if (ReactNativeNewArchitectureFeatureFlags.enableBridgelessArchitecture()) {\n+      reactDelegate =\n+          ReactDelegate(getActivity(), reactHost, mainComponentName, launchOptions)\n+    } else {\n+      reactDelegate =",
+        "comment_created_at": "2025-06-03T16:37:06+00:00",
+        "comment_author": "mateoguzmana",
+        "comment_body": "I am trying a few different things here, but seems like we can't get rid of the if/else as the constructors are different because of the `reactHost` vs `reactNativeHost`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2124448442",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 51756,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/ReactFragment.kt",
+        "discussion_id": "2123309907",
+        "commented_code": "@@ -0,0 +1,251 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react\n+\n+import android.app.Activity\n+import android.content.Intent\n+import android.os.Bundle\n+import android.view.KeyEvent\n+import android.view.LayoutInflater\n+import android.view.View\n+import android.view.ViewGroup\n+import androidx.fragment.app.Fragment\n+import com.facebook.react.internal.featureflags.ReactNativeNewArchitectureFeatureFlags\n+import com.facebook.react.modules.core.PermissionAwareActivity\n+import com.facebook.react.modules.core.PermissionListener\n+\n+/**\n+ * Fragment for creating a React View. This allows the developer to \"embed\" a React Application\n+ * inside native components such as a Drawer, ViewPager, etc.\n+ */\n+public class ReactFragment : Fragment(), PermissionAwareActivity {\n+  protected var reactDelegate: ReactDelegate? = null\n+  private var disableHostLifecycleEvents = false\n+  private var permissionListener: PermissionListener? = null\n+\n+  public override fun onCreate(savedInstanceState: Bundle?) {\n+    super.onCreate(savedInstanceState)\n+    var mainComponentName: String? = null\n+    var launchOptions: Bundle? = null\n+    var fabricEnabled: Boolean? = null\n+    getArguments()?.let {\n+      mainComponentName = it.getString(ARG_COMPONENT_NAME)\n+      launchOptions = it.getBundle(ARG_LAUNCH_OPTIONS)\n+      fabricEnabled = it.getBoolean(ARG_FABRIC_ENABLED)\n+      @Suppress(\"DEPRECATION\")\n+      disableHostLifecycleEvents = it.getBoolean(ARG_DISABLE_HOST_LIFECYCLE_EVENTS)\n+    }\n+    checkNotNull(mainComponentName) { \"Cannot loadApp if component name is null\" }\n+    if (ReactNativeNewArchitectureFeatureFlags.enableBridgelessArchitecture()) {\n+      reactDelegate =\n+          ReactDelegate(getActivity(), reactHost, mainComponentName, launchOptions)\n+    } else {\n+      reactDelegate =",
+        "comment_created_at": "2025-06-03T17:04:56+00:00",
+        "comment_author": "cortinico",
+        "comment_body": "Sorry I meant we do this:\r\n\r\n```kotlin\r\nreactDelegate = if (ReactNativeNewArchitectureFeatureFlags.enableBridgelessArchitecture()) {\r\n    ReactDelegate(getActivity(), reactHost, mainComponentName, launchOptions)\r\n} else {\r\n    ...\r\n}\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2123332974",
+    "pr_number": 51734,
+    "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/bridge/NativeModuleRegistry.kt",
+    "created_at": "2025-06-03T09:57:34+00:00",
+    "commented_code": "+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react.bridge\n+\n+import com.facebook.infer.annotation.Assertions\n+import com.facebook.react.bridge.ReactMarker.logMarker\n+import com.facebook.react.common.annotations.internal.LegacyArchitecture\n+import com.facebook.react.common.annotations.internal.LegacyArchitectureLogLevel\n+import com.facebook.react.common.annotations.internal.LegacyArchitectureLogger.assertLegacyArchitecture\n+import com.facebook.react.module.annotations.ReactModule\n+import com.facebook.systrace.Systrace\n+import com.facebook.systrace.Systrace.beginSection\n+import com.facebook.systrace.Systrace.endSection\n+\n+/** A set of Java APIs to expose to a particular JavaScript instance. */\n+@LegacyArchitecture\n+public class NativeModuleRegistry(\n+    private val reactApplicationContext: ReactApplicationContext,\n+    private val modules: MutableMap<String, ModuleHolder>\n+) {\n+  private val moduleMap: Map<String, ModuleHolder>\n+    /** Private getters for combining NativeModuleRegistry's */\n+    get() = modules\n+\n+  public fun getJavaModules(jsInstance: JSInstance): Collection<JavaModuleWrapper> =\n+    ArrayList<JavaModuleWrapper>().apply {",
+    "repo_full_name": "facebook/react-native",
+    "discussion_comments": [
+      {
+        "comment_id": "2123332974",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 51734,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/bridge/NativeModuleRegistry.kt",
+        "discussion_id": "2123332974",
+        "commented_code": "@@ -0,0 +1,147 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react.bridge\n+\n+import com.facebook.infer.annotation.Assertions\n+import com.facebook.react.bridge.ReactMarker.logMarker\n+import com.facebook.react.common.annotations.internal.LegacyArchitecture\n+import com.facebook.react.common.annotations.internal.LegacyArchitectureLogLevel\n+import com.facebook.react.common.annotations.internal.LegacyArchitectureLogger.assertLegacyArchitecture\n+import com.facebook.react.module.annotations.ReactModule\n+import com.facebook.systrace.Systrace\n+import com.facebook.systrace.Systrace.beginSection\n+import com.facebook.systrace.Systrace.endSection\n+\n+/** A set of Java APIs to expose to a particular JavaScript instance. */\n+@LegacyArchitecture\n+public class NativeModuleRegistry(\n+    private val reactApplicationContext: ReactApplicationContext,\n+    private val modules: MutableMap<String, ModuleHolder>\n+) {\n+  private val moduleMap: Map<String, ModuleHolder>\n+    /** Private getters for combining NativeModuleRegistry's */\n+    get() = modules\n+\n+  public fun getJavaModules(jsInstance: JSInstance): Collection<JavaModuleWrapper> =\n+    ArrayList<JavaModuleWrapper>().apply {",
+        "comment_created_at": "2025-06-03T09:57:34+00:00",
+        "comment_author": "cortinico",
+        "comment_body": "We shouldn't use `ArrayList<...>` directly but rather `buildList {...}` or `mutableListOf`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2049154010",
+    "pr_number": 50756,
+    "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/modules/blob/BlobProvider.kt",
+    "created_at": "2025-04-17T15:05:08+00:00",
+    "commented_code": "+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+package com.facebook.react.modules.blob\n+\n+import android.content.ContentProvider\n+import android.content.ContentValues\n+import android.database.Cursor\n+import android.net.Uri\n+import android.os.ParcelFileDescriptor\n+import com.facebook.infer.annotation.Nullsafe\n+import com.facebook.react.ReactApplication\n+import java.io.FileNotFoundException\n+import java.io.IOException\n+import java.util.concurrent.ExecutorService\n+import java.util.concurrent.Executors\n+\n+public final class BlobProvider : ContentProvider() {\n+  private val executor: ExecutorService = Executors.newSingleThreadExecutor()\n+\n+  override fun onCreate(): Boolean {\n+    return true\n+  }",
+    "repo_full_name": "facebook/react-native",
+    "discussion_comments": [
+      {
+        "comment_id": "2049154010",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 50756,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/modules/blob/BlobProvider.kt",
+        "discussion_id": "2049154010",
+        "commented_code": "@@ -0,0 +1,126 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+package com.facebook.react.modules.blob\n+\n+import android.content.ContentProvider\n+import android.content.ContentValues\n+import android.database.Cursor\n+import android.net.Uri\n+import android.os.ParcelFileDescriptor\n+import com.facebook.infer.annotation.Nullsafe\n+import com.facebook.react.ReactApplication\n+import java.io.FileNotFoundException\n+import java.io.IOException\n+import java.util.concurrent.ExecutorService\n+import java.util.concurrent.Executors\n+\n+public final class BlobProvider : ContentProvider() {\n+  private val executor: ExecutorService = Executors.newSingleThreadExecutor()\n+\n+  override fun onCreate(): Boolean {\n+    return true\n+  }",
+        "comment_created_at": "2025-04-17T15:05:08+00:00",
+        "comment_author": "mateoguzmana",
+        "comment_body": "For those functions that just return, can you simplify a bit in this way?:\r\n\r\n```suggestion\r\n  override fun onCreate(): Boolean = true\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2048420066",
+    "pr_number": 50754,
+    "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/bridge/DynamicFromObject.kt",
+    "created_at": "2025-04-17T07:42:34+00:00",
+    "commented_code": "+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+package com.facebook.react.bridge\n+\n+import com.facebook.common.logging.FLog\n+import com.facebook.infer.annotation.Nullsafe\n+import com.facebook.react.common.ReactConstants\n+\n+/** Implementation of Dynamic wrapping a ReadableArray.  */\n+@Nullsafe(Nullsafe.Mode.LOCAL)\n+public class DynamicFromObject(private val value: Any?) : Dynamic {\n+  override fun recycle() {\n+    // Noop - nothing to recycle since there is no pooling\n+  }\n+\n+  override val isNull: Boolean\n+    get() = value == null\n+\n+  override fun asBoolean(): Boolean {\n+    if (value is Boolean) {\n+      return value\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a boolean\")\n+  }\n+\n+  override fun asDouble(): Double {\n+    if (value is Number) {\n+      return value as Double\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a number\")\n+  }\n+\n+  override fun asInt(): Int {\n+    if (value is Number) {\n+      // Numbers from JS are always Doubles\n+      return (value as Double).toInt()\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a number\")\n+  }\n+\n+  override fun asString(): String? {\n+    if (value is String) {\n+      return value\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a string\")\n+  }\n+\n+  override fun asArray(): ReadableArray? {\n+    if (value is ReadableArray) {\n+      return value\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a ReadableArray\")\n+  }\n+\n+  override fun asMap(): ReadableMap? {\n+    if (value is ReadableMap) {\n+      return value\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a ReadableMap\")\n+  }\n+\n+  override val type: ReadableType\n+    get() {\n+      if (isNull) {\n+        return ReadableType.Null\n+      }\n+      if (value is Boolean) {\n+        return ReadableType.Boolean\n+      }\n+      if (value is Number) {\n+        return ReadableType.Number\n+      }\n+      if (value is String) {\n+        return ReadableType.String\n+      }\n+      if (value is ReadableMap) {\n+        return ReadableType.Map\n+      }\n+      if (value is ReadableArray) {\n+        return ReadableType.Array\n+      }\n+      FLog.e(\n+        ReactConstants.TAG,\n+        \"Unmapped object type \"\n+          + (if (value == null) \"<NULL object>\" else value.javaClass.name)\n+      )\n+      return ReadableType.Null\n+    }",
+    "repo_full_name": "facebook/react-native",
+    "discussion_comments": [
+      {
+        "comment_id": "2048420066",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 50754,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/bridge/DynamicFromObject.kt",
+        "discussion_id": "2048420066",
+        "commented_code": "@@ -0,0 +1,93 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+package com.facebook.react.bridge\n+\n+import com.facebook.common.logging.FLog\n+import com.facebook.infer.annotation.Nullsafe\n+import com.facebook.react.common.ReactConstants\n+\n+/** Implementation of Dynamic wrapping a ReadableArray.  */\n+@Nullsafe(Nullsafe.Mode.LOCAL)\n+public class DynamicFromObject(private val value: Any?) : Dynamic {\n+  override fun recycle() {\n+    // Noop - nothing to recycle since there is no pooling\n+  }\n+\n+  override val isNull: Boolean\n+    get() = value == null\n+\n+  override fun asBoolean(): Boolean {\n+    if (value is Boolean) {\n+      return value\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a boolean\")\n+  }\n+\n+  override fun asDouble(): Double {\n+    if (value is Number) {\n+      return value as Double\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a number\")\n+  }\n+\n+  override fun asInt(): Int {\n+    if (value is Number) {\n+      // Numbers from JS are always Doubles\n+      return (value as Double).toInt()\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a number\")\n+  }\n+\n+  override fun asString(): String? {\n+    if (value is String) {\n+      return value\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a string\")\n+  }\n+\n+  override fun asArray(): ReadableArray? {\n+    if (value is ReadableArray) {\n+      return value\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a ReadableArray\")\n+  }\n+\n+  override fun asMap(): ReadableMap? {\n+    if (value is ReadableMap) {\n+      return value\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a ReadableMap\")\n+  }\n+\n+  override val type: ReadableType\n+    get() {\n+      if (isNull) {\n+        return ReadableType.Null\n+      }\n+      if (value is Boolean) {\n+        return ReadableType.Boolean\n+      }\n+      if (value is Number) {\n+        return ReadableType.Number\n+      }\n+      if (value is String) {\n+        return ReadableType.String\n+      }\n+      if (value is ReadableMap) {\n+        return ReadableType.Map\n+      }\n+      if (value is ReadableArray) {\n+        return ReadableType.Array\n+      }\n+      FLog.e(\n+        ReactConstants.TAG,\n+        \"Unmapped object type \"\n+          + (if (value == null) \"<NULL object>\" else value.javaClass.name)\n+      )\n+      return ReadableType.Null\n+    }",
+        "comment_created_at": "2025-04-17T07:42:34+00:00",
+        "comment_author": "alanleedev",
+        "comment_body": "Could we use `when` to simplify the code for Kotlin?\r\n```suggestion\r\noverride val type: ReadableType\r\n    get() {\r\n      return when (value) {\r\n        null -> ReadableType.Null\r\n        is Boolean -> ReadableType.Boolean\r\n        is Number -> ReadableType.Number\r\n        is String -> ReadableType.String\r\n        is ReadableMap -> ReadableType.Map\r\n        is ReadableArray -> ReadableType.Array\r\n        else -> {\r\n          FLog.e(\r\n              ReactConstants.TAG,\r\n              \"Unmapped object type \" + (if (value == null) \"<NULL object>\" else value.javaClass.name))\r\n          ReadableType.Null\r\n        }\r\n      }\r\n    }\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2048802054",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 50754,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/bridge/DynamicFromObject.kt",
+        "discussion_id": "2048420066",
+        "commented_code": "@@ -0,0 +1,93 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+package com.facebook.react.bridge\n+\n+import com.facebook.common.logging.FLog\n+import com.facebook.infer.annotation.Nullsafe\n+import com.facebook.react.common.ReactConstants\n+\n+/** Implementation of Dynamic wrapping a ReadableArray.  */\n+@Nullsafe(Nullsafe.Mode.LOCAL)\n+public class DynamicFromObject(private val value: Any?) : Dynamic {\n+  override fun recycle() {\n+    // Noop - nothing to recycle since there is no pooling\n+  }\n+\n+  override val isNull: Boolean\n+    get() = value == null\n+\n+  override fun asBoolean(): Boolean {\n+    if (value is Boolean) {\n+      return value\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a boolean\")\n+  }\n+\n+  override fun asDouble(): Double {\n+    if (value is Number) {\n+      return value as Double\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a number\")\n+  }\n+\n+  override fun asInt(): Int {\n+    if (value is Number) {\n+      // Numbers from JS are always Doubles\n+      return (value as Double).toInt()\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a number\")\n+  }\n+\n+  override fun asString(): String? {\n+    if (value is String) {\n+      return value\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a string\")\n+  }\n+\n+  override fun asArray(): ReadableArray? {\n+    if (value is ReadableArray) {\n+      return value\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a ReadableArray\")\n+  }\n+\n+  override fun asMap(): ReadableMap? {\n+    if (value is ReadableMap) {\n+      return value\n+    }\n+    throw ClassCastException(\"Dynamic value from Object is not a ReadableMap\")\n+  }\n+\n+  override val type: ReadableType\n+    get() {\n+      if (isNull) {\n+        return ReadableType.Null\n+      }\n+      if (value is Boolean) {\n+        return ReadableType.Boolean\n+      }\n+      if (value is Number) {\n+        return ReadableType.Number\n+      }\n+      if (value is String) {\n+        return ReadableType.String\n+      }\n+      if (value is ReadableMap) {\n+        return ReadableType.Map\n+      }\n+      if (value is ReadableArray) {\n+        return ReadableType.Array\n+      }\n+      FLog.e(\n+        ReactConstants.TAG,\n+        \"Unmapped object type \"\n+          + (if (value == null) \"<NULL object>\" else value.javaClass.name)\n+      )\n+      return ReadableType.Null\n+    }",
+        "comment_created_at": "2025-04-17T12:01:30+00:00",
+        "comment_author": "yasir6jan",
+        "comment_body": "Done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2041153897",
+    "pr_number": 50685,
+    "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/runtime/ReactLifecycleStateManager.kt",
+    "created_at": "2025-04-13T15:57:30+00:00",
+    "commented_code": "+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react.runtime\n+\n+import android.app.Activity\n+import androidx.annotation.Nullable\n+import com.facebook.infer.annotation.Nullsafe\n+import com.facebook.infer.annotation.ThreadConfined\n+import com.facebook.infer.annotation.ThreadConfined.UI\n+import com.facebook.react.bridge.ReactContext\n+import com.facebook.react.common.LifecycleState\n+\n+@Nullsafe(Nullsafe.Mode.LOCAL)\n+internal class ReactLifecycleStateManager(\n+        private val bridgelessReactStateTracker: BridgelessReactStateTracker\n+) {\n+  private var state: LifecycleState = LifecycleState.BEFORE_CREATE\n+\n+  fun getLifecycleState(): LifecycleState = state",
+    "repo_full_name": "facebook/react-native",
+    "discussion_comments": [
+      {
+        "comment_id": "2041153897",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 50685,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/runtime/ReactLifecycleStateManager.kt",
+        "discussion_id": "2041153897",
+        "commented_code": "@@ -0,0 +1,91 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react.runtime\n+\n+import android.app.Activity\n+import androidx.annotation.Nullable\n+import com.facebook.infer.annotation.Nullsafe\n+import com.facebook.infer.annotation.ThreadConfined\n+import com.facebook.infer.annotation.ThreadConfined.UI\n+import com.facebook.react.bridge.ReactContext\n+import com.facebook.react.common.LifecycleState\n+\n+@Nullsafe(Nullsafe.Mode.LOCAL)\n+internal class ReactLifecycleStateManager(\n+        private val bridgelessReactStateTracker: BridgelessReactStateTracker\n+) {\n+  private var state: LifecycleState = LifecycleState.BEFORE_CREATE\n+\n+  fun getLifecycleState(): LifecycleState = state",
+        "comment_created_at": "2025-04-13T15:57:30+00:00",
+        "comment_author": "mateoguzmana",
+        "comment_body": "Could you try exposing this as:\r\n\r\n```suggestion\r\n  val lifecycleState: LifecycleState\r\n    get() = state\r\n```\r\n\r\nA bit more Kotlin idiomatic.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2041165655",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 50685,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/runtime/ReactLifecycleStateManager.kt",
+        "discussion_id": "2041153897",
+        "commented_code": "@@ -0,0 +1,91 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react.runtime\n+\n+import android.app.Activity\n+import androidx.annotation.Nullable\n+import com.facebook.infer.annotation.Nullsafe\n+import com.facebook.infer.annotation.ThreadConfined\n+import com.facebook.infer.annotation.ThreadConfined.UI\n+import com.facebook.react.bridge.ReactContext\n+import com.facebook.react.common.LifecycleState\n+\n+@Nullsafe(Nullsafe.Mode.LOCAL)\n+internal class ReactLifecycleStateManager(\n+        private val bridgelessReactStateTracker: BridgelessReactStateTracker\n+) {\n+  private var state: LifecycleState = LifecycleState.BEFORE_CREATE\n+\n+  fun getLifecycleState(): LifecycleState = state",
+        "comment_created_at": "2025-04-13T16:59:58+00:00",
+        "comment_author": "rohitverma-d11",
+        "comment_body": "made the suggested changes",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2031968861",
+    "pr_number": 50536,
+    "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/bridge/UiThreadUtil.kt",
+    "created_at": "2025-04-07T20:33:46+00:00",
+    "commented_code": "+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react.bridge\n+\n+import android.os.Handler\n+import android.os.Looper\n+import com.facebook.react.common.build.ReactBuildConfig\n+ \n+/** Utility for interacting with the UI thread. */\n+public object UiThreadUtil {\n+ \n+    @Volatile private var sMainHandler: Handler? = null\n+ \n+    private val mainHandler: Handler\n+        get() {\n+             if (sMainHandler == null) {\n+                 synchronized(this) {\n+                     if (sMainHandler == null) {\n+                         sMainHandler = Handler(Looper.getMainLooper())\n+                     }\n+                 }\n+             }\n+             return sMainHandler!!\n+        }\n+ \n+    /** Exposed for Java interop (e.g. Java calls to `UiThreadUtil.getUiThreadHandler()`) */\n+    @JvmStatic\n+    public fun getUiThreadHandler(): Handler {\n+         return mainHandler\n+    }\n+ \n+    /** @return `true` if current thread is the UI thread. */\n+    @JvmStatic\n+    public fun isOnUiThread(): Boolean {\n+         return Looper.getMainLooper().thread == Thread.currentThread()\n+    }",
+    "repo_full_name": "facebook/react-native",
+    "discussion_comments": [
+      {
+        "comment_id": "2031968861",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 50536,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/bridge/UiThreadUtil.kt",
+        "discussion_id": "2031968861",
+        "commented_code": "@@ -0,0 +1,85 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react.bridge\n+\n+import android.os.Handler\n+import android.os.Looper\n+import com.facebook.react.common.build.ReactBuildConfig\n+ \n+/** Utility for interacting with the UI thread. */\n+public object UiThreadUtil {\n+ \n+    @Volatile private var sMainHandler: Handler? = null\n+ \n+    private val mainHandler: Handler\n+        get() {\n+             if (sMainHandler == null) {\n+                 synchronized(this) {\n+                     if (sMainHandler == null) {\n+                         sMainHandler = Handler(Looper.getMainLooper())\n+                     }\n+                 }\n+             }\n+             return sMainHandler!!\n+        }\n+ \n+    /** Exposed for Java interop (e.g. Java calls to `UiThreadUtil.getUiThreadHandler()`) */\n+    @JvmStatic\n+    public fun getUiThreadHandler(): Handler {\n+         return mainHandler\n+    }\n+ \n+    /** @return `true` if current thread is the UI thread. */\n+    @JvmStatic\n+    public fun isOnUiThread(): Boolean {\n+         return Looper.getMainLooper().thread == Thread.currentThread()\n+    }",
+        "comment_created_at": "2025-04-07T20:33:46+00:00",
+        "comment_author": "mateoguzmana",
+        "comment_body": "Could you please use expression body syntax? \r\n\r\nLike this:\r\n\r\n```suggestion\r\n    @JvmStatic\r\n    public fun isOnUiThread(): Boolean = Looper.getMainLooper().thread == Thread.currentThread()\r\n```\r\n\r\nSame for the others that just return.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2032034286",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 50536,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/bridge/UiThreadUtil.kt",
+        "discussion_id": "2031968861",
+        "commented_code": "@@ -0,0 +1,85 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react.bridge\n+\n+import android.os.Handler\n+import android.os.Looper\n+import com.facebook.react.common.build.ReactBuildConfig\n+ \n+/** Utility for interacting with the UI thread. */\n+public object UiThreadUtil {\n+ \n+    @Volatile private var sMainHandler: Handler? = null\n+ \n+    private val mainHandler: Handler\n+        get() {\n+             if (sMainHandler == null) {\n+                 synchronized(this) {\n+                     if (sMainHandler == null) {\n+                         sMainHandler = Handler(Looper.getMainLooper())\n+                     }\n+                 }\n+             }\n+             return sMainHandler!!\n+        }\n+ \n+    /** Exposed for Java interop (e.g. Java calls to `UiThreadUtil.getUiThreadHandler()`) */\n+    @JvmStatic\n+    public fun getUiThreadHandler(): Handler {\n+         return mainHandler\n+    }\n+ \n+    /** @return `true` if current thread is the UI thread. */\n+    @JvmStatic\n+    public fun isOnUiThread(): Boolean {\n+         return Looper.getMainLooper().thread == Thread.currentThread()\n+    }",
+        "comment_created_at": "2025-04-07T21:29:27+00:00",
+        "comment_author": "riteshshukla04",
+        "comment_body": "Done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1981476711",
+    "pr_number": 49752,
+    "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/modules/network/ProgressResponseBody.kt",
+    "created_at": "2025-03-05T14:07:30+00:00",
+    "commented_code": "+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react.modules.network\n+\n+import okhttp3.MediaType\n+import okhttp3.ResponseBody\n+import okio.Buffer\n+import okio.BufferedSource\n+import okio.ForwardingSource\n+import okio.Source\n+import okio.buffer\n+import java.io.IOException\n+\n+public class ProgressResponseBody public constructor(\n+    private val responseBody: ResponseBody,\n+    private val progressListener: ProgressListener\n+) : ResponseBody() {\n+  private lateinit var bufferedSource: BufferedSource\n+  private var totalBytesRead = 0L\n+\n+  public override fun contentType(): MediaType? {\n+    return responseBody.contentType()\n+  }\n+\n+  override fun contentLength(): Long {\n+    return responseBody.contentLength()\n+  }\n+\n+  public fun totalBytesRead(): Long {\n+    return totalBytesRead\n+  }",
+    "repo_full_name": "facebook/react-native",
+    "discussion_comments": [
+      {
+        "comment_id": "1981476711",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 49752,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/modules/network/ProgressResponseBody.kt",
+        "discussion_id": "1981476711",
+        "commented_code": "@@ -0,0 +1,59 @@\n+/*\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+package com.facebook.react.modules.network\n+\n+import okhttp3.MediaType\n+import okhttp3.ResponseBody\n+import okio.Buffer\n+import okio.BufferedSource\n+import okio.ForwardingSource\n+import okio.Source\n+import okio.buffer\n+import java.io.IOException\n+\n+public class ProgressResponseBody public constructor(\n+    private val responseBody: ResponseBody,\n+    private val progressListener: ProgressListener\n+) : ResponseBody() {\n+  private lateinit var bufferedSource: BufferedSource\n+  private var totalBytesRead = 0L\n+\n+  public override fun contentType(): MediaType? {\n+    return responseBody.contentType()\n+  }\n+\n+  override fun contentLength(): Long {\n+    return responseBody.contentLength()\n+  }\n+\n+  public fun totalBytesRead(): Long {\n+    return totalBytesRead\n+  }",
+        "comment_created_at": "2025-03-05T14:07:30+00:00",
+        "comment_author": "cortinico",
+        "comment_body": "Let's move those 3 to expression syntax?\r\n\r\n```suggestion\r\n  public override fun contentType(): MediaType? = responseBody.contentType()\r\n\r\n  override fun contentLength(): Long = responseBody.contentLength()\r\n\r\n  public fun totalBytesRead(): Long = totalBytesRead\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1865578650",
+    "pr_number": 48038,
+    "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/uimanager/events/BatchEventDispatchedListener.kt",
+    "created_at": "2024-12-02T10:12:25+00:00",
+    "commented_code": "* LICENSE file in the root directory of this source tree.\n  */\n \n-package com.facebook.react.uimanager.events;\n+package com.facebook.react.uimanager.events\n \n public interface BatchEventDispatchedListener {",
+    "repo_full_name": "facebook/react-native",
+    "discussion_comments": [
+      {
+        "comment_id": "1865578650",
+        "repo_full_name": "facebook/react-native",
+        "pr_number": 48038,
+        "pr_file": "packages/react-native/ReactAndroid/src/main/java/com/facebook/react/uimanager/events/BatchEventDispatchedListener.kt",
+        "discussion_id": "1865578650",
+        "commented_code": "@@ -5,10 +5,10 @@\n  * LICENSE file in the root directory of this source tree.\n  */\n \n-package com.facebook.react.uimanager.events;\n+package com.facebook.react.uimanager.events\n \n public interface BatchEventDispatchedListener {",
+        "comment_created_at": "2024-12-02T10:12:25+00:00",
+        "comment_author": "javache",
+        "comment_body": "Make this `public fun interface` so an inline lambda can be used.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

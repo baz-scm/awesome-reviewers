@@ -1,0 +1,90 @@
+[
+  {
+    "discussion_id": "2149094918",
+    "pr_number": 47469,
+    "pr_file": "spec/api-utility-process-spec.ts",
+    "created_at": "2025-06-16T05:48:35+00:00",
+    "commented_code": "expect(code).to.equal(exitCode);\n     });\n \n+    it('does not run JS after process.exit is called', async () => {\n+      const file = path.join(os.tmpdir(), `no-js-after-exit-log-${Math.random()}`);\n+      const child = utilityProcess.fork(path.join(fixturesPath, 'no-js-after-exit.js'), [`--testPath=${file}`]);\n+      const [code] = await once(child, 'exit');\n+      expect(code).to.equal(1);\n+      let handle = null;\n+      try {\n+        handle = await fs.open(file);\n+        for await (const line of handle.readLines()) {\n+          expect(line).to.not.contain('after exit');\n+        }\n+      } finally {\n+        await handle?.close();\n+      }",
+    "repo_full_name": "electron/electron",
+    "discussion_comments": [
+      {
+        "comment_id": "2149094918",
+        "repo_full_name": "electron/electron",
+        "pr_number": 47469,
+        "pr_file": "spec/api-utility-process-spec.ts",
+        "discussion_id": "2149094918",
+        "commented_code": "@@ -129,6 +129,22 @@ describe('utilityProcess module', () => {\n       expect(code).to.equal(exitCode);\n     });\n \n+    it('does not run JS after process.exit is called', async () => {\n+      const file = path.join(os.tmpdir(), `no-js-after-exit-log-${Math.random()}`);\n+      const child = utilityProcess.fork(path.join(fixturesPath, 'no-js-after-exit.js'), [`--testPath=${file}`]);\n+      const [code] = await once(child, 'exit');\n+      expect(code).to.equal(1);\n+      let handle = null;\n+      try {\n+        handle = await fs.open(file);\n+        for await (const line of handle.readLines()) {\n+          expect(line).to.not.contain('after exit');\n+        }\n+      } finally {\n+        await handle?.close();\n+      }",
+        "comment_created_at": "2025-06-16T05:48:35+00:00",
+        "comment_author": "dsanders11",
+        "comment_body": "```suggestion\r\n      const lines = [];\r\n      try {\r\n        handle = await fs.open(file);\r\n        for await (const line of handle.readLines()) {\r\n          lines.push(line);\r\n        }\r\n      } finally {\r\n        await handle?.close();\r\n        await fs.rm(file, { force: true });\r\n      }\r\n      expect(lines.length).to.equal(1);\r\n      expect(lines[0]).to.equal('before exit');\r\n```\r\n\r\nLet's ensure we always do the `expect` calls even if there's an error thrown or the file is empty, otherwise we might miss a regression. Also added an `fs.rm` to clean up the temp file.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1131452652",
+    "pr_number": 37535,
+    "pr_file": "lib/browser/init.ts",
+    "created_at": "2023-03-09T18:43:45+00:00",
+    "commented_code": "// menu is set before any user window is created.\n app.once('will-finish-launching', setDefaultApplicationMenu);\n \n+const { appCodeLoaded } = process;\n+delete process.appCodeLoaded;\n+\n if (packagePath) {\n   // Finally load app's main.js and transfer control to C++.\n-  process._firstFileName = Module._resolveFilename(path.join(packagePath, mainStartupScript), null, false);\n-  Module._load(path.join(packagePath, mainStartupScript), Module, true);\n+  if ((packageJson.type === 'module' && !mainStartupScript.endsWith('.cjs')) || mainStartupScript.endsWith('.mjs')) {\n+    const { loadESM } = __non_webpack_require__('internal/process/esm_loader');\n+    const main = path.join(packagePath, mainStartupScript);\n+    loadESM((esmLoader: any) => {\n+      return esmLoader.import(main, undefined, Object.create(null)).then(() => {\n+        appCodeLoaded!();\n+      }).catch((err: Error) => {\n+        appCodeLoaded!();\n+        process.emit('uncaughtException', err);\n+      });\n+    });",
+    "repo_full_name": "electron/electron",
+    "discussion_comments": [
+      {
+        "comment_id": "1131452652",
+        "repo_full_name": "electron/electron",
+        "pr_number": 37535,
+        "pr_file": "lib/browser/init.ts",
+        "discussion_id": "1131452652",
+        "commented_code": "@@ -182,11 +182,30 @@ const { setDefaultApplicationMenu } = require('@electron/internal/browser/defaul\n // menu is set before any user window is created.\n app.once('will-finish-launching', setDefaultApplicationMenu);\n \n+const { appCodeLoaded } = process;\n+delete process.appCodeLoaded;\n+\n if (packagePath) {\n   // Finally load app's main.js and transfer control to C++.\n-  process._firstFileName = Module._resolveFilename(path.join(packagePath, mainStartupScript), null, false);\n-  Module._load(path.join(packagePath, mainStartupScript), Module, true);\n+  if ((packageJson.type === 'module' && !mainStartupScript.endsWith('.cjs')) || mainStartupScript.endsWith('.mjs')) {\n+    const { loadESM } = __non_webpack_require__('internal/process/esm_loader');\n+    const main = path.join(packagePath, mainStartupScript);\n+    loadESM((esmLoader: any) => {\n+      return esmLoader.import(main, undefined, Object.create(null)).then(() => {\n+        appCodeLoaded!();\n+      }).catch((err: Error) => {\n+        appCodeLoaded!();\n+        process.emit('uncaughtException', err);\n+      });\n+    });",
+        "comment_created_at": "2023-03-09T18:43:45+00:00",
+        "comment_author": "nornagon",
+        "comment_body": "I think this reads a little better:\r\n\r\n```suggestion\r\n    loadESM(async (esmLoader: any) => {\r\n      try {\r\n        await esmLoader.import(main, undefined, Object.create(null))\r\n      } catch (e) {\r\n        process.emit('uncaughtException', err);\r\n      } finally {\r\n        appCodeLoaded!();\r\n      }\r\n    });\r\n```\r\n\r\n(if it's okay for appCodeLoaded to be called after uncaughtException! otherwise could copy the finally clause into each branch of the try/catch.)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1701570739",
+    "pr_number": 43123,
+    "pr_file": "lib/browser/api/desktop-capturer.ts",
+    "created_at": "2024-08-02T09:18:04+00:00",
+    "commented_code": "win.resizable = resizableValues.get(win.id);\n             }\n           };\n-        }\n+          // On Windows, the underlying WebRTC implementation does not return sources\n+          // originating owned by the current process due to a Windows deadlock issue.\n+          // CL: https://chromium-review.googlesource.com/c/chromium/src/+/2907415\n+        } else if (process.platform === 'win32' && captureWindow) {\n+          const fetches = BrowserWindow.getAllWindows().map(async (win) => {\n+            let thumbnail = null;\n+            if (thumbnailSize.width > 0 && thumbnailSize.height > 0) {\n+              const pageContents = await win.capturePage();\n+              thumbnail = pageContents.resize(thumbnailSize);\n+            } else {\n+              thumbnail = nativeImage.createEmpty();\n+            }\n+            return {\n+              name: win.getTitle(),\n+              id: win.getMediaSourceId(),\n+              thumbnail: thumbnail,\n+              display_id: '',\n+              appIcon: null\n+            };\n+          });\n+          winsOwnedByElectronProcess = await Promise.all(fetches);\n+        };\n       }\n       // Remove from currentlyRunning once we resolve or reject\n       currentlyRunning = currentlyRunning.filter(running => running.options !== options);\n     };\n \n-    capturer._onerror = (error: string) => {\n-      stopRunning();\n+    capturer._onerror = async (error: string) => {",
+    "repo_full_name": "electron/electron",
+    "discussion_comments": [
+      {
+        "comment_id": "1701570739",
+        "repo_full_name": "electron/electron",
+        "pr_number": 43123,
+        "pr_file": "lib/browser/api/desktop-capturer.ts",
+        "discussion_id": "1701570739",
+        "commented_code": "@@ -62,20 +64,45 @@ export async function getSources (args: Electron.SourcesOptions) {\n               win.resizable = resizableValues.get(win.id);\n             }\n           };\n-        }\n+          // On Windows, the underlying WebRTC implementation does not return sources\n+          // originating owned by the current process due to a Windows deadlock issue.\n+          // CL: https://chromium-review.googlesource.com/c/chromium/src/+/2907415\n+        } else if (process.platform === 'win32' && captureWindow) {\n+          const fetches = BrowserWindow.getAllWindows().map(async (win) => {\n+            let thumbnail = null;\n+            if (thumbnailSize.width > 0 && thumbnailSize.height > 0) {\n+              const pageContents = await win.capturePage();\n+              thumbnail = pageContents.resize(thumbnailSize);\n+            } else {\n+              thumbnail = nativeImage.createEmpty();\n+            }\n+            return {\n+              name: win.getTitle(),\n+              id: win.getMediaSourceId(),\n+              thumbnail: thumbnail,\n+              display_id: '',\n+              appIcon: null\n+            };\n+          });\n+          winsOwnedByElectronProcess = await Promise.all(fetches);\n+        };\n       }\n       // Remove from currentlyRunning once we resolve or reject\n       currentlyRunning = currentlyRunning.filter(running => running.options !== options);\n     };\n \n-    capturer._onerror = (error: string) => {\n-      stopRunning();\n+    capturer._onerror = async (error: string) => {",
+        "comment_created_at": "2024-08-02T09:18:04+00:00",
+        "comment_author": "MarshallOfSound",
+        "comment_body": "This will leave a dangling promise, this shouldn't be `async`.\r\n\r\nInstead `winsOwnedByElectronProcess` should be `Promise<Array<>>` instead of `Array`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1701573074",
+    "pr_number": 43123,
+    "pr_file": "lib/browser/api/desktop-capturer.ts",
+    "created_at": "2024-08-02T09:19:02+00:00",
+    "commented_code": "win.resizable = resizableValues.get(win.id);\n             }\n           };\n-        }\n+          // On Windows, the underlying WebRTC implementation does not return sources\n+          // originating owned by the current process due to a Windows deadlock issue.\n+          // CL: https://chromium-review.googlesource.com/c/chromium/src/+/2907415\n+        } else if (process.platform === 'win32' && captureWindow) {\n+          const fetches = BrowserWindow.getAllWindows().map(async (win) => {\n+            let thumbnail = null;\n+            if (thumbnailSize.width > 0 && thumbnailSize.height > 0) {\n+              const pageContents = await win.capturePage();\n+              thumbnail = pageContents.resize(thumbnailSize);\n+            } else {\n+              thumbnail = nativeImage.createEmpty();\n+            }\n+            return {\n+              name: win.getTitle(),\n+              id: win.getMediaSourceId(),\n+              thumbnail: thumbnail,\n+              display_id: '',\n+              appIcon: null\n+            };\n+          });\n+          winsOwnedByElectronProcess = await Promise.all(fetches);\n+        };\n       }\n       // Remove from currentlyRunning once we resolve or reject\n       currentlyRunning = currentlyRunning.filter(running => running.options !== options);\n     };\n \n-    capturer._onerror = (error: string) => {\n-      stopRunning();\n+    capturer._onerror = async (error: string) => {\n+      await stopRunning();\n       reject(error);\n     };\n \n-    capturer._onfinished = (sources: Electron.DesktopCapturerSource[]) => {\n-      stopRunning();\n-      resolve(sources);\n+    capturer._onfinished = async (sources: Electron.DesktopCapturerSource[]) => {\n+      await stopRunning();\n+      if (Array.isArray(winsOwnedByElectronProcess)) {",
+    "repo_full_name": "electron/electron",
+    "discussion_comments": [
+      {
+        "comment_id": "1701573074",
+        "repo_full_name": "electron/electron",
+        "pr_number": 43123,
+        "pr_file": "lib/browser/api/desktop-capturer.ts",
+        "discussion_id": "1701573074",
+        "commented_code": "@@ -62,20 +64,45 @@ export async function getSources (args: Electron.SourcesOptions) {\n               win.resizable = resizableValues.get(win.id);\n             }\n           };\n-        }\n+          // On Windows, the underlying WebRTC implementation does not return sources\n+          // originating owned by the current process due to a Windows deadlock issue.\n+          // CL: https://chromium-review.googlesource.com/c/chromium/src/+/2907415\n+        } else if (process.platform === 'win32' && captureWindow) {\n+          const fetches = BrowserWindow.getAllWindows().map(async (win) => {\n+            let thumbnail = null;\n+            if (thumbnailSize.width > 0 && thumbnailSize.height > 0) {\n+              const pageContents = await win.capturePage();\n+              thumbnail = pageContents.resize(thumbnailSize);\n+            } else {\n+              thumbnail = nativeImage.createEmpty();\n+            }\n+            return {\n+              name: win.getTitle(),\n+              id: win.getMediaSourceId(),\n+              thumbnail: thumbnail,\n+              display_id: '',\n+              appIcon: null\n+            };\n+          });\n+          winsOwnedByElectronProcess = await Promise.all(fetches);\n+        };\n       }\n       // Remove from currentlyRunning once we resolve or reject\n       currentlyRunning = currentlyRunning.filter(running => running.options !== options);\n     };\n \n-    capturer._onerror = (error: string) => {\n-      stopRunning();\n+    capturer._onerror = async (error: string) => {\n+      await stopRunning();\n       reject(error);\n     };\n \n-    capturer._onfinished = (sources: Electron.DesktopCapturerSource[]) => {\n-      stopRunning();\n-      resolve(sources);\n+    capturer._onfinished = async (sources: Electron.DesktopCapturerSource[]) => {\n+      await stopRunning();\n+      if (Array.isArray(winsOwnedByElectronProcess)) {",
+        "comment_created_at": "2024-08-02T09:19:02+00:00",
+        "comment_author": "MarshallOfSound",
+        "comment_body": "We should do `winsOwnedByElectronProcess.then((wins) => resolve(sources.concat(wins)))` in combination with my above comment, these handlers should not be `async` as nothing is handling rejections",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

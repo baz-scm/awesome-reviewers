@@ -1,0 +1,112 @@
+[
+  {
+    "discussion_id": "1919420692",
+    "pr_number": 44882,
+    "pr_file": "shell/app/node_main.cc",
+    "created_at": "2025-01-17T01:01:08+00:00",
+    "commented_code": "NodeBindings::RegisterBuiltinBindings();\n \n     // Parse Node.js cli flags and strip out disallowed options.\n-    const std::vector<std::string> args = ElectronCommandLine::AsUtf8();\n+    std::vector<std::string> args = ElectronCommandLine::AsUtf8();\n     ExitIfContainsDisallowedFlags(args);\n \n+    uint64_t process_flags =\n+        node::ProcessInitializationFlags::kNoInitializeV8 |\n+        node::ProcessInitializationFlags::kNoInitializeNodeV8Platform;\n+\n+    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();\n+    if (command_line->HasSwitch(switches::kNoStdioInit)) {\n+      process_flags |= node::ProcessInitializationFlags::kNoStdioInitialization;\n+      // remove the option to avoid node error \"bad option: --no-stdio-init\"\n+      std::string option = std::string(\"--\") + switches::kNoStdioInit;\n+      std::erase(args, option);\n+    } else {\n+#if BUILDFLAG(IS_WIN)\n+      if (!platform_util::IsNulDeviceEnabled()) {\n+        LOG(FATAL) << \"Fail to open nul device and node initialization may \"\n+                      \"crash! Try using --\"\n+                   << switches::kNoStdioInit;",
+    "repo_full_name": "electron/electron",
+    "discussion_comments": [
+      {
+        "comment_id": "1919420692",
+        "repo_full_name": "electron/electron",
+        "pr_number": 44882,
+        "pr_file": "shell/app/node_main.cc",
+        "discussion_id": "1919420692",
+        "commented_code": "@@ -180,14 +182,33 @@ int NodeMain() {\n     NodeBindings::RegisterBuiltinBindings();\n \n     // Parse Node.js cli flags and strip out disallowed options.\n-    const std::vector<std::string> args = ElectronCommandLine::AsUtf8();\n+    std::vector<std::string> args = ElectronCommandLine::AsUtf8();\n     ExitIfContainsDisallowedFlags(args);\n \n+    uint64_t process_flags =\n+        node::ProcessInitializationFlags::kNoInitializeV8 |\n+        node::ProcessInitializationFlags::kNoInitializeNodeV8Platform;\n+\n+    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();\n+    if (command_line->HasSwitch(switches::kNoStdioInit)) {\n+      process_flags |= node::ProcessInitializationFlags::kNoStdioInitialization;\n+      // remove the option to avoid node error \"bad option: --no-stdio-init\"\n+      std::string option = std::string(\"--\") + switches::kNoStdioInit;\n+      std::erase(args, option);\n+    } else {\n+#if BUILDFLAG(IS_WIN)\n+      if (!platform_util::IsNulDeviceEnabled()) {\n+        LOG(FATAL) << \"Fail to open nul device and node initialization may \"\n+                      \"crash! Try using --\"\n+                   << switches::kNoStdioInit;",
+        "comment_created_at": "2025-01-17T01:01:08+00:00",
+        "comment_author": "deepak1556",
+        "comment_body": "```suggestion\r\n        LOG(FATAL) << \"Unable to open nul device needed for initialization, aborting startup. As a workaround, try starting with --\"\r\n                   << switches::kNoStdioInit;\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1818492180",
+    "pr_number": 44413,
+    "pr_file": "shell/common/logging.cc",
+    "created_at": "2024-10-28T07:24:34+00:00",
+    "commented_code": "// Don't resolve the log path unless we need to. Otherwise we leave an open\n   // ALPC handle after sandbox lockdown on Windows.\n   if ((logging_dest & LOG_TO_FILE) != 0) {\n-    log_path = GetLogFileName(command_line);\n+    if (filename_is_handle) {\n+#if BUILDFLAG(IS_WIN)\n+      // Child processes on Windows are provided a file handle if logging is\n+      // enabled as sandboxed processes cannot open files.\n+      log_handle = GetLogInheritedHandle(command_line);\n+      if (!log_handle.is_valid()) {\n+        DLOG(ERROR) << \"Unable to initialize logging from handle.\";",
+    "repo_full_name": "electron/electron",
+    "discussion_comments": [
+      {
+        "comment_id": "1818492180",
+        "repo_full_name": "electron/electron",
+        "pr_number": 44413,
+        "pr_file": "shell/common/logging.cc",
+        "discussion_id": "1818492180",
+        "commented_code": "@@ -124,7 +172,19 @@ void InitElectronLogging(const base::CommandLine& command_line,\n   // Don't resolve the log path unless we need to. Otherwise we leave an open\n   // ALPC handle after sandbox lockdown on Windows.\n   if ((logging_dest & LOG_TO_FILE) != 0) {\n-    log_path = GetLogFileName(command_line);\n+    if (filename_is_handle) {\n+#if BUILDFLAG(IS_WIN)\n+      // Child processes on Windows are provided a file handle if logging is\n+      // enabled as sandboxed processes cannot open files.\n+      log_handle = GetLogInheritedHandle(command_line);\n+      if (!log_handle.is_valid()) {\n+        DLOG(ERROR) << \"Unable to initialize logging from handle.\";",
+        "comment_created_at": "2024-10-28T07:24:34+00:00",
+        "comment_author": "deepak1556",
+        "comment_body": "Not having a handle in this case means the child process could not log which seems like a useful error to surface and not have it isolated to debug configuration.\r\n\r\n```suggestion\r\n        LOG(ERROR) << \"Unable to initialize logging from handle.\";\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1828472057",
+    "pr_number": 44411,
+    "pr_file": "shell/renderer/api/electron_api_context_bridge.cc",
+    "created_at": "2024-11-04T22:24:06+00:00",
+    "commented_code": "}\n }\n \n+// Determine if the current context is the main world context.\n bool IsCalledFromMainWorld(v8::Isolate* isolate) {\n-  auto* render_frame = GetRenderFrame(isolate->GetCurrentContext()->Global());\n-  CHECK(render_frame);\n-  auto* frame = render_frame->GetWebFrame();\n-  CHECK(frame);\n-  v8::Local<v8::Context> main_context = frame->MainWorldScriptContext();\n-  return isolate->GetCurrentContext() == main_context;\n+  v8::Local<v8::Context> source_context = isolate->GetCurrentContext();\n+  auto* ec = blink::ExecutionContext::From(source_context);\n+  if (ec->IsWindow()) {\n+    auto* render_frame = GetRenderFrame(source_context->Global());\n+    CHECK(render_frame);\n+    auto* frame = render_frame->GetWebFrame();\n+    CHECK(frame);\n+    v8::Local<v8::Context> main_context = frame->MainWorldScriptContext();\n+    return source_context == main_context;\n+  } else if (ec->IsShadowRealmGlobalScope()) {\n+    return false;\n+  } else if (ec->IsServiceWorkerGlobalScope()) {\n+    return true;\n+  } else {\n+    NOTREACHED();\n+  }\n+}\n+\n+// Clones a value into the target context.\n+v8::MaybeLocal<v8::Value> CloneValueToContext(\n+    v8::Isolate* isolate,\n+    v8::Local<v8::Value> value,\n+    v8::Local<v8::Context> target_context,\n+    std::string& error_message) {\n+  // Objects with prototype chains need to be protected and thus cloned.\n+  // Primitive values are fine as is.\n+  if (!value->IsObject()) {\n+    return value;\n+  }\n+\n+  v8::Local<v8::Object> object_value = value.As<v8::Object>();\n+  v8::Local<v8::Context> creation_context =\n+      object_value->GetCreationContextChecked();\n+\n+  // Value created in the same context are safe.\n+  if (target_context == creation_context) {\n+    return object_value;\n+  }\n+\n+  // Attempt to clone value.\n+  v8::MaybeLocal<v8::Value> maybe_result;\n+  {\n+    v8::TryCatch try_catch(isolate);\n+    context_bridge::ObjectCache object_cache;\n+    maybe_result =\n+        PassValueToOtherContext(creation_context, target_context, object_value,\n+                                creation_context->Global(), &object_cache,\n+                                false, 0, BridgeErrorTarget::kSource);\n+    if (try_catch.HasCaught()) {\n+      v8::String::Utf8Value utf8(isolate, try_catch.Exception());\n+      error_message = *utf8 ? *utf8 : \"Unknown error cloning result\";\n+    }\n+  }\n+\n+  return maybe_result;\n+}\n+\n+// Evaluate a script in the target world ID. The script is executed\n+// synchronously and clones the result into the calling context.\n+v8::Local<v8::Value> EvaluateInWorld(v8::Isolate* isolate,\n+                                     const int world_id,\n+                                     const std::string& source,\n+                                     gin_helper::Arguments* args) {\n+  v8::Local<v8::Context> source_context = isolate->GetCurrentContext();\n+  v8::Context::Scope source_scope(source_context);\n+\n+  // Get the target context\n+  v8::MaybeLocal<v8::Context> maybe_target_context =\n+      GetTargetContext(isolate, world_id);\n+  v8::Local<v8::Context> target_context;\n+  if (!maybe_target_context.ToLocal(&target_context)) {\n+    isolate->ThrowException(v8::Exception::Error(\n+        gin::StringToV8(isolate, \"Unknown error\")));  // TODO",
+    "repo_full_name": "electron/electron",
+    "discussion_comments": [
+      {
+        "comment_id": "1828472057",
+        "repo_full_name": "electron/electron",
+        "pr_number": 44411,
+        "pr_file": "shell/renderer/api/electron_api_context_bridge.cc",
+        "discussion_id": "1828472057",
+        "commented_code": "@@ -810,13 +854,137 @@ bool OverrideGlobalPropertyFromIsolatedWorld(\n   }\n }\n \n+// Determine if the current context is the main world context.\n bool IsCalledFromMainWorld(v8::Isolate* isolate) {\n-  auto* render_frame = GetRenderFrame(isolate->GetCurrentContext()->Global());\n-  CHECK(render_frame);\n-  auto* frame = render_frame->GetWebFrame();\n-  CHECK(frame);\n-  v8::Local<v8::Context> main_context = frame->MainWorldScriptContext();\n-  return isolate->GetCurrentContext() == main_context;\n+  v8::Local<v8::Context> source_context = isolate->GetCurrentContext();\n+  auto* ec = blink::ExecutionContext::From(source_context);\n+  if (ec->IsWindow()) {\n+    auto* render_frame = GetRenderFrame(source_context->Global());\n+    CHECK(render_frame);\n+    auto* frame = render_frame->GetWebFrame();\n+    CHECK(frame);\n+    v8::Local<v8::Context> main_context = frame->MainWorldScriptContext();\n+    return source_context == main_context;\n+  } else if (ec->IsShadowRealmGlobalScope()) {\n+    return false;\n+  } else if (ec->IsServiceWorkerGlobalScope()) {\n+    return true;\n+  } else {\n+    NOTREACHED();\n+  }\n+}\n+\n+// Clones a value into the target context.\n+v8::MaybeLocal<v8::Value> CloneValueToContext(\n+    v8::Isolate* isolate,\n+    v8::Local<v8::Value> value,\n+    v8::Local<v8::Context> target_context,\n+    std::string& error_message) {\n+  // Objects with prototype chains need to be protected and thus cloned.\n+  // Primitive values are fine as is.\n+  if (!value->IsObject()) {\n+    return value;\n+  }\n+\n+  v8::Local<v8::Object> object_value = value.As<v8::Object>();\n+  v8::Local<v8::Context> creation_context =\n+      object_value->GetCreationContextChecked();\n+\n+  // Value created in the same context are safe.\n+  if (target_context == creation_context) {\n+    return object_value;\n+  }\n+\n+  // Attempt to clone value.\n+  v8::MaybeLocal<v8::Value> maybe_result;\n+  {\n+    v8::TryCatch try_catch(isolate);\n+    context_bridge::ObjectCache object_cache;\n+    maybe_result =\n+        PassValueToOtherContext(creation_context, target_context, object_value,\n+                                creation_context->Global(), &object_cache,\n+                                false, 0, BridgeErrorTarget::kSource);\n+    if (try_catch.HasCaught()) {\n+      v8::String::Utf8Value utf8(isolate, try_catch.Exception());\n+      error_message = *utf8 ? *utf8 : \"Unknown error cloning result\";\n+    }\n+  }\n+\n+  return maybe_result;\n+}\n+\n+// Evaluate a script in the target world ID. The script is executed\n+// synchronously and clones the result into the calling context.\n+v8::Local<v8::Value> EvaluateInWorld(v8::Isolate* isolate,\n+                                     const int world_id,\n+                                     const std::string& source,\n+                                     gin_helper::Arguments* args) {\n+  v8::Local<v8::Context> source_context = isolate->GetCurrentContext();\n+  v8::Context::Scope source_scope(source_context);\n+\n+  // Get the target context\n+  v8::MaybeLocal<v8::Context> maybe_target_context =\n+      GetTargetContext(isolate, world_id);\n+  v8::Local<v8::Context> target_context;\n+  if (!maybe_target_context.ToLocal(&target_context)) {\n+    isolate->ThrowException(v8::Exception::Error(\n+        gin::StringToV8(isolate, \"Unknown error\")));  // TODO",
+        "comment_created_at": "2024-11-04T22:24:06+00:00",
+        "comment_author": "alicelovescake",
+        "comment_body": "Maybe some kind of error message to indicate target context not found along with the world id?\r\n```\r\n   isolate->ThrowException(v8::Exception::Error(\r\n       gin::StringToV8(isolate, \"Failed to retrieve target context for world ID: \" + std::to_string(world_id))));\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1827484017",
+    "pr_number": 44527,
+    "pr_file": "shell/browser/electron_api_ipc_handler_impl.cc",
+    "created_at": "2024-11-04T10:10:13+00:00",
+    "commented_code": "const std::string& channel,\n                                        blink::CloneableMessage arguments,\n                                        InvokeCallback callback) {\n+  electron::crash_keys::SetCrashKey(\"electron.ipc.method\", \"invoke\");\n+  electron::crash_keys::SetCrashKey(\"electron.ipc.channel\", channel);\n+\n   api::WebContents* api_web_contents = api::WebContents::From(web_contents());\n   if (api_web_contents) {\n     api_web_contents->Invoke(internal, channel, std::move(arguments),\n                              std::move(callback), GetRenderFrameHost());\n+  } else {\n+    v8::Isolate* isolate = electron::JavascriptEnvironment::GetIsolate();\n+    v8::HandleScope handle_scope(isolate);\n+    gin_helper::internal::ReplyChannel::Create(isolate, std::move(callback))\n+        ->SendError(\"WebContents does not exist\");",
+    "repo_full_name": "electron/electron",
+    "discussion_comments": [
+      {
+        "comment_id": "1827484017",
+        "repo_full_name": "electron/electron",
+        "pr_number": 44527,
+        "pr_file": "shell/browser/electron_api_ipc_handler_impl.cc",
+        "discussion_id": "1827484017",
+        "commented_code": "@@ -48,16 +58,27 @@ void ElectronApiIPCHandlerImpl::Invoke(bool internal,\n                                        const std::string& channel,\n                                        blink::CloneableMessage arguments,\n                                        InvokeCallback callback) {\n+  electron::crash_keys::SetCrashKey(\"electron.ipc.method\", \"invoke\");\n+  electron::crash_keys::SetCrashKey(\"electron.ipc.channel\", channel);\n+\n   api::WebContents* api_web_contents = api::WebContents::From(web_contents());\n   if (api_web_contents) {\n     api_web_contents->Invoke(internal, channel, std::move(arguments),\n                              std::move(callback), GetRenderFrameHost());\n+  } else {\n+    v8::Isolate* isolate = electron::JavascriptEnvironment::GetIsolate();\n+    v8::HandleScope handle_scope(isolate);\n+    gin_helper::internal::ReplyChannel::Create(isolate, std::move(callback))\n+        ->SendError(\"WebContents does not exist\");",
+        "comment_created_at": "2024-11-04T10:10:13+00:00",
+        "comment_author": "deepak1556",
+        "comment_body": "Would adding the channel value to the error message offer better context in the error ?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1849636883",
+    "pr_number": 44750,
+    "pr_file": "shell/browser/api/electron_api_session.cc",
+    "created_at": "2024-11-20T06:41:03+00:00",
+    "commented_code": "return prefs->preloads();\n }\n \n+/**\n+ * Exposes the network service's ClearSharedDictionaryCacheForIsolationKey\n+ * method, allowing clearing the Shared Dictionary cache for a given isolation\n+ * key. Details about the feature available at\n+ * https://developer.chrome.com/blog/shared-dictionary-compression\n+ */\n+v8::Local<v8::Promise> Session::ClearSharedDictionaryCacheForIsolationKey(\n+    const gin_helper::Dictionary& options) {\n+  gin_helper::Promise<void> promise(isolate_);\n+  auto handle = promise.GetHandle();\n+\n+  std::string frame_origin_str, top_frame_site_str;\n+  if (!options.Get(\"frameOrigin\", &frame_origin_str) ||\n+      !options.Get(\"topFrameSite\", &top_frame_site_str)) {\n+    promise.RejectWithErrorMessage(\n+        \"Must provide frameOrigin and topFrameSite strings\");",
+    "repo_full_name": "electron/electron",
+    "discussion_comments": [
+      {
+        "comment_id": "1849636883",
+        "repo_full_name": "electron/electron",
+        "pr_number": 44750,
+        "pr_file": "shell/browser/api/electron_api_session.cc",
+        "discussion_id": "1849636883",
+        "commented_code": "@@ -1074,6 +1076,181 @@ std::vector<base::FilePath> Session::GetPreloads() const {\n   return prefs->preloads();\n }\n \n+/**\n+ * Exposes the network service's ClearSharedDictionaryCacheForIsolationKey\n+ * method, allowing clearing the Shared Dictionary cache for a given isolation\n+ * key. Details about the feature available at\n+ * https://developer.chrome.com/blog/shared-dictionary-compression\n+ */\n+v8::Local<v8::Promise> Session::ClearSharedDictionaryCacheForIsolationKey(\n+    const gin_helper::Dictionary& options) {\n+  gin_helper::Promise<void> promise(isolate_);\n+  auto handle = promise.GetHandle();\n+\n+  std::string frame_origin_str, top_frame_site_str;\n+  if (!options.Get(\"frameOrigin\", &frame_origin_str) ||\n+      !options.Get(\"topFrameSite\", &top_frame_site_str)) {\n+    promise.RejectWithErrorMessage(\n+        \"Must provide frameOrigin and topFrameSite strings\");",
+        "comment_created_at": "2024-11-20T06:41:03+00:00",
+        "comment_author": "MarshallOfSound",
+        "comment_body": "```suggestion\r\n        \"Must provide frameOrigin and topFrameSite strings to `clearSharedDictionaryCacheForIsolationKey`\");\r\n```\r\n\r\nBig fan of error messages self-declaring where they come from to avoid the classic \"what even is an ENOENT\" style errors",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

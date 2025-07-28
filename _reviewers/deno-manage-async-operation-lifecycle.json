@@ -1,0 +1,82 @@
+[
+  {
+    "discussion_id": "1991057146",
+    "pr_number": 28463,
+    "pr_file": "ext/node/polyfills/http.ts",
+    "created_at": "2025-03-12T09:36:46+00:00",
+    "commented_code": "// This should be only happening in artificial test cases\n           return;\n         }\n+\n+        if (TRACING_ENABLED) {\n+          span = builtinTracer().startSpan(this.method, { kind: 2 }); // Kind 2 = Client\n+          context = enterSpan(span);",
+    "repo_full_name": "denoland/deno",
+    "discussion_comments": [
+      {
+        "comment_id": "1991057146",
+        "repo_full_name": "denoland/deno",
+        "pr_number": 28463,
+        "pr_file": "ext/node/polyfills/http.ts",
+        "discussion_id": "1991057146",
+        "commented_code": "@@ -467,6 +476,17 @@ class ClientRequest extends OutgoingMessage {\n           // This should be only happening in artificial test cases\n           return;\n         }\n+\n+        if (TRACING_ENABLED) {\n+          span = builtinTracer().startSpan(this.method, { kind: 2 }); // Kind 2 = Client\n+          context = enterSpan(span);",
+        "comment_created_at": "2025-03-12T09:36:46+00:00",
+        "comment_author": "lucacasonato",
+        "comment_body": "This is actually mildly problematic, because the correct contexts will not be restored across the `await` points in the block below.\r\n\r\n@devsnek do you have any simple ideas for how to resolve this? It is useful to enter the span here, so that request body reads happen within the context of the correct span.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1991097560",
+        "repo_full_name": "denoland/deno",
+        "pr_number": 28463,
+        "pr_file": "ext/node/polyfills/http.ts",
+        "discussion_id": "1991057146",
+        "commented_code": "@@ -467,6 +476,17 @@ class ClientRequest extends OutgoingMessage {\n           // This should be only happening in artificial test cases\n           return;\n         }\n+\n+        if (TRACING_ENABLED) {\n+          span = builtinTracer().startSpan(this.method, { kind: 2 }); // Kind 2 = Client\n+          context = enterSpan(span);",
+        "comment_created_at": "2025-03-12T09:58:03+00:00",
+        "comment_author": "devsnek",
+        "comment_body": "as a quick problem statement, this code logs 'inside foo' for both cases:\r\n```js\r\nconst { getAsyncContext, setAsyncContext } = Deno[Deno.internal].core;\r\n\r\nasync function bar() {}\r\n\r\nasync function foo() {\r\n  const old = getAsyncContext();\r\n  try {\r\n    setAsyncContext('inside foo'); // \"enter\"\r\n\r\n    await bar();\r\n\r\n    console.log('should be inside:', getAsyncContext());\r\n  } finally {\r\n    setAsyncContext(old);  // \"exit\"\r\n  }\r\n}\r\n\r\nsetAsyncContext('outside foo');\r\n\r\nconst promise = foo();\r\n\r\nconsole.log('should be outside:', getAsyncContext());\r\n```\r\n\r\nwe can fix it in the general case by transforming any sequence of enter->await->exit to use an iife like this:\r\n```js\r\nconst { getAsyncContext, setAsyncContext } = Deno[Deno.internal].core;\r\n\r\nasync function bar() {}\r\n\r\nfunction foo() {\r\n  const old = getAsyncContext();\r\n  try {\r\n    setAsyncContext('inside foo');\r\n\r\n    return (async () => {\r\n      await bar();\r\n\r\n      console.log('should be inside:', getAsyncContext());\r\n    })();\r\n  } finally {\r\n    setAsyncContext(old);\r\n  }\r\n}\r\n\r\nsetAsyncContext('outside foo');\r\n\r\nconst promise = foo();\r\n\r\nconsole.log('should be outside:', getAsyncContext());\r\n\r\n```\r\n\r\nin this case we already have an iife, so you can just move the enterSpan/span.exit to be outside of it.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1991569601",
+        "repo_full_name": "denoland/deno",
+        "pr_number": 28463,
+        "pr_file": "ext/node/polyfills/http.ts",
+        "discussion_id": "1991057146",
+        "commented_code": "@@ -467,6 +476,17 @@ class ClientRequest extends OutgoingMessage {\n           // This should be only happening in artificial test cases\n           return;\n         }\n+\n+        if (TRACING_ENABLED) {\n+          span = builtinTracer().startSpan(this.method, { kind: 2 }); // Kind 2 = Client\n+          context = enterSpan(span);",
+        "comment_created_at": "2025-03-12T14:00:58+00:00",
+        "comment_author": "kt3k",
+        "comment_body": "Does this work? https://github.com/denoland/deno/pull/28463/commits/c1b53314b2fe5fc2fdc0ae199be923847411ae3f",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1856997734",
+    "pr_number": 27064,
+    "pr_file": "ext/node/polyfills/internal_binding/stream_wrap.ts",
+    "created_at": "2024-11-25T17:23:20+00:00",
+    "commented_code": "readStop(): number {\n     this.#reading = false;\n \n+    // Unref any reads that are pending until this point.\n+    if (this.unref) {\n+      this.unref();\n+      this.ref();\n+    }",
+    "repo_full_name": "denoland/deno",
+    "discussion_comments": [
+      {
+        "comment_id": "1856997734",
+        "repo_full_name": "denoland/deno",
+        "pr_number": 27064,
+        "pr_file": "ext/node/polyfills/internal_binding/stream_wrap.ts",
+        "discussion_id": "1856997734",
+        "commented_code": "@@ -153,6 +153,12 @@ export class LibuvStreamWrap extends HandleWrap {\n   readStop(): number {\n     this.#reading = false;\n \n+    // Unref any reads that are pending until this point.\n+    if (this.unref) {\n+      this.unref();\n+      this.ref();\n+    }",
+        "comment_created_at": "2024-11-25T17:23:20+00:00",
+        "comment_author": "bartlomieju",
+        "comment_body": "Is this correct that we're unrefing and refing immediately after?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1857000893",
+        "repo_full_name": "denoland/deno",
+        "pr_number": 27064,
+        "pr_file": "ext/node/polyfills/internal_binding/stream_wrap.ts",
+        "discussion_id": "1856997734",
+        "commented_code": "@@ -153,6 +153,12 @@ export class LibuvStreamWrap extends HandleWrap {\n   readStop(): number {\n     this.#reading = false;\n \n+    // Unref any reads that are pending until this point.\n+    if (this.unref) {\n+      this.unref();\n+      this.ref();\n+    }",
+        "comment_created_at": "2024-11-25T17:24:56+00:00",
+        "comment_author": "littledivy",
+        "comment_body": "yup, this is to unref any ongoing reads until now but not any future reads.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

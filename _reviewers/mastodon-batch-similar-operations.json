@@ -1,0 +1,160 @@
+[
+  {
+    "discussion_id": "1952234156",
+    "pr_number": 33897,
+    "pr_file": "app/services/block_domain_service.rb",
+    "created_at": "2025-02-12T08:57:54+00:00",
+    "commented_code": "def notify_of_severed_relationships!\n     return if @domain_block_event.nil?\n \n-    # TODO: check how efficient that query is, also check `push_bulk`/`perform_bulk`\n+    notification_jobs_args = []\n+\n     @domain_block_event.affected_local_accounts.reorder(nil).find_each do |account|\n       event = AccountRelationshipSeveranceEvent.create!(account: account, relationship_severance_event: @domain_block_event)\n-      LocalNotificationWorker.perform_async(account.id, event.id, 'AccountRelationshipSeveranceEvent', 'severed_relationships')\n+      notification_jobs_args.push([account.id, event.id, 'AccountRelationshipSeveranceEvent', 'severed_relationships'])\n     end\n+\n+    # perform_bulk defaults to 1000 size batches, same as find_each\n+    LocalNotificationWorker.perform_bulk(notification_jobs_args)",
+    "repo_full_name": "mastodon/mastodon",
+    "discussion_comments": [
+      {
+        "comment_id": "1952234156",
+        "repo_full_name": "mastodon/mastodon",
+        "pr_number": 33897,
+        "pr_file": "app/services/block_domain_service.rb",
+        "discussion_id": "1952234156",
+        "commented_code": "@@ -47,11 +47,15 @@ def suspend_accounts!\n   def notify_of_severed_relationships!\n     return if @domain_block_event.nil?\n \n-    # TODO: check how efficient that query is, also check `push_bulk`/`perform_bulk`\n+    notification_jobs_args = []\n+\n     @domain_block_event.affected_local_accounts.reorder(nil).find_each do |account|\n       event = AccountRelationshipSeveranceEvent.create!(account: account, relationship_severance_event: @domain_block_event)\n-      LocalNotificationWorker.perform_async(account.id, event.id, 'AccountRelationshipSeveranceEvent', 'severed_relationships')\n+      notification_jobs_args.push([account.id, event.id, 'AccountRelationshipSeveranceEvent', 'severed_relationships'])\n     end\n+\n+    # perform_bulk defaults to 1000 size batches, same as find_each\n+    LocalNotificationWorker.perform_bulk(notification_jobs_args)",
+        "comment_created_at": "2025-02-12T08:57:54+00:00",
+        "comment_author": "ClearlyClaire",
+        "comment_body": "Thank you for your contribution!\r\n\r\nThis could grow into a pretty large in-memory `notification_jobs_args` array. If going this way, I'd probably use `find_in_batches` and build an array for each such group instead of for all affected groups. As you pointed out, `find_each` works with the same batch size as `perform_bulk`, so this would not actually change how jobs are sent to Sidekiq, it would just put a bound on the size of the in-memory array.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1952556537",
+        "repo_full_name": "mastodon/mastodon",
+        "pr_number": 33897,
+        "pr_file": "app/services/block_domain_service.rb",
+        "discussion_id": "1952234156",
+        "commented_code": "@@ -47,11 +47,15 @@ def suspend_accounts!\n   def notify_of_severed_relationships!\n     return if @domain_block_event.nil?\n \n-    # TODO: check how efficient that query is, also check `push_bulk`/`perform_bulk`\n+    notification_jobs_args = []\n+\n     @domain_block_event.affected_local_accounts.reorder(nil).find_each do |account|\n       event = AccountRelationshipSeveranceEvent.create!(account: account, relationship_severance_event: @domain_block_event)\n-      LocalNotificationWorker.perform_async(account.id, event.id, 'AccountRelationshipSeveranceEvent', 'severed_relationships')\n+      notification_jobs_args.push([account.id, event.id, 'AccountRelationshipSeveranceEvent', 'severed_relationships'])\n     end\n+\n+    # perform_bulk defaults to 1000 size batches, same as find_each\n+    LocalNotificationWorker.perform_bulk(notification_jobs_args)",
+        "comment_created_at": "2025-02-12T12:28:30+00:00",
+        "comment_author": "larouxn",
+        "comment_body": "That's a great point. We can and should indeed use `find_in_batches` if going this way. I've just pushed an adjusted implementation that should retain the benefits of 1000 batch Redis/job queue pushes while also limiting the in-memory array sizes via the aforementioned batch method.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1952582672",
+        "repo_full_name": "mastodon/mastodon",
+        "pr_number": 33897,
+        "pr_file": "app/services/block_domain_service.rb",
+        "discussion_id": "1952234156",
+        "commented_code": "@@ -47,11 +47,15 @@ def suspend_accounts!\n   def notify_of_severed_relationships!\n     return if @domain_block_event.nil?\n \n-    # TODO: check how efficient that query is, also check `push_bulk`/`perform_bulk`\n+    notification_jobs_args = []\n+\n     @domain_block_event.affected_local_accounts.reorder(nil).find_each do |account|\n       event = AccountRelationshipSeveranceEvent.create!(account: account, relationship_severance_event: @domain_block_event)\n-      LocalNotificationWorker.perform_async(account.id, event.id, 'AccountRelationshipSeveranceEvent', 'severed_relationships')\n+      notification_jobs_args.push([account.id, event.id, 'AccountRelationshipSeveranceEvent', 'severed_relationships'])\n     end\n+\n+    # perform_bulk defaults to 1000 size batches, same as find_each\n+    LocalNotificationWorker.perform_bulk(notification_jobs_args)",
+        "comment_created_at": "2025-02-12T12:47:11+00:00",
+        "comment_author": "ClearlyClaire",
+        "comment_body": "Looks good, thanks!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2132430356",
+    "pr_number": 34918,
+    "pr_file": "app/models/async_refresh.rb",
+    "created_at": "2025-06-06T15:42:02+00:00",
+    "commented_code": "+# frozen_string_literal: true\n+\n+class AsyncRefresh\n+  extend Redisable\n+  include Redisable\n+\n+  NEW_REFRESH_EXPIRATION = 1.day\n+  FINISHED_REFRESH_EXPIRATION = 1.hour\n+\n+  def self.find(id)\n+    redis_key = Rails.application.message_verifier('async_refreshes').verify(id)\n+    new(redis_key) if redis.exists?(redis_key)\n+  rescue ActiveSupport::MessageVerifier::InvalidSignature\n+    nil\n+  end\n+\n+  def self.create(redis_key, count_results: false)\n+    data = { 'status' => 'running' }\n+    data['result_count'] = 0 if count_results\n+    redis.hset(redis_key, data)\n+    redis.expire(redis_key, NEW_REFRESH_EXPIRATION)\n+    new(redis_key)\n+  end\n+\n+  attr_reader :status, :result_count\n+\n+  def initialize(redis_key)\n+    @redis_key = redis_key\n+    fetch_data_from_redis\n+  end\n+\n+  def id\n+    Rails.application.message_verifier('async_refreshes').generate(@redis_key)\n+  end\n+\n+  def running?\n+    @status == 'running'\n+  end\n+\n+  def finished?\n+    @status == 'finished'\n+  end\n+\n+  def finish!\n+    redis.hset(@redis_key, { 'status' => 'finished' })\n+    redis.expire(@redis_key, FINISHED_REFRESH_EXPIRATION)",
+    "repo_full_name": "mastodon/mastodon",
+    "discussion_comments": [
+      {
+        "comment_id": "2132430356",
+        "repo_full_name": "mastodon/mastodon",
+        "pr_number": 34918,
+        "pr_file": "app/models/async_refresh.rb",
+        "discussion_id": "2132430356",
+        "commented_code": "@@ -0,0 +1,71 @@\n+# frozen_string_literal: true\n+\n+class AsyncRefresh\n+  extend Redisable\n+  include Redisable\n+\n+  NEW_REFRESH_EXPIRATION = 1.day\n+  FINISHED_REFRESH_EXPIRATION = 1.hour\n+\n+  def self.find(id)\n+    redis_key = Rails.application.message_verifier('async_refreshes').verify(id)\n+    new(redis_key) if redis.exists?(redis_key)\n+  rescue ActiveSupport::MessageVerifier::InvalidSignature\n+    nil\n+  end\n+\n+  def self.create(redis_key, count_results: false)\n+    data = { 'status' => 'running' }\n+    data['result_count'] = 0 if count_results\n+    redis.hset(redis_key, data)\n+    redis.expire(redis_key, NEW_REFRESH_EXPIRATION)\n+    new(redis_key)\n+  end\n+\n+  attr_reader :status, :result_count\n+\n+  def initialize(redis_key)\n+    @redis_key = redis_key\n+    fetch_data_from_redis\n+  end\n+\n+  def id\n+    Rails.application.message_verifier('async_refreshes').generate(@redis_key)\n+  end\n+\n+  def running?\n+    @status == 'running'\n+  end\n+\n+  def finished?\n+    @status == 'finished'\n+  end\n+\n+  def finish!\n+    redis.hset(@redis_key, { 'status' => 'finished' })\n+    redis.expire(@redis_key, FINISHED_REFRESH_EXPIRATION)",
+        "comment_created_at": "2025-06-06T15:42:02+00:00",
+        "comment_author": "ClearlyClaire",
+        "comment_body": "Should those two calls be pipelined to avoid back-and-forth with Redis?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2137897221",
+        "repo_full_name": "mastodon/mastodon",
+        "pr_number": 34918,
+        "pr_file": "app/models/async_refresh.rb",
+        "discussion_id": "2132430356",
+        "commented_code": "@@ -0,0 +1,71 @@\n+# frozen_string_literal: true\n+\n+class AsyncRefresh\n+  extend Redisable\n+  include Redisable\n+\n+  NEW_REFRESH_EXPIRATION = 1.day\n+  FINISHED_REFRESH_EXPIRATION = 1.hour\n+\n+  def self.find(id)\n+    redis_key = Rails.application.message_verifier('async_refreshes').verify(id)\n+    new(redis_key) if redis.exists?(redis_key)\n+  rescue ActiveSupport::MessageVerifier::InvalidSignature\n+    nil\n+  end\n+\n+  def self.create(redis_key, count_results: false)\n+    data = { 'status' => 'running' }\n+    data['result_count'] = 0 if count_results\n+    redis.hset(redis_key, data)\n+    redis.expire(redis_key, NEW_REFRESH_EXPIRATION)\n+    new(redis_key)\n+  end\n+\n+  attr_reader :status, :result_count\n+\n+  def initialize(redis_key)\n+    @redis_key = redis_key\n+    fetch_data_from_redis\n+  end\n+\n+  def id\n+    Rails.application.message_verifier('async_refreshes').generate(@redis_key)\n+  end\n+\n+  def running?\n+    @status == 'running'\n+  end\n+\n+  def finished?\n+    @status == 'finished'\n+  end\n+\n+  def finish!\n+    redis.hset(@redis_key, { 'status' => 'finished' })\n+    redis.expire(@redis_key, FINISHED_REFRESH_EXPIRATION)",
+        "comment_created_at": "2025-06-10T13:22:24+00:00",
+        "comment_author": "oneiros",
+        "comment_body": "Yes, absolutely. I was not aware this feature existed. Thanks for pointing this out, I changed this accordingly.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2055572178",
+    "pr_number": 34485,
+    "pr_file": "lib/vite_ruby/sri_extensions.rb",
+    "created_at": "2025-04-23T08:51:59+00:00",
+    "commented_code": "+# frozen_string_literal: true\n+\n+module ViteRuby::ManifestIntegrityExtension\n+  @@integrity_cache = {} # rubocop:disable Style/ClassVars -- We want ClassVars in this case\n+\n+  def integrity_hash_for(name)\n+    lookup(name)&.fetch('integrity', nil)\n+  end\n+\n+  # Find a manifest entry by the *final* file name\n+  def integrity_hash_for_file(file_name)\n+    @@integrity_cache[file_name] ||= begin\n+      entry = manifest.find { |_key, entry| entry['file'] == file_name }\n+\n+      entry[1].fetch('integrity', nil) if entry\n+    end\n+  end\n+\n+  def resolve_entries_with_integrity(*names, **options)\n+    entries = names.map { |name| lookup!(name, **options) }\n+    script_paths = entries.map do |entry|\n+      {\n+        file: entry.fetch('file'),\n+        integrity: entry.fetch('integrity'),\n+      }\n+    end\n+\n+    imports = dev_server_running? ? [] : entries.flat_map { |entry| entry['imports'] }.compact\n+\n+    {\n+      scripts: script_paths,\n+      imports: imports.filter_map { |entry| { file: entry.fetch('file'), integrity: entry.fetch('integrity') } }.uniq,\n+      stylesheets: dev_server_running? ? [] : (entries + imports).flat_map { |entry| entry['css'] }.compact.uniq,\n+    }\n+  end\n+end\n+\n+ViteRuby::Manifest.prepend ViteRuby::ManifestIntegrityExtension\n+\n+module ViteRails::TagHelpers::IntegrityExtension\n+  def vite_javascript_tag(*names,\n+                          type: 'module',\n+                          asset_type: :javascript,\n+                          skip_preload_tags: false,\n+                          skip_style_tags: false,\n+                          crossorigin: 'anonymous',\n+                          media: 'screen',\n+                          **options)\n+    entries = vite_manifest.resolve_entries_with_integrity(*names, type: asset_type)\n+\n+    ''.html_safe.tap do |tags|\n+      entries.fetch(:scripts).each do |script|\n+        tags << javascript_include_tag(\n+          script[:file],\n+          integrity: script[:integrity],\n+          crossorigin: crossorigin,\n+          type: type,\n+          extname: false,\n+          **options\n+        )\n+      end\n+\n+      unless skip_preload_tags\n+        entries.fetch(:imports).each do |import|\n+          tags << vite_preload_tag(import[:file], integrity: import[:integrity], crossorigin: crossorigin, **options)\n+        end\n+      end\n+\n+      options[:extname] = false if Rails::VERSION::MAJOR >= 7\n+\n+      unless skip_style_tags\n+        entries.fetch(:stylesheets).each do |stylesheet|\n+          # This is for stylesheets imported from Javascript. The entry for the JS entrypoint only contains the final CSS file name, so we need to look it up in the manifest\n+          tags << stylesheet_link_tag(\n+            stylesheet,\n+            integrity: vite_manifest.integrity_hash_for_file(stylesheet),\n+            media: media,\n+            **options\n+          )\n+        end\n+      end\n+    end\n+  end\n+\n+  def vite_stylesheet_tag(*names, **options)\n+    ''.html_safe.tap do |tags|\n+      names.each do |name|\n+        tags << super(name, integrity: vite_manifest.integrity_hash_for(name), **options)",
+    "repo_full_name": "mastodon/mastodon",
+    "discussion_comments": [
+      {
+        "comment_id": "2055572178",
+        "repo_full_name": "mastodon/mastodon",
+        "pr_number": 34485,
+        "pr_file": "lib/vite_ruby/sri_extensions.rb",
+        "discussion_id": "2055572178",
+        "commented_code": "@@ -0,0 +1,94 @@\n+# frozen_string_literal: true\n+\n+module ViteRuby::ManifestIntegrityExtension\n+  @@integrity_cache = {} # rubocop:disable Style/ClassVars -- We want ClassVars in this case\n+\n+  def integrity_hash_for(name)\n+    lookup(name)&.fetch('integrity', nil)\n+  end\n+\n+  # Find a manifest entry by the *final* file name\n+  def integrity_hash_for_file(file_name)\n+    @@integrity_cache[file_name] ||= begin\n+      entry = manifest.find { |_key, entry| entry['file'] == file_name }\n+\n+      entry[1].fetch('integrity', nil) if entry\n+    end\n+  end\n+\n+  def resolve_entries_with_integrity(*names, **options)\n+    entries = names.map { |name| lookup!(name, **options) }\n+    script_paths = entries.map do |entry|\n+      {\n+        file: entry.fetch('file'),\n+        integrity: entry.fetch('integrity'),\n+      }\n+    end\n+\n+    imports = dev_server_running? ? [] : entries.flat_map { |entry| entry['imports'] }.compact\n+\n+    {\n+      scripts: script_paths,\n+      imports: imports.filter_map { |entry| { file: entry.fetch('file'), integrity: entry.fetch('integrity') } }.uniq,\n+      stylesheets: dev_server_running? ? [] : (entries + imports).flat_map { |entry| entry['css'] }.compact.uniq,\n+    }\n+  end\n+end\n+\n+ViteRuby::Manifest.prepend ViteRuby::ManifestIntegrityExtension\n+\n+module ViteRails::TagHelpers::IntegrityExtension\n+  def vite_javascript_tag(*names,\n+                          type: 'module',\n+                          asset_type: :javascript,\n+                          skip_preload_tags: false,\n+                          skip_style_tags: false,\n+                          crossorigin: 'anonymous',\n+                          media: 'screen',\n+                          **options)\n+    entries = vite_manifest.resolve_entries_with_integrity(*names, type: asset_type)\n+\n+    ''.html_safe.tap do |tags|\n+      entries.fetch(:scripts).each do |script|\n+        tags << javascript_include_tag(\n+          script[:file],\n+          integrity: script[:integrity],\n+          crossorigin: crossorigin,\n+          type: type,\n+          extname: false,\n+          **options\n+        )\n+      end\n+\n+      unless skip_preload_tags\n+        entries.fetch(:imports).each do |import|\n+          tags << vite_preload_tag(import[:file], integrity: import[:integrity], crossorigin: crossorigin, **options)\n+        end\n+      end\n+\n+      options[:extname] = false if Rails::VERSION::MAJOR >= 7\n+\n+      unless skip_style_tags\n+        entries.fetch(:stylesheets).each do |stylesheet|\n+          # This is for stylesheets imported from Javascript. The entry for the JS entrypoint only contains the final CSS file name, so we need to look it up in the manifest\n+          tags << stylesheet_link_tag(\n+            stylesheet,\n+            integrity: vite_manifest.integrity_hash_for_file(stylesheet),\n+            media: media,\n+            **options\n+          )\n+        end\n+      end\n+    end\n+  end\n+\n+  def vite_stylesheet_tag(*names, **options)\n+    ''.html_safe.tap do |tags|\n+      names.each do |name|\n+        tags << super(name, integrity: vite_manifest.integrity_hash_for(name), **options)",
+        "comment_created_at": "2025-04-23T08:51:59+00:00",
+        "comment_author": "ClearlyClaire",
+        "comment_body": "The superclass `vite_stylesheet_tag` calls `vite_asset_path` which itself makes a lookup. Maybe it would make sense rewriting this bit to avoid doing the lookup twice (once for the path, and once for the integrity)?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2037239037",
+    "pr_number": 34400,
+    "pr_file": "spec/support/system_helpers.rb",
+    "created_at": "2025-04-10T12:33:19+00:00",
+    "commented_code": "def css_id(record)\n     \"##{dom_id(record)}\"\n   end\n+\n+  def frontend_translations\n+    JSON.parse(FRONTEND_TRANSLATIONS)",
+    "repo_full_name": "mastodon/mastodon",
+    "discussion_comments": [
+      {
+        "comment_id": "2037239037",
+        "repo_full_name": "mastodon/mastodon",
+        "pr_number": 34400,
+        "pr_file": "spec/support/system_helpers.rb",
+        "discussion_id": "2037239037",
+        "commented_code": "@@ -16,4 +18,8 @@ def form_label(key)\n   def css_id(record)\n     \"##{dom_id(record)}\"\n   end\n+\n+  def frontend_translations\n+    JSON.parse(FRONTEND_TRANSLATIONS)",
+        "comment_created_at": "2025-04-10T12:33:19+00:00",
+        "comment_author": "ClearlyClaire",
+        "comment_body": "This will still be re-parsed on every access\u2026 maybe memoize it?\r\n```suggestion\r\n    @@frontend_translations ||= JSON.parse(FRONTEND_TRANSLATIONS)\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2037241023",
+        "repo_full_name": "mastodon/mastodon",
+        "pr_number": 34400,
+        "pr_file": "spec/support/system_helpers.rb",
+        "discussion_id": "2037239037",
+        "commented_code": "@@ -16,4 +18,8 @@ def form_label(key)\n   def css_id(record)\n     \"##{dom_id(record)}\"\n   end\n+\n+  def frontend_translations\n+    JSON.parse(FRONTEND_TRANSLATIONS)",
+        "comment_created_at": "2025-04-10T12:34:28+00:00",
+        "comment_author": "mjankowski",
+        "comment_body": "I pushed before totally done, will update more.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1671034589",
+    "pr_number": 30978,
+    "pr_file": "app/lib/application_extension.rb",
+    "created_at": "2024-07-09T19:14:07+00:00",
+    "commented_code": "pipeline.publish(\"timeline:access_token:#{id}\", payload)\n         end\n       end\n+\n+      redis.publish('system', Oj.dump(event: :terminate, access_tokens: tokens.ids))",
+    "repo_full_name": "mastodon/mastodon",
+    "discussion_comments": [
+      {
+        "comment_id": "1671034589",
+        "repo_full_name": "mastodon/mastodon",
+        "pr_number": 30978,
+        "pr_file": "app/lib/application_extension.rb",
+        "discussion_id": "1671034589",
+        "commented_code": "@@ -40,6 +40,8 @@ def close_streaming_sessions(resource_owner = nil)\n           pipeline.publish(\"timeline:access_token:#{id}\", payload)\n         end\n       end\n+\n+      redis.publish('system', Oj.dump(event: :terminate, access_tokens: tokens.ids))",
+        "comment_created_at": "2024-07-09T19:14:07+00:00",
+        "comment_author": "ThisIsMissEm",
+        "comment_body": "Here, if an application had say, 500 access tokens before being deleted, we'd previously publish 500 events in one redis pipeline to 500 pubsub topics.\r\n\r\nWith this change, we'd publish only one event with 500 access token IDs in the message body to a single pubsub topic.\r\n\r\nThis would apply for each multiple of 1000, so for 1500 access tokens, we'd send two publishes to a single topic.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

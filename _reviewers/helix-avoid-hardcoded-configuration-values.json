@@ -1,0 +1,102 @@
+[
+  {
+    "discussion_id": "2017188052",
+    "pr_number": 13206,
+    "pr_file": "helix-term/src/handlers/completion/word.rs",
+    "created_at": "2025-03-27T17:10:13+00:00",
+    "commented_code": "+use std::{borrow::Cow, sync::Arc};\n+\n+use helix_core::{\n+    self as core, chars::char_is_word, completion::CompletionProvider, movement, Transaction,\n+};\n+use helix_event::TaskHandle;\n+use helix_stdx::rope::RopeSliceExt as _;\n+use helix_view::{\n+    document::SavePoint, handlers::completion::ResponseContext, Document, Editor, ViewId,\n+};\n+\n+use super::{request::TriggerKind, CompletionItem, CompletionItems, CompletionResponse, Trigger};\n+\n+const COMPLETION_KIND: &str = \"word\";\n+\n+pub(super) fn completion(\n+    editor: &Editor,\n+    trigger: Trigger,\n+    handle: TaskHandle,\n+    savepoint: Arc<SavePoint>,\n+) -> Option<impl FnOnce() -> CompletionResponse> {\n+    // The minimum number of grapheme clusters needed to auto-suggest a word. This minimum is\n+    // ignored if completion was triggered manually.\n+    const MIN_WORD_LEN: usize = 7;",
+    "repo_full_name": "helix-editor/helix",
+    "discussion_comments": [
+      {
+        "comment_id": "2017188052",
+        "repo_full_name": "helix-editor/helix",
+        "pr_number": 13206,
+        "pr_file": "helix-term/src/handlers/completion/word.rs",
+        "discussion_id": "2017188052",
+        "commented_code": "@@ -0,0 +1,126 @@\n+use std::{borrow::Cow, sync::Arc};\n+\n+use helix_core::{\n+    self as core, chars::char_is_word, completion::CompletionProvider, movement, Transaction,\n+};\n+use helix_event::TaskHandle;\n+use helix_stdx::rope::RopeSliceExt as _;\n+use helix_view::{\n+    document::SavePoint, handlers::completion::ResponseContext, Document, Editor, ViewId,\n+};\n+\n+use super::{request::TriggerKind, CompletionItem, CompletionItems, CompletionResponse, Trigger};\n+\n+const COMPLETION_KIND: &str = \"word\";\n+\n+pub(super) fn completion(\n+    editor: &Editor,\n+    trigger: Trigger,\n+    handle: TaskHandle,\n+    savepoint: Arc<SavePoint>,\n+) -> Option<impl FnOnce() -> CompletionResponse> {\n+    // The minimum number of grapheme clusters needed to auto-suggest a word. This minimum is\n+    // ignored if completion was triggered manually.\n+    const MIN_WORD_LEN: usize = 7;",
+        "comment_created_at": "2025-03-27T17:10:13+00:00",
+        "comment_author": "nik-rev",
+        "comment_body": "could this be made configurable? I would like to get auto-complete for words like `because` for example.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2017409762",
+    "pr_number": 13206,
+    "pr_file": "helix-view/src/handlers/word_index.rs",
+    "created_at": "2025-03-27T18:28:07+00:00",
+    "commented_code": "+//! Indexing of words from open buffers.\n+//!\n+//! This provides an eventually consistent set of words used in any open buffers. This set is\n+//! later used for lexical completion.\n+\n+use std::{borrow::Cow, collections::HashMap, iter, mem, sync::Arc, time::Duration};\n+\n+use helix_core::{\n+    chars::char_is_word, fuzzy::fuzzy_match, movement, ChangeSet, Range, Rope, RopeSlice,\n+};\n+use helix_event::{register_hook, AsyncHook};\n+use helix_stdx::rope::RopeSliceExt as _;\n+use parking_lot::RwLock;\n+use tokio::{sync::mpsc, time::Instant};\n+\n+use crate::{\n+    events::{DocumentDidChange, DocumentDidClose, DocumentDidOpen},\n+    DocumentId,\n+};\n+\n+use super::Handlers;\n+\n+#[derive(Debug)]\n+struct Change {\n+    old_text: Rope,\n+    text: Rope,\n+    changes: ChangeSet,\n+}\n+\n+#[derive(Debug)]\n+enum Event {\n+    Insert(Rope),\n+    Update(DocumentId, Change),\n+    Delete(DocumentId, Rope),\n+}\n+\n+#[derive(Debug)]\n+pub struct Handler {\n+    pub(super) index: WordIndex,\n+    /// A sender into an async hook which debounces updates to the index.\n+    hook: mpsc::Sender<Event>,\n+    /// A sender to a tokio task which coordinates the indexing of documents.\n+    ///\n+    /// See [WordIndex::run]. A supervisor-like task is in charge of spawning tasks to update the\n+    /// index. This ensures that consecutive edits to a document trigger the correct order of\n+    /// insertions and deletions into the word set.\n+    coordinator: mpsc::UnboundedSender<Event>,\n+}\n+\n+impl Handler {\n+    pub fn spawn() -> Self {\n+        let index = WordIndex::default();\n+        let (tx, rx) = mpsc::unbounded_channel();\n+        tokio::spawn(index.clone().run(rx));\n+        Self {\n+            hook: Hook {\n+                changes: HashMap::default(),\n+                coordinator: tx.clone(),\n+            }\n+            .spawn(),\n+            index,\n+            coordinator: tx,\n+        }\n+    }\n+}\n+\n+#[derive(Debug)]\n+struct Hook {\n+    changes: HashMap<DocumentId, Change>,\n+    coordinator: mpsc::UnboundedSender<Event>,\n+}\n+\n+const DEBOUNCE: Duration = Duration::from_secs(1);",
+    "repo_full_name": "helix-editor/helix",
+    "discussion_comments": [
+      {
+        "comment_id": "2017409762",
+        "repo_full_name": "helix-editor/helix",
+        "pr_number": 13206,
+        "pr_file": "helix-view/src/handlers/word_index.rs",
+        "discussion_id": "2017409762",
+        "commented_code": "@@ -0,0 +1,484 @@\n+//! Indexing of words from open buffers.\n+//!\n+//! This provides an eventually consistent set of words used in any open buffers. This set is\n+//! later used for lexical completion.\n+\n+use std::{borrow::Cow, collections::HashMap, iter, mem, sync::Arc, time::Duration};\n+\n+use helix_core::{\n+    chars::char_is_word, fuzzy::fuzzy_match, movement, ChangeSet, Range, Rope, RopeSlice,\n+};\n+use helix_event::{register_hook, AsyncHook};\n+use helix_stdx::rope::RopeSliceExt as _;\n+use parking_lot::RwLock;\n+use tokio::{sync::mpsc, time::Instant};\n+\n+use crate::{\n+    events::{DocumentDidChange, DocumentDidClose, DocumentDidOpen},\n+    DocumentId,\n+};\n+\n+use super::Handlers;\n+\n+#[derive(Debug)]\n+struct Change {\n+    old_text: Rope,\n+    text: Rope,\n+    changes: ChangeSet,\n+}\n+\n+#[derive(Debug)]\n+enum Event {\n+    Insert(Rope),\n+    Update(DocumentId, Change),\n+    Delete(DocumentId, Rope),\n+}\n+\n+#[derive(Debug)]\n+pub struct Handler {\n+    pub(super) index: WordIndex,\n+    /// A sender into an async hook which debounces updates to the index.\n+    hook: mpsc::Sender<Event>,\n+    /// A sender to a tokio task which coordinates the indexing of documents.\n+    ///\n+    /// See [WordIndex::run]. A supervisor-like task is in charge of spawning tasks to update the\n+    /// index. This ensures that consecutive edits to a document trigger the correct order of\n+    /// insertions and deletions into the word set.\n+    coordinator: mpsc::UnboundedSender<Event>,\n+}\n+\n+impl Handler {\n+    pub fn spawn() -> Self {\n+        let index = WordIndex::default();\n+        let (tx, rx) = mpsc::unbounded_channel();\n+        tokio::spawn(index.clone().run(rx));\n+        Self {\n+            hook: Hook {\n+                changes: HashMap::default(),\n+                coordinator: tx.clone(),\n+            }\n+            .spawn(),\n+            index,\n+            coordinator: tx,\n+        }\n+    }\n+}\n+\n+#[derive(Debug)]\n+struct Hook {\n+    changes: HashMap<DocumentId, Change>,\n+    coordinator: mpsc::UnboundedSender<Event>,\n+}\n+\n+const DEBOUNCE: Duration = Duration::from_secs(1);",
+        "comment_created_at": "2025-03-27T18:28:07+00:00",
+        "comment_author": "nik-rev",
+        "comment_body": "One of the benefits of word completion is the ability to type common words faster\r\n\r\nIf I want to type a word like `configuration`, then when I input 2 characters `co` and have the rest of `...onfiguration` instantly completed would be a speed up when typing \r\n\r\nI've used this PR for a couple of minutes. When I want to type a long word, I usually finish typing it before the auto complete pops up, since it takes about 1 second to show up\r\n\r\nIt would be neat to be able to configure this, for example to be 20ms ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2017553656",
+        "repo_full_name": "helix-editor/helix",
+        "pr_number": 13206,
+        "pr_file": "helix-view/src/handlers/word_index.rs",
+        "discussion_id": "2017409762",
+        "commented_code": "@@ -0,0 +1,484 @@\n+//! Indexing of words from open buffers.\n+//!\n+//! This provides an eventually consistent set of words used in any open buffers. This set is\n+//! later used for lexical completion.\n+\n+use std::{borrow::Cow, collections::HashMap, iter, mem, sync::Arc, time::Duration};\n+\n+use helix_core::{\n+    chars::char_is_word, fuzzy::fuzzy_match, movement, ChangeSet, Range, Rope, RopeSlice,\n+};\n+use helix_event::{register_hook, AsyncHook};\n+use helix_stdx::rope::RopeSliceExt as _;\n+use parking_lot::RwLock;\n+use tokio::{sync::mpsc, time::Instant};\n+\n+use crate::{\n+    events::{DocumentDidChange, DocumentDidClose, DocumentDidOpen},\n+    DocumentId,\n+};\n+\n+use super::Handlers;\n+\n+#[derive(Debug)]\n+struct Change {\n+    old_text: Rope,\n+    text: Rope,\n+    changes: ChangeSet,\n+}\n+\n+#[derive(Debug)]\n+enum Event {\n+    Insert(Rope),\n+    Update(DocumentId, Change),\n+    Delete(DocumentId, Rope),\n+}\n+\n+#[derive(Debug)]\n+pub struct Handler {\n+    pub(super) index: WordIndex,\n+    /// A sender into an async hook which debounces updates to the index.\n+    hook: mpsc::Sender<Event>,\n+    /// A sender to a tokio task which coordinates the indexing of documents.\n+    ///\n+    /// See [WordIndex::run]. A supervisor-like task is in charge of spawning tasks to update the\n+    /// index. This ensures that consecutive edits to a document trigger the correct order of\n+    /// insertions and deletions into the word set.\n+    coordinator: mpsc::UnboundedSender<Event>,\n+}\n+\n+impl Handler {\n+    pub fn spawn() -> Self {\n+        let index = WordIndex::default();\n+        let (tx, rx) = mpsc::unbounded_channel();\n+        tokio::spawn(index.clone().run(rx));\n+        Self {\n+            hook: Hook {\n+                changes: HashMap::default(),\n+                coordinator: tx.clone(),\n+            }\n+            .spawn(),\n+            index,\n+            coordinator: tx,\n+        }\n+    }\n+}\n+\n+#[derive(Debug)]\n+struct Hook {\n+    changes: HashMap<DocumentId, Change>,\n+    coordinator: mpsc::UnboundedSender<Event>,\n+}\n+\n+const DEBOUNCE: Duration = Duration::from_secs(1);",
+        "comment_created_at": "2025-03-27T20:25:01+00:00",
+        "comment_author": "the-mikedavis",
+        "comment_body": "This debounce doesn't relate to that: it debounces large updates to the word index. Instead what you'd want would be covered by configuration for the minimum word length to trigger completion (in the new `word` module).\r\n\r\nThe way I have the completion tuned now (with constants rather than configuration) avoids word completion most of the time so to type a long word I use `C-x` more often than not. I think it's ok for the trigger length to be configurable but I think the default configuration should try to avoid aggressively completing words and word completions should be lower priority than LSP completions.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1256039155",
+    "pr_number": 6470,
+    "pr_file": "helix-core/src/comment.rs",
+    "created_at": "2023-07-07T15:49:46+00:00",
+    "commented_code": "pub fn toggle_line_comments(doc: &Rope, selection: &Selection, token: Option<&str>) -> Transaction {\n     let text = doc.slice(..);\n \n-    let token = token.unwrap_or(\"//\");\n+    let token = token.unwrap_or(\"#\");",
+    "repo_full_name": "helix-editor/helix",
+    "discussion_comments": [
+      {
+        "comment_id": "1256039155",
+        "repo_full_name": "helix-editor/helix",
+        "pr_number": 6470,
+        "pr_file": "helix-core/src/comment.rs",
+        "discussion_id": "1256039155",
+        "commented_code": "@@ -60,7 +60,7 @@ fn find_line_comment(\n pub fn toggle_line_comments(doc: &Rope, selection: &Selection, token: Option<&str>) -> Transaction {\n     let text = doc.slice(..);\n \n-    let token = token.unwrap_or(\"//\");\n+    let token = token.unwrap_or(\"#\");",
+        "comment_created_at": "2023-07-07T15:49:46+00:00",
+        "comment_author": "alevinval",
+        "comment_body": "This feels like it should be configurable. And then change the default in the configuration.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1929832450",
+    "pr_number": 12688,
+    "pr_file": "helix-term/src/ui/mod.rs",
+    "created_at": "2025-01-26T17:49:00+00:00",
+    "commented_code": "}\n     })\n     .with_preview(|_editor, path| Some((path.as_path().into(), None)));\n-    let injector = picker.injector();\n-    let timeout = std::time::Instant::now() + std::time::Duration::from_millis(30);\n+    inject_files(picker.injector(), walk_builder, config.file_picker.sorted);\n+\n+    picker\n+}\n+\n+fn inject_files(\n+    injector: Injector<PathBuf, PathBuf>,\n+    mut walk_builder: ignore::WalkBuilder,\n+    sorted: bool,\n+) {\n+    use ignore::WalkState;\n+    use std::collections::HashSet;\n+    use std::time::{Duration, Instant};\n+\n+    // How long we are willing to wait for results before displaying the file picker.\n+    let now = Instant::now();\n+    let timeout = now + Duration::from_millis(30);",
+    "repo_full_name": "helix-editor/helix",
+    "discussion_comments": [
+      {
+        "comment_id": "1929832450",
+        "repo_full_name": "helix-editor/helix",
+        "pr_number": 12688,
+        "pr_file": "helix-term/src/ui/mod.rs",
+        "discussion_id": "1929832450",
+        "commented_code": "@@ -254,11 +245,37 @@ pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> FilePi\n         }\n     })\n     .with_preview(|_editor, path| Some((path.as_path().into(), None)));\n-    let injector = picker.injector();\n-    let timeout = std::time::Instant::now() + std::time::Duration::from_millis(30);\n+    inject_files(picker.injector(), walk_builder, config.file_picker.sorted);\n+\n+    picker\n+}\n+\n+fn inject_files(\n+    injector: Injector<PathBuf, PathBuf>,\n+    mut walk_builder: ignore::WalkBuilder,\n+    sorted: bool,\n+) {\n+    use ignore::WalkState;\n+    use std::collections::HashSet;\n+    use std::time::{Duration, Instant};\n+\n+    // How long we are willing to wait for results before displaying the file picker.\n+    let now = Instant::now();\n+    let timeout = now + Duration::from_millis(30);",
+        "comment_created_at": "2025-01-26T17:49:00+00:00",
+        "comment_author": "malor",
+        "comment_body": "This would probably be a config option as well. Otherwise, it's unclear how to reliably trigger all code paths from the integration tests.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

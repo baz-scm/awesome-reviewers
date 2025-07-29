@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Generate aggregated contributor leaderboard data."""
 import json
+import os
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 import yaml
 
 def parse_front_matter(md_path):
@@ -17,6 +20,20 @@ def parse_front_matter(md_path):
     if len(parts) >= 3:
         return yaml.safe_load(parts[1]) or {}
     return {}
+
+def fetch_profile(user, token=None):
+    """Fetch GitHub profile data for a user."""
+    url = f'https://api.github.com/users/{user}'
+    headers = {'Accept': 'application/vnd.github+json'}
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    req = Request(url, headers=headers)
+    try:
+        with urlopen(req, timeout=10) as resp:
+            return json.load(resp)
+    except (HTTPError, URLError, OSError) as exc:
+        print(f'Failed to fetch profile for {user}: {exc}')
+        return None
 
 def main():
     reviewers_dir = Path('_reviewers')
@@ -68,6 +85,20 @@ def main():
 
     top_users = {u['name'] for u in output}
 
+    # Load existing contributor data to reuse cached profiles
+    assets_dir = Path('assets/data')
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    existing_path = assets_dir / 'contributors.json'
+    if existing_path.exists():
+        try:
+            with open(existing_path, 'r', encoding='utf-8') as f:
+                existing = json.load(f)
+        except Exception:
+            existing = {}
+
+    token = os.getenv('GITHUB_TOKEN')
+
     contributors = {}
     for user in top_users:
         d = users[user]
@@ -75,11 +106,20 @@ def main():
             {'slug': s, 'title': d['entry_titles'][s]}
             for s in sorted(d['entry_titles'])
         ]
-        contributors[user] = {
+        info = {
             'repos': sorted(d['repos']),
             'entries': entries,
             'comments': {k: v for k, v in d['comments'].items()}
         }
+        profile = existing.get(user, {}).get('profile')
+        if profile is None:
+            fetched = fetch_profile(user, token)
+            if fetched:
+                fields = ['location', 'company', 'blog', 'twitter_username', 'email', 'site_admin', 'followers', 'following']
+                profile = {k: fetched.get(k) for k in fields if fetched.get(k) is not None}
+        if profile:
+            info['profile'] = profile
+        contributors[user] = info
 
     data_dir = Path('_data')
     data_dir.mkdir(exist_ok=True)
@@ -87,8 +127,6 @@ def main():
         json.dump(output, f, indent=2, ensure_ascii=False)
     print(f'Wrote {len(output)} contributors to _data/leaderboard.json')
 
-    assets_dir = Path('assets/data')
-    assets_dir.mkdir(parents=True, exist_ok=True)
     with open(assets_dir / 'contributors.json', 'w', encoding='utf-8') as f:
         json.dump(contributors, f, indent=2, ensure_ascii=False)
     print(f'Wrote {len(contributors)} users to assets/data/contributors.json')

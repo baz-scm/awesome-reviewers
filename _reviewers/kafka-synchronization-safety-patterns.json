@@ -1,0 +1,182 @@
+[
+  {
+    "discussion_id": "2194746691",
+    "pr_number": 20124,
+    "pr_file": "core/src/main/java/kafka/server/share/SharePartition.java",
+    "created_at": "2025-07-09T11:14:44+00:00",
+    "commented_code": "};\n         }\n \n-        private void archive(String newMemberId) {\n-            state = RecordState.ARCHIVED;\n-            memberId = newMemberId;\n+        // Visible for testing.\n+        void archive(String newMemberId) {\n+            stateTransitionLock.writeLock().lock();\n+            try {\n+                if (rollbackState != null) {\n+                    isMarkedArchived = true;\n+                }\n+                state = RecordState.ARCHIVED;\n+                memberId = newMemberId;\n+            } finally {\n+                stateTransitionLock.writeLock().unlock();\n+            }\n         }\n \n-        private InFlightState startStateTransition(RecordState newState, DeliveryCountOps ops, int maxDeliveryCount, String newMemberId) {\n-            rollbackState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\n-            return tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);\n+        // Visible for testing\n+        InFlightState startStateTransition(RecordState newState, DeliveryCountOps ops, int maxDeliveryCount, String newMemberId) {\n+            stateTransitionLock.writeLock().lock();\n+            try {\n+                rollbackState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\n+                return tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);",
+    "repo_full_name": "apache/kafka",
+    "discussion_comments": [
+      {
+        "comment_id": "2194746691",
+        "repo_full_name": "apache/kafka",
+        "pr_number": 20124,
+        "pr_file": "core/src/main/java/kafka/server/share/SharePartition.java",
+        "discussion_id": "2194746691",
+        "commented_code": "@@ -3103,25 +3116,46 @@ private int updatedDeliveryCount(DeliveryCountOps ops) {\n             };\n         }\n \n-        private void archive(String newMemberId) {\n-            state = RecordState.ARCHIVED;\n-            memberId = newMemberId;\n+        // Visible for testing.\n+        void archive(String newMemberId) {\n+            stateTransitionLock.writeLock().lock();\n+            try {\n+                if (rollbackState != null) {\n+                    isMarkedArchived = true;\n+                }\n+                state = RecordState.ARCHIVED;\n+                memberId = newMemberId;\n+            } finally {\n+                stateTransitionLock.writeLock().unlock();\n+            }\n         }\n \n-        private InFlightState startStateTransition(RecordState newState, DeliveryCountOps ops, int maxDeliveryCount, String newMemberId) {\n-            rollbackState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\n-            return tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);\n+        // Visible for testing\n+        InFlightState startStateTransition(RecordState newState, DeliveryCountOps ops, int maxDeliveryCount, String newMemberId) {\n+            stateTransitionLock.writeLock().lock();\n+            try {\n+                rollbackState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\n+                return tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);",
+        "comment_created_at": "2025-07-09T11:14:44+00:00",
+        "comment_author": "apoorvmittal10",
+        "comment_body": "Should it happen as below:\r\n```suggestion\r\n                InFlightState currentState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\r\n                InflightState updatedState = tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);\r\n                if (updatedState != null) {\r\n                      rollbackState = currentState;\r\n                }\r\n                return updatedState;\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2195499392",
+    "pr_number": 20124,
+    "pr_file": "core/src/main/java/kafka/server/share/SharePartition.java",
+    "created_at": "2025-07-09T16:51:37+00:00",
+    "commented_code": "};\n         }\n \n-        private void archive(String newMemberId) {\n+        // Visible for testing.\n+        synchronized void archive(String newMemberId) {\n+            if (rollbackState != null) {\n+                isMarkedArchived = true;\n+            }\n             state = RecordState.ARCHIVED;\n             memberId = newMemberId;\n         }\n \n-        private InFlightState startStateTransition(RecordState newState, DeliveryCountOps ops, int maxDeliveryCount, String newMemberId) {\n-            rollbackState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\n-            return tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);\n+        // Visible for testing\n+        synchronized InFlightState startStateTransition(RecordState newState, DeliveryCountOps ops, int maxDeliveryCount, String newMemberId) {\n+            InFlightState currentState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\n+            InFlightState updatedState = tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);\n+            if (updatedState != null) {\n+                rollbackState = currentState;\n+            }\n+            return updatedState;\n         }\n \n-        private void completeStateTransition(boolean commit) {\n-            if (commit) {\n+        // Visible for testing\n+        synchronized void completeStateTransition(boolean commit) {\n+            if (commit || isMarkedArchived) {\n                 rollbackState = null;\n                 return;\n             }\n             state = rollbackState.state;\n             deliveryCount = rollbackState.deliveryCount;\n             memberId = rollbackState.memberId;\n             rollbackState = null;\n+            if (acquisitionLockTimeoutTask.hasExpired())\n+                acquisitionLockTimeoutTask.run();",
+    "repo_full_name": "apache/kafka",
+    "discussion_comments": [
+      {
+        "comment_id": "2195499392",
+        "repo_full_name": "apache/kafka",
+        "pr_number": 20124,
+        "pr_file": "core/src/main/java/kafka/server/share/SharePartition.java",
+        "discussion_id": "2195499392",
+        "commented_code": "@@ -3103,25 +3112,37 @@ private int updatedDeliveryCount(DeliveryCountOps ops) {\n             };\n         }\n \n-        private void archive(String newMemberId) {\n+        // Visible for testing.\n+        synchronized void archive(String newMemberId) {\n+            if (rollbackState != null) {\n+                isMarkedArchived = true;\n+            }\n             state = RecordState.ARCHIVED;\n             memberId = newMemberId;\n         }\n \n-        private InFlightState startStateTransition(RecordState newState, DeliveryCountOps ops, int maxDeliveryCount, String newMemberId) {\n-            rollbackState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\n-            return tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);\n+        // Visible for testing\n+        synchronized InFlightState startStateTransition(RecordState newState, DeliveryCountOps ops, int maxDeliveryCount, String newMemberId) {\n+            InFlightState currentState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\n+            InFlightState updatedState = tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);\n+            if (updatedState != null) {\n+                rollbackState = currentState;\n+            }\n+            return updatedState;\n         }\n \n-        private void completeStateTransition(boolean commit) {\n-            if (commit) {\n+        // Visible for testing\n+        synchronized void completeStateTransition(boolean commit) {\n+            if (commit || isMarkedArchived) {\n                 rollbackState = null;\n                 return;\n             }\n             state = rollbackState.state;\n             deliveryCount = rollbackState.deliveryCount;\n             memberId = rollbackState.memberId;\n             rollbackState = null;\n+            if (acquisitionLockTimeoutTask.hasExpired())\n+                acquisitionLockTimeoutTask.run();",
+        "comment_created_at": "2025-07-09T16:51:37+00:00",
+        "comment_author": "AndrewJSchofield",
+        "comment_body": "I observe that you are calling the acquisition lock timeout task within the synchronized block in the in-flight state. Are you sure that there is no opportunity for deadlock introduced by this?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2195598981",
+        "repo_full_name": "apache/kafka",
+        "pr_number": 20124,
+        "pr_file": "core/src/main/java/kafka/server/share/SharePartition.java",
+        "discussion_id": "2195499392",
+        "commented_code": "@@ -3103,25 +3112,37 @@ private int updatedDeliveryCount(DeliveryCountOps ops) {\n             };\n         }\n \n-        private void archive(String newMemberId) {\n+        // Visible for testing.\n+        synchronized void archive(String newMemberId) {\n+            if (rollbackState != null) {\n+                isMarkedArchived = true;\n+            }\n             state = RecordState.ARCHIVED;\n             memberId = newMemberId;\n         }\n \n-        private InFlightState startStateTransition(RecordState newState, DeliveryCountOps ops, int maxDeliveryCount, String newMemberId) {\n-            rollbackState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\n-            return tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);\n+        // Visible for testing\n+        synchronized InFlightState startStateTransition(RecordState newState, DeliveryCountOps ops, int maxDeliveryCount, String newMemberId) {\n+            InFlightState currentState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\n+            InFlightState updatedState = tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);\n+            if (updatedState != null) {\n+                rollbackState = currentState;\n+            }\n+            return updatedState;\n         }\n \n-        private void completeStateTransition(boolean commit) {\n-            if (commit) {\n+        // Visible for testing\n+        synchronized void completeStateTransition(boolean commit) {\n+            if (commit || isMarkedArchived) {\n                 rollbackState = null;\n                 return;\n             }\n             state = rollbackState.state;\n             deliveryCount = rollbackState.deliveryCount;\n             memberId = rollbackState.memberId;\n             rollbackState = null;\n+            if (acquisitionLockTimeoutTask.hasExpired())\n+                acquisitionLockTimeoutTask.run();",
+        "comment_created_at": "2025-07-09T17:31:09+00:00",
+        "comment_author": "adixitconfluent",
+        "comment_body": "hmm, I think you're right. Lets take a scenario where a thread is able to acquire `lock` when entering the function `acquire` and it is waiting for the `intrinsic lock` of an instance 'x' of `InflightState` in order to perform  a check for `hasOngoingStateTransition()`. Now, there is a possibility that there is another thread that hold the `intrinsic lock` of instance 'x' of `InflightState` when it entered `completeStateTransition` and now it wants to acquire `lock` in order to run `acquisitionLockTimeoutTask.run()`\r\nThis fix needs more thought then.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2195635537",
+        "repo_full_name": "apache/kafka",
+        "pr_number": 20124,
+        "pr_file": "core/src/main/java/kafka/server/share/SharePartition.java",
+        "discussion_id": "2195499392",
+        "commented_code": "@@ -3103,25 +3112,37 @@ private int updatedDeliveryCount(DeliveryCountOps ops) {\n             };\n         }\n \n-        private void archive(String newMemberId) {\n+        // Visible for testing.\n+        synchronized void archive(String newMemberId) {\n+            if (rollbackState != null) {\n+                isMarkedArchived = true;\n+            }\n             state = RecordState.ARCHIVED;\n             memberId = newMemberId;\n         }\n \n-        private InFlightState startStateTransition(RecordState newState, DeliveryCountOps ops, int maxDeliveryCount, String newMemberId) {\n-            rollbackState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\n-            return tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);\n+        // Visible for testing\n+        synchronized InFlightState startStateTransition(RecordState newState, DeliveryCountOps ops, int maxDeliveryCount, String newMemberId) {\n+            InFlightState currentState = new InFlightState(state, deliveryCount, memberId, acquisitionLockTimeoutTask);\n+            InFlightState updatedState = tryUpdateState(newState, ops, maxDeliveryCount, newMemberId);\n+            if (updatedState != null) {\n+                rollbackState = currentState;\n+            }\n+            return updatedState;\n         }\n \n-        private void completeStateTransition(boolean commit) {\n-            if (commit) {\n+        // Visible for testing\n+        synchronized void completeStateTransition(boolean commit) {\n+            if (commit || isMarkedArchived) {\n                 rollbackState = null;\n                 return;\n             }\n             state = rollbackState.state;\n             deliveryCount = rollbackState.deliveryCount;\n             memberId = rollbackState.memberId;\n             rollbackState = null;\n+            if (acquisitionLockTimeoutTask.hasExpired())\n+                acquisitionLockTimeoutTask.run();",
+        "comment_created_at": "2025-07-09T17:42:51+00:00",
+        "comment_author": "adixitconfluent",
+        "comment_body": "One solution I can think of is that instead of adding this code here , we should do it at the places where we call `inflightsState.completeStateTransition(false)`. That will be ideal, I think",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2200429775",
+    "pr_number": 20124,
+    "pr_file": "core/src/main/java/kafka/server/share/SharePartition.java",
+    "created_at": "2025-07-11T11:08:41+00:00",
+    "commented_code": "private final String memberId;\n         private final long firstOffset;\n         private final long lastOffset;\n+        private boolean hasExpired;\n \n         AcquisitionLockTimerTask(long delayMs, String memberId, long firstOffset, long lastOffset) {\n             super(delayMs);\n             this.expirationMs = time.hiResClockMs() + delayMs;\n             this.memberId = memberId;\n             this.firstOffset = firstOffset;\n             this.lastOffset = lastOffset;\n+            this.hasExpired = false;\n         }\n \n         long expirationMs() {\n             return expirationMs;\n         }\n \n+        boolean hasExpired() {\n+            return hasExpired;",
+    "repo_full_name": "apache/kafka",
+    "discussion_comments": [
+      {
+        "comment_id": "2200429775",
+        "repo_full_name": "apache/kafka",
+        "pr_number": 20124,
+        "pr_file": "core/src/main/java/kafka/server/share/SharePartition.java",
+        "discussion_id": "2200429775",
+        "commented_code": "@@ -2834,26 +2850,35 @@ final class AcquisitionLockTimerTask extends TimerTask {\n         private final String memberId;\n         private final long firstOffset;\n         private final long lastOffset;\n+        private boolean hasExpired;\n \n         AcquisitionLockTimerTask(long delayMs, String memberId, long firstOffset, long lastOffset) {\n             super(delayMs);\n             this.expirationMs = time.hiResClockMs() + delayMs;\n             this.memberId = memberId;\n             this.firstOffset = firstOffset;\n             this.lastOffset = lastOffset;\n+            this.hasExpired = false;\n         }\n \n         long expirationMs() {\n             return expirationMs;\n         }\n \n+        boolean hasExpired() {\n+            return hasExpired;",
+        "comment_created_at": "2025-07-11T11:08:41+00:00",
+        "comment_author": "AndrewJSchofield",
+        "comment_body": "This seems to me to be accessed on multiple threads. It is checked underneath the share-partition write lock to determine whether to run the task following a write error, but it can also change if the timer task runs normally.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2200500905",
+        "repo_full_name": "apache/kafka",
+        "pr_number": 20124,
+        "pr_file": "core/src/main/java/kafka/server/share/SharePartition.java",
+        "discussion_id": "2200429775",
+        "commented_code": "@@ -2834,26 +2850,35 @@ final class AcquisitionLockTimerTask extends TimerTask {\n         private final String memberId;\n         private final long firstOffset;\n         private final long lastOffset;\n+        private boolean hasExpired;\n \n         AcquisitionLockTimerTask(long delayMs, String memberId, long firstOffset, long lastOffset) {\n             super(delayMs);\n             this.expirationMs = time.hiResClockMs() + delayMs;\n             this.memberId = memberId;\n             this.firstOffset = firstOffset;\n             this.lastOffset = lastOffset;\n+            this.hasExpired = false;\n         }\n \n         long expirationMs() {\n             return expirationMs;\n         }\n \n+        boolean hasExpired() {\n+            return hasExpired;",
+        "comment_created_at": "2025-07-11T11:40:45+00:00",
+        "comment_author": "adixitconfluent",
+        "comment_body": "Agreed, I think it makes sense to make this function thread safe. I have added synchronized around `hasExpired()` and `run()` functions.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2205387026",
+    "pr_number": 20131,
+    "pr_file": "storage/src/main/java/org/apache/kafka/storage/internals/log/AbstractIndex.java",
+    "created_at": "2025-07-14T16:56:17+00:00",
+    "commented_code": "private static final Logger log = LoggerFactory.getLogger(AbstractIndex.class);\n \n-    // Serializes all index operations that mutate internal state\n+    // Serializes all index operations that mutate internal state.\n+    // Clients only read committed data and are not affected by concurrent appends/truncates.\n+    // In the rare case, when the data is truncated, the follower could read inconsistent data.\n+    // The follower has the logic to ignore the inconsistent data through crc and leader epoch.",
+    "repo_full_name": "apache/kafka",
+    "discussion_comments": [
+      {
+        "comment_id": "2205387026",
+        "repo_full_name": "apache/kafka",
+        "pr_number": 20131,
+        "pr_file": "storage/src/main/java/org/apache/kafka/storage/internals/log/AbstractIndex.java",
+        "discussion_id": "2205387026",
+        "commented_code": "@@ -48,7 +47,10 @@ private enum SearchResultType {\n \n     private static final Logger log = LoggerFactory.getLogger(AbstractIndex.class);\n \n-    // Serializes all index operations that mutate internal state\n+    // Serializes all index operations that mutate internal state.\n+    // Clients only read committed data and are not affected by concurrent appends/truncates.\n+    // In the rare case, when the data is truncated, the follower could read inconsistent data.\n+    // The follower has the logic to ignore the inconsistent data through crc and leader epoch.",
+        "comment_created_at": "2025-07-14T16:56:17+00:00",
+        "comment_author": "junrao",
+        "comment_body": "Actually, I meant to only replace the first item, not the whole thing. Could we use the following?\r\n\r\n```\r\n    // Serializes all index operations that mutate internal state.\r\n    // Readers do not need to acquire this lock because:\r\n    //  1) MappedByteBuffer provides direct access to the OS-level buffer cache,\r\n    //     which allows concurrent reads in practice.\r\n    //  2) Clients only read committed data and are not affected by concurrent appends/truncates.\r\n    //     In the rare case when the data is truncated, the follower could read inconsistent data.\r\n    //     The follower has the logic to ignore the inconsistent data through crc and leader epoch.\r\n    //  3) Read and remap operations are coordinated via remapLock to ensure visibility of the\r\n           underlying mmap.\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2205920723",
+        "repo_full_name": "apache/kafka",
+        "pr_number": 20131,
+        "pr_file": "storage/src/main/java/org/apache/kafka/storage/internals/log/AbstractIndex.java",
+        "discussion_id": "2205387026",
+        "commented_code": "@@ -48,7 +47,10 @@ private enum SearchResultType {\n \n     private static final Logger log = LoggerFactory.getLogger(AbstractIndex.class);\n \n-    // Serializes all index operations that mutate internal state\n+    // Serializes all index operations that mutate internal state.\n+    // Clients only read committed data and are not affected by concurrent appends/truncates.\n+    // In the rare case, when the data is truncated, the follower could read inconsistent data.\n+    // The follower has the logic to ignore the inconsistent data through crc and leader epoch.",
+        "comment_created_at": "2025-07-14T22:18:12+00:00",
+        "comment_author": "Forest0923",
+        "comment_body": "Thanks for the review. I've fixed in e802214.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1412049259",
+    "pr_number": 14849,
+    "pr_file": "group-coordinator/src/main/java/org/apache/kafka/coordinator/group/runtime/ContextStateMachine.java",
+    "created_at": "2023-12-01T12:30:36+00:00",
+    "commented_code": "+/*\n+ * Licensed to the Apache Software Foundation (ASF) under one or more\n+ * contributor license agreements. See the NOTICE file distributed with\n+ * this work for additional information regarding copyright ownership.\n+ * The ASF licenses this file to You under the Apache License, Version 2.0\n+ * (the \"License\"); you may not use this file except in compliance with\n+ * the License. You may obtain a copy of the License at\n+ *\n+ *    http://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS,\n+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+ * See the License for the specific language governing permissions and\n+ * limitations under the License.\n+ */\n+package org.apache.kafka.coordinator.group.runtime;\n+\n+import org.apache.kafka.common.TopicPartition;\n+import org.apache.kafka.common.utils.LogContext;\n+import org.apache.kafka.timeline.SnapshotRegistry;\n+import org.slf4j.Logger;\n+\n+/**\n+ * ContextStateMachine is a wrapper on top of the coordinator state machine. Generally, only a single thread at a\n+ * time will access this object but multiple threads may access while loading the __consumer_offsets topic partition.",
+    "repo_full_name": "apache/kafka",
+    "discussion_comments": [
+      {
+        "comment_id": "1412049259",
+        "repo_full_name": "apache/kafka",
+        "pr_number": 14849,
+        "pr_file": "group-coordinator/src/main/java/org/apache/kafka/coordinator/group/runtime/ContextStateMachine.java",
+        "discussion_id": "1412049259",
+        "commented_code": "@@ -0,0 +1,176 @@\n+/*\n+ * Licensed to the Apache Software Foundation (ASF) under one or more\n+ * contributor license agreements. See the NOTICE file distributed with\n+ * this work for additional information regarding copyright ownership.\n+ * The ASF licenses this file to You under the Apache License, Version 2.0\n+ * (the \"License\"); you may not use this file except in compliance with\n+ * the License. You may obtain a copy of the License at\n+ *\n+ *    http://www.apache.org/licenses/LICENSE-2.0\n+ *\n+ * Unless required by applicable law or agreed to in writing, software\n+ * distributed under the License is distributed on an \"AS IS\" BASIS,\n+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+ * See the License for the specific language governing permissions and\n+ * limitations under the License.\n+ */\n+package org.apache.kafka.coordinator.group.runtime;\n+\n+import org.apache.kafka.common.TopicPartition;\n+import org.apache.kafka.common.utils.LogContext;\n+import org.apache.kafka.timeline.SnapshotRegistry;\n+import org.slf4j.Logger;\n+\n+/**\n+ * ContextStateMachine is a wrapper on top of the coordinator state machine. Generally, only a single thread at a\n+ * time will access this object but multiple threads may access while loading the __consumer_offsets topic partition.",
+        "comment_created_at": "2023-12-01T12:30:36+00:00",
+        "comment_author": "dajac",
+        "comment_body": "I think that we could do slightly better for the documentation. The object is indeed never accessed concurrently however it is accessed by multiple threads. Therefore, we need to sync'ed the access.\r\n\r\nI would also remove the reference to the `__consumer_offsets` because the runtime is not tight to it. We can explain the same without mentioning it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1896838707",
+    "pr_number": 17731,
+    "pr_file": "clients/src/main/java/org/apache/kafka/common/requests/RequestContext.java",
+    "created_at": "2024-12-24T15:46:23+00:00",
+    "commented_code": "public final KafkaPrincipal principal;\n     public final ListenerName listenerName;\n     public final SecurityProtocol securityProtocol;\n-    public final ClientInformation clientInformation;\n+    // The client information can be updated if the request is ApiVersionRequest,\n+    // so the client information will not be unknown for ApiVersionRequest.\n+    public ClientInformation clientInformation;",
+    "repo_full_name": "apache/kafka",
+    "discussion_comments": [
+      {
+        "comment_id": "1896838707",
+        "repo_full_name": "apache/kafka",
+        "pr_number": 17731,
+        "pr_file": "clients/src/main/java/org/apache/kafka/common/requests/RequestContext.java",
+        "discussion_id": "1896838707",
+        "commented_code": "@@ -41,7 +41,9 @@ public class RequestContext implements AuthorizableRequestContext {\n     public final KafkaPrincipal principal;\n     public final ListenerName listenerName;\n     public final SecurityProtocol securityProtocol;\n-    public final ClientInformation clientInformation;\n+    // The client information can be updated if the request is ApiVersionRequest,\n+    // so the client information will not be unknown for ApiVersionRequest.\n+    public ClientInformation clientInformation;",
+        "comment_created_at": "2024-12-24T15:46:23+00:00",
+        "comment_author": "ijuma",
+        "comment_body": "Making this mutable and public seems dangerous. A few things to consider:\r\n1. Thread safety.\r\n2. Whether we want to allow it to be updated only once (if so, we'd want to have a method that enforces that).",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

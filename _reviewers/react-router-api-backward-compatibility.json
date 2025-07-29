@@ -1,0 +1,102 @@
+[
+  {
+    "discussion_id": "2164151376",
+    "pr_number": 13700,
+    "pr_file": "packages/react-router/lib/components.tsx",
+    "created_at": "2025-06-24T14:15:26+00:00",
+    "commented_code": "export function renderMatches(\n   matches: RouteMatch[] | null\n ): React.ReactElement | null {\n+  // Is this legacy? No params relevant to how it's used???? Seems lacking.",
+    "repo_full_name": "remix-run/react-router",
+    "discussion_comments": [
+      {
+        "comment_id": "2164151376",
+        "repo_full_name": "remix-run/react-router",
+        "pr_number": 13700,
+        "pr_file": "packages/react-router/lib/components.tsx",
+        "discussion_id": "2164151376",
+        "commented_code": "@@ -1232,6 +1232,7 @@ export let createRoutesFromElements = createRoutesFromChildren;\n export function renderMatches(\n   matches: RouteMatch[] | null\n ): React.ReactElement | null {\n+  // Is this legacy? No params relevant to how it's used???? Seems lacking.",
+        "comment_created_at": "2025-06-24T14:15:26+00:00",
+        "comment_author": "brophdawg11",
+        "comment_body": "This internal `_renderMatches` was forked off as a private implementation to allow us to expand the function with data-router capabilities without changing the existing `renderMatches` public API.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1939744742",
+    "pr_number": 12941,
+    "pr_file": "packages/react-router/lib/dom/ssr/single-fetch.tsx",
+    "created_at": "2025-02-03T17:09:48+00:00",
+    "commented_code": "}\n }\n \n+function middlewareErrorHandler(\n+  e: MiddlewareError,\n+  keyedResults: Record<string, DataStrategyResult>\n+) {\n+  // we caught an error running the middleware, copy that overtop any\n+  // non-error result for the route\n+  Object.assign(keyedResults, {\n+    [e.routeId]: { type: \"error\", result: e.error },\n+  });\n+}\n+\n export function getSingleFetchDataStrategy(\n   manifest: AssetsManifest,\n   routeModules: RouteModules,\n   getRouter: () => DataRouter\n ): DataStrategyFunction {\n-  return async ({ request, matches, fetcherKey }) => {\n+  return async (args) => {\n+    let { request, matches, fetcherKey } = args;\n+\n     // Actions are simple and behave the same for navigations and fetchers\n     if (request.method !== \"GET\") {\n-      return singleFetchActionStrategy(request, matches);\n+      return runMiddlewarePipeline(\n+        args,\n+        matches.findIndex((m) => m.shouldLoad),\n+        false,\n+        async (keyedResults) => {\n+          let results = await singleFetchActionStrategy(request, matches);\n+          Object.assign(keyedResults, results);\n+        },\n+        middlewareErrorHandler\n+      ) as Promise<Record<string, DataStrategyResult>>;",
+    "repo_full_name": "remix-run/react-router",
+    "discussion_comments": [
+      {
+        "comment_id": "1939744742",
+        "repo_full_name": "remix-run/react-router",
+        "pr_number": 12941,
+        "pr_file": "packages/react-router/lib/dom/ssr/single-fetch.tsx",
+        "discussion_id": "1939744742",
+        "commented_code": "@@ -131,30 +135,82 @@ export function StreamTransfer({\n   }\n }\n \n+function middlewareErrorHandler(\n+  e: MiddlewareError,\n+  keyedResults: Record<string, DataStrategyResult>\n+) {\n+  // we caught an error running the middleware, copy that overtop any\n+  // non-error result for the route\n+  Object.assign(keyedResults, {\n+    [e.routeId]: { type: \"error\", result: e.error },\n+  });\n+}\n+\n export function getSingleFetchDataStrategy(\n   manifest: AssetsManifest,\n   routeModules: RouteModules,\n   getRouter: () => DataRouter\n ): DataStrategyFunction {\n-  return async ({ request, matches, fetcherKey }) => {\n+  return async (args) => {\n+    let { request, matches, fetcherKey } = args;\n+\n     // Actions are simple and behave the same for navigations and fetchers\n     if (request.method !== \"GET\") {\n-      return singleFetchActionStrategy(request, matches);\n+      return runMiddlewarePipeline(\n+        args,\n+        matches.findIndex((m) => m.shouldLoad),\n+        false,\n+        async (keyedResults) => {\n+          let results = await singleFetchActionStrategy(request, matches);\n+          Object.assign(keyedResults, results);\n+        },\n+        middlewareErrorHandler\n+      ) as Promise<Record<string, DataStrategyResult>>;",
+        "comment_created_at": "2025-02-03T17:09:48+00:00",
+        "comment_author": "brophdawg11",
+        "comment_body": "Because `middleware` is part of the default data strategy, we have to re-implement it here in our custom data strategy and can do so using the same `runMiddlewarePipeline` API we use internally.  I'm thinking we should make some form of this public API as well for userland `dataStrategy` implementation who want to use the normal middleware. \r\n\r\nThe current API is as follows - may be leaking some implementation details we could hide in the exported version though:\r\n\r\n```js\r\nrunMiddlewarePipeline(\r\n  // Passthrough of { request, matches, context } from dataStrategy\r\n  args, \r\n\r\n  // how deep?  I.e., what is the lowest handler to run\r\n  matchIndexToRunMiddlewareTo, \r\n\r\n  // Should I bubble up a returned Response?  SSR only - always `false` in user client-side implementations\r\n  false, \r\n\r\n  // callback to run the handlers and assign results to keyedResults\r\n  // async (keyedResults: Record<string, DataStrategyResult>) { ... },\r\n\r\n  // Error callback if a middleware throws an error - assign the error to keyedResults\r\n  async (e: MiddlewareError, keyedResults: Record<string, DataStrategyResult>) { ... }  \r\n)\r\n```\r\n\r\n\r\nMaybe we could pass it as an arg to `dataStrategy`?  We could remove the boolean and handle that for them internally, and then instead of using an index we could just let them hand us the matches which they could `.slice` if they didn't want to run all the way down:\r\n\r\n```js\r\nfunction dataStrategy({ request, params, context, matches, runMiddleware }) {\r\n  return runMiddleware(\r\n    { request, params, context }, \r\n    matches,\r\n    (results) => { /* run handlers, assign to results */ },\r\n    (e, results) => { /* handle error */ },\r\n  );    \r\n})\r\n```\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2190354882",
+    "pr_number": 12941,
+    "pr_file": "packages/react-router/lib/dom/ssr/routes-test-stub.tsx",
+    "created_at": "2025-07-07T15:04:18+00:00",
+    "commented_code": "*/\n export function createRoutesStub(\n   routes: StubRouteObject[],\n-  context: AppLoadContext = {}\n+  unstable_getContext?: () => unstable_InitialContext",
+    "repo_full_name": "remix-run/react-router",
+    "discussion_comments": [
+      {
+        "comment_id": "2190354882",
+        "repo_full_name": "remix-run/react-router",
+        "pr_number": 12941,
+        "pr_file": "packages/react-router/lib/dom/ssr/routes-test-stub.tsx",
+        "discussion_id": "2190354882",
+        "commented_code": "@@ -91,7 +86,7 @@ export interface RoutesTestStubProps {\n  */\n export function createRoutesStub(\n   routes: StubRouteObject[],\n-  context: AppLoadContext = {}\n+  unstable_getContext?: () => unstable_InitialContext",
+        "comment_created_at": "2025-07-07T15:04:18+00:00",
+        "comment_author": "topaxi",
+        "comment_body": "The typings are off, it used to take an `AppLoadContext`, now it takes a `() => unstable_InitialContext`. This means there's no way of using `createRoutesStub` with the old non-experimental API.\r\n\r\nMigrating to the experimental API is not very desirable, even though I did in the end manage to do so, I'm worried that other developers might not commit to it.\r\n\r\nIt should either support both types or have an other separate API to support each the old and the new use-case.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2190413178",
+        "repo_full_name": "remix-run/react-router",
+        "pr_number": 12941,
+        "pr_file": "packages/react-router/lib/dom/ssr/routes-test-stub.tsx",
+        "discussion_id": "2190354882",
+        "commented_code": "@@ -91,7 +86,7 @@ export interface RoutesTestStubProps {\n  */\n export function createRoutesStub(\n   routes: StubRouteObject[],\n-  context: AppLoadContext = {}\n+  unstable_getContext?: () => unstable_InitialContext",
+        "comment_created_at": "2025-07-07T15:30:58+00:00",
+        "comment_author": "brophdawg11",
+        "comment_body": "Ah ok yeah good catch - opened a PR to fix those https://github.com/remix-run/react-router/pull/13946.  I'll cut an experimental release if you want to try it out and see if it fixes the issue.  I'll tag you to move the convo over there",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2037632573",
+    "pr_number": 13395,
+    "pr_file": "packages/react-router/lib/dom/ssr/single-fetch.tsx",
+    "created_at": "2025-04-10T14:59:39+00:00",
+    "commented_code": "}\n }\n \n-function handleMiddlewareError(error: unknown, routeId: string) {\n-  return { [routeId]: { type: \"error\", result: error } };\n+export function getSingleFetchDataStrategy(\n+  manifest: AssetsManifest,\n+  ssr: boolean,\n+  basename: string | undefined,\n+  getRouter: () => DataRouter\n+): DataStrategyFunction {\n+  let dataStrategy = getSingleFetchDataStrategyImpl(\n+    manifest,\n+    ssr,\n+    basename,\n+    getRouter\n+  );\n+  return async (args) => args.unstable_runMiddleware(dataStrategy);",
+    "repo_full_name": "remix-run/react-router",
+    "discussion_comments": [
+      {
+        "comment_id": "2037632573",
+        "repo_full_name": "remix-run/react-router",
+        "pr_number": 13395,
+        "pr_file": "packages/react-router/lib/dom/ssr/single-fetch.tsx",
+        "discussion_id": "2037632573",
+        "commented_code": "@@ -148,11 +148,22 @@ export function StreamTransfer({\n   }\n }\n \n-function handleMiddlewareError(error: unknown, routeId: string) {\n-  return { [routeId]: { type: \"error\", result: error } };\n+export function getSingleFetchDataStrategy(\n+  manifest: AssetsManifest,\n+  ssr: boolean,\n+  basename: string | undefined,\n+  getRouter: () => DataRouter\n+): DataStrategyFunction {\n+  let dataStrategy = getSingleFetchDataStrategyImpl(\n+    manifest,\n+    ssr,\n+    basename,\n+    getRouter\n+  );\n+  return async (args) => args.unstable_runMiddleware(dataStrategy);",
+        "comment_created_at": "2025-04-10T14:59:39+00:00",
+        "comment_author": "brophdawg11",
+        "comment_body": "Use the new `runMiddleware` API to wrap middleware around our existing `dataStrategy` - instead of calling middleware independently for each fork in the `dataStrategy`",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

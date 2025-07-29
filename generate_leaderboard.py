@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Generate aggregated contributor leaderboard data."""
 import json
+import os
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
 import yaml
+
+from github_utils import fetch_profile
 
 def parse_front_matter(md_path):
     try:
@@ -68,6 +71,20 @@ def main():
 
     top_users = {u['name'] for u in output}
 
+    # Load existing contributor data to reuse cached profiles
+    assets_dir = Path('assets/data')
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    existing = {}
+    existing_path = assets_dir / 'contributors.json'
+    if existing_path.exists():
+        try:
+            with open(existing_path, 'r', encoding='utf-8') as f:
+                existing = json.load(f)
+        except Exception:
+            existing = {}
+
+    token = os.getenv('GITHUB_TOKEN')
+
     contributors = {}
     for user in top_users:
         d = users[user]
@@ -75,11 +92,17 @@ def main():
             {'slug': s, 'title': d['entry_titles'][s]}
             for s in sorted(d['entry_titles'])
         ]
-        contributors[user] = {
+        info = {
             'repos': sorted(d['repos']),
             'entries': entries,
             'comments': {k: v for k, v in d['comments'].items()}
         }
+        profile = existing.get(user, {}).get('profile')
+        if profile is None:
+            profile = fetch_profile(user, token)
+        if profile is not None:
+            info['profile'] = profile
+        contributors[user] = info
 
     data_dir = Path('_data')
     data_dir.mkdir(exist_ok=True)
@@ -87,8 +110,6 @@ def main():
         json.dump(output, f, indent=2, ensure_ascii=False)
     print(f'Wrote {len(output)} contributors to _data/leaderboard.json')
 
-    assets_dir = Path('assets/data')
-    assets_dir.mkdir(parents=True, exist_ok=True)
     with open(assets_dir / 'contributors.json', 'w', encoding='utf-8') as f:
         json.dump(contributors, f, indent=2, ensure_ascii=False)
     print(f'Wrote {len(contributors)} users to assets/data/contributors.json')

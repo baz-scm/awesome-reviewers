@@ -5,9 +5,9 @@ import os
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
-from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
 import yaml
+
+from github_utils import fetch_profile
 
 def parse_front_matter(md_path):
     try:
@@ -20,20 +20,6 @@ def parse_front_matter(md_path):
     if len(parts) >= 3:
         return yaml.safe_load(parts[1]) or {}
     return {}
-
-def fetch_profile(user, token=None):
-    """Fetch GitHub profile data for a user."""
-    url = f'https://api.github.com/users/{user}'
-    headers = {'Accept': 'application/vnd.github+json'}
-    if token:
-        headers['Authorization'] = f'Bearer {token}'
-    req = Request(url, headers=headers)
-    try:
-        with urlopen(req, timeout=10) as resp:
-            return json.load(resp)
-    except (HTTPError, URLError, OSError) as exc:
-        print(f'Failed to fetch profile for {user}: {exc}')
-        return None
 
 def main():
     reviewers_dir = Path('_reviewers')
@@ -113,11 +99,8 @@ def main():
         }
         profile = existing.get(user, {}).get('profile')
         if profile is None:
-            fetched = fetch_profile(user, token)
-            if fetched:
-                fields = ['location', 'company', 'blog', 'twitter_username', 'email', 'site_admin', 'followers', 'following']
-                profile = {k: fetched.get(k) for k in fields if fetched.get(k) is not None}
-        if profile:
+            profile = fetch_profile(user, token)
+        if profile is not None:
             info['profile'] = profile
         contributors[user] = info
 

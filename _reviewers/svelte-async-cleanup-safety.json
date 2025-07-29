@@ -1,0 +1,200 @@
+[
+  {
+    "discussion_id": "2004381534",
+    "pr_number": 15069,
+    "pr_file": "packages/svelte/src/internal/client/reactivity/sources.js",
+    "created_at": "2025-03-19T22:04:38+00:00",
+    "commented_code": "e.state_unsafe_mutation();\n \t}\n \n-\tlet new_value = should_proxy ? proxy(value, null, source) : value;\n+\tlet new_value = should_proxy\n+\t\t? needs_previous\n+\t\t\t? proxy(value, source.o, null, source)\n+\t\t\t: proxy(value, source.o)\n+\t\t: value;\n \n \treturn internal_set(source, new_value);\n }\n \n+/**\n+ * @template V\n+ * @param {Source<V>} source\n+ * @param {V} value\n+ * @param {boolean} [should_proxy]\n+ * @param {boolean} [needs_previous]\n+ * @returns {V}\n+ */\n+export function simple_set(source, value, should_proxy = false, needs_previous = false) {\n+\tlet new_value = should_proxy\n+\t\t? needs_previous\n+\t\t\t? proxy(value, source.o, null, source)\n+\t\t\t: proxy(value, source.o)\n+\t\t: value;\n+\n+\tsource.v = new_value;\n+\n+\tsource.o?.onchange?.();\n+\n+\treturn new_value;\n+}",
+    "repo_full_name": "sveltejs/svelte",
+    "discussion_comments": [
+      {
+        "comment_id": "2004381534",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 15069,
+        "pr_file": "packages/svelte/src/internal/client/reactivity/sources.js",
+        "discussion_id": "2004381534",
+        "commented_code": "@@ -160,11 +199,37 @@ export function set(source, value, should_proxy = false) {\n \t\te.state_unsafe_mutation();\n \t}\n \n-\tlet new_value = should_proxy ? proxy(value, null, source) : value;\n+\tlet new_value = should_proxy\n+\t\t? needs_previous\n+\t\t\t? proxy(value, source.o, null, source)\n+\t\t\t: proxy(value, source.o)\n+\t\t: value;\n \n \treturn internal_set(source, new_value);\n }\n \n+/**\n+ * @template V\n+ * @param {Source<V>} source\n+ * @param {V} value\n+ * @param {boolean} [should_proxy]\n+ * @param {boolean} [needs_previous]\n+ * @returns {V}\n+ */\n+export function simple_set(source, value, should_proxy = false, needs_previous = false) {\n+\tlet new_value = should_proxy\n+\t\t? needs_previous\n+\t\t\t? proxy(value, source.o, null, source)\n+\t\t\t: proxy(value, source.o)\n+\t\t: value;\n+\n+\tsource.v = new_value;\n+\n+\tsource.o?.onchange?.();\n+\n+\treturn new_value;\n+}",
+        "comment_created_at": "2025-03-19T22:04:38+00:00",
+        "comment_author": "Rich-Harris",
+        "comment_body": "I think we should get rid of `simple_set`, it will be a bug magnet. Case in point: `onchange` fires [here](https://svelte.dev/playground/hello-world?version=pr-15069#H4sIAAAAAAAAE22Qy2rDMBBFf2VQu7AhJGTrOIbu-gmBugtFntQGRRKecZJi9O-V5NemC4G4d-6ZxyiMvKMoxCdqbeFpe91Ahk3H2ORiJ26dRhLF1yj418W6KAR9Tn04t6cHao7aVRL-pytrGA0HjChJ9Z3jqjY1a2RQrTQ_2MAZ3oklY3aTmjA_RT8-pSURXGBMAr89pB5wqz7uFqdmayZYAVkO52ozAmXtwv2Ap8Xw08endukbJqVQotj2AbISuO1ov_Y-zoAU91M0BeEVXINPuGQRWR62ZU3pqmWKjFo7hCtfEaZtCxhnz5cHV4WLMb5YFHFY_-3_ALWpfmCjAQAA) when it shouldn't...\r\n\r\n```js\r\nclass X {\r\n  #value = $state(1, {\r\n    onchange: () => {\r\n      changed = true;\r\n    }\r\n  });\r\n\r\n  constructor() {\r\n    this.#value = 1;\r\n  }\r\n}\r\n```\r\n\r\n...because we're missing the `!source.equals(value)` check. We could add that in, but we're likely to run into similar cases if we (for example) add forking and so on. The very slight optimisation probably isn't worth the more complicated code.\r\n\r\nOne wrinkle: while no tests fail if we replace `$.simple_set` with `$.set` (other than a harmless snapshot test), it _is_ technically a breaking change, because it would mean that private state behaves the same as public state with regards to effects:\r\n\r\n```js\r\nclass X {\r\n  value = $state(0);\r\n  #value = $state(0);\r\n\r\n  constructor() {\r\n    this.value = 1;\r\n    this.#value = 1;\r\n  }\r\n\r\n  get private_value() {\r\n    return this.#value;\r\n  }\r\n}\r\n\r\n$effect(() => {\r\n  // this creates an infinite loop\r\n  const x = new X();\r\n  x.value;\r\n});\r\n\r\n$effect(() => {\r\n  // this does not (but probably should)\r\n  const x = new X();\r\n  x.private_value;\r\n});\r\n```\r\n\r\nI think that's _probably_ okay, since a) you really shouldn't be reading a signal that you just created inside an effect (in fact perhaps we should have a dedicated error for that, rather than just the infinite loop detection, [like we do with deriveds](https://svelte.dev/playground/hello-world?version=5.23.2#H4sIAAAAAAAAE22OQQqDMBBFrxKGLiIW7dpGobveoXahZgqBNIZktBXJ3WtUKJQu5_03M38G0zwRCrii1j179U5LxlEqQpnAER5Ko4fiNgNNNnoRLHzfulib-RE1RdY2Hv_xrjeEhpYzIHznlKWqNjVpJNb1gyFWsoNEp0aUWTtxnrCyYnNUfiRPDSE_JectW3ma7pNDGpzZ5BWF6In8-9EIW81rHkRuq6UZ4ZugIDdguIcP1dCucgsBAAA=)), and b) I'd be very surprised if anyone was relying on that behaviour. But it gives me pause.\r\n\r\nIf we wanted to be super cautious about it then we could pass a bitmask as the third option instead of a boolean, where the `1` bit means 'proxy this please' and the `2` bit means 'don't mark reactions'.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2004388859",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 15069,
+        "pr_file": "packages/svelte/src/internal/client/reactivity/sources.js",
+        "discussion_id": "2004381534",
+        "commented_code": "@@ -160,11 +199,37 @@ export function set(source, value, should_proxy = false) {\n \t\te.state_unsafe_mutation();\n \t}\n \n-\tlet new_value = should_proxy ? proxy(value, null, source) : value;\n+\tlet new_value = should_proxy\n+\t\t? needs_previous\n+\t\t\t? proxy(value, source.o, null, source)\n+\t\t\t: proxy(value, source.o)\n+\t\t: value;\n \n \treturn internal_set(source, new_value);\n }\n \n+/**\n+ * @template V\n+ * @param {Source<V>} source\n+ * @param {V} value\n+ * @param {boolean} [should_proxy]\n+ * @param {boolean} [needs_previous]\n+ * @returns {V}\n+ */\n+export function simple_set(source, value, should_proxy = false, needs_previous = false) {\n+\tlet new_value = should_proxy\n+\t\t? needs_previous\n+\t\t\t? proxy(value, source.o, null, source)\n+\t\t\t: proxy(value, source.o)\n+\t\t: value;\n+\n+\tsource.v = new_value;\n+\n+\tsource.o?.onchange?.();\n+\n+\treturn new_value;\n+}",
+        "comment_created_at": "2025-03-19T22:12:17+00:00",
+        "comment_author": "paoloricciuti",
+        "comment_body": "There's actually a bug open for the opposite (to switch stuff into the constructor to be reactive) and I've opened a PR for it #15300 (it was for deriveds but the discussion also drifted on signals)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2006033687",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 15069,
+        "pr_file": "packages/svelte/src/internal/client/reactivity/sources.js",
+        "discussion_id": "2004381534",
+        "commented_code": "@@ -160,11 +199,37 @@ export function set(source, value, should_proxy = false) {\n \t\te.state_unsafe_mutation();\n \t}\n \n-\tlet new_value = should_proxy ? proxy(value, null, source) : value;\n+\tlet new_value = should_proxy\n+\t\t? needs_previous\n+\t\t\t? proxy(value, source.o, null, source)\n+\t\t\t: proxy(value, source.o)\n+\t\t: value;\n \n \treturn internal_set(source, new_value);\n }\n \n+/**\n+ * @template V\n+ * @param {Source<V>} source\n+ * @param {V} value\n+ * @param {boolean} [should_proxy]\n+ * @param {boolean} [needs_previous]\n+ * @returns {V}\n+ */\n+export function simple_set(source, value, should_proxy = false, needs_previous = false) {\n+\tlet new_value = should_proxy\n+\t\t? needs_previous\n+\t\t\t? proxy(value, source.o, null, source)\n+\t\t\t: proxy(value, source.o)\n+\t\t: value;\n+\n+\tsource.v = new_value;\n+\n+\tsource.o?.onchange?.();\n+\n+\treturn new_value;\n+}",
+        "comment_created_at": "2025-03-20T16:30:47+00:00",
+        "comment_author": "Rich-Harris",
+        "comment_body": "A reversal of my previous position: neither effect in the code above should run in a loop https://github.com/sveltejs/svelte/pull/15553\r\n\r\nIf we merge that, we can safely get rid of `simple_set` IIUC",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2006039697",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 15069,
+        "pr_file": "packages/svelte/src/internal/client/reactivity/sources.js",
+        "discussion_id": "2004381534",
+        "commented_code": "@@ -160,11 +199,37 @@ export function set(source, value, should_proxy = false) {\n \t\te.state_unsafe_mutation();\n \t}\n \n-\tlet new_value = should_proxy ? proxy(value, null, source) : value;\n+\tlet new_value = should_proxy\n+\t\t? needs_previous\n+\t\t\t? proxy(value, source.o, null, source)\n+\t\t\t: proxy(value, source.o)\n+\t\t: value;\n \n \treturn internal_set(source, new_value);\n }\n \n+/**\n+ * @template V\n+ * @param {Source<V>} source\n+ * @param {V} value\n+ * @param {boolean} [should_proxy]\n+ * @param {boolean} [needs_previous]\n+ * @returns {V}\n+ */\n+export function simple_set(source, value, should_proxy = false, needs_previous = false) {\n+\tlet new_value = should_proxy\n+\t\t? needs_previous\n+\t\t\t? proxy(value, source.o, null, source)\n+\t\t\t: proxy(value, source.o)\n+\t\t: value;\n+\n+\tsource.v = new_value;\n+\n+\tsource.o?.onchange?.();\n+\n+\treturn new_value;\n+}",
+        "comment_created_at": "2025-03-20T16:34:15+00:00",
+        "comment_author": "paoloricciuti",
+        "comment_body": "Yup much better",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2006739632",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 15069,
+        "pr_file": "packages/svelte/src/internal/client/reactivity/sources.js",
+        "discussion_id": "2004381534",
+        "commented_code": "@@ -160,11 +199,37 @@ export function set(source, value, should_proxy = false) {\n \t\te.state_unsafe_mutation();\n \t}\n \n-\tlet new_value = should_proxy ? proxy(value, null, source) : value;\n+\tlet new_value = should_proxy\n+\t\t? needs_previous\n+\t\t\t? proxy(value, source.o, null, source)\n+\t\t\t: proxy(value, source.o)\n+\t\t: value;\n \n \treturn internal_set(source, new_value);\n }\n \n+/**\n+ * @template V\n+ * @param {Source<V>} source\n+ * @param {V} value\n+ * @param {boolean} [should_proxy]\n+ * @param {boolean} [needs_previous]\n+ * @returns {V}\n+ */\n+export function simple_set(source, value, should_proxy = false, needs_previous = false) {\n+\tlet new_value = should_proxy\n+\t\t? needs_previous\n+\t\t\t? proxy(value, source.o, null, source)\n+\t\t\t: proxy(value, source.o)\n+\t\t: value;\n+\n+\tsource.v = new_value;\n+\n+\tsource.o?.onchange?.();\n+\n+\treturn new_value;\n+}",
+        "comment_created_at": "2025-03-21T02:21:13+00:00",
+        "comment_author": "Rich-Harris",
+        "comment_body": "There was some drift between this and `main` after #15553, so I merged everything and removed `simple_set` in the process on the assumption that #15300 (and #15564) will happen ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2178611259",
+    "pr_number": 15844,
+    "pr_file": "packages/svelte/src/internal/client/runtime.js",
+    "created_at": "2025-07-01T22:02:03+00:00",
+    "commented_code": "// Register the dependency on the current reaction signal.\n \tif (active_reaction !== null && !untracking) {\n-\t\tif (!reaction_sources?.[1].includes(signal) || reaction_sources[0] !== active_reaction) {\n+\t\t// if we're in a derived that is being read inside an _async_ derived,\n+\t\t// it's possible that the effect was already destroyed. In this case,\n+\t\t// we don't add the dependency, because that would create a memory leak\n+\t\tvar destroyed = active_effect !== null && (active_effect.f & DESTROYED) !== 0;\n+\n+\t\tif (\n+\t\t\t!destroyed &&\n+\t\t\t((async_mode_flag && (active_reaction.f & DERIVED) === 0) ||\n+\t\t\t\t!reaction_sources?.[1].includes(signal) ||\n+\t\t\t\treaction_sources[0] !== active_reaction)\n+\t\t) {",
+    "repo_full_name": "sveltejs/svelte",
+    "discussion_comments": [
+      {
+        "comment_id": "2178611259",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 15844,
+        "pr_file": "packages/svelte/src/internal/client/runtime.js",
+        "discussion_id": "2178611259",
+        "commented_code": "@@ -735,22 +791,49 @@ export function get(signal) {\n \n \t// Register the dependency on the current reaction signal.\n \tif (active_reaction !== null && !untracking) {\n-\t\tif (!reaction_sources?.[1].includes(signal) || reaction_sources[0] !== active_reaction) {\n+\t\t// if we're in a derived that is being read inside an _async_ derived,\n+\t\t// it's possible that the effect was already destroyed. In this case,\n+\t\t// we don't add the dependency, because that would create a memory leak\n+\t\tvar destroyed = active_effect !== null && (active_effect.f & DESTROYED) !== 0;\n+\n+\t\tif (\n+\t\t\t!destroyed &&\n+\t\t\t((async_mode_flag && (active_reaction.f & DERIVED) === 0) ||\n+\t\t\t\t!reaction_sources?.[1].includes(signal) ||\n+\t\t\t\treaction_sources[0] !== active_reaction)\n+\t\t) {",
+        "comment_created_at": "2025-07-01T22:02:03+00:00",
+        "comment_author": "elliott-with-the-longest-name-on-github",
+        "comment_body": "Is there a way to write this that's easier to parse? Maybe some intermediate variables? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2180831141",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 15844,
+        "pr_file": "packages/svelte/src/internal/client/runtime.js",
+        "discussion_id": "2178611259",
+        "commented_code": "@@ -735,22 +791,49 @@ export function get(signal) {\n \n \t// Register the dependency on the current reaction signal.\n \tif (active_reaction !== null && !untracking) {\n-\t\tif (!reaction_sources?.[1].includes(signal) || reaction_sources[0] !== active_reaction) {\n+\t\t// if we're in a derived that is being read inside an _async_ derived,\n+\t\t// it's possible that the effect was already destroyed. In this case,\n+\t\t// we don't add the dependency, because that would create a memory leak\n+\t\tvar destroyed = active_effect !== null && (active_effect.f & DESTROYED) !== 0;\n+\n+\t\tif (\n+\t\t\t!destroyed &&\n+\t\t\t((async_mode_flag && (active_reaction.f & DERIVED) === 0) ||\n+\t\t\t\t!reaction_sources?.[1].includes(signal) ||\n+\t\t\t\treaction_sources[0] !== active_reaction)\n+\t\t) {",
+        "comment_created_at": "2025-07-02T19:32:40+00:00",
+        "comment_author": "Rich-Harris",
+        "comment_body": "the whole tuple thing is a bit confusing for starters but that'll need to be fixed on main",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2181140205",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 15844,
+        "pr_file": "packages/svelte/src/internal/client/runtime.js",
+        "discussion_id": "2178611259",
+        "commented_code": "@@ -735,22 +791,49 @@ export function get(signal) {\n \n \t// Register the dependency on the current reaction signal.\n \tif (active_reaction !== null && !untracking) {\n-\t\tif (!reaction_sources?.[1].includes(signal) || reaction_sources[0] !== active_reaction) {\n+\t\t// if we're in a derived that is being read inside an _async_ derived,\n+\t\t// it's possible that the effect was already destroyed. In this case,\n+\t\t// we don't add the dependency, because that would create a memory leak\n+\t\tvar destroyed = active_effect !== null && (active_effect.f & DESTROYED) !== 0;\n+\n+\t\tif (\n+\t\t\t!destroyed &&\n+\t\t\t((async_mode_flag && (active_reaction.f & DERIVED) === 0) ||\n+\t\t\t\t!reaction_sources?.[1].includes(signal) ||\n+\t\t\t\treaction_sources[0] !== active_reaction)\n+\t\t) {",
+        "comment_created_at": "2025-07-02T23:23:05+00:00",
+        "comment_author": "Rich-Harris",
+        "comment_body": "https://github.com/sveltejs/svelte/pull/16287",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2183527694",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 15844,
+        "pr_file": "packages/svelte/src/internal/client/runtime.js",
+        "discussion_id": "2178611259",
+        "commented_code": "@@ -735,22 +791,49 @@ export function get(signal) {\n \n \t// Register the dependency on the current reaction signal.\n \tif (active_reaction !== null && !untracking) {\n-\t\tif (!reaction_sources?.[1].includes(signal) || reaction_sources[0] !== active_reaction) {\n+\t\t// if we're in a derived that is being read inside an _async_ derived,\n+\t\t// it's possible that the effect was already destroyed. In this case,\n+\t\t// we don't add the dependency, because that would create a memory leak\n+\t\tvar destroyed = active_effect !== null && (active_effect.f & DESTROYED) !== 0;\n+\n+\t\tif (\n+\t\t\t!destroyed &&\n+\t\t\t((async_mode_flag && (active_reaction.f & DERIVED) === 0) ||\n+\t\t\t\t!reaction_sources?.[1].includes(signal) ||\n+\t\t\t\treaction_sources[0] !== active_reaction)\n+\t\t) {",
+        "comment_created_at": "2025-07-03T18:48:35+00:00",
+        "comment_author": "Rich-Harris",
+        "comment_body": "honestly... i have no idea what the `async_mode_flag` clause is doing here. maybe @dummdidumm knows since it was apparently introduced with #16197.\r\n\r\ni deleted it to see if anything would break and it didn't, so unless we can articulate why it needs to be there my inclination is to leave it deleted",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2183737024",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 15844,
+        "pr_file": "packages/svelte/src/internal/client/runtime.js",
+        "discussion_id": "2178611259",
+        "commented_code": "@@ -735,22 +791,49 @@ export function get(signal) {\n \n \t// Register the dependency on the current reaction signal.\n \tif (active_reaction !== null && !untracking) {\n-\t\tif (!reaction_sources?.[1].includes(signal) || reaction_sources[0] !== active_reaction) {\n+\t\t// if we're in a derived that is being read inside an _async_ derived,\n+\t\t// it's possible that the effect was already destroyed. In this case,\n+\t\t// we don't add the dependency, because that would create a memory leak\n+\t\tvar destroyed = active_effect !== null && (active_effect.f & DESTROYED) !== 0;\n+\n+\t\tif (\n+\t\t\t!destroyed &&\n+\t\t\t((async_mode_flag && (active_reaction.f & DERIVED) === 0) ||\n+\t\t\t\t!reaction_sources?.[1].includes(signal) ||\n+\t\t\t\treaction_sources[0] !== active_reaction)\n+\t\t) {",
+        "comment_created_at": "2025-07-03T20:54:11+00:00",
+        "comment_author": "dummdidumm",
+        "comment_body": "It needs to be there and it will break if you run the tests with the \"no async\" environment flag. It was added in https://github.com/sveltejs/svelte/pull/16198 and the logic basically says \"in async mode we want to depend on state read inside and effect in which that state was also created, but not in non async mode because it's a breaking change\"",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2168059352",
+    "pr_number": 16239,
+    "pr_file": "packages/svelte/src/reactivity/map.js",
+    "created_at": "2025-06-26T04:08:53+00:00",
+    "commented_code": "#sources = new Map();\n \t#version = state(0);\n \t#size = state(0);\n+\t/**@type {Reaction | null} */\n+\t#initial_reaction = null;",
+    "repo_full_name": "sveltejs/svelte",
+    "discussion_comments": [
+      {
+        "comment_id": "2168059352",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 16239,
+        "pr_file": "packages/svelte/src/reactivity/map.js",
+        "discussion_id": "2168059352",
+        "commented_code": "@@ -56,13 +56,17 @@ export class SvelteMap extends Map {\n \t#sources = new Map();\n \t#version = state(0);\n \t#size = state(0);\n+\t/**@type {Reaction | null} */\n+\t#initial_reaction = null;",
+        "comment_created_at": "2025-06-26T04:08:53+00:00",
+        "comment_author": "gyzerok",
+        "comment_body": "Wondering if there are cases when map still lives, while the reaction could have been GCed and this would prevent it?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2168368301",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 16239,
+        "pr_file": "packages/svelte/src/reactivity/map.js",
+        "discussion_id": "2168059352",
+        "commented_code": "@@ -56,13 +56,17 @@ export class SvelteMap extends Map {\n \t#sources = new Map();\n \t#version = state(0);\n \t#size = state(0);\n+\t/**@type {Reaction | null} */\n+\t#initial_reaction = null;",
+        "comment_created_at": "2025-06-26T07:22:35+00:00",
+        "comment_author": "paoloricciuti",
+        "comment_body": "Yeah I was wondering about that too...technically it shouldn't be the case because either there's no active reaction (it's outside of a derived/effect) or it's inside it but this means that when the derived/effect is no longer used the function should be GCd and everything inside it too...but I need to do a better check",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2168583359",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 16239,
+        "pr_file": "packages/svelte/src/reactivity/map.js",
+        "discussion_id": "2168059352",
+        "commented_code": "@@ -56,13 +56,17 @@ export class SvelteMap extends Map {\n \t#sources = new Map();\n \t#version = state(0);\n \t#size = state(0);\n+\t/**@type {Reaction | null} */\n+\t#initial_reaction = null;",
+        "comment_created_at": "2025-06-26T09:06:55+00:00",
+        "comment_author": "gyzerok",
+        "comment_body": "Maybe this can become `initial_reaction = WeakSet(active_reaction)` and we can check with `this.initial_reaction.has(active_reaction)`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2177922339",
+        "repo_full_name": "sveltejs/svelte",
+        "pr_number": 16239,
+        "pr_file": "packages/svelte/src/reactivity/map.js",
+        "discussion_id": "2168059352",
+        "commented_code": "@@ -56,13 +56,17 @@ export class SvelteMap extends Map {\n \t#sources = new Map();\n \t#version = state(0);\n \t#size = state(0);\n+\t/**@type {Reaction | null} */\n+\t#initial_reaction = null;",
+        "comment_created_at": "2025-07-01T15:37:09+00:00",
+        "comment_author": "gyzerok",
+        "comment_body": "Just for the sake of history, I've also discovered there is a WeakRef struct that could be alternative here. In case of any future issues might be a possible alternative implementation",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

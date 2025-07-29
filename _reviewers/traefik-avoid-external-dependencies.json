@@ -1,0 +1,70 @@
+[
+  {
+    "discussion_id": "2215618612",
+    "pr_number": 11906,
+    "pr_file": "pkg/types/k8sdetector.go",
+    "created_at": "2025-07-18T09:51:46+00:00",
+    "commented_code": null,
+    "repo_full_name": "traefik/traefik",
+    "discussion_comments": [
+      {
+        "comment_id": "2215618612",
+        "repo_full_name": "traefik/traefik",
+        "pr_number": 11906,
+        "pr_file": "pkg/types/k8sdetector.go",
+        "discussion_id": "2215618612",
+        "commented_code": null,
+        "comment_created_at": "2025-07-18T09:51:46+00:00",
+        "comment_author": "sdelicata",
+        "comment_body": "WDYT about adding tests for this new `KubernetesDetector` component?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2216089802",
+        "repo_full_name": "traefik/traefik",
+        "pr_number": 11906,
+        "pr_file": "pkg/types/k8sdetector.go",
+        "discussion_id": "2215618612",
+        "commented_code": null,
+        "comment_created_at": "2025-07-18T13:47:44+00:00",
+        "comment_author": "rtribotte",
+        "comment_body": "@sdelicata It seems complicated to test it, as after mocking the file and K8s client, we would only test the initialization of struct.\r\nAn integration test would have been the solution to us, but it not an easy task that we preferred to delay.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1616148350",
+    "pr_number": 10211,
+    "pr_file": "pkg/middlewares/ratelimiter/redisrate/rate_test.go",
+    "created_at": "2024-05-27T14:47:10+00:00",
+    "commented_code": "+package redisrate_test\n+\n+import (\n+\t\"context\"\n+\t\"testing\"\n+\t\"time\"\n+\n+\t\"github.com/go-redis/redis_rate/v10\"\n+\t\"github.com/redis/go-redis/v9\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func rateLimiter() *redis_rate.Limiter {",
+    "repo_full_name": "traefik/traefik",
+    "discussion_comments": [
+      {
+        "comment_id": "1616148350",
+        "repo_full_name": "traefik/traefik",
+        "pr_number": 10211,
+        "pr_file": "pkg/middlewares/ratelimiter/redisrate/rate_test.go",
+        "discussion_id": "1616148350",
+        "commented_code": "@@ -0,0 +1,246 @@\n+package redisrate_test\n+\n+import (\n+\t\"context\"\n+\t\"testing\"\n+\t\"time\"\n+\n+\t\"github.com/go-redis/redis_rate/v10\"\n+\t\"github.com/redis/go-redis/v9\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func rateLimiter() *redis_rate.Limiter {",
+        "comment_created_at": "2024-05-27T14:47:10+00:00",
+        "comment_author": "jspdown",
+        "comment_body": "On Traefik, we avoid running unit tests against external components. When things needs to be tested against a real implementation we write integration tests (located in the `integration` directory).\r\nSo here I think it would be best faking the Redis store and execute the Lua script on an interpreter. \r\n\r\nI had great success in the past with `github.com/yuin/gopher-lua` and a hand rolled fake Redis implementation.\r\nSomething like this:\r\n\r\n```go\r\ntype FakeRedisClient struct{\r\n\tscript string\r\n\tkeys   *ttlmap.TtlMap\r\n}\r\n\r\nfunc (m FakeRedisClient) EvalSha(ctx context.Context, _ string, keys []string, args ...interface{}) *redis.Cmd {\r\n\tstate := lua.NewState()\r\n\tdefer state.Close()\r\n\r\n\ttableKeys := state.NewTable()\r\n\tfor _, key := range keys {\r\n\t\ttableKeys.Append(lua.LString(key))\r\n\t}\r\n\tstate.SetGlobal(\"KEYS\", tableKeys)\r\n\r\n\ttableArgv := state.NewTable()\r\n\tfor _, arg := range args {\r\n\t\ttableArgv.Append(lua.LString(fmt.Sprint(arg)))\r\n\t}\r\n\tstate.SetGlobal(\"ARGV\", tableArgv)\r\n\r\n\tmod := state.SetFuncs(state.NewTable(), map[string]lua.LGFunction{\r\n\t\t\"call\": func(state *lua.LState) int {\r\n\t\t\tswitch state.Get(1).String() {\r\n\t\t\tcase \"GET\":\r\n\t\t\t\tkey := state.Get(2).String()\r\n\t\t\t\tvalue, ok := m.keys.Get(key)\r\n\t\t\t\tif !ok {\r\n\t\t\t\t\tstate.Push(lua.LNil)\r\n\t\t\t\t} else {\r\n\t\t\t\t\tstate.Push(lua.LString(value.(string)))\r\n\t\t\t\t}\r\n\t\t\tcase \"SET\":\r\n\t\t\t\tkey := state.Get(2).String()\r\n\t\t\t\tvalue := state.Get(3).String()\r\n\t\t\t\tstringTTL := state.Get(5).String()\r\n\t\t\t\tttl, _ := strconv.Atoi(stringTTL)\r\n\t\t\t\t_ = m.keys.Set(key, value, ttl)\r\n\t\t\tdefault:\r\n\t\t\t\treturn 0\r\n\t\t\t}\r\n\r\n\t\t\treturn 1\r\n\t\t},\r\n\t})\r\n\tstate.SetGlobal(\"redis\", mod)\r\n\tstate.Push(mod)\r\n\r\n\tcmd := redis.NewCmd(ctx)\r\n\tif err := state.DoString(\"<script goes here>\"); err != nil {\r\n\t\tcmd.SetErr(err)\r\n\t\treturn cmd\r\n\t}\r\n\r\n\tresult := state.Get(2)\r\n\tresultTable, ok := result.(*lua.LTable)\r\n\tif !ok {\r\n\t\tcmd.SetErr(errors.New(\"unexpected response type: \" + result.String()))\r\n\t\treturn cmd\r\n\t}\r\n\r\n\tvar resultSlice []interface{}\r\n\tresultTable.ForEach(func(_ lua.LValue, value lua.LValue) {\r\n\t\tvalueNbr, ok := value.(lua.LNumber)\r\n\t\tif !ok {\r\n\t\t\tvalueStr, ok := value.(lua.LString)\r\n\t\t\tif !ok {\r\n\t\t\t\tcmd.SetErr(errors.New(\"unexpected response value type \" + value.String()))\r\n\t\t\t}\r\n\t\t\tresultSlice = append(resultSlice, string(valueStr))\r\n\t\t\treturn\r\n\t\t}\r\n\r\n\t\tresultSlice = append(resultSlice, int64(valueNbr))\r\n\t})\r\n\r\n\tcmd.SetVal(resultSlice)\r\n\r\n\treturn cmd\r\n}\r\n```\r\n\r\nLet me know if you need some help on the tests.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1626367540",
+        "repo_full_name": "traefik/traefik",
+        "pr_number": 10211,
+        "pr_file": "pkg/middlewares/ratelimiter/redisrate/rate_test.go",
+        "discussion_id": "1616148350",
+        "commented_code": "@@ -0,0 +1,246 @@\n+package redisrate_test\n+\n+import (\n+\t\"context\"\n+\t\"testing\"\n+\t\"time\"\n+\n+\t\"github.com/go-redis/redis_rate/v10\"\n+\t\"github.com/redis/go-redis/v9\"\n+\t\"github.com/stretchr/testify/require\"\n+)\n+\n+func rateLimiter() *redis_rate.Limiter {",
+        "comment_created_at": "2024-06-04T17:22:59+00:00",
+        "comment_author": "longquan0104",
+        "comment_body": "Really thank you for this. It helps me a lot in my unit test",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

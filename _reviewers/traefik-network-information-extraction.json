@@ -1,0 +1,126 @@
+[
+  {
+    "discussion_id": "1518541202",
+    "pr_number": 10492,
+    "pr_file": "pkg/server/server_entrypoint_tcp.go",
+    "created_at": "2024-03-09T09:17:18+00:00",
+    "commented_code": "prevConnContext := serverHTTP.ConnContext\n \tserverHTTP.ConnContext = func(ctx context.Context, c net.Conn) context.Context {\n+\t\t// This adds the remote address of the server making the connection if the PROXY Protocol is enabled",
+    "repo_full_name": "traefik/traefik",
+    "discussion_comments": [
+      {
+        "comment_id": "1518541202",
+        "repo_full_name": "traefik/traefik",
+        "pr_number": 10492,
+        "pr_file": "pkg/server/server_entrypoint_tcp.go",
+        "discussion_id": "1518541202",
+        "commented_code": "@@ -616,6 +618,21 @@ func createHTTPServer(ctx context.Context, ln net.Listener, configuration *stati\n \n \tprevConnContext := serverHTTP.ConnContext\n \tserverHTTP.ConnContext = func(ctx context.Context, c net.Conn) context.Context {\n+\t\t// This adds the remote address of the server making the connection if the PROXY Protocol is enabled",
+        "comment_created_at": "2024-03-09T09:17:18+00:00",
+        "comment_author": "andsarr",
+        "comment_body": "I am wondering if it is better to use this code instead:\r\n\r\n```go\r\n\t// This adds the remote address of the server making the connection if the PROXY Protocol is enabled\r\n\t\tgetProxyIP := func(c net.Conn) string {\r\n\t\t\tfor {\r\n\t\t\t\tswitch conn := c.(type) {\r\n\t\t\t\tcase *tcprouter.Conn:\r\n\t\t\t\t\tc = conn.WriteCloser\r\n\t\t\t\tcase *trackedConnection:\r\n\t\t\t\t\tc = conn.WriteCloser\r\n\t\t\t\tcase *writeCloserWrapper:\r\n\t\t\t\t\tc = conn.writeCloser\r\n\t\t\t\tcase *net.TCPConn:\r\n\t\t\t\t\treturn c.RemoteAddr().String()\r\n\t\t\t\tdefault:\r\n\t\t\t\t\treturn conn.RemoteAddr().String()\r\n\t\t\t\t}\r\n\t\t\t}\r\n\t\t}\r\n\r\n\t\tif proxyProtocolEnabled {\r\n\t\t\tproxyIP := getProxyIP(c)\r\n\t\t\tctx = context.WithValue(ctx, forwardedheaders.ProxyAddrKey, proxyIP)\r\n\t\t}\r\n```\r\n\r\nIt looks less brittle since it does not depends on the exact order of the \"wrapping\".  What do you think @juliens, @mmatur ? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1573161244",
+        "repo_full_name": "traefik/traefik",
+        "pr_number": 10492,
+        "pr_file": "pkg/server/server_entrypoint_tcp.go",
+        "discussion_id": "1518541202",
+        "commented_code": "@@ -616,6 +618,21 @@ func createHTTPServer(ctx context.Context, ln net.Listener, configuration *stati\n \n \tprevConnContext := serverHTTP.ConnContext\n \tserverHTTP.ConnContext = func(ctx context.Context, c net.Conn) context.Context {\n+\t\t// This adds the remote address of the server making the connection if the PROXY Protocol is enabled",
+        "comment_created_at": "2024-04-20T05:23:37+00:00",
+        "comment_author": "andsarr",
+        "comment_body": "I am going with this variant! ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1778367867",
+    "pr_number": 10492,
+    "pr_file": "pkg/server/service/proxy.go",
+    "created_at": "2024-09-27T10:04:00+00:00",
+    "commented_code": "}\n \n \tproxy := &httputil.ReverseProxy{\n-\t\tDirector: func(outReq *http.Request) {\n-\t\t\tu := outReq.URL\n-\t\t\tif outReq.RequestURI != \"\" {\n-\t\t\t\tparsedURL, err := url.ParseRequestURI(outReq.RequestURI)\n+\t\tRewrite: func(req *httputil.ProxyRequest) {\n+\t\t\tu := req.In.URL\n+\t\t\tif req.In.RequestURI != \"\" {\n+\t\t\t\tparsedURL, err := url.ParseRequestURI(req.In.RequestURI)\n \t\t\t\tif err == nil {\n \t\t\t\t\tu = parsedURL\n \t\t\t\t}\n \t\t\t}\n \n-\t\t\toutReq.URL.Path = u.Path\n-\t\t\toutReq.URL.RawPath = u.RawPath\n+\t\t\treq.Out.URL.Path = u.Path\n+\t\t\treq.Out.URL.RawPath = u.RawPath\n \t\t\t// If a plugin/middleware adds semicolons in query params, they should be urlEncoded.\n-\t\t\toutReq.URL.RawQuery = strings.ReplaceAll(u.RawQuery, \";\", \"&\")\n-\t\t\toutReq.RequestURI = \"\" // Outgoing request should not have RequestURI\n+\t\t\treq.Out.URL.RawQuery = strings.ReplaceAll(u.RawQuery, \";\", \"&\")\n+\t\t\treq.Out.RequestURI = \"\" // Outgoing request should not have RequestURI\n \n-\t\t\toutReq.Proto = \"HTTP/1.1\"\n-\t\t\toutReq.ProtoMajor = 1\n-\t\t\toutReq.ProtoMinor = 1\n-\n-\t\t\t// Do not pass client Host header unless optsetter PassHostHeader is set.\n+\t\t\t// Do not pass client Host header unless PassHostHeader is set.\n \t\t\tif passHostHeader != nil && !*passHostHeader {\n-\t\t\t\toutReq.Host = outReq.URL.Host\n+\t\t\t\treq.Out.Host = req.In.URL.Host\n+\t\t\t}\n+\n+\t\t\t// Add back removed Forwarded Headers.\n+\t\t\treq.Out.Header[\"Forwarded\"] = req.In.Header[\"Forwarded\"]\n+\t\t\treq.Out.Header[\"X-Forwarded-For\"] = req.In.Header[\"X-Forwarded-For\"]\n+\t\t\treq.Out.Header[\"X-Forwarded-Host\"] = req.In.Header[\"X-Forwarded-Host\"]\n+\t\t\treq.Out.Header[\"X-Forwarded-Proto\"] = req.In.Header[\"X-Forwarded-Proto\"]\n+\n+\t\t\tremoteAddr := req.In.RemoteAddr\n+\t\t\t// In case of a ProxyProtocol connection the http.Request#RemoteAddr is the original one,\n+\t\t\t// and if the Forwarded headers were trusted from the peer socket address (see trustedIPs) and not from the original IP,\n+\t\t\t// the peer socket address should be used instead.\n+\t\t\t// The ForwardedHeaders middleware provides the address to be used to populate the X-Forwarded-For header.\n+\t\t\tif xForwardedForAddr, ok := req.In.Context().Value(forwardedheaders.XForwardedForAddr).(string); ok {\n+\t\t\t\tremoteAddr = xForwardedForAddr\n+\t\t\t}\n+\n+\t\t\t// Adapted from httputil.ReverseProxy.\n+\t\t\tif clientIP, _, err := net.SplitHostPort(remoteAddr); err == nil {",
+    "repo_full_name": "traefik/traefik",
+    "discussion_comments": [
+      {
+        "comment_id": "1778367867",
+        "repo_full_name": "traefik/traefik",
+        "pr_number": 10492,
+        "pr_file": "pkg/server/service/proxy.go",
+        "discussion_id": "1778367867",
+        "commented_code": "@@ -37,45 +38,71 @@ func buildProxy(passHostHeader *bool, responseForwarding *dynamic.ResponseForwar\n \t}\n \n \tproxy := &httputil.ReverseProxy{\n-\t\tDirector: func(outReq *http.Request) {\n-\t\t\tu := outReq.URL\n-\t\t\tif outReq.RequestURI != \"\" {\n-\t\t\t\tparsedURL, err := url.ParseRequestURI(outReq.RequestURI)\n+\t\tRewrite: func(req *httputil.ProxyRequest) {\n+\t\t\tu := req.In.URL\n+\t\t\tif req.In.RequestURI != \"\" {\n+\t\t\t\tparsedURL, err := url.ParseRequestURI(req.In.RequestURI)\n \t\t\t\tif err == nil {\n \t\t\t\t\tu = parsedURL\n \t\t\t\t}\n \t\t\t}\n \n-\t\t\toutReq.URL.Path = u.Path\n-\t\t\toutReq.URL.RawPath = u.RawPath\n+\t\t\treq.Out.URL.Path = u.Path\n+\t\t\treq.Out.URL.RawPath = u.RawPath\n \t\t\t// If a plugin/middleware adds semicolons in query params, they should be urlEncoded.\n-\t\t\toutReq.URL.RawQuery = strings.ReplaceAll(u.RawQuery, \";\", \"&\")\n-\t\t\toutReq.RequestURI = \"\" // Outgoing request should not have RequestURI\n+\t\t\treq.Out.URL.RawQuery = strings.ReplaceAll(u.RawQuery, \";\", \"&\")\n+\t\t\treq.Out.RequestURI = \"\" // Outgoing request should not have RequestURI\n \n-\t\t\toutReq.Proto = \"HTTP/1.1\"\n-\t\t\toutReq.ProtoMajor = 1\n-\t\t\toutReq.ProtoMinor = 1\n-\n-\t\t\t// Do not pass client Host header unless optsetter PassHostHeader is set.\n+\t\t\t// Do not pass client Host header unless PassHostHeader is set.\n \t\t\tif passHostHeader != nil && !*passHostHeader {\n-\t\t\t\toutReq.Host = outReq.URL.Host\n+\t\t\t\treq.Out.Host = req.In.URL.Host\n+\t\t\t}\n+\n+\t\t\t// Add back removed Forwarded Headers.\n+\t\t\treq.Out.Header[\"Forwarded\"] = req.In.Header[\"Forwarded\"]\n+\t\t\treq.Out.Header[\"X-Forwarded-For\"] = req.In.Header[\"X-Forwarded-For\"]\n+\t\t\treq.Out.Header[\"X-Forwarded-Host\"] = req.In.Header[\"X-Forwarded-Host\"]\n+\t\t\treq.Out.Header[\"X-Forwarded-Proto\"] = req.In.Header[\"X-Forwarded-Proto\"]\n+\n+\t\t\tremoteAddr := req.In.RemoteAddr\n+\t\t\t// In case of a ProxyProtocol connection the http.Request#RemoteAddr is the original one,\n+\t\t\t// and if the Forwarded headers were trusted from the peer socket address (see trustedIPs) and not from the original IP,\n+\t\t\t// the peer socket address should be used instead.\n+\t\t\t// The ForwardedHeaders middleware provides the address to be used to populate the X-Forwarded-For header.\n+\t\t\tif xForwardedForAddr, ok := req.In.Context().Value(forwardedheaders.XForwardedForAddr).(string); ok {\n+\t\t\t\tremoteAddr = xForwardedForAddr\n+\t\t\t}\n+\n+\t\t\t// Adapted from httputil.ReverseProxy.\n+\t\t\tif clientIP, _, err := net.SplitHostPort(remoteAddr); err == nil {",
+        "comment_created_at": "2024-09-27T10:04:00+00:00",
+        "comment_author": "lbenguigui",
+        "comment_body": "I think that when the port is provided in the Proxy Protocol, we should populate the ```X-Forwarded-Port``` header with that value, rather than ignoring it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1956215624",
+    "pr_number": 11351,
+    "pr_file": "pkg/server/service/loadbalancer/wrr/wrr.go",
+    "created_at": "2025-02-14T14:15:24+00:00",
+    "commented_code": "http.SetCookie(w, cookie)\n \t}\n \n-\tserver.ServeHTTP(w, req)\n+\tcustomWriter := &CustomResponseWriter{ResponseWriter: w, StatusCode: http.StatusOK}\n+\tif server.wantsPassiveHealthCheck {\n+\t\tif !server.passiveHealthChecker.AllowRequest() {\n+\t\t\tserver, err = b.nextServerExcluding(server.name)\n+\t\t\tif err != nil {\n+\t\t\t\tif errors.Is(err, errNoAvailableServer) {\n+\t\t\t\t\thttp.Error(w, errNoAvailableServer.Error(), http.StatusServiceUnavailable)\n+\t\t\t\t} else {\n+\t\t\t\t\thttp.Error(w, err.Error(), http.StatusInternalServerError)\n+\t\t\t\t}\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t}\n+\n+\t}",
+    "repo_full_name": "traefik/traefik",
+    "discussion_comments": [
+      {
+        "comment_id": "1956215624",
+        "repo_full_name": "traefik/traefik",
+        "pr_number": 11351,
+        "pr_file": "pkg/server/service/loadbalancer/wrr/wrr.go",
+        "discussion_id": "1956215624",
+        "commented_code": "@@ -256,12 +305,33 @@ func (b *Balancer) ServeHTTP(w http.ResponseWriter, req *http.Request) {\n \t\thttp.SetCookie(w, cookie)\n \t}\n \n-\tserver.ServeHTTP(w, req)\n+\tcustomWriter := &CustomResponseWriter{ResponseWriter: w, StatusCode: http.StatusOK}\n+\tif server.wantsPassiveHealthCheck {\n+\t\tif !server.passiveHealthChecker.AllowRequest() {\n+\t\t\tserver, err = b.nextServerExcluding(server.name)\n+\t\t\tif err != nil {\n+\t\t\t\tif errors.Is(err, errNoAvailableServer) {\n+\t\t\t\t\thttp.Error(w, errNoAvailableServer.Error(), http.StatusServiceUnavailable)\n+\t\t\t\t} else {\n+\t\t\t\t\thttp.Error(w, err.Error(), http.StatusInternalServerError)\n+\t\t\t\t}\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t}\n+\n+\t}",
+        "comment_created_at": "2025-02-14T14:15:24+00:00",
+        "comment_author": "youkoulayley",
+        "comment_body": "```suggestion\r\n\tif server.wantsPassiveHealthCheck && !server.passiveHealthChecker.AllowRequest() {\r\n\t\tserver, err = b.nextServerExcluding(server.name)\r\n\t\tif err != nil {\r\n\t\t\tif errors.Is(err, errNoAvailableServer) {\r\n\t\t\t\thttp.Error(w, errNoAvailableServer.Error(), http.StatusServiceUnavailable)\r\n\t\t\t} else {\r\n\t\t\t\thttp.Error(w, err.Error(), http.StatusInternalServerError)\r\n\t\t\t}\r\n\t\t\treturn\r\n\t\t} \r\n\t}\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1957042214",
+        "repo_full_name": "traefik/traefik",
+        "pr_number": 11351,
+        "pr_file": "pkg/server/service/loadbalancer/wrr/wrr.go",
+        "discussion_id": "1956215624",
+        "commented_code": "@@ -256,12 +305,33 @@ func (b *Balancer) ServeHTTP(w http.ResponseWriter, req *http.Request) {\n \t\thttp.SetCookie(w, cookie)\n \t}\n \n-\tserver.ServeHTTP(w, req)\n+\tcustomWriter := &CustomResponseWriter{ResponseWriter: w, StatusCode: http.StatusOK}\n+\tif server.wantsPassiveHealthCheck {\n+\t\tif !server.passiveHealthChecker.AllowRequest() {\n+\t\t\tserver, err = b.nextServerExcluding(server.name)\n+\t\t\tif err != nil {\n+\t\t\t\tif errors.Is(err, errNoAvailableServer) {\n+\t\t\t\t\thttp.Error(w, errNoAvailableServer.Error(), http.StatusServiceUnavailable)\n+\t\t\t\t} else {\n+\t\t\t\t\thttp.Error(w, err.Error(), http.StatusInternalServerError)\n+\t\t\t\t}\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t}\n+\n+\t}",
+        "comment_created_at": "2025-02-15T05:22:27+00:00",
+        "comment_author": "Nelwhix",
+        "comment_body": "added",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2039562023",
+    "pr_number": 11351,
+    "pr_file": "pkg/server/service/loadbalancer/wrr/wrr.go",
+    "created_at": "2025-04-11T13:24:51+00:00",
+    "commented_code": "http.SetCookie(w, cookie)\n \t}",
+    "repo_full_name": "traefik/traefik",
+    "discussion_comments": [
+      {
+        "comment_id": "2039562023",
+        "repo_full_name": "traefik/traefik",
+        "pr_number": 11351,
+        "pr_file": "pkg/server/service/loadbalancer/wrr/wrr.go",
+        "discussion_id": "2039562023",
+        "commented_code": "@@ -256,12 +306,30 @@ func (b *Balancer) ServeHTTP(w http.ResponseWriter, req *http.Request) {\n \t\thttp.SetCookie(w, cookie)\n \t}\n ",
+        "comment_created_at": "2025-04-11T13:24:51+00:00",
+        "comment_author": "sdelicata",
+        "comment_body": "The sticky cookie value may be incorrect if a server fails the health check and another server is selected. The cookie should be updated with the server that ultimately handled the request.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2062211693",
+        "repo_full_name": "traefik/traefik",
+        "pr_number": 11351,
+        "pr_file": "pkg/server/service/loadbalancer/wrr/wrr.go",
+        "discussion_id": "2039562023",
+        "commented_code": "@@ -256,12 +306,30 @@ func (b *Balancer) ServeHTTP(w http.ResponseWriter, req *http.Request) {\n \t\thttp.SetCookie(w, cookie)\n \t}\n ",
+        "comment_created_at": "2025-04-27T04:58:43+00:00",
+        "comment_author": "Nelwhix",
+        "comment_body": "fixed, also added tests to check",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

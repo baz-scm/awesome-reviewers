@@ -1,0 +1,106 @@
+[
+  {
+    "discussion_id": "2096484220",
+    "pr_number": 1140,
+    "pr_file": "sweagent/agent/models.py",
+    "created_at": "2025-05-19T21:01:50+00:00",
+    "commented_code": "\"completion_kwargs to {'extra_headers': {'anthropic-beta': 'output-128k-2025-02-19'}}.\"\n                 )\n \n-        self.lm_provider = litellm.model_cost.get(self.config.name, {}).get(\"litellm_provider\")\n+        self.lm_provider = litellm.model_cost.get(self.config.name, {}).get(\"litellm_provider\", self.config.name)\n+        if self.config.per_instance_cost_limit == 0 and self.config.total_cost_limit == 0:  # Local model\n+            if \"/\" in self.lm_provider:\n+                self.custom_tokenizer = {}\n+                self.custom_tokenizer[\"provider\"] = self.lm_provider.split(\"/\")[0]\n+\n+                if self.custom_tokenizer[\"provider\"] not in litellm.provider_list:\n+                    self.logger.warning(\n+                        f\"Local model {self.lm_provider} not found in LiteLLM provider list. Using default tokenizer.\"\n+                    )\n+                    self.custom_tokenizer = None\n+                else:\n+                    self.custom_tokenizer[\"identifier\"] = \"/\".join(self.lm_provider.split(\"/\")[1:])\n+                    self.custom_tokenizer[\"type\"] = \"huggingface_tokenizer\"\n+                    # Use backend tokenizer as workaround for litellm HF tokenizer bug",
+    "repo_full_name": "SWE-agent/SWE-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "2096484220",
+        "repo_full_name": "SWE-agent/SWE-agent",
+        "pr_number": 1140,
+        "pr_file": "sweagent/agent/models.py",
+        "discussion_id": "2096484220",
+        "commented_code": "@@ -594,7 +596,28 @@ def __init__(self, args: GenericAPIModelConfig, tools: ToolConfig):\n                     \"completion_kwargs to {'extra_headers': {'anthropic-beta': 'output-128k-2025-02-19'}}.\"\n                 )\n \n-        self.lm_provider = litellm.model_cost.get(self.config.name, {}).get(\"litellm_provider\")\n+        self.lm_provider = litellm.model_cost.get(self.config.name, {}).get(\"litellm_provider\", self.config.name)\n+        if self.config.per_instance_cost_limit == 0 and self.config.total_cost_limit == 0:  # Local model\n+            if \"/\" in self.lm_provider:\n+                self.custom_tokenizer = {}\n+                self.custom_tokenizer[\"provider\"] = self.lm_provider.split(\"/\")[0]\n+\n+                if self.custom_tokenizer[\"provider\"] not in litellm.provider_list:\n+                    self.logger.warning(\n+                        f\"Local model {self.lm_provider} not found in LiteLLM provider list. Using default tokenizer.\"\n+                    )\n+                    self.custom_tokenizer = None\n+                else:\n+                    self.custom_tokenizer[\"identifier\"] = \"/\".join(self.lm_provider.split(\"/\")[1:])\n+                    self.custom_tokenizer[\"type\"] = \"huggingface_tokenizer\"\n+                    # Use backend tokenizer as workaround for litellm HF tokenizer bug",
+        "comment_created_at": "2025-05-19T21:01:50+00:00",
+        "comment_author": "klieret",
+        "comment_body": "what bug are you referring to here? Do you have an issue link?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2098013839",
+        "repo_full_name": "SWE-agent/SWE-agent",
+        "pr_number": 1140,
+        "pr_file": "sweagent/agent/models.py",
+        "discussion_id": "2096484220",
+        "commented_code": "@@ -594,7 +596,28 @@ def __init__(self, args: GenericAPIModelConfig, tools: ToolConfig):\n                     \"completion_kwargs to {'extra_headers': {'anthropic-beta': 'output-128k-2025-02-19'}}.\"\n                 )\n \n-        self.lm_provider = litellm.model_cost.get(self.config.name, {}).get(\"litellm_provider\")\n+        self.lm_provider = litellm.model_cost.get(self.config.name, {}).get(\"litellm_provider\", self.config.name)\n+        if self.config.per_instance_cost_limit == 0 and self.config.total_cost_limit == 0:  # Local model\n+            if \"/\" in self.lm_provider:\n+                self.custom_tokenizer = {}\n+                self.custom_tokenizer[\"provider\"] = self.lm_provider.split(\"/\")[0]\n+\n+                if self.custom_tokenizer[\"provider\"] not in litellm.provider_list:\n+                    self.logger.warning(\n+                        f\"Local model {self.lm_provider} not found in LiteLLM provider list. Using default tokenizer.\"\n+                    )\n+                    self.custom_tokenizer = None\n+                else:\n+                    self.custom_tokenizer[\"identifier\"] = \"/\".join(self.lm_provider.split(\"/\")[1:])\n+                    self.custom_tokenizer[\"type\"] = \"huggingface_tokenizer\"\n+                    # Use backend tokenizer as workaround for litellm HF tokenizer bug",
+        "comment_created_at": "2025-05-20T13:43:29+00:00",
+        "comment_author": "Liqs-v2",
+        "comment_body": "No, I couldn't find an issue directly addressing this in LiteLLM and was also considering fixing it in LiteLLM if I find the time. It's really just adding an if-branch. I'll open an issue later.\r\n\r\nBasically, [their token counter implementation](https://github.com/BerriAI/litellm/blob/a676f69cab1e7b7a21c9b162fab6968bdc96bcd4/litellm/litellm_core_utils/token_counter.py#L510) expects a `Tokenizer` that returns an [Encoding](https://huggingface.co/docs/tokenizers/api/encoding), because they access the `ids` field after calling the tokenizer. However, this is quite unintuitive, because the typical way one would set up a tokenizer is with `AutoTokenizer` which does not return an `Encoding` but a list of ids directly.\r\n\r\nWhat the fix in LiteLLm would be imo is:\r\n```python\r\ndef count_tokens(text: str) -> int:\r\n  enc = tokenizer_json[\"tokenizer\"].encode(text)\r\n  if isinstance(enc, list):\r\n      return len(enc)\r\n  elif hasattr(enc, \"ids\"):\r\n      return len(enc.ids)\r\n  else:\r\n      raise TypeError(f\"Unexpected return type from encode: {type(enc)}\")\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1568750534",
+    "pr_number": 236,
+    "pr_file": "sweagent/agent/models.py",
+    "created_at": "2024-04-17T12:18:59+00:00",
+    "commented_code": "completion = together.Complete.create(\n             model=self.api_model,\n             prompt=prompt,\n-            max_tokens=self.model_metadata[\"max_context\"],\n-            stop=\"<human>\",\n+            # Input token count + max_tokens needs to be less than the context length of the model.\n+            # But it is difficult to calculate input token before request.\n+            max_tokens=None,\n+            stop=[\"<human>\"],",
+    "repo_full_name": "SWE-agent/SWE-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "1568750534",
+        "repo_full_name": "SWE-agent/SWE-agent",
+        "pr_number": 236,
+        "pr_file": "sweagent/agent/models.py",
+        "discussion_id": "1568750534",
+        "commented_code": "@@ -565,15 +566,17 @@ def query(self, history: list[dict[str, str]]) -> str:\n         completion = together.Complete.create(\n             model=self.api_model,\n             prompt=prompt,\n-            max_tokens=self.model_metadata[\"max_context\"],\n-            stop=\"<human>\",\n+            # Input token count + max_tokens needs to be less than the context length of the model.\n+            # But it is difficult to calculate input token before request.\n+            max_tokens=None,\n+            stop=[\"<human>\"],",
+        "comment_created_at": "2024-04-17T12:18:59+00:00",
+        "comment_author": "mikanfactory",
+        "comment_body": "here is new request definitions.\r\nhttps://docs.together.ai/reference/complete",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1569191653",
+        "repo_full_name": "SWE-agent/SWE-agent",
+        "pr_number": 236,
+        "pr_file": "sweagent/agent/models.py",
+        "discussion_id": "1568750534",
+        "commented_code": "@@ -565,15 +566,17 @@ def query(self, history: list[dict[str, str]]) -> str:\n         completion = together.Complete.create(\n             model=self.api_model,\n             prompt=prompt,\n-            max_tokens=self.model_metadata[\"max_context\"],\n-            stop=\"<human>\",\n+            # Input token count + max_tokens needs to be less than the context length of the model.\n+            # But it is difficult to calculate input token before request.\n+            max_tokens=None,\n+            stop=[\"<human>\"],",
+        "comment_created_at": "2024-04-17T17:16:37+00:00",
+        "comment_author": "klieret",
+        "comment_body": "Thanks for the link. It seems to me that `max_tokens` sets the maximum number of output tokens, though, right? \r\n\r\n> Maximum number of tokens the model should generate. Default: 128 \r\n\r\nSo that means it's probably important to keep this, right?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1570803561",
+        "repo_full_name": "SWE-agent/SWE-agent",
+        "pr_number": 236,
+        "pr_file": "sweagent/agent/models.py",
+        "discussion_id": "1568750534",
+        "commented_code": "@@ -565,15 +566,17 @@ def query(self, history: list[dict[str, str]]) -> str:\n         completion = together.Complete.create(\n             model=self.api_model,\n             prompt=prompt,\n-            max_tokens=self.model_metadata[\"max_context\"],\n-            stop=\"<human>\",\n+            # Input token count + max_tokens needs to be less than the context length of the model.\n+            # But it is difficult to calculate input token before request.\n+            max_tokens=None,\n+            stop=[\"<human>\"],",
+        "comment_created_at": "2024-04-18T13:51:20+00:00",
+        "comment_author": "mikanfactory",
+        "comment_body": "Thanks for your great review! I misunderstood a bit.\r\n\r\n> It seems to me that max_tokens sets the maximum number of output tokens, though, right?\r\n\r\nYes, it's right. But it seems that `max_token` is different from `context_length`. We need to specify `max_tokens` as the value obtained by subtracting the input tokens from `context_length`.\r\n\r\n[This link](https://github.com/princeton-nlp/SWE-agent/issues/135#issuecomment-2054060266) is the error message when we set `max_tokens` as `max_context` in MODELS constants.\r\n\r\nSo, it seems better to calculate `input_token` in advance like [Anthropics' Claude-2 models](https://github.com/mikanfactory/SWE-agent/blob/main/sweagent/agent/models.py#L389).\r\n\r\nI have a question about the implementation. Which one of the following, 1 or 2, would be better?\r\n\r\n1. Like Anthropic's Claude-2 models, use the `count_token` method from the Anthropic package.\r\n    - While this implementation will be quick, it feels unnatural to rely on the Anthropic package when using the Together model.\r\n2. Imitate the `count_token` method from the Anthropic package and implement it within this repository.\r\n    - Looking back from [here](https://github.com/anthropics/anthropic-sdk-python/blob/8e3d8a68d309424238ae54e03ee962f7147cfc60/src/anthropic/_client.py#L270), it seems that `count_token` only using the [huggingface/tokenizer](https://github.com/huggingface/tokenizers) (and cache it as a singleton).\r\n\r\nI think 2 is better because 1 feels unnatural, but I would appreciate advice on other approaches as well!\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1573309328",
+        "repo_full_name": "SWE-agent/SWE-agent",
+        "pr_number": 236,
+        "pr_file": "sweagent/agent/models.py",
+        "discussion_id": "1568750534",
+        "commented_code": "@@ -565,15 +566,17 @@ def query(self, history: list[dict[str, str]]) -> str:\n         completion = together.Complete.create(\n             model=self.api_model,\n             prompt=prompt,\n-            max_tokens=self.model_metadata[\"max_context\"],\n-            stop=\"<human>\",\n+            # Input token count + max_tokens needs to be less than the context length of the model.\n+            # But it is difficult to calculate input token before request.\n+            max_tokens=None,\n+            stop=[\"<human>\"],",
+        "comment_created_at": "2024-04-20T14:53:02+00:00",
+        "comment_author": "mikanfactory",
+        "comment_body": "It feels a bit weird, but I implemented 1.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1579616579",
+        "repo_full_name": "SWE-agent/SWE-agent",
+        "pr_number": 236,
+        "pr_file": "sweagent/agent/models.py",
+        "discussion_id": "1568750534",
+        "commented_code": "@@ -565,15 +566,17 @@ def query(self, history: list[dict[str, str]]) -> str:\n         completion = together.Complete.create(\n             model=self.api_model,\n             prompt=prompt,\n-            max_tokens=self.model_metadata[\"max_context\"],\n-            stop=\"<human>\",\n+            # Input token count + max_tokens needs to be less than the context length of the model.\n+            # But it is difficult to calculate input token before request.\n+            max_tokens=None,\n+            stop=[\"<human>\"],",
+        "comment_created_at": "2024-04-25T14:48:22+00:00",
+        "comment_author": "klieret",
+        "comment_body": "Thank you! I didn't realize this issue. Thanks for taking a closer look! I think (1) is fine for now (better than having a broken model anyway ;) ). I think in the longer term it might make most sense to switch to `litellm` to get a standardized interface to all models and providers, so I think \"simple but working\" is the best for now!",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

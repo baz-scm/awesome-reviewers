@@ -1,0 +1,80 @@
+[
+  {
+    "discussion_id": "1910697715",
+    "pr_number": 3860,
+    "pr_file": "unstructured/partition/utils/ocr_models/tesseract_ocr.py",
+    "created_at": "2025-01-10T17:29:37+00:00",
+    "commented_code": "np.round(env_config.TESSERACT_OPTIMUM_TEXT_HEIGHT / text_height, 1),\n                 max_zoom,\n             )\n-            ocr_df = unstructured_pytesseract.image_to_data(\n+            ocr_df = self.image_to_data_with_character_confidence_filter(\n                 np.array(zoom_image(image, zoom)),\n                 lang=self.language,\n-                output_type=Output.DATAFRAME,\n+                character_confidence_threshold=env_config.TESSERACT_CHARACTER_CONFIDENCE_THRESHOLD,\n             )\n             ocr_df = ocr_df.dropna()\n-\n         ocr_regions = self.parse_data(ocr_df, zoom=zoom)\n \n         return ocr_regions\n \n+    def image_to_data_with_character_confidence_filter(\n+        self,\n+        image: np.ndarray,\n+        lang: str = \"eng\",\n+        config: str = \"\",\n+        character_confidence_threshold: float = 0.0,\n+    ) -> pd.DataFrame:\n+        hocr: str = unstructured_pytesseract.image_to_pdf_or_hocr(\n+            image,\n+            lang=lang,\n+            config=\"-c hocr_char_boxes=1 \" + config,\n+            extension=\"hocr\",\n+        )\n+        ocr_df = self.hocr_to_dataframe(hocr, character_confidence_threshold)\n+        return ocr_df\n+\n+    def hocr_to_dataframe(\n+        self, hocr: str, character_confidence_threshold: float = 0.0\n+    ) -> pd.DataFrame:\n+        soup = BeautifulSoup(hocr, \"html.parser\")\n+        word_spans = soup.find_all(\"span\", class_=\"ocrx_word\")\n+\n+        df_entries = []\n+        for word_span in word_spans:\n+            word_title = word_span.get(\"title\", \"\")\n+            bbox_match = re.search(r\"bbox (\\d+) (\\d+) (\\d+) (\\d+)\", word_title)\n+\n+            # Note: word bbox is used instead of combining characters together due to tesseract\n+            # bug that causes the character bboxes to be outside the word bbox, and they have 0\n+            # height or width when text is horizontal\n+            text = self.extract_word_from_hocr(\n+                word=word_span, character_confidence_threshold=character_confidence_threshold\n+            )\n+            if text and bbox_match:\n+                word_bbox = list(map(int, bbox_match.groups()))\n+                left, top, right, bottom = word_bbox\n+                df_entries.append(\n+                    {\n+                        \"left\": left,\n+                        \"top\": top,\n+                        \"width\": right - left,\n+                        \"height\": bottom - top,",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1910697715",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3860,
+        "pr_file": "unstructured/partition/utils/ocr_models/tesseract_ocr.py",
+        "discussion_id": "1910697715",
+        "commented_code": "@@ -76,17 +77,89 @@ def get_layout_from_image(self, image: PILImage.Image) -> List[TextRegion]:\n                 np.round(env_config.TESSERACT_OPTIMUM_TEXT_HEIGHT / text_height, 1),\n                 max_zoom,\n             )\n-            ocr_df = unstructured_pytesseract.image_to_data(\n+            ocr_df = self.image_to_data_with_character_confidence_filter(\n                 np.array(zoom_image(image, zoom)),\n                 lang=self.language,\n-                output_type=Output.DATAFRAME,\n+                character_confidence_threshold=env_config.TESSERACT_CHARACTER_CONFIDENCE_THRESHOLD,\n             )\n             ocr_df = ocr_df.dropna()\n-\n         ocr_regions = self.parse_data(ocr_df, zoom=zoom)\n \n         return ocr_regions\n \n+    def image_to_data_with_character_confidence_filter(\n+        self,\n+        image: np.ndarray,\n+        lang: str = \"eng\",\n+        config: str = \"\",\n+        character_confidence_threshold: float = 0.0,\n+    ) -> pd.DataFrame:\n+        hocr: str = unstructured_pytesseract.image_to_pdf_or_hocr(\n+            image,\n+            lang=lang,\n+            config=\"-c hocr_char_boxes=1 \" + config,\n+            extension=\"hocr\",\n+        )\n+        ocr_df = self.hocr_to_dataframe(hocr, character_confidence_threshold)\n+        return ocr_df\n+\n+    def hocr_to_dataframe(\n+        self, hocr: str, character_confidence_threshold: float = 0.0\n+    ) -> pd.DataFrame:\n+        soup = BeautifulSoup(hocr, \"html.parser\")\n+        word_spans = soup.find_all(\"span\", class_=\"ocrx_word\")\n+\n+        df_entries = []\n+        for word_span in word_spans:\n+            word_title = word_span.get(\"title\", \"\")\n+            bbox_match = re.search(r\"bbox (\\d+) (\\d+) (\\d+) (\\d+)\", word_title)\n+\n+            # Note: word bbox is used instead of combining characters together due to tesseract\n+            # bug that causes the character bboxes to be outside the word bbox, and they have 0\n+            # height or width when text is horizontal\n+            text = self.extract_word_from_hocr(\n+                word=word_span, character_confidence_threshold=character_confidence_threshold\n+            )\n+            if text and bbox_match:\n+                word_bbox = list(map(int, bbox_match.groups()))\n+                left, top, right, bottom = word_bbox\n+                df_entries.append(\n+                    {\n+                        \"left\": left,\n+                        \"top\": top,\n+                        \"width\": right - left,\n+                        \"height\": bottom - top,",
+        "comment_created_at": "2025-01-10T17:29:37+00:00",
+        "comment_author": "badGarnet",
+        "comment_body": "small nit on performance we can create df using bbox first then use vector ops to compute width and height (and overwrite the data for right and bottom).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1913074214",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3860,
+        "pr_file": "unstructured/partition/utils/ocr_models/tesseract_ocr.py",
+        "discussion_id": "1910697715",
+        "commented_code": "@@ -76,17 +77,89 @@ def get_layout_from_image(self, image: PILImage.Image) -> List[TextRegion]:\n                 np.round(env_config.TESSERACT_OPTIMUM_TEXT_HEIGHT / text_height, 1),\n                 max_zoom,\n             )\n-            ocr_df = unstructured_pytesseract.image_to_data(\n+            ocr_df = self.image_to_data_with_character_confidence_filter(\n                 np.array(zoom_image(image, zoom)),\n                 lang=self.language,\n-                output_type=Output.DATAFRAME,\n+                character_confidence_threshold=env_config.TESSERACT_CHARACTER_CONFIDENCE_THRESHOLD,\n             )\n             ocr_df = ocr_df.dropna()\n-\n         ocr_regions = self.parse_data(ocr_df, zoom=zoom)\n \n         return ocr_regions\n \n+    def image_to_data_with_character_confidence_filter(\n+        self,\n+        image: np.ndarray,\n+        lang: str = \"eng\",\n+        config: str = \"\",\n+        character_confidence_threshold: float = 0.0,\n+    ) -> pd.DataFrame:\n+        hocr: str = unstructured_pytesseract.image_to_pdf_or_hocr(\n+            image,\n+            lang=lang,\n+            config=\"-c hocr_char_boxes=1 \" + config,\n+            extension=\"hocr\",\n+        )\n+        ocr_df = self.hocr_to_dataframe(hocr, character_confidence_threshold)\n+        return ocr_df\n+\n+    def hocr_to_dataframe(\n+        self, hocr: str, character_confidence_threshold: float = 0.0\n+    ) -> pd.DataFrame:\n+        soup = BeautifulSoup(hocr, \"html.parser\")\n+        word_spans = soup.find_all(\"span\", class_=\"ocrx_word\")\n+\n+        df_entries = []\n+        for word_span in word_spans:\n+            word_title = word_span.get(\"title\", \"\")\n+            bbox_match = re.search(r\"bbox (\\d+) (\\d+) (\\d+) (\\d+)\", word_title)\n+\n+            # Note: word bbox is used instead of combining characters together due to tesseract\n+            # bug that causes the character bboxes to be outside the word bbox, and they have 0\n+            # height or width when text is horizontal\n+            text = self.extract_word_from_hocr(\n+                word=word_span, character_confidence_threshold=character_confidence_threshold\n+            )\n+            if text and bbox_match:\n+                word_bbox = list(map(int, bbox_match.groups()))\n+                left, top, right, bottom = word_bbox\n+                df_entries.append(\n+                    {\n+                        \"left\": left,\n+                        \"top\": top,\n+                        \"width\": right - left,\n+                        \"height\": bottom - top,",
+        "comment_created_at": "2025-01-13T11:54:20+00:00",
+        "comment_author": "plutasnyy",
+        "comment_body": "done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1433260554",
+    "pr_number": 2299,
+    "pr_file": "unstructured/metrics/evaluate.py",
+    "created_at": "2023-12-20T22:56:44+00:00",
+    "commented_code": "if not output_list:\n         print(\"No output files to calculate to edit distances for, exiting\")\n         sys.exit(0)\n+    if output_type not in [\"json\", \"txt\"]:\n+        raise ValueError(\n+            f\"Specified file type under `output_dir` or `output_list` should be one of \\\n+                'json' or 'txt'. The given file type is {output_type}, exiting.\"\n+        )\n+    if not all(_.endswith(output_type) for _ in output_list):\n+        print(\n+            \"The directory contains file type inconsistent with the given input. \\\n+                Please note that some files will be skipped.\"\n+        )\n \n     rows = []\n \n     # assumption: output file name convention is name-of-file.doc.json\n     # NOTE(klaijan) - disable=True means to not show, disable=False means to show the progress bar\n     for doc in tqdm(output_list, leave=False, disable=not visualize):  # type: ignore\n-        filename = (doc.split(\"/\")[-1]).split(\".json\")[0]\n+        filename = (doc.split(\"/\")[-1]).split(f\".{output_type}\")[0]",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1433260554",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 2299,
+        "pr_file": "unstructured/metrics/evaluate.py",
+        "discussion_id": "1433260554",
+        "commented_code": "@@ -59,13 +60,23 @@ def measure_text_extraction_accuracy(\n     if not output_list:\n         print(\"No output files to calculate to edit distances for, exiting\")\n         sys.exit(0)\n+    if output_type not in [\"json\", \"txt\"]:\n+        raise ValueError(\n+            f\"Specified file type under `output_dir` or `output_list` should be one of \\\n+                'json' or 'txt'. The given file type is {output_type}, exiting.\"\n+        )\n+    if not all(_.endswith(output_type) for _ in output_list):\n+        print(\n+            \"The directory contains file type inconsistent with the given input. \\\n+                Please note that some files will be skipped.\"\n+        )\n \n     rows = []\n \n     # assumption: output file name convention is name-of-file.doc.json\n     # NOTE(klaijan) - disable=True means to not show, disable=False means to show the progress bar\n     for doc in tqdm(output_list, leave=False, disable=not visualize):  # type: ignore\n-        filename = (doc.split(\"/\")[-1]).split(\".json\")[0]\n+        filename = (doc.split(\"/\")[-1]).split(f\".{output_type}\")[0]",
+        "comment_created_at": "2023-12-20T22:56:44+00:00",
+        "comment_author": "badGarnet",
+        "comment_body": "a small trick: here using split to just drop the file extension actually lead to creation of a list (i.e., expensive)\r\nhere we really need is the part of the string before the extension so we can do something like \r\n```\r\next_index = -len(output_type)\r\nfor doc in tqdm(...):\r\n    filename = os.path.basename(doc)[:ext_index]\r\n```\r\nalso here using split on \"/\" is potentially problematic as it assumes the os separator is \"/\"",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1433263500",
+    "pr_number": 2299,
+    "pr_file": "unstructured/metrics/evaluate.py",
+    "created_at": "2023-12-20T23:02:22+00:00",
+    "commented_code": "df[\"count\"] = df[\"count\"].astype(int)\n     if \"filename\" in df.columns and \"connector\" in df.columns:\n         df.sort_values(by=[\"connector\", \"filename\"], inplace=True)\n+    if not overwrite:\n+        filename = _uniquity_file(dir, filename)\n     df.to_csv(os.path.join(dir, filename), sep=\"\\t\", mode=mode, index=False, header=(mode == \"w\"))\n \n \n+def _uniquity_file(dir, filename):\n+    counter = 1\n+    original_filename, extension = filename.rsplit(\".\", 1)\n+    while os.path.exists(os.path.join(dir, filename)):\n+        filename = original_filename + \" (\" + str(counter) + \").\" + extension\n+        counter += 1",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1433263500",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 2299,
+        "pr_file": "unstructured/metrics/evaluate.py",
+        "discussion_id": "1433263500",
+        "commented_code": "@@ -212,9 +235,20 @@ def _write_to_file(dir: str, filename: str, df: pd.DataFrame, mode: str = \"w\"):\n         df[\"count\"] = df[\"count\"].astype(int)\n     if \"filename\" in df.columns and \"connector\" in df.columns:\n         df.sort_values(by=[\"connector\", \"filename\"], inplace=True)\n+    if not overwrite:\n+        filename = _uniquity_file(dir, filename)\n     df.to_csv(os.path.join(dir, filename), sep=\"\\t\", mode=mode, index=False, header=(mode == \"w\"))\n \n \n+def _uniquity_file(dir, filename):\n+    counter = 1\n+    original_filename, extension = filename.rsplit(\".\", 1)\n+    while os.path.exists(os.path.join(dir, filename)):\n+        filename = original_filename + \" (\" + str(counter) + \").\" + extension\n+        counter += 1",
+        "comment_created_at": "2023-12-20T23:02:22+00:00",
+        "comment_author": "badGarnet",
+        "comment_body": "I would suggest to use `os.listdir` and filtering to find all the files match the pattern and get the counter values and get max -> increment by 1\r\nReason:\r\n- repeatedly calling os.path.join, path.exists is more expensive than just calling once listdir\r\n- a while loop is a dangerous trap for infinite loop and I'd suggest we avoid it as much as we can",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

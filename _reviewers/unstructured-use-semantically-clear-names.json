@@ -1,0 +1,446 @@
+[
+  {
+    "discussion_id": "1946452938",
+    "pr_number": 3900,
+    "pr_file": "unstructured/partition/pdf_image/pdfminer_processing.py",
+    "created_at": "2025-02-07T12:26:46+00:00",
+    "commented_code": "def boxes_self_iou(bboxes, threshold: float = 0.5, round_to: int = DEFAULT_ROUND) -> np.ndarray:\n     \"\"\"compute iou for a group of elements\"\"\"\n+    # only store one copy of coords in memory instead of calling get coords twice\n     coords = get_coords_from_bboxes(bboxes, round_to=round_to)\n \n+    return boxes_iou(coords, coords, threshold, round_to)\n+\n+\n+# TODO (yao): move those vector math utils into a separated sub module to void import issues\n+def boxes_iou(",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1946452938",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3900,
+        "pr_file": "unstructured/partition/pdf_image/pdfminer_processing.py",
+        "discussion_id": "1946452938",
+        "commented_code": "@@ -238,12 +538,23 @@ def bboxes1_is_almost_subregion_of_bboxes2(\n \n def boxes_self_iou(bboxes, threshold: float = 0.5, round_to: int = DEFAULT_ROUND) -> np.ndarray:\n     \"\"\"compute iou for a group of elements\"\"\"\n+    # only store one copy of coords in memory instead of calling get coords twice\n     coords = get_coords_from_bboxes(bboxes, round_to=round_to)\n \n+    return boxes_iou(coords, coords, threshold, round_to)\n+\n+\n+# TODO (yao): move those vector math utils into a separated sub module to void import issues\n+def boxes_iou(",
+        "comment_created_at": "2025-02-07T12:26:46+00:00",
+        "comment_author": "plutasnyy",
+        "comment_body": "nit Maybe this could be renamed to 'are_boxes_overlapping`, typing would be nice here ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1947178161",
+    "pr_number": 3900,
+    "pr_file": "unstructured/partition/pdf_image/pdfminer_processing.py",
+    "created_at": "2025-02-07T20:53:10+00:00",
+    "commented_code": "return all(x is not None for x in bbox) and (bbox[2] - bbox[0] > 0) and (bbox[3] - bbox[1] > 0)\n \n \n+def _minimum_containing_coords(*regions: TextRegions) -> np.ndarray:\n+    # TODO: refactor to just use np array as input\n+    return np.vstack(\n+        (\n+            np.min([region.x1 for region in regions], axis=0),\n+            np.min([region.y1 for region in regions], axis=0),\n+            np.max([region.x2 for region in regions], axis=0),\n+            np.max([region.y2 for region in regions], axis=0),\n+        )\n+    ).T\n+\n+\n+def _inferred_is_elementtype(\n+    inferred_layout: LayoutElements, etypes: Iterable[ElementType]\n+) -> np.ndarry:\n+    inferred_text_idx = [\n+        idx\n+        for idx, class_name in inferred_layout.element_class_id_map.items()\n+        if class_name in etypes\n+    ]\n+    inferred_is_etypes = np.zeros((len(inferred_layout),)).astype(bool)\n+    for idx in inferred_text_idx:\n+        inferred_is_etypes = np.logical_or(\n+            inferred_is_etypes, inferred_layout.element_class_ids == idx\n+        )\n+    return inferred_is_etypes\n+\n+\n+def _inferred_is_text(inferred_layout: LayoutElements) -> np.ndarry:\n+    \"\"\"return a boolean array masking for each element if it is non-image type (True) or image like\n+    type (False); image types are ElementType.FIGURE/IMAGE/PAGE_BREAK/TABLE\"\"\"\n+    return ~_inferred_is_elementtype(\n+        inferred_layout,\n+        etypes=(\n+            ElementType.FIGURE,\n+            ElementType.IMAGE,\n+            # NOTE (yao): PICTURE is not in the loop version of the logic in inference library\n+            # ElementType.PICTURE,\n+            ElementType.PAGE_BREAK,\n+            ElementType.TABLE,\n+        ),\n+    )\n+\n+\n+def _merge_extracted_into_inferred_when_almost_the_same(\n+    extracted_layout: LayoutElements,\n+    inferred_layout: LayoutElements,\n+    same_region_threshold: float,\n+) -> tuple[np.ndarray]:\n+    \"\"\"merge exstracted elements that have almost the same bounding box as an inferrred element into\n+    that inferred element: a) the inferred element bounding box is updated, if needed, to be able to\n+    bound the merged extracted element; b) the inferred element uses the extracted element's text as\n+    its text attribute. Return a boolean mask array indicating where (when True) an extracted\n+    element is merged therefore should be excluded from later analysis\"\"\"\n+\n+    if len(inferred_layout) == 0:\n+        return np.array([False] * len(extracted_layout))\n+    if len(extracted_layout) == 0:\n+        return np.array([])\n+\n+    boxes_almost_same = boxes_iou(\n+        extracted_layout.element_coords,\n+        inferred_layout.element_coords,\n+        threshold=same_region_threshold,\n+    )\n+    extracted_almost_the_same_as_inferred = boxes_almost_same.sum(axis=1).astype(bool)\n+    # NOTE: if a row is full of False the argmax returns first index; we use the mask above to\n+    # distinguish those (they would be False in the mask)\n+    first_match = np.argmax(boxes_almost_same, axis=1)\n+    inferred_indices_to_update = first_match[extracted_almost_the_same_as_inferred]\n+    extracted_to_remove = extracted_layout.slice(extracted_almost_the_same_as_inferred)\n+    # copy here in case we change the extracted layout later\n+    inferred_layout.texts[inferred_indices_to_update] = extracted_to_remove.texts.copy()\n+    # use coords that can bound BOTH the inferred and extracted region as final bounding box coords\n+    inferred_layout.element_coords[inferred_indices_to_update] = _minimum_containing_coords(\n+        inferred_layout.slice(inferred_indices_to_update),\n+        extracted_to_remove,\n+    )\n+    return extracted_almost_the_same_as_inferred\n+\n+\n+def _merge_extracted_that_are_subregion_of_inferred_text(\n+    extracted_layout: LayoutElements,\n+    inferred_layout: LayoutElements,\n+    extracted_is_subregion_of_inferred: np.ndarray,\n+    extracted_to_proc: np.ndarray,\n+    inferred_to_proc: np.ndarray,\n+) -> LayoutElements:\n+    \"\"\"merged extracted elements that are subregions of inferrred elements into those inferred\n+    elements: the inferred elements' bounding boxes expands, if needed, to include those subregion\n+    elements. Returns the modified inferred layout where some of its elements' bounding boxes may\n+    have expanded due to merging.\n+    \"\"\"\n+    # in theory one extracted __should__ only match at most one inferred region, given inferred\n+    # region can not overlap; so first match here __should__ also be the only match\n+    inferred_to_iter = inferred_to_proc[inferred_to_proc]\n+    extracted_to_iter = extracted_to_proc[extracted_to_proc]\n+    for inferred_index, inferred_row in enumerate(extracted_is_subregion_of_inferred.T):\n+        matches = np.where(inferred_row)[0]\n+        if not matches.size:\n+            continue\n+        # Technically those two lines below can be vectorized but this loop would still run anyway;\n+        # it is not clear which one is overall faster so might worth profiling in the future\n+        extracted_to_iter[matches] = False\n+        inferred_to_iter[inferred_index] = False\n+        # then expand inferred box by all the extracted boxes\n+        # FIXME (yao): this part is broken at the moment\n+        inferred_layout.element_coords[[inferred_index]] = _minimum_containing_coords(\n+            inferred_layout.slice([inferred_index]),\n+            *[extracted_layout.slice([match]) for match in matches],\n+        )\n+    inferred_to_proc[inferred_to_proc] = inferred_to_iter",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1947178161",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3900,
+        "pr_file": "unstructured/partition/pdf_image/pdfminer_processing.py",
+        "discussion_id": "1947178161",
+        "commented_code": "@@ -50,6 +52,322 @@ def _validate_bbox(bbox: list[int | float]) -> bool:\n     return all(x is not None for x in bbox) and (bbox[2] - bbox[0] > 0) and (bbox[3] - bbox[1] > 0)\n \n \n+def _minimum_containing_coords(*regions: TextRegions) -> np.ndarray:\n+    # TODO: refactor to just use np array as input\n+    return np.vstack(\n+        (\n+            np.min([region.x1 for region in regions], axis=0),\n+            np.min([region.y1 for region in regions], axis=0),\n+            np.max([region.x2 for region in regions], axis=0),\n+            np.max([region.y2 for region in regions], axis=0),\n+        )\n+    ).T\n+\n+\n+def _inferred_is_elementtype(\n+    inferred_layout: LayoutElements, etypes: Iterable[ElementType]\n+) -> np.ndarry:\n+    inferred_text_idx = [\n+        idx\n+        for idx, class_name in inferred_layout.element_class_id_map.items()\n+        if class_name in etypes\n+    ]\n+    inferred_is_etypes = np.zeros((len(inferred_layout),)).astype(bool)\n+    for idx in inferred_text_idx:\n+        inferred_is_etypes = np.logical_or(\n+            inferred_is_etypes, inferred_layout.element_class_ids == idx\n+        )\n+    return inferred_is_etypes\n+\n+\n+def _inferred_is_text(inferred_layout: LayoutElements) -> np.ndarry:\n+    \"\"\"return a boolean array masking for each element if it is non-image type (True) or image like\n+    type (False); image types are ElementType.FIGURE/IMAGE/PAGE_BREAK/TABLE\"\"\"\n+    return ~_inferred_is_elementtype(\n+        inferred_layout,\n+        etypes=(\n+            ElementType.FIGURE,\n+            ElementType.IMAGE,\n+            # NOTE (yao): PICTURE is not in the loop version of the logic in inference library\n+            # ElementType.PICTURE,\n+            ElementType.PAGE_BREAK,\n+            ElementType.TABLE,\n+        ),\n+    )\n+\n+\n+def _merge_extracted_into_inferred_when_almost_the_same(\n+    extracted_layout: LayoutElements,\n+    inferred_layout: LayoutElements,\n+    same_region_threshold: float,\n+) -> tuple[np.ndarray]:\n+    \"\"\"merge exstracted elements that have almost the same bounding box as an inferrred element into\n+    that inferred element: a) the inferred element bounding box is updated, if needed, to be able to\n+    bound the merged extracted element; b) the inferred element uses the extracted element's text as\n+    its text attribute. Return a boolean mask array indicating where (when True) an extracted\n+    element is merged therefore should be excluded from later analysis\"\"\"\n+\n+    if len(inferred_layout) == 0:\n+        return np.array([False] * len(extracted_layout))\n+    if len(extracted_layout) == 0:\n+        return np.array([])\n+\n+    boxes_almost_same = boxes_iou(\n+        extracted_layout.element_coords,\n+        inferred_layout.element_coords,\n+        threshold=same_region_threshold,\n+    )\n+    extracted_almost_the_same_as_inferred = boxes_almost_same.sum(axis=1).astype(bool)\n+    # NOTE: if a row is full of False the argmax returns first index; we use the mask above to\n+    # distinguish those (they would be False in the mask)\n+    first_match = np.argmax(boxes_almost_same, axis=1)\n+    inferred_indices_to_update = first_match[extracted_almost_the_same_as_inferred]\n+    extracted_to_remove = extracted_layout.slice(extracted_almost_the_same_as_inferred)\n+    # copy here in case we change the extracted layout later\n+    inferred_layout.texts[inferred_indices_to_update] = extracted_to_remove.texts.copy()\n+    # use coords that can bound BOTH the inferred and extracted region as final bounding box coords\n+    inferred_layout.element_coords[inferred_indices_to_update] = _minimum_containing_coords(\n+        inferred_layout.slice(inferred_indices_to_update),\n+        extracted_to_remove,\n+    )\n+    return extracted_almost_the_same_as_inferred\n+\n+\n+def _merge_extracted_that_are_subregion_of_inferred_text(\n+    extracted_layout: LayoutElements,\n+    inferred_layout: LayoutElements,\n+    extracted_is_subregion_of_inferred: np.ndarray,\n+    extracted_to_proc: np.ndarray,\n+    inferred_to_proc: np.ndarray,\n+) -> LayoutElements:\n+    \"\"\"merged extracted elements that are subregions of inferrred elements into those inferred\n+    elements: the inferred elements' bounding boxes expands, if needed, to include those subregion\n+    elements. Returns the modified inferred layout where some of its elements' bounding boxes may\n+    have expanded due to merging.\n+    \"\"\"\n+    # in theory one extracted __should__ only match at most one inferred region, given inferred\n+    # region can not overlap; so first match here __should__ also be the only match\n+    inferred_to_iter = inferred_to_proc[inferred_to_proc]\n+    extracted_to_iter = extracted_to_proc[extracted_to_proc]\n+    for inferred_index, inferred_row in enumerate(extracted_is_subregion_of_inferred.T):\n+        matches = np.where(inferred_row)[0]\n+        if not matches.size:\n+            continue\n+        # Technically those two lines below can be vectorized but this loop would still run anyway;\n+        # it is not clear which one is overall faster so might worth profiling in the future\n+        extracted_to_iter[matches] = False\n+        inferred_to_iter[inferred_index] = False\n+        # then expand inferred box by all the extracted boxes\n+        # FIXME (yao): this part is broken at the moment\n+        inferred_layout.element_coords[[inferred_index]] = _minimum_containing_coords(\n+            inferred_layout.slice([inferred_index]),\n+            *[extracted_layout.slice([match]) for match in matches],\n+        )\n+    inferred_to_proc[inferred_to_proc] = inferred_to_iter",
+        "comment_created_at": "2025-02-07T20:53:10+00:00",
+        "comment_author": "tbs17",
+        "comment_body": "are the use of inferred_to_iter and extracted_to_iter necessary? i got confused when i first saw `inferred_to_proc`  and `extracted_to_proc` didn't get returned but updated but it could be just me. \r\n\r\nwould below work?\r\n\r\n```\r\ndef _merge_extracted_that_are_subregion_of_inferred_text(\r\n    extracted_layout,\r\n    inferred_layout,\r\n    extracted_is_subregion_of_inferred,\r\n    extracted_to_proc,\r\n    inferred_to_proc,\r\n):\r\n    \"\"\"Merge extracted regions that are subregions of inferred text regions.\"\"\"\r\n    for inferred_index, inferred_row in enumerate(extracted_is_subregion_of_inferred.T):\r\n        matches = np.where(inferred_row)[0]\r\n        if not matches.size:\r\n            continue\r\n        # Mark matched regions as processed\r\n        extracted_to_proc[matches] = False\r\n        inferred_to_proc[inferred_index] = False\r\n        # Expand inferred bounding box to encompass matched extracted regions\r\n        inferred_layout.element_coords[[inferred_index]] = _minimum_containing_coords(\r\n            inferred_layout.slice([inferred_index]),\r\n            *[extracted_layout.slice([match]) for match in matches],\r\n        )\r\n    return inferred_layout\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1731921217",
+    "pr_number": 3562,
+    "pr_file": "unstructured/file_utils/file_conversion.py",
+    "created_at": "2024-08-26T23:04:19+00:00",
+    "commented_code": "exactly_one(filename=filename, file=file)\n \n     if file is not None:\n-        with tempfile.NamedTemporaryFile() as tmp:\n-            tmp.write(file.read())\n-            tmp.flush()\n+        with tempfile.TemporaryDirectory() as temp_dir_path:\n+            tmp_file_path = os.path.join(temp_dir_path, \"tmp_file\")",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1731921217",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3562,
+        "pr_file": "unstructured/file_utils/file_conversion.py",
+        "discussion_id": "1731921217",
+        "commented_code": "@@ -54,11 +55,12 @@ def convert_file_to_html_text_using_pandoc(\n     exactly_one(filename=filename, file=file)\n \n     if file is not None:\n-        with tempfile.NamedTemporaryFile() as tmp:\n-            tmp.write(file.read())\n-            tmp.flush()\n+        with tempfile.TemporaryDirectory() as temp_dir_path:\n+            tmp_file_path = os.path.join(temp_dir_path, \"tmp_file\")",
+        "comment_created_at": "2024-08-26T23:04:19+00:00",
+        "comment_author": "scanny",
+        "comment_body": "It would be nice if we could do a little better than \"tmp_file\" as a name. Not sure what `source_format` is, but if it's an extension or something acceptable as one, maybe `f\"document.{source_format}\"` to produce a name like `document.doc` or `document.epub` or similar if we happen to be looking around in there during debugging or something.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1704393892",
+    "pr_number": 3480,
+    "pr_file": "test_unstructured/staging/test_weaviate.py",
+    "created_at": "2024-08-05T16:49:45+00:00",
+    "commented_code": ")\n \n is_in_docker = os.path.exists(\"/.dockerenv\")\n+skip_outside_ci = os.getenv(\"CI\", \"\").lower() in {\"\", \"false\", \"f\", \"0\"}",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1704393892",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3480,
+        "pr_file": "test_unstructured/staging/test_weaviate.py",
+        "discussion_id": "1704393892",
+        "commented_code": "@@ -17,9 +17,10 @@\n )\n \n is_in_docker = os.path.exists(\"/.dockerenv\")\n+skip_outside_ci = os.getenv(\"CI\", \"\").lower() in {\"\", \"false\", \"f\", \"0\"}",
+        "comment_created_at": "2024-08-05T16:49:45+00:00",
+        "comment_author": "scanny",
+        "comment_body": "This is a predicate (resolves to True or False) but is named like a function.\r\n\r\nI'd say something like \"is_in_ci\" would be a better name, flip the logic to \"not in\" and then use `not is_in_ci` in the `skipif` expression.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1697364261",
+    "pr_number": 3444,
+    "pr_file": "unstructured/partition/email.py",
+    "created_at": "2024-07-30T17:58:44+00:00",
+    "commented_code": ") -> ElementMetadata:\n     \"\"\"Creates an ElementMetadata object from the header information in the email.\"\"\"\n     signature = find_signature(msg)\n-\n     header_dict = dict(msg.raw_items())\n     email_date = header_dict.get(\"Date\")\n+\n+    def parse_recipients(header_value: Optional[str]) -> Optional[list[str]]:\n+        if header_value is not None:\n+            return [recipient.strip() for recipient in header_value.split(\",\")]\n+        return None\n+\n     if email_date is not None:\n         email_date = convert_to_iso_8601(email_date)\n \n-    sent_from = header_dict.get(\"From\")\n-    if sent_from is not None:\n-        sent_from = [sender.strip() for sender in sent_from.split(\",\")]\n-\n-    sent_to = header_dict.get(\"To\")\n-    if sent_to is not None:\n-        sent_to = [recipient.strip() for recipient in sent_to.split(\",\")]\n+    sent_from = parse_recipients(header_dict.get(\"From\"))\n+    sent_to = parse_recipients(header_dict.get(\"To\"))\n+    bcc_recipient = parse_recipients(header_dict.get(\"Bcc\"))\n+    cc_recipient = parse_recipients(header_dict.get(\"Cc\"))\n+    message_id = header_dict.get(\"Message-ID\")\n+    if message_id:\n+        message_id = _strip_angle_brackets(message_id)\n \n     element_metadata = ElementMetadata(\n+        bcc_recipient=bcc_recipient,\n+        cc_recipient=cc_recipient,\n+        message_id=message_id,",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1697364261",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3444,
+        "pr_file": "unstructured/partition/email.py",
+        "discussion_id": "1697364261",
+        "commented_code": "@@ -131,21 +166,29 @@ def build_email_metadata(\n ) -> ElementMetadata:\n     \"\"\"Creates an ElementMetadata object from the header information in the email.\"\"\"\n     signature = find_signature(msg)\n-\n     header_dict = dict(msg.raw_items())\n     email_date = header_dict.get(\"Date\")\n+\n+    def parse_recipients(header_value: Optional[str]) -> Optional[list[str]]:\n+        if header_value is not None:\n+            return [recipient.strip() for recipient in header_value.split(\",\")]\n+        return None\n+\n     if email_date is not None:\n         email_date = convert_to_iso_8601(email_date)\n \n-    sent_from = header_dict.get(\"From\")\n-    if sent_from is not None:\n-        sent_from = [sender.strip() for sender in sent_from.split(\",\")]\n-\n-    sent_to = header_dict.get(\"To\")\n-    if sent_to is not None:\n-        sent_to = [recipient.strip() for recipient in sent_to.split(\",\")]\n+    sent_from = parse_recipients(header_dict.get(\"From\"))\n+    sent_to = parse_recipients(header_dict.get(\"To\"))\n+    bcc_recipient = parse_recipients(header_dict.get(\"Bcc\"))\n+    cc_recipient = parse_recipients(header_dict.get(\"Cc\"))\n+    message_id = header_dict.get(\"Message-ID\")\n+    if message_id:\n+        message_id = _strip_angle_brackets(message_id)\n \n     element_metadata = ElementMetadata(\n+        bcc_recipient=bcc_recipient,\n+        cc_recipient=cc_recipient,\n+        message_id=message_id,",
+        "comment_created_at": "2024-07-30T17:58:44+00:00",
+        "comment_author": "MthwRobinson",
+        "comment_body": "@scanny - What do you think about `email_message_id` vs `message_id` for this? We also have our own ID, was thinking we might want to differentiate.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1697405574",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3444,
+        "pr_file": "unstructured/partition/email.py",
+        "discussion_id": "1697364261",
+        "commented_code": "@@ -131,21 +166,29 @@ def build_email_metadata(\n ) -> ElementMetadata:\n     \"\"\"Creates an ElementMetadata object from the header information in the email.\"\"\"\n     signature = find_signature(msg)\n-\n     header_dict = dict(msg.raw_items())\n     email_date = header_dict.get(\"Date\")\n+\n+    def parse_recipients(header_value: Optional[str]) -> Optional[list[str]]:\n+        if header_value is not None:\n+            return [recipient.strip() for recipient in header_value.split(\",\")]\n+        return None\n+\n     if email_date is not None:\n         email_date = convert_to_iso_8601(email_date)\n \n-    sent_from = header_dict.get(\"From\")\n-    if sent_from is not None:\n-        sent_from = [sender.strip() for sender in sent_from.split(\",\")]\n-\n-    sent_to = header_dict.get(\"To\")\n-    if sent_to is not None:\n-        sent_to = [recipient.strip() for recipient in sent_to.split(\",\")]\n+    sent_from = parse_recipients(header_dict.get(\"From\"))\n+    sent_to = parse_recipients(header_dict.get(\"To\"))\n+    bcc_recipient = parse_recipients(header_dict.get(\"Bcc\"))\n+    cc_recipient = parse_recipients(header_dict.get(\"Cc\"))\n+    message_id = header_dict.get(\"Message-ID\")\n+    if message_id:\n+        message_id = _strip_angle_brackets(message_id)\n \n     element_metadata = ElementMetadata(\n+        bcc_recipient=bcc_recipient,\n+        cc_recipient=cc_recipient,\n+        message_id=message_id,",
+        "comment_created_at": "2024-07-30T18:33:26+00:00",
+        "comment_author": "scanny",
+        "comment_body": "Yeah, I'd say so. This is in metadata, right? So folks will be encountering that field when email is far from their mind, so good to qualify it I'd say. Like we do `image_base64` and `image_mime_type`.\r\n\r\n`message_id` is already established though, right? So not sure how to go about changing something like that. I suppose we either assume no one is using it and just go for it, or we populate both for a while and remove the old one later.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1697420810",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3444,
+        "pr_file": "unstructured/partition/email.py",
+        "discussion_id": "1697364261",
+        "commented_code": "@@ -131,21 +166,29 @@ def build_email_metadata(\n ) -> ElementMetadata:\n     \"\"\"Creates an ElementMetadata object from the header information in the email.\"\"\"\n     signature = find_signature(msg)\n-\n     header_dict = dict(msg.raw_items())\n     email_date = header_dict.get(\"Date\")\n+\n+    def parse_recipients(header_value: Optional[str]) -> Optional[list[str]]:\n+        if header_value is not None:\n+            return [recipient.strip() for recipient in header_value.split(\",\")]\n+        return None\n+\n     if email_date is not None:\n         email_date = convert_to_iso_8601(email_date)\n \n-    sent_from = header_dict.get(\"From\")\n-    if sent_from is not None:\n-        sent_from = [sender.strip() for sender in sent_from.split(\",\")]\n-\n-    sent_to = header_dict.get(\"To\")\n-    if sent_to is not None:\n-        sent_to = [recipient.strip() for recipient in sent_to.split(\",\")]\n+    sent_from = parse_recipients(header_dict.get(\"From\"))\n+    sent_to = parse_recipients(header_dict.get(\"To\"))\n+    bcc_recipient = parse_recipients(header_dict.get(\"Bcc\"))\n+    cc_recipient = parse_recipients(header_dict.get(\"Cc\"))\n+    message_id = header_dict.get(\"Message-ID\")\n+    if message_id:\n+        message_id = _strip_angle_brackets(message_id)\n \n     element_metadata = ElementMetadata(\n+        bcc_recipient=bcc_recipient,\n+        cc_recipient=cc_recipient,\n+        message_id=message_id,",
+        "comment_created_at": "2024-07-30T18:46:56+00:00",
+        "comment_author": "Coniferish",
+        "comment_body": "No, it was added as a metadata field in this, so there shouldn't be any problem with changing it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1689750125",
+    "pr_number": 3431,
+    "pr_file": "unstructured/errors.py",
+    "created_at": "2024-07-24T12:58:08+00:00",
+    "commented_code": "+class PdfMaxPagesExceededError(ValueError):",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1689750125",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3431,
+        "pr_file": "unstructured/errors.py",
+        "discussion_id": "1689750125",
+        "commented_code": "@@ -0,0 +1,4 @@\n+class PdfMaxPagesExceededError(ValueError):",
+        "comment_created_at": "2024-07-24T12:58:08+00:00",
+        "comment_author": "awalker4",
+        "comment_body": "I'd maybe go generic here, if we want to throw the same error for other filetypes in the future. Something like `PageCountExceededError`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1689757610",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3431,
+        "pr_file": "unstructured/errors.py",
+        "discussion_id": "1689750125",
+        "commented_code": "@@ -0,0 +1,4 @@\n+class PdfMaxPagesExceededError(ValueError):",
+        "comment_created_at": "2024-07-24T13:03:05+00:00",
+        "comment_author": "MthwRobinson",
+        "comment_body": "Yeah agree with @awalker4 on that",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1658842856",
+    "pr_number": 3320,
+    "pr_file": "unstructured/ingest/v2/processes/connectors/singlestore.py",
+    "created_at": "2024-06-28T14:25:54+00:00",
+    "commented_code": "+import json\n+from dataclasses import dataclass\n+from datetime import date, datetime\n+from pathlib import Path\n+from typing import TYPE_CHECKING, Any, Optional\n+\n+import numpy as np\n+import pandas as pd\n+from dateutil import parser\n+\n+from unstructured.ingest.enhanced_dataclass import enhanced_field\n+from unstructured.ingest.utils.data_prep import chunk_generator\n+from unstructured.ingest.utils.table import convert_to_pandas_dataframe\n+from unstructured.ingest.v2.interfaces import (\n+    AccessConfig,\n+    ConnectionConfig,\n+    FileData,\n+    UploadContent,\n+    Uploader,\n+    UploaderConfig,\n+    UploadStager,\n+    UploadStagerConfig,\n+)\n+from unstructured.ingest.v2.logger import logger\n+from unstructured.ingest.v2.processes.connector_registry import (\n+    DestinationRegistryEntry,\n+    add_destination_entry,\n+)\n+from unstructured.utils import requires_dependencies\n+\n+if TYPE_CHECKING:\n+    from singlestoredb.connection import Connection\n+\n+CONNECTOR_TYPE = \"singlestore\"\n+\n+\n+@dataclass\n+class SingleStoreAccessConfig(AccessConfig):\n+    password: Optional[str] = None\n+\n+\n+@dataclass\n+class SingleStoreConnectionConfig(ConnectionConfig):\n+    host: Optional[str] = None\n+    port: Optional[int] = None\n+    user: Optional[str] = None\n+    database: Optional[str] = None\n+    access_config: SingleStoreAccessConfig = enhanced_field(sensitive=True)\n+\n+    @requires_dependencies([\"singlestoredb\"], extras=\"singlestore\")\n+    def get_connection(self) -> \"Connection\":\n+        import singlestoredb as s2\n+\n+        conn = s2.connect(\n+            host=self.host,\n+            port=self.port,\n+            database=self.database,\n+            user=self.user,\n+            password=self.access_config.password,\n+        )\n+        return conn\n+\n+\n+@dataclass\n+class SingleStoreUploadStagerConfig(UploadStagerConfig):\n+    drop_empty_cols: bool = False\n+\n+\n+@dataclass\n+class SingleStoreUploadStager(UploadStager):\n+    upload_stager_config: SingleStoreUploadStagerConfig\n+\n+    @staticmethod\n+    def parse_date_string(date_string: str) -> date:\n+        try:\n+            timestamp = float(date_string)\n+            return datetime.fromtimestamp(timestamp)\n+        except Exception as e:\n+            logger.debug(f\"date {date_string} string not a timestamp: {e}\")\n+        return parser.parse(date_string)\n+\n+    def run(\n+        self,\n+        elements_filepath: Path,\n+        file_data: FileData,\n+        output_dir: Path,\n+        output_filename: str,\n+        **kwargs: Any,\n+    ) -> Path:\n+        with open(elements_filepath) as elements_file:\n+            elements_contents = json.load(elements_file)\n+        output_path = Path(output_dir) / Path(f\"{output_filename}.csv\")\n+        output_path.parent.mkdir(parents=True, exist_ok=True)\n+\n+        df = convert_to_pandas_dataframe(\n+            elements_dict=elements_contents,\n+            drop_empty_cols=self.upload_stager_config.drop_empty_cols,\n+        )\n+        datetime_columns = [\n+            \"data_source_date_created\",\n+            \"data_source_date_modified\",\n+            \"data_source_date_processed\",\n+        ]\n+        for column in filter(lambda x: x in df.columns, datetime_columns):\n+            df[column] = df[column].apply(self.parse_date_string)\n+        if \"data_source_record_locator\" in df.columns:\n+            df[\"data_source_record_locator\"] = df[\"data_source_record_locator\"].apply(\n+                lambda x: json.dumps(x) if x else None\n+            )\n+\n+        with output_path.open(\"w\") as output_file:\n+            df.to_csv(output_file, index=False)\n+        return output_path\n+\n+\n+@dataclass\n+class SingleStoreUploaderConfig(UploaderConfig):\n+    table_name: str\n+    batch_size: int = 100\n+\n+\n+@dataclass\n+class SingleStoreUploader(Uploader):\n+    connection_config: SingleStoreConnectionConfig\n+    upload_config: SingleStoreUploaderConfig\n+    connector_type: str = CONNECTOR_TYPE\n+\n+    def upload_csv(self, content: UploadContent) -> None:\n+        df = pd.read_csv(content.path)\n+        logger.debug(\n+            f\"uploading {len(df)} entries to {self.connection_config.database} \"\n+            f\"db in table {self.upload_config.table_name}\"\n+        )\n+        stmt = \"INSERT INTO {} ({}) VALUES ({})\".format(\n+            self.upload_config.table_name,\n+            \", \".join(df.columns),\n+            \", \".join([\"%s\"] * len(df.columns)),\n+        )\n+        logger.debug(f\"sql statement: {stmt}\")\n+        df.replace({np.nan: None}, inplace=True)\n+        data_as_tuples = list(df.itertuples(index=False, name=None))\n+        with self.connection_config.get_connection() as conn:\n+            with conn.cursor() as cur:\n+                for chunk in chunk_generator(",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1658842856",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3320,
+        "pr_file": "unstructured/ingest/v2/processes/connectors/singlestore.py",
+        "discussion_id": "1658842856",
+        "commented_code": "@@ -0,0 +1,164 @@\n+import json\n+from dataclasses import dataclass\n+from datetime import date, datetime\n+from pathlib import Path\n+from typing import TYPE_CHECKING, Any, Optional\n+\n+import numpy as np\n+import pandas as pd\n+from dateutil import parser\n+\n+from unstructured.ingest.enhanced_dataclass import enhanced_field\n+from unstructured.ingest.utils.data_prep import chunk_generator\n+from unstructured.ingest.utils.table import convert_to_pandas_dataframe\n+from unstructured.ingest.v2.interfaces import (\n+    AccessConfig,\n+    ConnectionConfig,\n+    FileData,\n+    UploadContent,\n+    Uploader,\n+    UploaderConfig,\n+    UploadStager,\n+    UploadStagerConfig,\n+)\n+from unstructured.ingest.v2.logger import logger\n+from unstructured.ingest.v2.processes.connector_registry import (\n+    DestinationRegistryEntry,\n+    add_destination_entry,\n+)\n+from unstructured.utils import requires_dependencies\n+\n+if TYPE_CHECKING:\n+    from singlestoredb.connection import Connection\n+\n+CONNECTOR_TYPE = \"singlestore\"\n+\n+\n+@dataclass\n+class SingleStoreAccessConfig(AccessConfig):\n+    password: Optional[str] = None\n+\n+\n+@dataclass\n+class SingleStoreConnectionConfig(ConnectionConfig):\n+    host: Optional[str] = None\n+    port: Optional[int] = None\n+    user: Optional[str] = None\n+    database: Optional[str] = None\n+    access_config: SingleStoreAccessConfig = enhanced_field(sensitive=True)\n+\n+    @requires_dependencies([\"singlestoredb\"], extras=\"singlestore\")\n+    def get_connection(self) -> \"Connection\":\n+        import singlestoredb as s2\n+\n+        conn = s2.connect(\n+            host=self.host,\n+            port=self.port,\n+            database=self.database,\n+            user=self.user,\n+            password=self.access_config.password,\n+        )\n+        return conn\n+\n+\n+@dataclass\n+class SingleStoreUploadStagerConfig(UploadStagerConfig):\n+    drop_empty_cols: bool = False\n+\n+\n+@dataclass\n+class SingleStoreUploadStager(UploadStager):\n+    upload_stager_config: SingleStoreUploadStagerConfig\n+\n+    @staticmethod\n+    def parse_date_string(date_string: str) -> date:\n+        try:\n+            timestamp = float(date_string)\n+            return datetime.fromtimestamp(timestamp)\n+        except Exception as e:\n+            logger.debug(f\"date {date_string} string not a timestamp: {e}\")\n+        return parser.parse(date_string)\n+\n+    def run(\n+        self,\n+        elements_filepath: Path,\n+        file_data: FileData,\n+        output_dir: Path,\n+        output_filename: str,\n+        **kwargs: Any,\n+    ) -> Path:\n+        with open(elements_filepath) as elements_file:\n+            elements_contents = json.load(elements_file)\n+        output_path = Path(output_dir) / Path(f\"{output_filename}.csv\")\n+        output_path.parent.mkdir(parents=True, exist_ok=True)\n+\n+        df = convert_to_pandas_dataframe(\n+            elements_dict=elements_contents,\n+            drop_empty_cols=self.upload_stager_config.drop_empty_cols,\n+        )\n+        datetime_columns = [\n+            \"data_source_date_created\",\n+            \"data_source_date_modified\",\n+            \"data_source_date_processed\",\n+        ]\n+        for column in filter(lambda x: x in df.columns, datetime_columns):\n+            df[column] = df[column].apply(self.parse_date_string)\n+        if \"data_source_record_locator\" in df.columns:\n+            df[\"data_source_record_locator\"] = df[\"data_source_record_locator\"].apply(\n+                lambda x: json.dumps(x) if x else None\n+            )\n+\n+        with output_path.open(\"w\") as output_file:\n+            df.to_csv(output_file, index=False)\n+        return output_path\n+\n+\n+@dataclass\n+class SingleStoreUploaderConfig(UploaderConfig):\n+    table_name: str\n+    batch_size: int = 100\n+\n+\n+@dataclass\n+class SingleStoreUploader(Uploader):\n+    connection_config: SingleStoreConnectionConfig\n+    upload_config: SingleStoreUploaderConfig\n+    connector_type: str = CONNECTOR_TYPE\n+\n+    def upload_csv(self, content: UploadContent) -> None:\n+        df = pd.read_csv(content.path)\n+        logger.debug(\n+            f\"uploading {len(df)} entries to {self.connection_config.database} \"\n+            f\"db in table {self.upload_config.table_name}\"\n+        )\n+        stmt = \"INSERT INTO {} ({}) VALUES ({})\".format(\n+            self.upload_config.table_name,\n+            \", \".join(df.columns),\n+            \", \".join([\"%s\"] * len(df.columns)),\n+        )\n+        logger.debug(f\"sql statement: {stmt}\")\n+        df.replace({np.nan: None}, inplace=True)\n+        data_as_tuples = list(df.itertuples(index=False, name=None))\n+        with self.connection_config.get_connection() as conn:\n+            with conn.cursor() as cur:\n+                for chunk in chunk_generator(",
+        "comment_created_at": "2024-06-28T14:25:54+00:00",
+        "comment_author": "potter-potter",
+        "comment_body": "I'd love if we changed this name from chunk_generator to something else eventually. I've talked to open source users that think it is chunking here.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1658852443",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3320,
+        "pr_file": "unstructured/ingest/v2/processes/connectors/singlestore.py",
+        "discussion_id": "1658842856",
+        "commented_code": "@@ -0,0 +1,164 @@\n+import json\n+from dataclasses import dataclass\n+from datetime import date, datetime\n+from pathlib import Path\n+from typing import TYPE_CHECKING, Any, Optional\n+\n+import numpy as np\n+import pandas as pd\n+from dateutil import parser\n+\n+from unstructured.ingest.enhanced_dataclass import enhanced_field\n+from unstructured.ingest.utils.data_prep import chunk_generator\n+from unstructured.ingest.utils.table import convert_to_pandas_dataframe\n+from unstructured.ingest.v2.interfaces import (\n+    AccessConfig,\n+    ConnectionConfig,\n+    FileData,\n+    UploadContent,\n+    Uploader,\n+    UploaderConfig,\n+    UploadStager,\n+    UploadStagerConfig,\n+)\n+from unstructured.ingest.v2.logger import logger\n+from unstructured.ingest.v2.processes.connector_registry import (\n+    DestinationRegistryEntry,\n+    add_destination_entry,\n+)\n+from unstructured.utils import requires_dependencies\n+\n+if TYPE_CHECKING:\n+    from singlestoredb.connection import Connection\n+\n+CONNECTOR_TYPE = \"singlestore\"\n+\n+\n+@dataclass\n+class SingleStoreAccessConfig(AccessConfig):\n+    password: Optional[str] = None\n+\n+\n+@dataclass\n+class SingleStoreConnectionConfig(ConnectionConfig):\n+    host: Optional[str] = None\n+    port: Optional[int] = None\n+    user: Optional[str] = None\n+    database: Optional[str] = None\n+    access_config: SingleStoreAccessConfig = enhanced_field(sensitive=True)\n+\n+    @requires_dependencies([\"singlestoredb\"], extras=\"singlestore\")\n+    def get_connection(self) -> \"Connection\":\n+        import singlestoredb as s2\n+\n+        conn = s2.connect(\n+            host=self.host,\n+            port=self.port,\n+            database=self.database,\n+            user=self.user,\n+            password=self.access_config.password,\n+        )\n+        return conn\n+\n+\n+@dataclass\n+class SingleStoreUploadStagerConfig(UploadStagerConfig):\n+    drop_empty_cols: bool = False\n+\n+\n+@dataclass\n+class SingleStoreUploadStager(UploadStager):\n+    upload_stager_config: SingleStoreUploadStagerConfig\n+\n+    @staticmethod\n+    def parse_date_string(date_string: str) -> date:\n+        try:\n+            timestamp = float(date_string)\n+            return datetime.fromtimestamp(timestamp)\n+        except Exception as e:\n+            logger.debug(f\"date {date_string} string not a timestamp: {e}\")\n+        return parser.parse(date_string)\n+\n+    def run(\n+        self,\n+        elements_filepath: Path,\n+        file_data: FileData,\n+        output_dir: Path,\n+        output_filename: str,\n+        **kwargs: Any,\n+    ) -> Path:\n+        with open(elements_filepath) as elements_file:\n+            elements_contents = json.load(elements_file)\n+        output_path = Path(output_dir) / Path(f\"{output_filename}.csv\")\n+        output_path.parent.mkdir(parents=True, exist_ok=True)\n+\n+        df = convert_to_pandas_dataframe(\n+            elements_dict=elements_contents,\n+            drop_empty_cols=self.upload_stager_config.drop_empty_cols,\n+        )\n+        datetime_columns = [\n+            \"data_source_date_created\",\n+            \"data_source_date_modified\",\n+            \"data_source_date_processed\",\n+        ]\n+        for column in filter(lambda x: x in df.columns, datetime_columns):\n+            df[column] = df[column].apply(self.parse_date_string)\n+        if \"data_source_record_locator\" in df.columns:\n+            df[\"data_source_record_locator\"] = df[\"data_source_record_locator\"].apply(\n+                lambda x: json.dumps(x) if x else None\n+            )\n+\n+        with output_path.open(\"w\") as output_file:\n+            df.to_csv(output_file, index=False)\n+        return output_path\n+\n+\n+@dataclass\n+class SingleStoreUploaderConfig(UploaderConfig):\n+    table_name: str\n+    batch_size: int = 100\n+\n+\n+@dataclass\n+class SingleStoreUploader(Uploader):\n+    connection_config: SingleStoreConnectionConfig\n+    upload_config: SingleStoreUploaderConfig\n+    connector_type: str = CONNECTOR_TYPE\n+\n+    def upload_csv(self, content: UploadContent) -> None:\n+        df = pd.read_csv(content.path)\n+        logger.debug(\n+            f\"uploading {len(df)} entries to {self.connection_config.database} \"\n+            f\"db in table {self.upload_config.table_name}\"\n+        )\n+        stmt = \"INSERT INTO {} ({}) VALUES ({})\".format(\n+            self.upload_config.table_name,\n+            \", \".join(df.columns),\n+            \", \".join([\"%s\"] * len(df.columns)),\n+        )\n+        logger.debug(f\"sql statement: {stmt}\")\n+        df.replace({np.nan: None}, inplace=True)\n+        data_as_tuples = list(df.itertuples(index=False, name=None))\n+        with self.connection_config.get_connection() as conn:\n+            with conn.cursor() as cur:\n+                for chunk in chunk_generator(",
+        "comment_created_at": "2024-06-28T14:33:32+00:00",
+        "comment_author": "rbiseck3",
+        "comment_body": "We can just change the name? It already existed so I'm using it, but I can see the confusion. Could call it `batch_generator`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1659046520",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3320,
+        "pr_file": "unstructured/ingest/v2/processes/connectors/singlestore.py",
+        "discussion_id": "1658842856",
+        "commented_code": "@@ -0,0 +1,164 @@\n+import json\n+from dataclasses import dataclass\n+from datetime import date, datetime\n+from pathlib import Path\n+from typing import TYPE_CHECKING, Any, Optional\n+\n+import numpy as np\n+import pandas as pd\n+from dateutil import parser\n+\n+from unstructured.ingest.enhanced_dataclass import enhanced_field\n+from unstructured.ingest.utils.data_prep import chunk_generator\n+from unstructured.ingest.utils.table import convert_to_pandas_dataframe\n+from unstructured.ingest.v2.interfaces import (\n+    AccessConfig,\n+    ConnectionConfig,\n+    FileData,\n+    UploadContent,\n+    Uploader,\n+    UploaderConfig,\n+    UploadStager,\n+    UploadStagerConfig,\n+)\n+from unstructured.ingest.v2.logger import logger\n+from unstructured.ingest.v2.processes.connector_registry import (\n+    DestinationRegistryEntry,\n+    add_destination_entry,\n+)\n+from unstructured.utils import requires_dependencies\n+\n+if TYPE_CHECKING:\n+    from singlestoredb.connection import Connection\n+\n+CONNECTOR_TYPE = \"singlestore\"\n+\n+\n+@dataclass\n+class SingleStoreAccessConfig(AccessConfig):\n+    password: Optional[str] = None\n+\n+\n+@dataclass\n+class SingleStoreConnectionConfig(ConnectionConfig):\n+    host: Optional[str] = None\n+    port: Optional[int] = None\n+    user: Optional[str] = None\n+    database: Optional[str] = None\n+    access_config: SingleStoreAccessConfig = enhanced_field(sensitive=True)\n+\n+    @requires_dependencies([\"singlestoredb\"], extras=\"singlestore\")\n+    def get_connection(self) -> \"Connection\":\n+        import singlestoredb as s2\n+\n+        conn = s2.connect(\n+            host=self.host,\n+            port=self.port,\n+            database=self.database,\n+            user=self.user,\n+            password=self.access_config.password,\n+        )\n+        return conn\n+\n+\n+@dataclass\n+class SingleStoreUploadStagerConfig(UploadStagerConfig):\n+    drop_empty_cols: bool = False\n+\n+\n+@dataclass\n+class SingleStoreUploadStager(UploadStager):\n+    upload_stager_config: SingleStoreUploadStagerConfig\n+\n+    @staticmethod\n+    def parse_date_string(date_string: str) -> date:\n+        try:\n+            timestamp = float(date_string)\n+            return datetime.fromtimestamp(timestamp)\n+        except Exception as e:\n+            logger.debug(f\"date {date_string} string not a timestamp: {e}\")\n+        return parser.parse(date_string)\n+\n+    def run(\n+        self,\n+        elements_filepath: Path,\n+        file_data: FileData,\n+        output_dir: Path,\n+        output_filename: str,\n+        **kwargs: Any,\n+    ) -> Path:\n+        with open(elements_filepath) as elements_file:\n+            elements_contents = json.load(elements_file)\n+        output_path = Path(output_dir) / Path(f\"{output_filename}.csv\")\n+        output_path.parent.mkdir(parents=True, exist_ok=True)\n+\n+        df = convert_to_pandas_dataframe(\n+            elements_dict=elements_contents,\n+            drop_empty_cols=self.upload_stager_config.drop_empty_cols,\n+        )\n+        datetime_columns = [\n+            \"data_source_date_created\",\n+            \"data_source_date_modified\",\n+            \"data_source_date_processed\",\n+        ]\n+        for column in filter(lambda x: x in df.columns, datetime_columns):\n+            df[column] = df[column].apply(self.parse_date_string)\n+        if \"data_source_record_locator\" in df.columns:\n+            df[\"data_source_record_locator\"] = df[\"data_source_record_locator\"].apply(\n+                lambda x: json.dumps(x) if x else None\n+            )\n+\n+        with output_path.open(\"w\") as output_file:\n+            df.to_csv(output_file, index=False)\n+        return output_path\n+\n+\n+@dataclass\n+class SingleStoreUploaderConfig(UploaderConfig):\n+    table_name: str\n+    batch_size: int = 100\n+\n+\n+@dataclass\n+class SingleStoreUploader(Uploader):\n+    connection_config: SingleStoreConnectionConfig\n+    upload_config: SingleStoreUploaderConfig\n+    connector_type: str = CONNECTOR_TYPE\n+\n+    def upload_csv(self, content: UploadContent) -> None:\n+        df = pd.read_csv(content.path)\n+        logger.debug(\n+            f\"uploading {len(df)} entries to {self.connection_config.database} \"\n+            f\"db in table {self.upload_config.table_name}\"\n+        )\n+        stmt = \"INSERT INTO {} ({}) VALUES ({})\".format(\n+            self.upload_config.table_name,\n+            \", \".join(df.columns),\n+            \", \".join([\"%s\"] * len(df.columns)),\n+        )\n+        logger.debug(f\"sql statement: {stmt}\")\n+        df.replace({np.nan: None}, inplace=True)\n+        data_as_tuples = list(df.itertuples(index=False, name=None))\n+        with self.connection_config.get_connection() as conn:\n+            with conn.cursor() as cur:\n+                for chunk in chunk_generator(",
+        "comment_created_at": "2024-06-28T17:00:59+00:00",
+        "comment_author": "vangheem",
+        "comment_body": "`batch_generator` seems good to me",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1661186364",
+    "pr_number": 3286,
+    "pr_file": "unstructured/ingest/v2/processes/connectors/pinecone.py",
+    "created_at": "2024-07-01T14:58:56+00:00",
+    "commented_code": "+import json\n+import multiprocessing as mp\n+import uuid\n+from dataclasses import dataclass, field\n+from pathlib import Path\n+from typing import TYPE_CHECKING, Any, Optional\n+\n+from unstructured.ingest.enhanced_dataclass import enhanced_field\n+from unstructured.ingest.error import DestinationConnectionError\n+from unstructured.ingest.utils.data_prep import chunk_generator\n+from unstructured.ingest.v2.interfaces import (\n+    AccessConfig,\n+    ConnectionConfig,\n+    UploadContent,\n+    Uploader,\n+    UploaderConfig,\n+    UploadStager,\n+    UploadStagerConfig,\n+)\n+from unstructured.ingest.v2.logger import logger\n+from unstructured.ingest.v2.processes.connector_registry import (\n+    DestinationRegistryEntry,\n+    add_destination_entry,\n+)\n+from unstructured.staging.base import flatten_dict\n+from unstructured.utils import requires_dependencies\n+\n+if TYPE_CHECKING:\n+    from pinecone import Index as PineconeIndex\n+\n+\n+CONNECTOR_TYPE = \"pinecone\"\n+\n+\n+@dataclass\n+class PineconeAccessConfig(AccessConfig):\n+    api_key: Optional[str] = enhanced_field(default=None, overload_name=\"pinecone_api_key\")\n+\n+\n+@dataclass\n+class PineconeConnectionConfig(ConnectionConfig):\n+    index_name: str\n+    environment: str\n+    access_config: PineconeAccessConfig = enhanced_field(sensitive=True)\n+\n+    @requires_dependencies([\"pinecone\"], extras=\"pinecone\")\n+    def create_index(self) -> \"PineconeIndex\":",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1661186364",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3286,
+        "pr_file": "unstructured/ingest/v2/processes/connectors/pinecone.py",
+        "discussion_id": "1661186364",
+        "commented_code": "@@ -0,0 +1,182 @@\n+import json\n+import multiprocessing as mp\n+import uuid\n+from dataclasses import dataclass, field\n+from pathlib import Path\n+from typing import TYPE_CHECKING, Any, Optional\n+\n+from unstructured.ingest.enhanced_dataclass import enhanced_field\n+from unstructured.ingest.error import DestinationConnectionError\n+from unstructured.ingest.utils.data_prep import chunk_generator\n+from unstructured.ingest.v2.interfaces import (\n+    AccessConfig,\n+    ConnectionConfig,\n+    UploadContent,\n+    Uploader,\n+    UploaderConfig,\n+    UploadStager,\n+    UploadStagerConfig,\n+)\n+from unstructured.ingest.v2.logger import logger\n+from unstructured.ingest.v2.processes.connector_registry import (\n+    DestinationRegistryEntry,\n+    add_destination_entry,\n+)\n+from unstructured.staging.base import flatten_dict\n+from unstructured.utils import requires_dependencies\n+\n+if TYPE_CHECKING:\n+    from pinecone import Index as PineconeIndex\n+\n+\n+CONNECTOR_TYPE = \"pinecone\"\n+\n+\n+@dataclass\n+class PineconeAccessConfig(AccessConfig):\n+    api_key: Optional[str] = enhanced_field(default=None, overload_name=\"pinecone_api_key\")\n+\n+\n+@dataclass\n+class PineconeConnectionConfig(ConnectionConfig):\n+    index_name: str\n+    environment: str\n+    access_config: PineconeAccessConfig = enhanced_field(sensitive=True)\n+\n+    @requires_dependencies([\"pinecone\"], extras=\"pinecone\")\n+    def create_index(self) -> \"PineconeIndex\":",
+        "comment_created_at": "2024-07-01T14:58:56+00:00",
+        "comment_author": "vangheem",
+        "comment_body": "I wonder if we should rename this to something like `get_index` or `initialize_index`? At least to me, it made me think that we were actually creating the pinecone index here.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1661230251",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3286,
+        "pr_file": "unstructured/ingest/v2/processes/connectors/pinecone.py",
+        "discussion_id": "1661186364",
+        "commented_code": "@@ -0,0 +1,182 @@\n+import json\n+import multiprocessing as mp\n+import uuid\n+from dataclasses import dataclass, field\n+from pathlib import Path\n+from typing import TYPE_CHECKING, Any, Optional\n+\n+from unstructured.ingest.enhanced_dataclass import enhanced_field\n+from unstructured.ingest.error import DestinationConnectionError\n+from unstructured.ingest.utils.data_prep import chunk_generator\n+from unstructured.ingest.v2.interfaces import (\n+    AccessConfig,\n+    ConnectionConfig,\n+    UploadContent,\n+    Uploader,\n+    UploaderConfig,\n+    UploadStager,\n+    UploadStagerConfig,\n+)\n+from unstructured.ingest.v2.logger import logger\n+from unstructured.ingest.v2.processes.connector_registry import (\n+    DestinationRegistryEntry,\n+    add_destination_entry,\n+)\n+from unstructured.staging.base import flatten_dict\n+from unstructured.utils import requires_dependencies\n+\n+if TYPE_CHECKING:\n+    from pinecone import Index as PineconeIndex\n+\n+\n+CONNECTOR_TYPE = \"pinecone\"\n+\n+\n+@dataclass\n+class PineconeAccessConfig(AccessConfig):\n+    api_key: Optional[str] = enhanced_field(default=None, overload_name=\"pinecone_api_key\")\n+\n+\n+@dataclass\n+class PineconeConnectionConfig(ConnectionConfig):\n+    index_name: str\n+    environment: str\n+    access_config: PineconeAccessConfig = enhanced_field(sensitive=True)\n+\n+    @requires_dependencies([\"pinecone\"], extras=\"pinecone\")\n+    def create_index(self) -> \"PineconeIndex\":",
+        "comment_created_at": "2024-07-01T15:33:16+00:00",
+        "comment_author": "ahmetmeleq",
+        "comment_body": "Agreed, and addressed with: [change misleading func name create_index to get_index](https://github.com/Unstructured-IO/unstructured/pull/3286/commits/a8d6fd63f93ce03f41bfb0d6cd400d7557d03640)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1600485224",
+    "pr_number": 3014,
+    "pr_file": "unstructured/partition/utils/config.py",
+    "created_at": "2024-05-14T18:35:06+00:00",
+    "commented_code": "return self._get_float(\"PDF_ANNOTATION_THRESHOLD\", 0.9)\n \n+    @property\n+    def STORAGE_ENABLED(self) -> bool:\n+        \"\"\"Enable usage of STORAGE_DIR and STORAGE_TMPDIR.\"\"\"\n+        return self._get_bool(\"STORAGE_ENABLED\", False)\n+\n+    @property\n+    def STORAGE_DIR(self) -> str:\n+        \"\"\"Path to Unstructured storage directory.\"\"\"",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1600485224",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3014,
+        "pr_file": "unstructured/partition/utils/config.py",
+        "discussion_id": "1600485224",
+        "commented_code": "@@ -117,5 +140,28 @@ def PDF_ANNOTATION_THRESHOLD(self) -> float:\n \n         return self._get_float(\"PDF_ANNOTATION_THRESHOLD\", 0.9)\n \n+    @property\n+    def STORAGE_ENABLED(self) -> bool:\n+        \"\"\"Enable usage of STORAGE_DIR and STORAGE_TMPDIR.\"\"\"\n+        return self._get_bool(\"STORAGE_ENABLED\", False)\n+\n+    @property\n+    def STORAGE_DIR(self) -> str:\n+        \"\"\"Path to Unstructured storage directory.\"\"\"",
+        "comment_created_at": "2024-05-14T18:35:06+00:00",
+        "comment_author": "cragwolfe",
+        "comment_body": "STORAGE_DIR is a misleading name, which has permanent or at least caching connotations. could this instead be TMP_STORAGE_DIR?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1600491394",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3014,
+        "pr_file": "unstructured/partition/utils/config.py",
+        "discussion_id": "1600485224",
+        "commented_code": "@@ -117,5 +140,28 @@ def PDF_ANNOTATION_THRESHOLD(self) -> float:\n \n         return self._get_float(\"PDF_ANNOTATION_THRESHOLD\", 0.9)\n \n+    @property\n+    def STORAGE_ENABLED(self) -> bool:\n+        \"\"\"Enable usage of STORAGE_DIR and STORAGE_TMPDIR.\"\"\"\n+        return self._get_bool(\"STORAGE_ENABLED\", False)\n+\n+    @property\n+    def STORAGE_DIR(self) -> str:\n+        \"\"\"Path to Unstructured storage directory.\"\"\"",
+        "comment_created_at": "2024-05-14T18:40:29+00:00",
+        "comment_author": "amadeusz-ds",
+        "comment_body": "There are parameters `STORAGE_DIR` and `STORAGE_TMPDIR`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1600511822",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3014,
+        "pr_file": "unstructured/partition/utils/config.py",
+        "discussion_id": "1600485224",
+        "commented_code": "@@ -117,5 +140,28 @@ def PDF_ANNOTATION_THRESHOLD(self) -> float:\n \n         return self._get_float(\"PDF_ANNOTATION_THRESHOLD\", 0.9)\n \n+    @property\n+    def STORAGE_ENABLED(self) -> bool:\n+        \"\"\"Enable usage of STORAGE_DIR and STORAGE_TMPDIR.\"\"\"\n+        return self._get_bool(\"STORAGE_ENABLED\", False)\n+\n+    @property\n+    def STORAGE_DIR(self) -> str:\n+        \"\"\"Path to Unstructured storage directory.\"\"\"",
+        "comment_created_at": "2024-05-14T18:58:06+00:00",
+        "comment_author": "amadeusz-ds",
+        "comment_body": "Maybe `UNSTRUCTURED_DIR` and `UNSTRUCTURED_TMPDIR` as those by default point to `~/.cache/unstructured` and `~/.cache/unstructured/tmp/{gid}` respectively",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1601361278",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3014,
+        "pr_file": "unstructured/partition/utils/config.py",
+        "discussion_id": "1600485224",
+        "commented_code": "@@ -117,5 +140,28 @@ def PDF_ANNOTATION_THRESHOLD(self) -> float:\n \n         return self._get_float(\"PDF_ANNOTATION_THRESHOLD\", 0.9)\n \n+    @property\n+    def STORAGE_ENABLED(self) -> bool:\n+        \"\"\"Enable usage of STORAGE_DIR and STORAGE_TMPDIR.\"\"\"\n+        return self._get_bool(\"STORAGE_ENABLED\", False)\n+\n+    @property\n+    def STORAGE_DIR(self) -> str:\n+        \"\"\"Path to Unstructured storage directory.\"\"\"",
+        "comment_created_at": "2024-05-15T10:15:13+00:00",
+        "comment_author": "pawel-kmiecik",
+        "comment_body": "or `UNSTRUCTURED_CACHE_DIR` and `UNSTRUCTURED_TMP_DIR`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1601521568",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 3014,
+        "pr_file": "unstructured/partition/utils/config.py",
+        "discussion_id": "1600485224",
+        "commented_code": "@@ -117,5 +140,28 @@ def PDF_ANNOTATION_THRESHOLD(self) -> float:\n \n         return self._get_float(\"PDF_ANNOTATION_THRESHOLD\", 0.9)\n \n+    @property\n+    def STORAGE_ENABLED(self) -> bool:\n+        \"\"\"Enable usage of STORAGE_DIR and STORAGE_TMPDIR.\"\"\"\n+        return self._get_bool(\"STORAGE_ENABLED\", False)\n+\n+    @property\n+    def STORAGE_DIR(self) -> str:\n+        \"\"\"Path to Unstructured storage directory.\"\"\"",
+        "comment_created_at": "2024-05-15T12:09:16+00:00",
+        "comment_author": "amadeusz-ds",
+        "comment_body": "made the changes, waiting for greenlight @cragwolfe ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1459240632",
+    "pr_number": 2428,
+    "pr_file": "unstructured/partition/code.py",
+    "created_at": "2024-01-19T15:53:17+00:00",
+    "commented_code": "+import copy\n+import os\n+import io\n+from typing import IO, Any, List, Optional\n+\n+import tree_sitter\n+\n+from unstructured.documents.elements import Code, Element, ElementMetadata, process_metadata\n+\n+from unstructured.file_utils.filetype import FileType, EXT_TO_FILETYPE, detect_filetype\n+from unstructured.partition.common import (\n+    exactly_one,\n+    get_last_modified_date,\n+    get_last_modified_date_from_file,\n+)\n+\n+from unstructured import __path__ as package_path\n+\n+TREE_SITTER_BUILD_PATH = package_path[0] + '/treesitter_build/languages.so'\n+# TODO(Pierre) Add the other languages\n+FILETYPE_TO_LANG = {\n+    FileType.C: \"c\",\n+    FileType.GO: \"go\",\n+    FileType.PY: \"python\",\n+    FileType.CPP: \"cpp\",\n+    FileType.JS: \"javascript\",\n+    FileType.TS: \"typescript\",\n+}\n+\n+def partition_code(\n+    filename: Optional[str] = None,\n+    file: Optional[IO[bytes]] = None,\n+    text: Optional[str] = None,\n+    encoding: Optional[str] = None,\n+    language: Optional[str] = None,\n+    max_partition: Optional[int] = 1500,\n+    min_partition: Optional[int] = 0,\n+    metadata_last_modified: Optional[str] = None,\n+    chunking_strategy: Optional[str] = None,\n+    detection_origin: Optional[str] = \"text\",\n+    **kwargs: Any,\n+) -> List[Element]:\n+    \"\"\"Partitions an .txt documents into its constituent paragraph elements.\n+    If paragraphs are below \"min_partition\" or above \"max_partition\" boundaries,\n+    they are combined or split.\n+    Parameters\n+    ----------\n+    filename\n+        A string defining the target filename path.\n+    file\n+        A file-like object using \"rb\" mode --> open(filename, \"rb\").\n+    text\n+        The string representation of the .txt document.\n+    encoding\n+        The encoding method used to decode the text input. If None, utf-8 will be used.\n+    max_partition\n+        The maximum number of characters to include in a partition. If None is passed,\n+        no maximum is applied.\n+    min_partition\n+        The minimum number of characters to include in a partition.\n+    metadata_last_modified\n+        The day of the last modification\n+    \"\"\"\n+    return _partition_code(\n+        filename=filename,\n+        file=file,\n+        text=text,\n+        encoding=encoding,\n+        language=language,\n+        max_partition=max_partition,\n+        min_partition=min_partition,\n+        metadata_last_modified=metadata_last_modified,\n+        chunking_strategy=chunking_strategy,\n+        detection_origin=detection_origin,\n+        **kwargs,\n+    )\n+\n+\n+@process_metadata()\n+def _partition_code(\n+    filename: Optional[str] = None,\n+    file: Optional[IO[bytes]] = None,\n+    text: Optional[str] = None,\n+    metadata_filename: Optional[str] = None,\n+    include_metadata: bool = True,\n+    languages: Optional[List[str]] = [\"auto\"],\n+    max_partition: Optional[int] = 1500,\n+    min_partition: Optional[int] = 50,\n+    metadata_last_modified: Optional[str] = None,\n+    detect_language_per_element: bool = False,\n+    detection_origin: Optional[str] = \"codefile\",\n+    **kwargs: Any,\n+) -> List[Element]:\n+    \"\"\"internal API for `partition_code`\"\"\"\n+    if text is not None and text.strip() == \"\" and not file and not filename:\n+        return []\n+\n+    if (\n+        min_partition is not None\n+        and max_partition is not None\n+        and (min_partition > max_partition or min_partition < 0 or max_partition < 0)\n+    ):\n+        raise ValueError(\"Invalid values for min_partition and/or max_partition.\")\n+\n+    # Verify that only one of the arguments was provided\n+    exactly_one(filename=filename, file=file, text=text)\n+    file_text = bytes()\n+    language = None",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1459240632",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 2428,
+        "pr_file": "unstructured/partition/code.py",
+        "discussion_id": "1459240632",
+        "commented_code": "@@ -0,0 +1,217 @@\n+import copy\n+import os\n+import io\n+from typing import IO, Any, List, Optional\n+\n+import tree_sitter\n+\n+from unstructured.documents.elements import Code, Element, ElementMetadata, process_metadata\n+\n+from unstructured.file_utils.filetype import FileType, EXT_TO_FILETYPE, detect_filetype\n+from unstructured.partition.common import (\n+    exactly_one,\n+    get_last_modified_date,\n+    get_last_modified_date_from_file,\n+)\n+\n+from unstructured import __path__ as package_path\n+\n+TREE_SITTER_BUILD_PATH = package_path[0] + '/treesitter_build/languages.so'\n+# TODO(Pierre) Add the other languages\n+FILETYPE_TO_LANG = {\n+    FileType.C: \"c\",\n+    FileType.GO: \"go\",\n+    FileType.PY: \"python\",\n+    FileType.CPP: \"cpp\",\n+    FileType.JS: \"javascript\",\n+    FileType.TS: \"typescript\",\n+}\n+\n+def partition_code(\n+    filename: Optional[str] = None,\n+    file: Optional[IO[bytes]] = None,\n+    text: Optional[str] = None,\n+    encoding: Optional[str] = None,\n+    language: Optional[str] = None,\n+    max_partition: Optional[int] = 1500,\n+    min_partition: Optional[int] = 0,\n+    metadata_last_modified: Optional[str] = None,\n+    chunking_strategy: Optional[str] = None,\n+    detection_origin: Optional[str] = \"text\",\n+    **kwargs: Any,\n+) -> List[Element]:\n+    \"\"\"Partitions an .txt documents into its constituent paragraph elements.\n+    If paragraphs are below \"min_partition\" or above \"max_partition\" boundaries,\n+    they are combined or split.\n+    Parameters\n+    ----------\n+    filename\n+        A string defining the target filename path.\n+    file\n+        A file-like object using \"rb\" mode --> open(filename, \"rb\").\n+    text\n+        The string representation of the .txt document.\n+    encoding\n+        The encoding method used to decode the text input. If None, utf-8 will be used.\n+    max_partition\n+        The maximum number of characters to include in a partition. If None is passed,\n+        no maximum is applied.\n+    min_partition\n+        The minimum number of characters to include in a partition.\n+    metadata_last_modified\n+        The day of the last modification\n+    \"\"\"\n+    return _partition_code(\n+        filename=filename,\n+        file=file,\n+        text=text,\n+        encoding=encoding,\n+        language=language,\n+        max_partition=max_partition,\n+        min_partition=min_partition,\n+        metadata_last_modified=metadata_last_modified,\n+        chunking_strategy=chunking_strategy,\n+        detection_origin=detection_origin,\n+        **kwargs,\n+    )\n+\n+\n+@process_metadata()\n+def _partition_code(\n+    filename: Optional[str] = None,\n+    file: Optional[IO[bytes]] = None,\n+    text: Optional[str] = None,\n+    metadata_filename: Optional[str] = None,\n+    include_metadata: bool = True,\n+    languages: Optional[List[str]] = [\"auto\"],\n+    max_partition: Optional[int] = 1500,\n+    min_partition: Optional[int] = 50,\n+    metadata_last_modified: Optional[str] = None,\n+    detect_language_per_element: bool = False,\n+    detection_origin: Optional[str] = \"codefile\",\n+    **kwargs: Any,\n+) -> List[Element]:\n+    \"\"\"internal API for `partition_code`\"\"\"\n+    if text is not None and text.strip() == \"\" and not file and not filename:\n+        return []\n+\n+    if (\n+        min_partition is not None\n+        and max_partition is not None\n+        and (min_partition > max_partition or min_partition < 0 or max_partition < 0)\n+    ):\n+        raise ValueError(\"Invalid values for min_partition and/or max_partition.\")\n+\n+    # Verify that only one of the arguments was provided\n+    exactly_one(filename=filename, file=file, text=text)\n+    file_text = bytes()\n+    language = None",
+        "comment_created_at": "2024-01-19T15:53:17+00:00",
+        "comment_author": "qued",
+        "comment_body": "Could we call this `code_language` or something similar just to clarify it's not a variable for storing English, Spanish, Chinese, etc.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1460168367",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 2428,
+        "pr_file": "unstructured/partition/code.py",
+        "discussion_id": "1459240632",
+        "commented_code": "@@ -0,0 +1,217 @@\n+import copy\n+import os\n+import io\n+from typing import IO, Any, List, Optional\n+\n+import tree_sitter\n+\n+from unstructured.documents.elements import Code, Element, ElementMetadata, process_metadata\n+\n+from unstructured.file_utils.filetype import FileType, EXT_TO_FILETYPE, detect_filetype\n+from unstructured.partition.common import (\n+    exactly_one,\n+    get_last_modified_date,\n+    get_last_modified_date_from_file,\n+)\n+\n+from unstructured import __path__ as package_path\n+\n+TREE_SITTER_BUILD_PATH = package_path[0] + '/treesitter_build/languages.so'\n+# TODO(Pierre) Add the other languages\n+FILETYPE_TO_LANG = {\n+    FileType.C: \"c\",\n+    FileType.GO: \"go\",\n+    FileType.PY: \"python\",\n+    FileType.CPP: \"cpp\",\n+    FileType.JS: \"javascript\",\n+    FileType.TS: \"typescript\",\n+}\n+\n+def partition_code(\n+    filename: Optional[str] = None,\n+    file: Optional[IO[bytes]] = None,\n+    text: Optional[str] = None,\n+    encoding: Optional[str] = None,\n+    language: Optional[str] = None,\n+    max_partition: Optional[int] = 1500,\n+    min_partition: Optional[int] = 0,\n+    metadata_last_modified: Optional[str] = None,\n+    chunking_strategy: Optional[str] = None,\n+    detection_origin: Optional[str] = \"text\",\n+    **kwargs: Any,\n+) -> List[Element]:\n+    \"\"\"Partitions an .txt documents into its constituent paragraph elements.\n+    If paragraphs are below \"min_partition\" or above \"max_partition\" boundaries,\n+    they are combined or split.\n+    Parameters\n+    ----------\n+    filename\n+        A string defining the target filename path.\n+    file\n+        A file-like object using \"rb\" mode --> open(filename, \"rb\").\n+    text\n+        The string representation of the .txt document.\n+    encoding\n+        The encoding method used to decode the text input. If None, utf-8 will be used.\n+    max_partition\n+        The maximum number of characters to include in a partition. If None is passed,\n+        no maximum is applied.\n+    min_partition\n+        The minimum number of characters to include in a partition.\n+    metadata_last_modified\n+        The day of the last modification\n+    \"\"\"\n+    return _partition_code(\n+        filename=filename,\n+        file=file,\n+        text=text,\n+        encoding=encoding,\n+        language=language,\n+        max_partition=max_partition,\n+        min_partition=min_partition,\n+        metadata_last_modified=metadata_last_modified,\n+        chunking_strategy=chunking_strategy,\n+        detection_origin=detection_origin,\n+        **kwargs,\n+    )\n+\n+\n+@process_metadata()\n+def _partition_code(\n+    filename: Optional[str] = None,\n+    file: Optional[IO[bytes]] = None,\n+    text: Optional[str] = None,\n+    metadata_filename: Optional[str] = None,\n+    include_metadata: bool = True,\n+    languages: Optional[List[str]] = [\"auto\"],\n+    max_partition: Optional[int] = 1500,\n+    min_partition: Optional[int] = 50,\n+    metadata_last_modified: Optional[str] = None,\n+    detect_language_per_element: bool = False,\n+    detection_origin: Optional[str] = \"codefile\",\n+    **kwargs: Any,\n+) -> List[Element]:\n+    \"\"\"internal API for `partition_code`\"\"\"\n+    if text is not None and text.strip() == \"\" and not file and not filename:\n+        return []\n+\n+    if (\n+        min_partition is not None\n+        and max_partition is not None\n+        and (min_partition > max_partition or min_partition < 0 or max_partition < 0)\n+    ):\n+        raise ValueError(\"Invalid values for min_partition and/or max_partition.\")\n+\n+    # Verify that only one of the arguments was provided\n+    exactly_one(filename=filename, file=file, text=text)\n+    file_text = bytes()\n+    language = None",
+        "comment_created_at": "2024-01-20T03:33:15+00:00",
+        "comment_author": "Plemeur",
+        "comment_body": "Sure thing,\r\nAlso, for now I've put the programming language as the language metadata, but it might be confusing in the rest of the pipeline, any input on that ?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1498177251",
+    "pr_number": 2572,
+    "pr_file": "unstructured/metrics/evaluate.py",
+    "created_at": "2024-02-21T19:25:22+00:00",
+    "commented_code": "_write_to_file(export_dir, \"all-docs-element-type-frequency.tsv\", df)\n     _write_to_file(export_dir, \"aggregate-scores-element-type.tsv\", agg_df)\n     _display(agg_df)\n+\n+\n+def group_text_extraction_acc(",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1498177251",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 2572,
+        "pr_file": "unstructured/metrics/evaluate.py",
+        "discussion_id": "1498177251",
+        "commented_code": "@@ -187,3 +173,25 @@ def measure_element_type_accuracy(\n     _write_to_file(export_dir, \"all-docs-element-type-frequency.tsv\", df)\n     _write_to_file(export_dir, \"aggregate-scores-element-type.tsv\", agg_df)\n     _display(agg_df)\n+\n+\n+def group_text_extraction_acc(",
+        "comment_created_at": "2024-02-21T19:25:22+00:00",
+        "comment_author": "scanny",
+        "comment_body": "What does `acc` stand for? Could be accumulation, accumulator, accessory, access, etc.\r\n\r\nCan we just spell it out? I'm thinking it's `_accuracy`, but especially since it's a call now it improves readability if the user doesn't need to visit the implementation to make sense of the call.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1498682789",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 2572,
+        "pr_file": "unstructured/metrics/evaluate.py",
+        "discussion_id": "1498177251",
+        "commented_code": "@@ -187,3 +173,25 @@ def measure_element_type_accuracy(\n     _write_to_file(export_dir, \"all-docs-element-type-frequency.tsv\", df)\n     _write_to_file(export_dir, \"aggregate-scores-element-type.tsv\", agg_df)\n     _display(agg_df)\n+\n+\n+def group_text_extraction_acc(",
+        "comment_created_at": "2024-02-22T05:52:56+00:00",
+        "comment_author": "Klaijan",
+        "comment_body": "We'll want to call it through the metrics evaluation script",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1499648005",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 2572,
+        "pr_file": "unstructured/metrics/evaluate.py",
+        "discussion_id": "1498177251",
+        "commented_code": "@@ -187,3 +173,25 @@ def measure_element_type_accuracy(\n     _write_to_file(export_dir, \"all-docs-element-type-frequency.tsv\", df)\n     _write_to_file(export_dir, \"aggregate-scores-element-type.tsv\", agg_df)\n     _display(agg_df)\n+\n+\n+def group_text_extraction_acc(",
+        "comment_created_at": "2024-02-22T17:52:22+00:00",
+        "comment_author": "scanny",
+        "comment_body": "@Klaijan not getting your comment. I'm suggesting you change the name to `group_text_extraction_accuracy()` (if \"accuracy\" is what is meant by \"acc\". What does that have to do with being called via the metrics evaluation script?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1447926378",
+    "pr_number": 2381,
+    "pr_file": "unstructured/ingest/interfaces.py",
+    "created_at": "2024-01-10T20:21:43+00:00",
+    "commented_code": "self.write_config = write_config\n         self.connector_config = connector_config\n \n+    def conform_dict(self, data: dict) -> None:\n+        return\n+\n     @abstractmethod\n     def initialize(self):\n         \"\"\"Initializes the connector. Should also validate the connector is properly\n         configured.\"\"\"\n \n-    @abstractmethod\n     def write(self, docs: t.List[BaseSingleIngestDoc]) -> None:\n+        elements_dict = self.get_elements_dict(docs=docs)\n+        self.write_raw_dict(elements_dict=elements_dict)\n+\n+    @abstractmethod\n+    def get_elements_dict(self, docs: t.List[BaseSingleIngestDoc]) -> t.List[t.Dict[str, t.Any]]:\n         pass\n \n     @abstractmethod\n     def write_dict(self, *args, elements_dict: t.List[t.Dict[str, t.Any]], **kwargs) -> None:\n         pass\n \n+    def write_raw_dict(self, *args, elements_dict: t.List[t.Dict[str, t.Any]], **kwargs) -> None:",
+    "repo_full_name": "Unstructured-IO/unstructured",
+    "discussion_comments": [
+      {
+        "comment_id": "1447926378",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 2381,
+        "pr_file": "unstructured/ingest/interfaces.py",
+        "discussion_id": "1447926378",
+        "commented_code": "@@ -654,22 +654,34 @@ def __init__(self, write_config: WriteConfig, connector_config: BaseConnectorCon\n         self.write_config = write_config\n         self.connector_config = connector_config\n \n+    def conform_dict(self, data: dict) -> None:\n+        return\n+\n     @abstractmethod\n     def initialize(self):\n         \"\"\"Initializes the connector. Should also validate the connector is properly\n         configured.\"\"\"\n \n-    @abstractmethod\n     def write(self, docs: t.List[BaseSingleIngestDoc]) -> None:\n+        elements_dict = self.get_elements_dict(docs=docs)\n+        self.write_raw_dict(elements_dict=elements_dict)\n+\n+    @abstractmethod\n+    def get_elements_dict(self, docs: t.List[BaseSingleIngestDoc]) -> t.List[t.Dict[str, t.Any]]:\n         pass\n \n     @abstractmethod\n     def write_dict(self, *args, elements_dict: t.List[t.Dict[str, t.Any]], **kwargs) -> None:\n         pass\n \n+    def write_raw_dict(self, *args, elements_dict: t.List[t.Dict[str, t.Any]], **kwargs) -> None:",
+        "comment_created_at": "2024-01-10T20:21:43+00:00",
+        "comment_author": "ahmetmeleq",
+        "comment_body": "I'd rather name this as something like `normalize_and_write_dict`, \"raw\" sounds as the thing to write will not get formatted before getting written",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1448097511",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 2381,
+        "pr_file": "unstructured/ingest/interfaces.py",
+        "discussion_id": "1447926378",
+        "commented_code": "@@ -654,22 +654,34 @@ def __init__(self, write_config: WriteConfig, connector_config: BaseConnectorCon\n         self.write_config = write_config\n         self.connector_config = connector_config\n \n+    def conform_dict(self, data: dict) -> None:\n+        return\n+\n     @abstractmethod\n     def initialize(self):\n         \"\"\"Initializes the connector. Should also validate the connector is properly\n         configured.\"\"\"\n \n-    @abstractmethod\n     def write(self, docs: t.List[BaseSingleIngestDoc]) -> None:\n+        elements_dict = self.get_elements_dict(docs=docs)\n+        self.write_raw_dict(elements_dict=elements_dict)\n+\n+    @abstractmethod\n+    def get_elements_dict(self, docs: t.List[BaseSingleIngestDoc]) -> t.List[t.Dict[str, t.Any]]:\n         pass\n \n     @abstractmethod\n     def write_dict(self, *args, elements_dict: t.List[t.Dict[str, t.Any]], **kwargs) -> None:\n         pass\n \n+    def write_raw_dict(self, *args, elements_dict: t.List[t.Dict[str, t.Any]], **kwargs) -> None:",
+        "comment_created_at": "2024-01-10T23:16:24+00:00",
+        "comment_author": "ryannikolaidis",
+        "comment_body": "@rbiseck3 I do see your point, but I think I agree with @ahmetmeleq here. at a glance I immediately know what to expect from `normalize_and_write_dict` whereas I might not have assumed `write_raw_dict` does this without looking at the code. \r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1448097849",
+        "repo_full_name": "Unstructured-IO/unstructured",
+        "pr_number": 2381,
+        "pr_file": "unstructured/ingest/interfaces.py",
+        "discussion_id": "1447926378",
+        "commented_code": "@@ -654,22 +654,34 @@ def __init__(self, write_config: WriteConfig, connector_config: BaseConnectorCon\n         self.write_config = write_config\n         self.connector_config = connector_config\n \n+    def conform_dict(self, data: dict) -> None:\n+        return\n+\n     @abstractmethod\n     def initialize(self):\n         \"\"\"Initializes the connector. Should also validate the connector is properly\n         configured.\"\"\"\n \n-    @abstractmethod\n     def write(self, docs: t.List[BaseSingleIngestDoc]) -> None:\n+        elements_dict = self.get_elements_dict(docs=docs)\n+        self.write_raw_dict(elements_dict=elements_dict)\n+\n+    @abstractmethod\n+    def get_elements_dict(self, docs: t.List[BaseSingleIngestDoc]) -> t.List[t.Dict[str, t.Any]]:\n         pass\n \n     @abstractmethod\n     def write_dict(self, *args, elements_dict: t.List[t.Dict[str, t.Any]], **kwargs) -> None:\n         pass\n \n+    def write_raw_dict(self, *args, elements_dict: t.List[t.Dict[str, t.Any]], **kwargs) -> None:",
+        "comment_created_at": "2024-01-10T23:17:05+00:00",
+        "comment_author": "ryannikolaidis",
+        "comment_body": "ahh, looks like you just bumped\r\n",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

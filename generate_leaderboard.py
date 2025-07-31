@@ -44,7 +44,7 @@ def main():
                 text = c.get('comment_body')
                 if not author or not ts:
                     continue
-                if author == 'Copilot' or '[bot]' in author:
+                if author == 'Copilot':
                     continue
                 info = users[author]
                 info['reviewers'].add(slug)
@@ -57,19 +57,27 @@ def main():
                 if info['last'] is None or dt > info['last']:
                     info['last'] = dt
 
-    output = []
+    human_output = []
+    bot_output = []
     for user, d in users.items():
-        output.append({
+        entry = {
             'name': user,
             'reviewers_count': len(d['reviewers']),
             'repos_count': len(d['repos']),
             'last_contribution': d['last'].isoformat() if d['last'] else None
-        })
-    output.sort(key=lambda x: x['reviewers_count'], reverse=True)
-    # Keep only the top 100 contributors to keep the dataset small
-    output = output[:100]
+        }
+        if '[bot]' in user:
+            bot_output.append(entry)
+        else:
+            human_output.append(entry)
 
-    top_users = {u['name'] for u in output}
+    human_output.sort(key=lambda x: x['reviewers_count'], reverse=True)
+    bot_output.sort(key=lambda x: x['reviewers_count'], reverse=True)
+    # Keep only the top 100 contributors in each list to keep the dataset small
+    human_output = human_output[:100]
+    bot_output = bot_output[:100]
+
+    top_users = {u['name'] for u in human_output + bot_output}
 
     # Load existing contributor data to reuse cached profiles
     assets_dir = Path('assets/data')
@@ -107,12 +115,18 @@ def main():
     data_dir = Path('_data')
     data_dir.mkdir(exist_ok=True)
     with open(data_dir / 'leaderboard.json', 'w', encoding='utf-8') as f:
-        json.dump(output, f, indent=2, ensure_ascii=False)
-    print(f'Wrote {len(output)} contributors to _data/leaderboard.json')
+        json.dump(human_output, f, indent=2, ensure_ascii=False)
+    with open(data_dir / 'ai_leaderboard.json', 'w', encoding='utf-8') as f:
+        json.dump(bot_output, f, indent=2, ensure_ascii=False)
+    print(f'Wrote {len(human_output)} contributors to _data/leaderboard.json')
+    print(f'Wrote {len(bot_output)} contributors to _data/ai_leaderboard.json')
 
     with open(assets_dir / 'contributors.json', 'w', encoding='utf-8') as f:
-        json.dump(contributors, f, indent=2, ensure_ascii=False)
-    print(f'Wrote {len(contributors)} users to assets/data/contributors.json')
+        json.dump({u: contributors[u] for u in top_users if u in {x["name"] for x in human_output}}, f, indent=2, ensure_ascii=False)
+    with open(assets_dir / 'ai_contributors.json', 'w', encoding='utf-8') as f:
+        json.dump({u: contributors[u] for u in top_users if u in {x["name"] for x in bot_output}}, f, indent=2, ensure_ascii=False)
+    print(f'Wrote {len(human_output)} users to assets/data/contributors.json')
+    print(f'Wrote {len(bot_output)} users to assets/data/ai_contributors.json')
 
 if __name__ == '__main__':
     main()

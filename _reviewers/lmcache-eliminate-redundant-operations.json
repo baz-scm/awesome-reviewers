@@ -1,0 +1,124 @@
+[
+  {
+    "discussion_id": "2237821522",
+    "pr_number": 1134,
+    "pr_file": "lmcache/v1/cache_engine.py",
+    "created_at": "2025-07-28T20:39:00+00:00",
+    "commented_code": "# object is already pinned in the storage backend.\n                 ret_mask[start:end] = True\n \n-                if location not in key_mapping:\n-                    key_mapping[location] = [key]\n-                    start_mapping[location] = [start]\n-                    end_mapping[location] = [end]\n-                    continue\n+                if location not in block_mapping:\n+                    block_mapping[location] = []\n \n             assert location is not None\n \n-            key_mapping[location].append(key)\n-            start_mapping[location].append(start)\n-            end_mapping[location].append(end)\n+            block_mapping[location].append((key, start, end))\n \n         # TODO(Jiayi): We can parallelize the retrieval from\n         # different storage backends.\n-        for location, keys in key_mapping.items():\n+        last_failed_block_start = None\n+        for location, blocks in block_mapping.items():\n+            keys = [key for key, _, _ in blocks]\n             memory_objs = self.storage_manager.batched_get(\n                 keys=keys,\n                 storage_backend_name=location,\n             )\n-            reordered_memory_objs.extend(memory_objs)\n-            reordered_keys.extend(keys)\n-            reordered_starts.extend(start_mapping[location])\n-            reordered_ends.extend(end_mapping[location])\n+            for (key, start, end), memory_obj in zip(blocks, memory_objs, strict=False):\n+                if memory_obj is None:\n+                    logger.warn(\n+                        \"The cache block is in the storage, but it can't be retrieved\"\n+                    )\n+                    ret_mask[start:end] = False\n+                    if (\n+                        last_failed_block_start is None\n+                        or last_failed_block_start < start\n+                    ):\n+                        last_failed_block_start = start\n+                    continue\n+                reordered_blocks.append((key, memory_obj, start, end))\n+\n+        if last_failed_block_start is not None:\n+            ret_mask[last_failed_block_start:] = False\n+\n+            filtered_reordered_blocks = [\n+                (key, memory_obj, start, end)\n+                for key, memory_obj, start, end in reordered_blocks\n+                if end < last_failed_block_start\n+            ]\n+            reordered_blocks = filtered_reordered_blocks\n \n         # NOTE(Jiayi): memory_obj doesn't have to be a pinned\n         # cpu tensor for the sake of performance.\n         # For example, disk->gpu is faster than disk->cpu->gpu.\n         # RDMA is another example.\n-        self.gpu_connector.batched_to_gpu(\n-            reordered_memory_objs, reordered_starts, reordered_ends, **kwargs\n-        )\n+        memory_objs, starts, ends = [], [], []",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "2237821522",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 1134,
+        "pr_file": "lmcache/v1/cache_engine.py",
+        "discussion_id": "2237821522",
+        "commented_code": "@@ -469,40 +462,59 @@ def retrieve(\n                 # object is already pinned in the storage backend.\n                 ret_mask[start:end] = True\n \n-                if location not in key_mapping:\n-                    key_mapping[location] = [key]\n-                    start_mapping[location] = [start]\n-                    end_mapping[location] = [end]\n-                    continue\n+                if location not in block_mapping:\n+                    block_mapping[location] = []\n \n             assert location is not None\n \n-            key_mapping[location].append(key)\n-            start_mapping[location].append(start)\n-            end_mapping[location].append(end)\n+            block_mapping[location].append((key, start, end))\n \n         # TODO(Jiayi): We can parallelize the retrieval from\n         # different storage backends.\n-        for location, keys in key_mapping.items():\n+        last_failed_block_start = None\n+        for location, blocks in block_mapping.items():\n+            keys = [key for key, _, _ in blocks]\n             memory_objs = self.storage_manager.batched_get(\n                 keys=keys,\n                 storage_backend_name=location,\n             )\n-            reordered_memory_objs.extend(memory_objs)\n-            reordered_keys.extend(keys)\n-            reordered_starts.extend(start_mapping[location])\n-            reordered_ends.extend(end_mapping[location])\n+            for (key, start, end), memory_obj in zip(blocks, memory_objs, strict=False):\n+                if memory_obj is None:\n+                    logger.warn(\n+                        \"The cache block is in the storage, but it can't be retrieved\"\n+                    )\n+                    ret_mask[start:end] = False\n+                    if (\n+                        last_failed_block_start is None\n+                        or last_failed_block_start < start\n+                    ):\n+                        last_failed_block_start = start\n+                    continue\n+                reordered_blocks.append((key, memory_obj, start, end))\n+\n+        if last_failed_block_start is not None:\n+            ret_mask[last_failed_block_start:] = False\n+\n+            filtered_reordered_blocks = [\n+                (key, memory_obj, start, end)\n+                for key, memory_obj, start, end in reordered_blocks\n+                if end < last_failed_block_start\n+            ]\n+            reordered_blocks = filtered_reordered_blocks\n \n         # NOTE(Jiayi): memory_obj doesn't have to be a pinned\n         # cpu tensor for the sake of performance.\n         # For example, disk->gpu is faster than disk->cpu->gpu.\n         # RDMA is another example.\n-        self.gpu_connector.batched_to_gpu(\n-            reordered_memory_objs, reordered_starts, reordered_ends, **kwargs\n-        )\n+        memory_objs, starts, ends = [], [], []",
+        "comment_created_at": "2025-07-28T20:39:00+00:00",
+        "comment_author": "sammshen",
+        "comment_body": "can we use:\r\n```python\r\nif reordered_list: \r\n    _, memory_objs, starts, ends = zip(*reordered_blocks) \r\n    self.gpu_connector.batched_to_gpu(list(memory_objs), list(starts), list(ends), **kwargs)\r\n```\r\n\r\n1. check for empty reordered_blocks\r\n2. avoid repeated calls to `.append()` which IIRC is not very fast",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2238177400",
+    "pr_number": 1113,
+    "pr_file": "lmcache/v1/storage_backend/remote_backend.py",
+    "created_at": "2025-07-29T02:24:43+00:00",
+    "commented_code": "if self._mla_worker_id_as0_mode:\n             return None\n \n+        if self.exists_in_put_tasks(key) or self.contains(key):",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "2238177400",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 1113,
+        "pr_file": "lmcache/v1/storage_backend/remote_backend.py",
+        "discussion_id": "2238177400",
+        "commented_code": "@@ -179,6 +179,9 @@ def submit_put_task(\n         if self._mla_worker_id_as0_mode:\n             return None\n \n+        if self.exists_in_put_tasks(key) or self.contains(key):",
+        "comment_created_at": "2025-07-29T02:24:43+00:00",
+        "comment_author": "chunxiaozheng",
+        "comment_body": "I think we do not need to call `contains`, which will add one RPC or IO.\r\n```\r\nif self.exists_in_put_tasks(key):\r\n    return None\r\n```\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2162670170",
+    "pr_number": 882,
+    "pr_file": "lmcache/integration/vllm/vllm_v1_adapter.py",
+    "created_at": "2025-06-23T23:12:20+00:00",
+    "commented_code": "request: \"Request\",\n         block_ids: list[int],\n     ) -> tuple[bool, Optional[dict[str, Any]]]:\n+        # Preprocess the request for multimodal hashes.\n+        request = mask_mm_hashes_in_request(request)",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "2162670170",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 882,
+        "pr_file": "lmcache/integration/vllm/vllm_v1_adapter.py",
+        "discussion_id": "2162670170",
+        "commented_code": "@@ -925,6 +955,9 @@ def request_finished(\n         request: \"Request\",\n         block_ids: list[int],\n     ) -> tuple[bool, Optional[dict[str, Any]]]:\n+        # Preprocess the request for multimodal hashes.\n+        request = mask_mm_hashes_in_request(request)",
+        "comment_created_at": "2025-06-23T23:12:20+00:00",
+        "comment_author": "YaoJiayi",
+        "comment_body": "remove redundant calls to `mask_mm_hashes_in_request`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2100423396",
+    "pr_number": 678,
+    "pr_file": "lmcache/experimental/gpu_connector.py",
+    "created_at": "2025-05-21T14:18:02+00:00",
+    "commented_code": "dtype=kwargs[\"dtype\"],\n                                           device=kwargs[\"device\"])\n \n-    def _pointers_are_good(self, kv_caches: List[torch.Tensor]):\n-        \"\"\"\n-        Check if the initialized pointers are the same as the pointers in \n-        the KV caches. \n-\n-        Returns:\n-            bool: True if the pointers are the same, False otherwise (\n-                including uninitialized).\n-        \"\"\"\n-        if not self.pointers_initialized:\n-            return False\n-\n-        for i in range(self.num_layers):\n-            if self.kv_cache_pointers[i] != kv_caches[i].data_ptr():\n-                return False\n-        return True\n-\n-    def _initialize_pointers(self, kv_caches: List[torch.Tensor]):\n-        for i in range(self.num_layers):\n-            self.kv_cache_pointers[i] = kv_caches[i].data_ptr()\n-        self.pointers_initialized = True\n+    def _initialize_pointers(self,",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "2100423396",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 678,
+        "pr_file": "lmcache/experimental/gpu_connector.py",
+        "discussion_id": "2100423396",
+        "commented_code": "@@ -298,29 +299,21 @@ def __init__(self,\n                                           dtype=kwargs[\"dtype\"],\n                                           device=kwargs[\"device\"])\n \n-    def _pointers_are_good(self, kv_caches: List[torch.Tensor]):\n-        \"\"\"\n-        Check if the initialized pointers are the same as the pointers in \n-        the KV caches. \n-\n-        Returns:\n-            bool: True if the pointers are the same, False otherwise (\n-                including uninitialized).\n-        \"\"\"\n-        if not self.pointers_initialized:\n-            return False\n-\n-        for i in range(self.num_layers):\n-            if self.kv_cache_pointers[i] != kv_caches[i].data_ptr():\n-                return False\n-        return True\n-\n-    def _initialize_pointers(self, kv_caches: List[torch.Tensor]):\n-        for i in range(self.num_layers):\n-            self.kv_cache_pointers[i] = kv_caches[i].data_ptr()\n-        self.pointers_initialized = True\n+    def _initialize_pointers(self,",
+        "comment_created_at": "2025-05-21T14:18:02+00:00",
+        "comment_author": "YaoJiayi",
+        "comment_body": "`_initialize_pointers` here is executed every time, but `_initialize_pointers` in the old code is only called once during the first execution. IIUC, you are saying that the `_pointers_are_good` is slow only because of `if self.kv_cache_pointers[i] != kv_caches[i].data_ptr():` ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2100464532",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 678,
+        "pr_file": "lmcache/experimental/gpu_connector.py",
+        "discussion_id": "2100423396",
+        "commented_code": "@@ -298,29 +299,21 @@ def __init__(self,\n                                           dtype=kwargs[\"dtype\"],\n                                           device=kwargs[\"device\"])\n \n-    def _pointers_are_good(self, kv_caches: List[torch.Tensor]):\n-        \"\"\"\n-        Check if the initialized pointers are the same as the pointers in \n-        the KV caches. \n-\n-        Returns:\n-            bool: True if the pointers are the same, False otherwise (\n-                including uninitialized).\n-        \"\"\"\n-        if not self.pointers_initialized:\n-            return False\n-\n-        for i in range(self.num_layers):\n-            if self.kv_cache_pointers[i] != kv_caches[i].data_ptr():\n-                return False\n-        return True\n-\n-    def _initialize_pointers(self, kv_caches: List[torch.Tensor]):\n-        for i in range(self.num_layers):\n-            self.kv_cache_pointers[i] = kv_caches[i].data_ptr()\n-        self.pointers_initialized = True\n+    def _initialize_pointers(self,",
+        "comment_created_at": "2025-05-21T14:36:09+00:00",
+        "comment_author": "yanok",
+        "comment_body": "Short answer: yes, the slowness was in this line.\r\n\r\nLonger answer: there are multiple layers of this.\r\n* First, we observed that most of `toGpu` time is spent inside some torch function with an obscure name, which we deciphered to be `!=` overload. So, making it `int(self.kv_cache_pointers[i]) != ...` helped a bit, but now a lot of time were spent in torch's `get_item`.\r\n* At this point, I started thinking why we do `_pointers_are_good` at all? In the happy case in has to iterate over all elements, but so does `_initialize_pointers`. And in unhappy cases, we still have to `_initialize_pointers` after spending some time in `_pointers_are_good`.\r\n* Finally, for `_initialize_pointers` we could use an overloaded array assignment, which is much more efficient than doing `set_item` from a Python loop.\r\n\r\nDoes that answer your question?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1937792530",
+    "pr_number": 334,
+    "pr_file": "lmcache/experimental/storage_backend/connector/redis_connector.py",
+    "created_at": "2025-01-31T19:10:43+00:00",
+    "commented_code": "+import asyncio\n+import inspect\n+import os\n+from typing import List, Optional, Tuple, Union, no_type_check\n+\n+import redis\n+\n+from lmcache.experimental.memory_management import (MemoryAllocatorInterface,\n+                                                    MemoryObj)\n+from lmcache.experimental.protocol import RedisMetadata\n+from lmcache.experimental.storage_backend.connector.base_connector import \\\n+    RemoteConnector\n+from lmcache.logging import init_logger\n+from lmcache.utils import CacheEngineKey\n+\n+logger = init_logger(__name__)\n+\n+# TODO(Jiayi): Use `redis.asyncio`\n+# NOTE(Jiayi): `redis-py` supports async operations, but data copy\n+# cannot be avoided. `hiredis` is more lower-level but asyncio is\n+# not supported.\n+\n+\n+class RedisConnector(RemoteConnector):\n+    \"\"\"\n+    The remote url should start with \"redis://\" and only have one host-port pair\n+    \"\"\"\n+\n+    def __init__(self, host: str, port: int, loop: asyncio.AbstractEventLoop,\n+                 memory_allocator: MemoryAllocatorInterface):\n+        self.connection = redis.Redis(host=host,\n+                                      port=port,\n+                                      decode_responses=False)\n+\n+        self.memory_allocator = memory_allocator\n+        self.loop = loop\n+\n+    async def exists(self, key: CacheEngineKey) -> bool:\n+        return bool(self.connection.exists(key.to_string() + \"metadata\"))\n+\n+    async def get(self, key: CacheEngineKey) -> Optional[MemoryObj]:\n+        key_str = key.to_string()\n+        redis_metadata_bytes = self.connection.get(key_str + \"metadata\")",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "1937792530",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 334,
+        "pr_file": "lmcache/experimental/storage_backend/connector/redis_connector.py",
+        "discussion_id": "1937792530",
+        "commented_code": "@@ -0,0 +1,205 @@\n+import asyncio\n+import inspect\n+import os\n+from typing import List, Optional, Tuple, Union, no_type_check\n+\n+import redis\n+\n+from lmcache.experimental.memory_management import (MemoryAllocatorInterface,\n+                                                    MemoryObj)\n+from lmcache.experimental.protocol import RedisMetadata\n+from lmcache.experimental.storage_backend.connector.base_connector import \\\n+    RemoteConnector\n+from lmcache.logging import init_logger\n+from lmcache.utils import CacheEngineKey\n+\n+logger = init_logger(__name__)\n+\n+# TODO(Jiayi): Use `redis.asyncio`\n+# NOTE(Jiayi): `redis-py` supports async operations, but data copy\n+# cannot be avoided. `hiredis` is more lower-level but asyncio is\n+# not supported.\n+\n+\n+class RedisConnector(RemoteConnector):\n+    \"\"\"\n+    The remote url should start with \"redis://\" and only have one host-port pair\n+    \"\"\"\n+\n+    def __init__(self, host: str, port: int, loop: asyncio.AbstractEventLoop,\n+                 memory_allocator: MemoryAllocatorInterface):\n+        self.connection = redis.Redis(host=host,\n+                                      port=port,\n+                                      decode_responses=False)\n+\n+        self.memory_allocator = memory_allocator\n+        self.loop = loop\n+\n+    async def exists(self, key: CacheEngineKey) -> bool:\n+        return bool(self.connection.exists(key.to_string() + \"metadata\"))\n+\n+    async def get(self, key: CacheEngineKey) -> Optional[MemoryObj]:\n+        key_str = key.to_string()\n+        redis_metadata_bytes = self.connection.get(key_str + \"metadata\")",
+        "comment_created_at": "2025-01-31T19:10:43+00:00",
+        "comment_author": "ApostaC",
+        "comment_body": "Potential TODO 2\r\n- [ ] prepend the metadata struct (fixed length) to the real data byte array. In this case, we don't need to have 2 different redis keys and 2 transactions for each chunk",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,136 @@
+[
+  {
+    "discussion_id": "2232999535",
+    "pr_number": 1162,
+    "pr_file": "lmcache/integration/vllm/vllm_v1_adapter.py",
+    "created_at": "2025-07-26T14:19:26+00:00",
+    "commented_code": "# TODO: have a pre-allocated buffer to hold the slot_mappings\n             slot_mapping = slot_mapping.cuda()\n \n+            skip_leading_tokens = save_spec.skip_leading_tokens\n             if self.kv_role == \"kv_producer\":\n-                skip_leading_tokens = 0\n-            else:\n-                skip_leading_tokens = max(\n-                    self.lmcache_engine.lookup(token_ids),\n-                    save_spec.skip_leading_tokens,\n-                )\n-                skip_leading_tokens = save_spec.skip_leading_tokens\n-\n-                if skip_leading_tokens == len(token_ids):\n-                    continue  # skip this request\n-                # Align to lmcache chunk size\n-                skip_leading_tokens = (\n-                    skip_leading_tokens\n-                    // self._lmcache_chunk_size\n-                    * self._lmcache_chunk_size\n+                skip_leading_tokens = min(\n+                    skip_leading_tokens, request.disagg_spec.num_transferred_tokens",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "2232999535",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 1162,
+        "pr_file": "lmcache/integration/vllm/vllm_v1_adapter.py",
+        "discussion_id": "2232999535",
+        "commented_code": "@@ -695,24 +702,21 @@ def wait_for_save(self):\n             # TODO: have a pre-allocated buffer to hold the slot_mappings\n             slot_mapping = slot_mapping.cuda()\n \n+            skip_leading_tokens = save_spec.skip_leading_tokens\n             if self.kv_role == \"kv_producer\":\n-                skip_leading_tokens = 0\n-            else:\n-                skip_leading_tokens = max(\n-                    self.lmcache_engine.lookup(token_ids),\n-                    save_spec.skip_leading_tokens,\n-                )\n-                skip_leading_tokens = save_spec.skip_leading_tokens\n-\n-                if skip_leading_tokens == len(token_ids):\n-                    continue  # skip this request\n-                # Align to lmcache chunk size\n-                skip_leading_tokens = (\n-                    skip_leading_tokens\n-                    // self._lmcache_chunk_size\n-                    * self._lmcache_chunk_size\n+                skip_leading_tokens = min(\n+                    skip_leading_tokens, request.disagg_spec.num_transferred_tokens",
+        "comment_created_at": "2025-07-26T14:19:26+00:00",
+        "comment_author": "vladnosiv",
+        "comment_body": "there were the following problems at this point:\n* in the case of CPP, there was a duplicate sending of chunks to decode with only one deletion. This caused chunks to leak during decoding. \n* at the same time, you can not rely on skip_leading_chunks as is, because if the skip is caused by hitting the cache on the prefill, this does not mean that the necessary chunks have already been sent for decoding.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2233000931",
+    "pr_number": 1162,
+    "pr_file": "lmcache/v1/storage_backend/connector/nixl_connector_v3.py",
+    "created_at": "2025-07-26T14:21:49+00:00",
+    "commented_code": "alloc_indexes = []\n         already_send_indexes = []\n \n-        for idx, key in enumerate(alloc_request.keys):\n+        for idx, key_str in enumerate(alloc_request.keys):\n+            key = CacheEngineKey.from_string(key_str)\n             if self._backend.contains(key, pin=True):",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "2233000931",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 1162,
+        "pr_file": "lmcache/v1/storage_backend/connector/nixl_connector_v3.py",
+        "discussion_id": "2233000931",
+        "commented_code": "@@ -559,7 +569,8 @@ def _allocate_and_put(self, alloc_request: NixlAllocRequest) -> NixlAllocRespons\n         alloc_indexes = []\n         already_send_indexes = []\n \n-        for idx, key in enumerate(alloc_request.keys):\n+        for idx, key_str in enumerate(alloc_request.keys):\n+            key = CacheEngineKey.from_string(key_str)\n             if self._backend.contains(key, pin=True):",
+        "comment_created_at": "2025-07-26T14:21:49+00:00",
+        "comment_author": "vladnosiv",
+        "comment_body": "here contains always returned False, because the key was supplied as a string, so I added assertions in those places\n\nthis led to repeated puts on the same key and leakage of the past mem-obj, respectively",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2233002505",
+    "pr_number": 1162,
+    "pr_file": "lmcache/v1/storage_backend/nixl_backend_v3.py",
+    "created_at": "2025-07-26T14:24:49+00:00",
+    "commented_code": ":return: MemoryObj. None if the key does not exist.\n         \"\"\"\n \n+        assert isinstance(key, CacheEngineKey)\n         with self._data_lock:\n             # NOTE(Jiayi): we assume that the key must be in local data\n             # because we are using a push-based transfer\n-            mem_obj = self._data.pop(key, None)\n+            mem_obj = self._data.get(key, None)",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "2233002505",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 1162,
+        "pr_file": "lmcache/v1/storage_backend/nixl_backend_v3.py",
+        "discussion_id": "2233002505",
+        "commented_code": "@@ -168,10 +172,11 @@ def get_blocking(self, key: CacheEngineKey) -> Optional[MemoryObj]:\n         :return: MemoryObj. None if the key does not exist.\n         \"\"\"\n \n+        assert isinstance(key, CacheEngineKey)\n         with self._data_lock:\n             # NOTE(Jiayi): we assume that the key must be in local data\n             # because we are using a push-based transfer\n-            mem_obj = self._data.pop(key, None)\n+            mem_obj = self._data.get(key, None)",
+        "comment_created_at": "2025-07-26T14:24:49+00:00",
+        "comment_author": "vladnosiv",
+        "comment_body": "you can't do a pop here, since the same chunk can be shared between two running requests\n\nin the case of pop, the first (idx=0 i mean) prefix block will not be found for the second running query, and in addition to performing a prefill on the decode node, non-common blocks of the second query will leak",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2184747380",
+    "pr_number": 916,
+    "pr_file": "lmcache/integration/vllm/vllm_v1_adapter.py",
+    "created_at": "2025-07-04T08:40:10+00:00",
+    "commented_code": "new_block_ids = new_block_ids[0]\n         self.allocated_block_ids.extend(new_block_ids)\n \n+        # When a request is scheduled again,\n+        # it means that the request is in decode phase",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "2184747380",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 916,
+        "pr_file": "lmcache/integration/vllm/vllm_v1_adapter.py",
+        "discussion_id": "2184747380",
+        "commented_code": "@@ -241,6 +241,10 @@ def update(\n             new_block_ids = new_block_ids[0]\n         self.allocated_block_ids.extend(new_block_ids)\n \n+        # When a request is scheduled again,\n+        # it means that the request is in decode phase",
+        "comment_created_at": "2025-07-04T08:40:10+00:00",
+        "comment_author": "maobaolong",
+        "comment_body": "how about chunked prefill? @TeenSpirit1107 ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2185242700",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 916,
+        "pr_file": "lmcache/integration/vllm/vllm_v1_adapter.py",
+        "discussion_id": "2184747380",
+        "commented_code": "@@ -241,6 +241,10 @@ def update(\n             new_block_ids = new_block_ids[0]\n         self.allocated_block_ids.extend(new_block_ids)\n \n+        # When a request is scheduled again,\n+        # it means that the request is in decode phase",
+        "comment_created_at": "2025-07-04T12:28:41+00:00",
+        "comment_author": "TeenSpirit1107",
+        "comment_body": "@maobaolong Thank you. This is indeed an important point to make. In my previous commit, `is_decode_phase` is updated as `True` after the first `update()` call, assuming the function will be called **only once** during prefill phase, overlooking the case of chunked prefill. As a result, parts of the chunked prefill may not be cached.\r\n\r\nTherefore, I added a function for determining `is_decode_phase`, instead of judging by `update()`. This function utilizes the facts that:\r\n\r\n1. in decode phase, only one new token will be included each time;\r\n2. if the number of  `new_token_ids` is the same as `token_ids`, then it is in prefill phase.\r\n\r\n```py\r\ndef _update_decode_phase(self, new_token_ids: list[int]) -> None:\r\n    \"\"\"Update the decode phase based on the new tokens.\r\n    \r\n    Args:\r\n        new_token_ids (list[int]): The new tokens being added to the request.\r\n    \"\"\"\r\n    # Heuristic: Decode phase usually has only one new token\r\n    if len(new_token_ids) == 1 and len(self.token_ids) > 1:\r\n        self.is_decode_phase = True\r\n    else:\r\n        self.is_decode_phase = False\r\n```\r\n\r\nThis implementation has a limitation: if a prefill chunk contains only one token, then its corresponding request will be mistakenly marked as in decode phase. \r\n\r\nHowever, I don't think this will have an impact on deciding `save_skip`. Since the `chunk_size` is typically around 256, a prefill chunk with one token will **not** be cached, even if correctly classified as prefill. \r\n\r\n```py\r\nskip_leading_tokens = tracker.num_saved_tokens\r\nchunk_boundary = (\r\n    cdiv(tracker.num_saved_tokens + 1, lmcache_chunk_size) * lmcache_chunk_size\r\n)\r\nskip_save = skip_save or (\r\n    tracker.num_saved_tokens > 0\r\n    and input_token_len < chunk_boundary\r\n    # check whether in decode phase\r\n    or (tracker.is_decode_phase and not save_decode_cache)\r\n)\r\n```\r\n\r\nI have not yet figured out a way to deal with this corner case. Unlike `vllm_adapter.py` which uses `StoreStatus(Enum)` to keep track of prefill, decode and other phases, `vllm_v1_adapter.py` does not include this mechanism.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1932981633",
+    "pr_number": 329,
+    "pr_file": "lmcache/experimental/storage_backend/storage_manager.py",
+    "created_at": "2025-01-28T23:01:16+00:00",
+    "commented_code": "evict_keys = []\n         while memory_obj is None:\n             evict_key = next(iter_hot_cache)\n+\n+            # If the ref_count > 1, we cannot evict it as the hot cache\n+            # might be used as buffers by other storage backends\n+            if self.memory_allocator.get_ref_count(\n+                    self.hot_cache[evict_key]) > 1:\n+                continue\n             evict_keys.append(evict_key)",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "1932981633",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 329,
+        "pr_file": "lmcache/experimental/storage_backend/storage_manager.py",
+        "discussion_id": "1932981633",
+        "commented_code": "@@ -68,8 +72,14 @@ def allocate(\n         evict_keys = []\n         while memory_obj is None:\n             evict_key = next(iter_hot_cache)\n+\n+            # If the ref_count > 1, we cannot evict it as the hot cache\n+            # might be used as buffers by other storage backends\n+            if self.memory_allocator.get_ref_count(\n+                    self.hot_cache[evict_key]) > 1:\n+                continue\n             evict_keys.append(evict_key)",
+        "comment_created_at": "2025-01-28T23:01:16+00:00",
+        "comment_author": "ApostaC",
+        "comment_body": "Actually, did we every use the `LRUEvictor` in the experimental folder?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1933102227",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 329,
+        "pr_file": "lmcache/experimental/storage_backend/storage_manager.py",
+        "discussion_id": "1932981633",
+        "commented_code": "@@ -68,8 +72,14 @@ def allocate(\n         evict_keys = []\n         while memory_obj is None:\n             evict_key = next(iter_hot_cache)\n+\n+            # If the ref_count > 1, we cannot evict it as the hot cache\n+            # might be used as buffers by other storage backends\n+            if self.memory_allocator.get_ref_count(\n+                    self.hot_cache[evict_key]) > 1:\n+                continue\n             evict_keys.append(evict_key)",
+        "comment_created_at": "2025-01-29T01:43:35+00:00",
+        "comment_author": "YaoJiayi",
+        "comment_body": "Yes. It is used in disk backend and should also be used in all other backends other than hot cache (local cpu). We might need to align the evictor between cpu evictor and other backend evictor.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

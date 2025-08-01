@@ -1,0 +1,252 @@
+[
+  {
+    "discussion_id": "2205995502",
+    "pr_number": 999,
+    "pr_file": "lmcache/v1/storage_backend/storage_manager.py",
+    "created_at": "2025-07-14T23:40:31+00:00",
+    "commented_code": "\"\"\"\n         Update metadata after prefetch.\n         \"\"\"\n-        self.manager_lock.acquire()\n-        prefetch_task = self.prefetch_tasks.pop(key)\n-        self.manager_lock.release()\n+        with self.manager_lock:\n+            prefetch_task = self.prefetch_tasks.pop(key)\n         try:\n             buffer_memory_obj = prefetch_task.result()\n         except Exception as e:\n             logger.error(f\"Exception captured from future in prefetch_callback: {e}\")\n             raise e\n-        kv_chunk = buffer_memory_obj.tensor\n-        kv_shape = kv_chunk.shape\n-        kv_dtype = kv_chunk.dtype\n-        memory_obj = self.allocator_backend.allocate(kv_shape, kv_dtype)\n-        if memory_obj is None:\n-            logger.warning(\"Memory allocation failed in prefetch_callback\")\n+        if buffer_memory_obj is None:\n             return\n+        assert isinstance(buffer_memory_obj, MemoryObj)\n+        assert buffer_memory_obj.tensor is not None, \"Encounter invalid tensor\"\n+        assert buffer_memory_obj.tensor.device.type == \"cpu\"\n \n-        assert memory_obj.tensor is not None, \"Encounter invalid tensor\"\n-\n-        # TODO(Jiayi): this part should be done in another process if\n-        # the cpu->pinned cpu copy is blocking.\n-        prefetch_stream = torch.cuda.Stream()\n-        with torch.cuda.stream(prefetch_stream):\n-            memory_obj.tensor.copy_(kv_chunk, non_blocking=True)\n-        prefetch_stream.synchronize()\n-\n-        # NOTE: no need to ref_count_up here because\n-        # the memory_obj's ref_count is already 1\n-        self.manager_lock.acquire()\n-        self.storage_backends[\"LocalCPUBackend\"].submit_put_task(key, memory_obj)\n-        self.manager_lock.release()\n+        # the buffer_memory_obj is a cpu backend allocated memory obj\n+        self.storage_backends[\"LocalCPUBackend\"].submit_put_task(key, buffer_memory_obj)",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "2205995502",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 999,
+        "pr_file": "lmcache/v1/storage_backend/storage_manager.py",
+        "discussion_id": "2205995502",
+        "commented_code": "@@ -278,58 +283,42 @@ def prefetch_callback(self, future, key):\n         \"\"\"\n         Update metadata after prefetch.\n         \"\"\"\n-        self.manager_lock.acquire()\n-        prefetch_task = self.prefetch_tasks.pop(key)\n-        self.manager_lock.release()\n+        with self.manager_lock:\n+            prefetch_task = self.prefetch_tasks.pop(key)\n         try:\n             buffer_memory_obj = prefetch_task.result()\n         except Exception as e:\n             logger.error(f\"Exception captured from future in prefetch_callback: {e}\")\n             raise e\n-        kv_chunk = buffer_memory_obj.tensor\n-        kv_shape = kv_chunk.shape\n-        kv_dtype = kv_chunk.dtype\n-        memory_obj = self.allocator_backend.allocate(kv_shape, kv_dtype)\n-        if memory_obj is None:\n-            logger.warning(\"Memory allocation failed in prefetch_callback\")\n+        if buffer_memory_obj is None:\n             return\n+        assert isinstance(buffer_memory_obj, MemoryObj)\n+        assert buffer_memory_obj.tensor is not None, \"Encounter invalid tensor\"\n+        assert buffer_memory_obj.tensor.device.type == \"cpu\"\n \n-        assert memory_obj.tensor is not None, \"Encounter invalid tensor\"\n-\n-        # TODO(Jiayi): this part should be done in another process if\n-        # the cpu->pinned cpu copy is blocking.\n-        prefetch_stream = torch.cuda.Stream()\n-        with torch.cuda.stream(prefetch_stream):\n-            memory_obj.tensor.copy_(kv_chunk, non_blocking=True)\n-        prefetch_stream.synchronize()\n-\n-        # NOTE: no need to ref_count_up here because\n-        # the memory_obj's ref_count is already 1\n-        self.manager_lock.acquire()\n-        self.storage_backends[\"LocalCPUBackend\"].submit_put_task(key, memory_obj)\n-        self.manager_lock.release()\n+        # the buffer_memory_obj is a cpu backend allocated memory obj\n+        self.storage_backends[\"LocalCPUBackend\"].submit_put_task(key, buffer_memory_obj)",
+        "comment_created_at": "2025-07-14T23:40:31+00:00",
+        "comment_author": "Shaoting-Feng",
+        "comment_body": "Do we need `self.manager_lock` here?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2206113677",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 999,
+        "pr_file": "lmcache/v1/storage_backend/storage_manager.py",
+        "discussion_id": "2205995502",
+        "commented_code": "@@ -278,58 +283,42 @@ def prefetch_callback(self, future, key):\n         \"\"\"\n         Update metadata after prefetch.\n         \"\"\"\n-        self.manager_lock.acquire()\n-        prefetch_task = self.prefetch_tasks.pop(key)\n-        self.manager_lock.release()\n+        with self.manager_lock:\n+            prefetch_task = self.prefetch_tasks.pop(key)\n         try:\n             buffer_memory_obj = prefetch_task.result()\n         except Exception as e:\n             logger.error(f\"Exception captured from future in prefetch_callback: {e}\")\n             raise e\n-        kv_chunk = buffer_memory_obj.tensor\n-        kv_shape = kv_chunk.shape\n-        kv_dtype = kv_chunk.dtype\n-        memory_obj = self.allocator_backend.allocate(kv_shape, kv_dtype)\n-        if memory_obj is None:\n-            logger.warning(\"Memory allocation failed in prefetch_callback\")\n+        if buffer_memory_obj is None:\n             return\n+        assert isinstance(buffer_memory_obj, MemoryObj)\n+        assert buffer_memory_obj.tensor is not None, \"Encounter invalid tensor\"\n+        assert buffer_memory_obj.tensor.device.type == \"cpu\"\n \n-        assert memory_obj.tensor is not None, \"Encounter invalid tensor\"\n-\n-        # TODO(Jiayi): this part should be done in another process if\n-        # the cpu->pinned cpu copy is blocking.\n-        prefetch_stream = torch.cuda.Stream()\n-        with torch.cuda.stream(prefetch_stream):\n-            memory_obj.tensor.copy_(kv_chunk, non_blocking=True)\n-        prefetch_stream.synchronize()\n-\n-        # NOTE: no need to ref_count_up here because\n-        # the memory_obj's ref_count is already 1\n-        self.manager_lock.acquire()\n-        self.storage_backends[\"LocalCPUBackend\"].submit_put_task(key, memory_obj)\n-        self.manager_lock.release()\n+        # the buffer_memory_obj is a cpu backend allocated memory obj\n+        self.storage_backends[\"LocalCPUBackend\"].submit_put_task(key, buffer_memory_obj)",
+        "comment_created_at": "2025-07-15T01:49:20+00:00",
+        "comment_author": "llc-kc",
+        "comment_body": "The submit_put_task in backends already use lock to protect their dict, thus I don't think lock is necessary here. And lock are not used in other submit_put_task/batched_submit_put_task callings in this file.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1974943079",
+    "pr_number": 368,
+    "pr_file": "lmcache/experimental/cache_engine.py",
+    "created_at": "2025-02-28T07:36:14+00:00",
+    "commented_code": "self.storage_manager.put(key, memory_obj)\n         self.stats_monitor.on_store_finished(monitor_req_id)\n \n+    def store_hidden_states(self, tokens: torch.Tensor,\n+                            hidden_states: torch.Tensor) -> None:\n+\n+        hidden_states_key = self.token_database.make_hidden_states_key(tokens)\n+\n+        # the LMCache backend assumes a tensor with 4 dimensions\n+        assert len(hidden_states.shape) == 2\n+        hidden_states = hidden_states.unsqueeze(0).unsqueeze(0)\n+\n+        memory_obj = self.storage_manager.allocate(hidden_states.shape,\n+                                                   hidden_states.dtype)\n+        if memory_obj is None or memory_obj.tensor is None:\n+            logger.warning(\"Failed to allocate memory for the hidden states.\")\n+            return\n+\n+        memory_obj.tensor.copy_(hidden_states, non_blocking=True)",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "1974943079",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 368,
+        "pr_file": "lmcache/experimental/cache_engine.py",
+        "discussion_id": "1974943079",
+        "commented_code": "@@ -115,12 +129,51 @@ def store(self,\n             self.storage_manager.put(key, memory_obj)\n         self.stats_monitor.on_store_finished(monitor_req_id)\n \n+    def store_hidden_states(self, tokens: torch.Tensor,\n+                            hidden_states: torch.Tensor) -> None:\n+\n+        hidden_states_key = self.token_database.make_hidden_states_key(tokens)\n+\n+        # the LMCache backend assumes a tensor with 4 dimensions\n+        assert len(hidden_states.shape) == 2\n+        hidden_states = hidden_states.unsqueeze(0).unsqueeze(0)\n+\n+        memory_obj = self.storage_manager.allocate(hidden_states.shape,\n+                                                   hidden_states.dtype)\n+        if memory_obj is None or memory_obj.tensor is None:\n+            logger.warning(\"Failed to allocate memory for the hidden states.\")\n+            return\n+\n+        memory_obj.tensor.copy_(hidden_states, non_blocking=True)",
+        "comment_created_at": "2025-02-28T07:36:14+00:00",
+        "comment_author": "YaoJiayi",
+        "comment_body": "Not sure if this async copy is safe here.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1975901263",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 368,
+        "pr_file": "lmcache/experimental/cache_engine.py",
+        "discussion_id": "1974943079",
+        "commented_code": "@@ -115,12 +129,51 @@ def store(self,\n             self.storage_manager.put(key, memory_obj)\n         self.stats_monitor.on_store_finished(monitor_req_id)\n \n+    def store_hidden_states(self, tokens: torch.Tensor,\n+                            hidden_states: torch.Tensor) -> None:\n+\n+        hidden_states_key = self.token_database.make_hidden_states_key(tokens)\n+\n+        # the LMCache backend assumes a tensor with 4 dimensions\n+        assert len(hidden_states.shape) == 2\n+        hidden_states = hidden_states.unsqueeze(0).unsqueeze(0)\n+\n+        memory_obj = self.storage_manager.allocate(hidden_states.shape,\n+                                                   hidden_states.dtype)\n+        if memory_obj is None or memory_obj.tensor is None:\n+            logger.warning(\"Failed to allocate memory for the hidden states.\")\n+            return\n+\n+        memory_obj.tensor.copy_(hidden_states, non_blocking=True)",
+        "comment_created_at": "2025-02-28T19:13:30+00:00",
+        "comment_author": "chenqianfzh",
+        "comment_body": "You are right. The memory_obj copy needs to be done before moving on. \r\n\r\nCode updated.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1980230623",
+    "pr_number": 368,
+    "pr_file": "lmcache/experimental/cache_engine.py",
+    "created_at": "2025-03-04T21:05:58+00:00",
+    "commented_code": "self.stats_monitor.on_store_finished(monitor_req_id)\n \n+    def store_hidden_states(self, tokens: torch.Tensor,\n+                            hidden_states: torch.Tensor) -> None:\n+\n+        hidden_states_key = self.token_database.make_hidden_states_key(tokens)\n+\n+        # the LMCache backend assumes a tensor with 4 dimensions\n+        assert len(hidden_states.shape) == 2\n+        hidden_states = hidden_states.unsqueeze(0).unsqueeze(0)\n+\n+        memory_obj = self.storage_manager.allocate(hidden_states.shape,\n+                                                   hidden_states.dtype)\n+        if memory_obj is None or memory_obj.tensor is None:\n+            logger.warning(\"Failed to allocate memory for the hidden states.\")\n+            return\n+\n+        memory_obj.tensor.copy_(hidden_states)",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "1980230623",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 368,
+        "pr_file": "lmcache/experimental/cache_engine.py",
+        "discussion_id": "1980230623",
+        "commented_code": "@@ -139,12 +157,51 @@ def store(self,\n \n         self.stats_monitor.on_store_finished(monitor_req_id)\n \n+    def store_hidden_states(self, tokens: torch.Tensor,\n+                            hidden_states: torch.Tensor) -> None:\n+\n+        hidden_states_key = self.token_database.make_hidden_states_key(tokens)\n+\n+        # the LMCache backend assumes a tensor with 4 dimensions\n+        assert len(hidden_states.shape) == 2\n+        hidden_states = hidden_states.unsqueeze(0).unsqueeze(0)\n+\n+        memory_obj = self.storage_manager.allocate(hidden_states.shape,\n+                                                   hidden_states.dtype)\n+        if memory_obj is None or memory_obj.tensor is None:\n+            logger.warning(\"Failed to allocate memory for the hidden states.\")\n+            return\n+\n+        memory_obj.tensor.copy_(hidden_states)",
+        "comment_created_at": "2025-03-04T21:05:58+00:00",
+        "comment_author": "KuntaiDu",
+        "comment_body": "This copy is a little bit worrying. This operation seems to be synchronous. The overhead of this operation itself is small, but since it goes out of the asynchronous world, it may forces all preceding operations in the cuda stream to terminate for this line to be executed and return (though I'm not sure about this).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1980519509",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 368,
+        "pr_file": "lmcache/experimental/cache_engine.py",
+        "discussion_id": "1980230623",
+        "commented_code": "@@ -139,12 +157,51 @@ def store(self,\n \n         self.stats_monitor.on_store_finished(monitor_req_id)\n \n+    def store_hidden_states(self, tokens: torch.Tensor,\n+                            hidden_states: torch.Tensor) -> None:\n+\n+        hidden_states_key = self.token_database.make_hidden_states_key(tokens)\n+\n+        # the LMCache backend assumes a tensor with 4 dimensions\n+        assert len(hidden_states.shape) == 2\n+        hidden_states = hidden_states.unsqueeze(0).unsqueeze(0)\n+\n+        memory_obj = self.storage_manager.allocate(hidden_states.shape,\n+                                                   hidden_states.dtype)\n+        if memory_obj is None or memory_obj.tensor is None:\n+            logger.warning(\"Failed to allocate memory for the hidden states.\")\n+            return\n+\n+        memory_obj.tensor.copy_(hidden_states)",
+        "comment_created_at": "2025-03-05T01:27:40+00:00",
+        "comment_author": "chenqianfzh",
+        "comment_body": "Please correct me if I am wrong. Per my understanding, the operation before store_hidden_states is synchronous to make sure the copy is complete before moving on. \r\n\r\nIn class VLLMPagedMemGPUConnectorV2, I saw the following code:\r\n```\r\n    def from_gpu(self, memory_obj: MemoryObj, start: int, end: int, **kwargs):\r\n       .....\r\n\r\n        # some cuda code to do copy job\r\n\r\n        torch.cuda.synchronize()\r\n   ```\r\n  \r\n   ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2053295037",
+    "pr_number": 506,
+    "pr_file": "lmcache/experimental/storage_backend/connector/fs_connector.py",
+    "created_at": "2025-04-22T04:07:58+00:00",
+    "commented_code": "+# Copyright 2024-2025 LMCache Authors.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+import asyncio\n+from pathlib import Path\n+from typing import List, Optional, no_type_check\n+\n+from lmcache.experimental.memory_management import (MemoryAllocatorInterface,\n+                                                    MemoryObj)\n+from lmcache.experimental.protocol import RedisMetadata\n+from lmcache.experimental.storage_backend.connector.base_connector import \\\n+    RemoteConnector\n+from lmcache.logging import init_logger\n+from lmcache.utils import CacheEngineKey\n+\n+logger = init_logger(__name__)\n+\n+METADATA_BYTES_LEN = 28\n+\n+\n+class FSConnector(RemoteConnector):\n+    \"\"\"File system based connector that stores data in local files.\n+\n+    Data is stored in the following format:\n+    - Each key is stored as a separate file\n+    - File content: metadata (METADATA_BYTES_LEN bytes) + serialized data\n+    \"\"\"\n+\n+    def __init__(self, base_path: str, loop: asyncio.AbstractEventLoop,\n+                 memory_allocator: MemoryAllocatorInterface):\n+        \"\"\"\n+        Args:\n+            base_path: Root directory to store all cache files\n+            loop: Asyncio event loop\n+            memory_allocator: Memory allocator interface\n+        \"\"\"\n+        self.base_path = Path(base_path)\n+        self.memory_allocator = memory_allocator\n+        self.loop = loop\n+\n+        logger.info(f\"Initialized FSConnector with base path {base_path}\")\n+        # Create base directory if not exists\n+        self.base_path.mkdir(parents=True, exist_ok=True)\n+\n+    def _get_file_path(self, key: CacheEngineKey) -> Path:\n+        \"\"\"Get file path for the given key\"\"\"\n+        key_path = key.to_string().replace(\"/\", \"-\") + \".data\"\n+        # Use key's string representation as filename\n+        return self.base_path / key_path\n+\n+    async def exists(self, key: CacheEngineKey) -> bool:\n+        \"\"\"Check if key exists in file system\"\"\"\n+        file_path = self._get_file_path(key)\n+        return file_path.exists()\n+\n+    async def get(self, key: CacheEngineKey) -> Optional[MemoryObj]:\n+        \"\"\"Get data from file system\"\"\"\n+        file_path = self._get_file_path(key)\n+        if not file_path.exists():\n+            return None\n+\n+        try:\n+            # Read file content\n+            with open(file_path, 'rb') as f:\n+                data = f.read()\n+\n+            # Split metadata and actual data\n+            redis_metadata = RedisMetadata.deserialize(\n+                memoryview(data[:METADATA_BYTES_LEN]))\n+            kv_bytes = data[METADATA_BYTES_LEN:METADATA_BYTES_LEN +\n+                            redis_metadata.length]\n+\n+            # Allocate memory and copy data\n+            memory_obj = self.memory_allocator.allocate(\n+                redis_metadata.shape,\n+                redis_metadata.dtype,\n+                redis_metadata.fmt,\n+            )\n+            if memory_obj is None:\n+                logger.warning(\"Failed to allocate memory during file read\")\n+                return None\n+\n+            if isinstance(memory_obj.byte_array, memoryview):\n+                view = memory_obj.byte_array\n+                if view.format == \"<B\":\n+                    view = view.cast(\"B\")\n+            else:\n+                view = memoryview(memory_obj.byte_array)\n+            view[:redis_metadata.length] = kv_bytes\n+\n+            return memory_obj\n+\n+        except Exception as e:\n+            logger.error(f\"Failed to read from file {file_path}: {str(e)}\")\n+            return None\n+\n+    async def put(self, key: CacheEngineKey, memory_obj: MemoryObj):\n+        \"\"\"Store data to file system\"\"\"\n+        file_path = self._get_file_path(key)\n+        try:\n+            # Prepare metadata\n+            redis_metadata = RedisMetadata(len(memory_obj.byte_array),\n+                                           memory_obj.get_shape(),\n+                                           memory_obj.get_dtype(),\n+                                           memory_obj.get_memory_format())\n+\n+            # Write to file (metadata + data)\n+            with open(file_path, 'wb') as f:\n+                f.write(redis_metadata.serialize())\n+                f.write(memory_obj.byte_array)\n+\n+            self.memory_allocator.ref_count_down(memory_obj)",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "2053295037",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 506,
+        "pr_file": "lmcache/experimental/storage_backend/connector/fs_connector.py",
+        "discussion_id": "2053295037",
+        "commented_code": "@@ -0,0 +1,137 @@\n+# Copyright 2024-2025 LMCache Authors.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+import asyncio\n+from pathlib import Path\n+from typing import List, Optional, no_type_check\n+\n+from lmcache.experimental.memory_management import (MemoryAllocatorInterface,\n+                                                    MemoryObj)\n+from lmcache.experimental.protocol import RedisMetadata\n+from lmcache.experimental.storage_backend.connector.base_connector import \\\n+    RemoteConnector\n+from lmcache.logging import init_logger\n+from lmcache.utils import CacheEngineKey\n+\n+logger = init_logger(__name__)\n+\n+METADATA_BYTES_LEN = 28\n+\n+\n+class FSConnector(RemoteConnector):\n+    \"\"\"File system based connector that stores data in local files.\n+\n+    Data is stored in the following format:\n+    - Each key is stored as a separate file\n+    - File content: metadata (METADATA_BYTES_LEN bytes) + serialized data\n+    \"\"\"\n+\n+    def __init__(self, base_path: str, loop: asyncio.AbstractEventLoop,\n+                 memory_allocator: MemoryAllocatorInterface):\n+        \"\"\"\n+        Args:\n+            base_path: Root directory to store all cache files\n+            loop: Asyncio event loop\n+            memory_allocator: Memory allocator interface\n+        \"\"\"\n+        self.base_path = Path(base_path)\n+        self.memory_allocator = memory_allocator\n+        self.loop = loop\n+\n+        logger.info(f\"Initialized FSConnector with base path {base_path}\")\n+        # Create base directory if not exists\n+        self.base_path.mkdir(parents=True, exist_ok=True)\n+\n+    def _get_file_path(self, key: CacheEngineKey) -> Path:\n+        \"\"\"Get file path for the given key\"\"\"\n+        key_path = key.to_string().replace(\"/\", \"-\") + \".data\"\n+        # Use key's string representation as filename\n+        return self.base_path / key_path\n+\n+    async def exists(self, key: CacheEngineKey) -> bool:\n+        \"\"\"Check if key exists in file system\"\"\"\n+        file_path = self._get_file_path(key)\n+        return file_path.exists()\n+\n+    async def get(self, key: CacheEngineKey) -> Optional[MemoryObj]:\n+        \"\"\"Get data from file system\"\"\"\n+        file_path = self._get_file_path(key)\n+        if not file_path.exists():\n+            return None\n+\n+        try:\n+            # Read file content\n+            with open(file_path, 'rb') as f:\n+                data = f.read()\n+\n+            # Split metadata and actual data\n+            redis_metadata = RedisMetadata.deserialize(\n+                memoryview(data[:METADATA_BYTES_LEN]))\n+            kv_bytes = data[METADATA_BYTES_LEN:METADATA_BYTES_LEN +\n+                            redis_metadata.length]\n+\n+            # Allocate memory and copy data\n+            memory_obj = self.memory_allocator.allocate(\n+                redis_metadata.shape,\n+                redis_metadata.dtype,\n+                redis_metadata.fmt,\n+            )\n+            if memory_obj is None:\n+                logger.warning(\"Failed to allocate memory during file read\")\n+                return None\n+\n+            if isinstance(memory_obj.byte_array, memoryview):\n+                view = memory_obj.byte_array\n+                if view.format == \"<B\":\n+                    view = view.cast(\"B\")\n+            else:\n+                view = memoryview(memory_obj.byte_array)\n+            view[:redis_metadata.length] = kv_bytes\n+\n+            return memory_obj\n+\n+        except Exception as e:\n+            logger.error(f\"Failed to read from file {file_path}: {str(e)}\")\n+            return None\n+\n+    async def put(self, key: CacheEngineKey, memory_obj: MemoryObj):\n+        \"\"\"Store data to file system\"\"\"\n+        file_path = self._get_file_path(key)\n+        try:\n+            # Prepare metadata\n+            redis_metadata = RedisMetadata(len(memory_obj.byte_array),\n+                                           memory_obj.get_shape(),\n+                                           memory_obj.get_dtype(),\n+                                           memory_obj.get_memory_format())\n+\n+            # Write to file (metadata + data)\n+            with open(file_path, 'wb') as f:\n+                f.write(redis_metadata.serialize())\n+                f.write(memory_obj.byte_array)\n+\n+            self.memory_allocator.ref_count_down(memory_obj)",
+        "comment_created_at": "2025-04-22T04:07:58+00:00",
+        "comment_author": "ApostaC",
+        "comment_body": "Is it possible to have the following race condition:\r\n- Process A creates the file and starts writing\r\n- Process B tries to get the KV cache, and finds the file before process A finishes writing\r\nFinally, process B will load a \"dirty KV cache\".",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2056318263",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 506,
+        "pr_file": "lmcache/experimental/storage_backend/connector/fs_connector.py",
+        "discussion_id": "2053295037",
+        "commented_code": "@@ -0,0 +1,137 @@\n+# Copyright 2024-2025 LMCache Authors.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+import asyncio\n+from pathlib import Path\n+from typing import List, Optional, no_type_check\n+\n+from lmcache.experimental.memory_management import (MemoryAllocatorInterface,\n+                                                    MemoryObj)\n+from lmcache.experimental.protocol import RedisMetadata\n+from lmcache.experimental.storage_backend.connector.base_connector import \\\n+    RemoteConnector\n+from lmcache.logging import init_logger\n+from lmcache.utils import CacheEngineKey\n+\n+logger = init_logger(__name__)\n+\n+METADATA_BYTES_LEN = 28\n+\n+\n+class FSConnector(RemoteConnector):\n+    \"\"\"File system based connector that stores data in local files.\n+\n+    Data is stored in the following format:\n+    - Each key is stored as a separate file\n+    - File content: metadata (METADATA_BYTES_LEN bytes) + serialized data\n+    \"\"\"\n+\n+    def __init__(self, base_path: str, loop: asyncio.AbstractEventLoop,\n+                 memory_allocator: MemoryAllocatorInterface):\n+        \"\"\"\n+        Args:\n+            base_path: Root directory to store all cache files\n+            loop: Asyncio event loop\n+            memory_allocator: Memory allocator interface\n+        \"\"\"\n+        self.base_path = Path(base_path)\n+        self.memory_allocator = memory_allocator\n+        self.loop = loop\n+\n+        logger.info(f\"Initialized FSConnector with base path {base_path}\")\n+        # Create base directory if not exists\n+        self.base_path.mkdir(parents=True, exist_ok=True)\n+\n+    def _get_file_path(self, key: CacheEngineKey) -> Path:\n+        \"\"\"Get file path for the given key\"\"\"\n+        key_path = key.to_string().replace(\"/\", \"-\") + \".data\"\n+        # Use key's string representation as filename\n+        return self.base_path / key_path\n+\n+    async def exists(self, key: CacheEngineKey) -> bool:\n+        \"\"\"Check if key exists in file system\"\"\"\n+        file_path = self._get_file_path(key)\n+        return file_path.exists()\n+\n+    async def get(self, key: CacheEngineKey) -> Optional[MemoryObj]:\n+        \"\"\"Get data from file system\"\"\"\n+        file_path = self._get_file_path(key)\n+        if not file_path.exists():\n+            return None\n+\n+        try:\n+            # Read file content\n+            with open(file_path, 'rb') as f:\n+                data = f.read()\n+\n+            # Split metadata and actual data\n+            redis_metadata = RedisMetadata.deserialize(\n+                memoryview(data[:METADATA_BYTES_LEN]))\n+            kv_bytes = data[METADATA_BYTES_LEN:METADATA_BYTES_LEN +\n+                            redis_metadata.length]\n+\n+            # Allocate memory and copy data\n+            memory_obj = self.memory_allocator.allocate(\n+                redis_metadata.shape,\n+                redis_metadata.dtype,\n+                redis_metadata.fmt,\n+            )\n+            if memory_obj is None:\n+                logger.warning(\"Failed to allocate memory during file read\")\n+                return None\n+\n+            if isinstance(memory_obj.byte_array, memoryview):\n+                view = memory_obj.byte_array\n+                if view.format == \"<B\":\n+                    view = view.cast(\"B\")\n+            else:\n+                view = memoryview(memory_obj.byte_array)\n+            view[:redis_metadata.length] = kv_bytes\n+\n+            return memory_obj\n+\n+        except Exception as e:\n+            logger.error(f\"Failed to read from file {file_path}: {str(e)}\")\n+            return None\n+\n+    async def put(self, key: CacheEngineKey, memory_obj: MemoryObj):\n+        \"\"\"Store data to file system\"\"\"\n+        file_path = self._get_file_path(key)\n+        try:\n+            # Prepare metadata\n+            redis_metadata = RedisMetadata(len(memory_obj.byte_array),\n+                                           memory_obj.get_shape(),\n+                                           memory_obj.get_dtype(),\n+                                           memory_obj.get_memory_format())\n+\n+            # Write to file (metadata + data)\n+            with open(file_path, 'wb') as f:\n+                f.write(redis_metadata.serialize())\n+                f.write(memory_obj.byte_array)\n+\n+            self.memory_allocator.ref_count_down(memory_obj)",
+        "comment_created_at": "2025-04-23T15:29:17+00:00",
+        "comment_author": "maobaolong",
+        "comment_body": "@ApostaC It could be handled by writing .tmp and rename .tmp to finalized file name.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2083267399",
+    "pr_number": 506,
+    "pr_file": "lmcache/experimental/storage_backend/connector/fs_connector.py",
+    "created_at": "2025-05-10T18:47:54+00:00",
+    "commented_code": "+# Copyright 2024-2025 LMCache Authors.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+import asyncio\n+from pathlib import Path\n+from typing import List, Optional, no_type_check\n+\n+from lmcache.experimental.memory_management import (MemoryAllocatorInterface,\n+                                                    MemoryObj)\n+from lmcache.experimental.protocol import RemoteMetadata\n+from lmcache.experimental.storage_backend.connector.base_connector import \\\n+    RemoteConnector\n+from lmcache.logging import init_logger\n+from lmcache.utils import CacheEngineKey\n+\n+logger = init_logger(__name__)\n+\n+METADATA_BYTES_LEN = 28\n+\n+\n+class FSConnector(RemoteConnector):",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "2083267399",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 506,
+        "pr_file": "lmcache/experimental/storage_backend/connector/fs_connector.py",
+        "discussion_id": "2083267399",
+        "commented_code": "@@ -0,0 +1,143 @@\n+# Copyright 2024-2025 LMCache Authors.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+import asyncio\n+from pathlib import Path\n+from typing import List, Optional, no_type_check\n+\n+from lmcache.experimental.memory_management import (MemoryAllocatorInterface,\n+                                                    MemoryObj)\n+from lmcache.experimental.protocol import RemoteMetadata\n+from lmcache.experimental.storage_backend.connector.base_connector import \\\n+    RemoteConnector\n+from lmcache.logging import init_logger\n+from lmcache.utils import CacheEngineKey\n+\n+logger = init_logger(__name__)\n+\n+METADATA_BYTES_LEN = 28\n+\n+\n+class FSConnector(RemoteConnector):",
+        "comment_created_at": "2025-05-10T18:47:54+00:00",
+        "comment_author": "YaoJiayi",
+        "comment_body": "General question: how is read-write or write-write conflict avoided when two lmcache instances are accessing the same file?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2083467174",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 506,
+        "pr_file": "lmcache/experimental/storage_backend/connector/fs_connector.py",
+        "discussion_id": "2083267399",
+        "commented_code": "@@ -0,0 +1,143 @@\n+# Copyright 2024-2025 LMCache Authors.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+import asyncio\n+from pathlib import Path\n+from typing import List, Optional, no_type_check\n+\n+from lmcache.experimental.memory_management import (MemoryAllocatorInterface,\n+                                                    MemoryObj)\n+from lmcache.experimental.protocol import RemoteMetadata\n+from lmcache.experimental.storage_backend.connector.base_connector import \\\n+    RemoteConnector\n+from lmcache.logging import init_logger\n+from lmcache.utils import CacheEngineKey\n+\n+logger = init_logger(__name__)\n+\n+METADATA_BYTES_LEN = 28\n+\n+\n+class FSConnector(RemoteConnector):",
+        "comment_created_at": "2025-05-11T09:36:31+00:00",
+        "comment_author": "maobaolong",
+        "comment_body": "I use a common trick\r\n- Create a temp file named `KEY.tmp`, and writing data into which is not visible for other reader.\r\n- Rename the `KEY.tmp` to `KEY` after finish write, after this, the file is visible for other reader.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2084917781",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 506,
+        "pr_file": "lmcache/experimental/storage_backend/connector/fs_connector.py",
+        "discussion_id": "2083267399",
+        "commented_code": "@@ -0,0 +1,143 @@\n+# Copyright 2024-2025 LMCache Authors.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+import asyncio\n+from pathlib import Path\n+from typing import List, Optional, no_type_check\n+\n+from lmcache.experimental.memory_management import (MemoryAllocatorInterface,\n+                                                    MemoryObj)\n+from lmcache.experimental.protocol import RemoteMetadata\n+from lmcache.experimental.storage_backend.connector.base_connector import \\\n+    RemoteConnector\n+from lmcache.logging import init_logger\n+from lmcache.utils import CacheEngineKey\n+\n+logger = init_logger(__name__)\n+\n+METADATA_BYTES_LEN = 28\n+\n+\n+class FSConnector(RemoteConnector):",
+        "comment_created_at": "2025-05-12T15:17:11+00:00",
+        "comment_author": "YaoJiayi",
+        "comment_body": "I think a better way is to use file lock? But let's optimize this later.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2130764897",
+    "pr_number": 778,
+    "pr_file": "lmcache/v1/storage_backend/storage_manager.py",
+    "created_at": "2025-06-05T22:47:06+00:00",
+    "commented_code": "Do not store if the same object is being stored (handled here by\n         storage manager) or has been stored (handled by storage backend).\n \n-        A default implementation using \"put\"\n+        Optimized implementation using batched operations to reduce lock contention.\n         \"\"\"\n+        # Check for existing put tasks\n+        filtered_keys = []\n+        filtered_objs = []\n+        \n         for key, obj in zip(keys, memory_objs, strict=False):\n-            self.put(key, obj)\n+            # Check if any backend is already storing this cache\n+            already_storing = False\n+            for storage_backend in self.storage_backends.values():\n+                if storage_backend.exists_in_put_tasks(key):\n+                    obj.ref_count_down()\n+                    already_storing = True\n+                    break\n+            \n+            if not already_storing:\n+                filtered_keys.append(key)\n+                filtered_objs.append(obj)\n+        \n+        if not filtered_keys:\n+            return\n+        \n+        # Use batched operations where available\n+        for backend_name, backend in self.storage_backends.items():\n+            if hasattr(backend, 'batched_submit_put_tasks'):\n+                backend.batched_submit_put_tasks(filtered_keys, filtered_objs)\n+            else:\n+                # Fall back to individual puts for backends without batched support\n+                for key, obj in zip(filtered_keys, filtered_objs, strict=False):\n+                    backend.submit_put_task(key, obj)\n+        \n+        # Decrement reference counts\n+        for obj in filtered_objs:\n+            obj.ref_count_down()",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "2130764897",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 778,
+        "pr_file": "lmcache/v1/storage_backend/storage_manager.py",
+        "discussion_id": "2130764897",
+        "commented_code": "@@ -171,10 +171,40 @@ def batched_put(\n         Do not store if the same object is being stored (handled here by\n         storage manager) or has been stored (handled by storage backend).\n \n-        A default implementation using \"put\"\n+        Optimized implementation using batched operations to reduce lock contention.\n         \"\"\"\n+        # Check for existing put tasks\n+        filtered_keys = []\n+        filtered_objs = []\n+        \n         for key, obj in zip(keys, memory_objs, strict=False):\n-            self.put(key, obj)\n+            # Check if any backend is already storing this cache\n+            already_storing = False\n+            for storage_backend in self.storage_backends.values():\n+                if storage_backend.exists_in_put_tasks(key):\n+                    obj.ref_count_down()\n+                    already_storing = True\n+                    break\n+            \n+            if not already_storing:\n+                filtered_keys.append(key)\n+                filtered_objs.append(obj)\n+        \n+        if not filtered_keys:\n+            return\n+        \n+        # Use batched operations where available\n+        for backend_name, backend in self.storage_backends.items():\n+            if hasattr(backend, 'batched_submit_put_tasks'):\n+                backend.batched_submit_put_tasks(filtered_keys, filtered_objs)\n+            else:\n+                # Fall back to individual puts for backends without batched support\n+                for key, obj in zip(filtered_keys, filtered_objs, strict=False):\n+                    backend.submit_put_task(key, obj)\n+        \n+        # Decrement reference counts\n+        for obj in filtered_objs:\n+            obj.ref_count_down()",
+        "comment_created_at": "2025-06-05T22:47:06+00:00",
+        "comment_author": "ApostaC",
+        "comment_body": "Not sure if we should do `ref_count_down` here. After calling `submit_put_task`, the object may not be consumed directly, while counting down reference count here will trigger the free of the memory object.\r\n\r\nIMO, the backend should call `ref_count_down` after making sure that the put has been finished. \r\n\r\ncc @YaoJiayi ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1835810595",
+    "pr_number": 211,
+    "pr_file": "lmcache/storage_backend/local_backend.py",
+    "created_at": "2024-11-10T23:14:17+00:00",
+    "commented_code": "for evict_key in evict_keys:\n             self.remove(evict_key)\n \n+        # free old block to avoid mem leak\n+        if key in self.dict:\n+            self.remove(key)\n+\n+        # Allocate the kv chunk\n+        kv_obj = self.mpool.allocate(kv_chunk)\n+        self.update_lock.release()\n+\n+        if kv_obj is None:\n+            return\n+\n+        put_stream = torch.cuda.Stream()\n+        if kv_chunk.device != torch.cpu:\n+            put_stream.wait_stream(torch.cuda.default_stream(kv_chunk.device))",
+    "repo_full_name": "LMCache/LMCache",
+    "discussion_comments": [
+      {
+        "comment_id": "1835810595",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 211,
+        "pr_file": "lmcache/storage_backend/local_backend.py",
+        "discussion_id": "1835810595",
+        "commented_code": "@@ -126,31 +126,58 @@ def put_nonblocking(self, key, kv_chunk):\n         for evict_key in evict_keys:\n             self.remove(evict_key)\n \n+        # free old block to avoid mem leak\n+        if key in self.dict:\n+            self.remove(key)\n+\n+        # Allocate the kv chunk\n+        kv_obj = self.mpool.allocate(kv_chunk)\n+        self.update_lock.release()\n+\n+        if kv_obj is None:\n+            return\n+\n+        put_stream = torch.cuda.Stream()\n+        if kv_chunk.device != torch.cpu:\n+            put_stream.wait_stream(torch.cuda.default_stream(kv_chunk.device))",
+        "comment_created_at": "2024-11-10T23:14:17+00:00",
+        "comment_author": "ApostaC",
+        "comment_body": "Not sure about this: do we need to `wait_stream` here, or do it at the beginning of `batched_put`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1835810791",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 211,
+        "pr_file": "lmcache/storage_backend/local_backend.py",
+        "discussion_id": "1835810595",
+        "commented_code": "@@ -126,31 +126,58 @@ def put_nonblocking(self, key, kv_chunk):\n         for evict_key in evict_keys:\n             self.remove(evict_key)\n \n+        # free old block to avoid mem leak\n+        if key in self.dict:\n+            self.remove(key)\n+\n+        # Allocate the kv chunk\n+        kv_obj = self.mpool.allocate(kv_chunk)\n+        self.update_lock.release()\n+\n+        if kv_obj is None:\n+            return\n+\n+        put_stream = torch.cuda.Stream()\n+        if kv_chunk.device != torch.cpu:\n+            put_stream.wait_stream(torch.cuda.default_stream(kv_chunk.device))",
+        "comment_created_at": "2024-11-10T23:15:29+00:00",
+        "comment_author": "ApostaC",
+        "comment_body": "Actually, I feel like the local CPU Backend does not need a separate thread. Let's talk about this tomorrow? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1836915097",
+        "repo_full_name": "LMCache/LMCache",
+        "pr_number": 211,
+        "pr_file": "lmcache/storage_backend/local_backend.py",
+        "discussion_id": "1835810595",
+        "commented_code": "@@ -126,31 +126,58 @@ def put_nonblocking(self, key, kv_chunk):\n         for evict_key in evict_keys:\n             self.remove(evict_key)\n \n+        # free old block to avoid mem leak\n+        if key in self.dict:\n+            self.remove(key)\n+\n+        # Allocate the kv chunk\n+        kv_obj = self.mpool.allocate(kv_chunk)\n+        self.update_lock.release()\n+\n+        if kv_obj is None:\n+            return\n+\n+        put_stream = torch.cuda.Stream()\n+        if kv_chunk.device != torch.cpu:\n+            put_stream.wait_stream(torch.cuda.default_stream(kv_chunk.device))",
+        "comment_created_at": "2024-11-11T16:19:42+00:00",
+        "comment_author": "YaoJiayi",
+        "comment_body": "Updated the comment. The wait is needed as there are operations done on that chunk by the main stream. Will try to remove the extra threads.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

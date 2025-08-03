@@ -5,7 +5,7 @@ description: Ensure component usage in templates matches registered components. 
   or by their exact registered name.
 repository: n8n-io/n8n
 label: Vue
-language: Typescript
+language: TypeScript
 comments_count: 12
 repository_stars: 122978
 ---

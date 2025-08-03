@@ -5,7 +5,7 @@ description: 'When designing APIs, provide error messages that are contextually 
   don''t apply to the specific situation. Instead, tailor error responses to include:'
 repository: microsoft/typescript
 label: API
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 105378
 ---

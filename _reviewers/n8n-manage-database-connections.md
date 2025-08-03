@@ -7,7 +7,7 @@ description: 'Always properly manage database connections to prevent resource le
   1. Release connections back to the pool after use with a try/finally block'
 repository: n8n-io/n8n
 label: Database
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 122978
 ---

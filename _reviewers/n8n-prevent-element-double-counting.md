@@ -6,7 +6,7 @@ description: 'When working with graph structures, collections, or relationship m
   of elements, especially in scenarios involving:'
 repository: n8n-io/n8n
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 122978
 ---

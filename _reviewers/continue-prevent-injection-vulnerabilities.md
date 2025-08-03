@@ -6,7 +6,7 @@ description: When constructing templates or dynamic content that will be parsed,
   this could break formatting or enable code injection attacks.
 repository: continuedev/continue
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 1
 repository_stars: 27819
 ---

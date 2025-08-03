@@ -5,7 +5,7 @@ description: Perform lightweight validation checks before executing expensive op
   or frequently called functions.
 repository: microsoft/vscode
 label: Performance Optimization
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 174887
 ---

@@ -7,7 +7,7 @@ description: When handling empty or missing values, be intentional about using `
   should be dropped.
 repository: supabase/supabase
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 86070
 ---

@@ -6,7 +6,7 @@ description: Remove redundant or unnecessary code constructs to improve readabil
   clarity.
 repository: microsoft/typescript
 label: Code Style
-language: Javascript
+language: JavaScript
 comments_count: 3
 repository_stars: 105378
 ---

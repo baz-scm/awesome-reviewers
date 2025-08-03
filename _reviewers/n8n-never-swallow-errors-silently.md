@@ -7,7 +7,7 @@ description: Always handle errors explicitly and preserve their context. Never s
   technical details at appropriate levels.
 repository: n8n-io/n8n
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 122978
 ---

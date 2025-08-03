@@ -7,7 +7,7 @@ description: 'Remove redundant code patterns that add complexity without value. 
   1. Duplicate code blocks - Extract shared logic into reusable functions'
 repository: microsoft/vscode
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 9
 repository_stars: 174887
 ---

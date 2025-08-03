@@ -6,7 +6,7 @@ description: When modifying existing APIs, maintain backwards compatibility by a
   version change.
 repository: microsoft/typescript
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 105378
 ---

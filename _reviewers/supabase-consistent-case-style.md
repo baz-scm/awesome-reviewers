@@ -6,7 +6,7 @@ description: Use consistent case styles in your codebase, adapting to the conven
   in your interfaces to those systems.
 repository: supabase/supabase
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 86070
 ---

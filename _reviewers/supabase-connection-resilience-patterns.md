@@ -7,7 +7,7 @@ description: Implement resilient networking connections with retry mechanisms fo
   across different connection types...
 repository: supabase/supabase
 label: Networking
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 86070
 ---

@@ -5,7 +5,7 @@ description: Identify and extract duplicate code patterns into shared utility fu
   multiple places, create a reusable function in a shared utility file.
 repository: RooCodeInc/Roo-Code
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 17288
 ---

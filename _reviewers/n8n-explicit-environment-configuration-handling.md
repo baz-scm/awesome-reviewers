@@ -5,7 +5,7 @@ description: 'Environment and configuration values should be explicit, visible, 
   and complex environment variable logic. Instead:'
 repository: n8n-io/n8n
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 122978
 ---

@@ -7,7 +7,7 @@ description: Maintain consistent code style by using and respecting the project'
   analysis tools.
 repository: openai/codex
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 31275
 ---

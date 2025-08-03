@@ -5,7 +5,7 @@ description: Always handle potentially null or undefined values explicitly using
   safety and prevents runtime errors from null references.
 repository: RooCodeInc/Roo-Code
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 17288
 ---

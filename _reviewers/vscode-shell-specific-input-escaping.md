@@ -6,7 +6,7 @@ description: When processing user input that will be used in shell commands, imp
   that must be handled appropriately.
 repository: microsoft/vscode
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 1
 repository_stars: 174887
 ---

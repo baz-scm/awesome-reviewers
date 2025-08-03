@@ -6,7 +6,7 @@ description: Use a single language (preferably English) consistently throughout 
   inconsistent naming patterns.
 repository: appwrite/appwrite
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 51959
 ---

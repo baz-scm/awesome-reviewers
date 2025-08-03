@@ -5,7 +5,7 @@ description: 'Maintain consistent parameter names and interface patterns across 
   includes:'
 repository: n8n-io/n8n
 label: AI
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 122978
 ---

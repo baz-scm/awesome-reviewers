@@ -7,7 +7,7 @@ description: 'Always validate data existence and type before accessing propertie
   1. Array bounds checking before indexing'
 repository: continuedev/continue
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 27819
 ---

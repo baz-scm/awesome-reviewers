@@ -7,7 +7,7 @@ description: 'Documentation should explain rationale and be technically precise.
   1. Including all required parameters with correct names in examples and documentation'
 repository: continuedev/continue
 label: Documentation
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 27819
 ---

@@ -6,7 +6,7 @@ description: When catching and re-throwing errors, always preserve the original 
   errors between layers.
 repository: RooCodeInc/Roo-Code
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 17288
 ---

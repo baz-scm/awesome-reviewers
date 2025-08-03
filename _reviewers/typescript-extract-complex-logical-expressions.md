@@ -4,7 +4,7 @@ description: 'Complex logical expressions should be extracted into well-named va
   or functions to improve code readability and maintainability. This applies to:'
 repository: microsoft/typescript
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 105378
 ---

@@ -5,7 +5,7 @@ description: When implementing algorithms with nested loops or recursive operati
   attention to loop ordering, early termination conditions, and unnecessary recomputation.
 repository: microsoft/typescript
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 8
 repository_stars: 105378
 ---

@@ -5,7 +5,7 @@ description: 'Names should be semantically meaningful and consistent across rela
   types. When naming:'
 repository: n8n-io/n8n
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 122978
 ---

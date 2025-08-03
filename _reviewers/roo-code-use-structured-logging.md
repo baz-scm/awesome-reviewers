@@ -6,7 +6,7 @@ description: Replace direct `console.log`, `console.warn`, and `console.error` c
   environments.
 repository: RooCodeInc/Roo-Code
 label: Logging
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 17288
 ---

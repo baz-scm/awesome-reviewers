@@ -8,7 +8,7 @@ description: 'Ensure your comparison algorithms handle edge cases properly and a
   you need to normalize whitespace, case, or other variants:'
 repository: continuedev/continue
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 27819
 ---

@@ -5,7 +5,7 @@ description: Tests tightly coupled to implementation details break easily when t
   Write tests that validate behavior rather than specific implementation details.
 repository: continuedev/continue
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 27819
 ---

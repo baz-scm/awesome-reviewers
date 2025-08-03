@@ -5,7 +5,7 @@ description: 'Always handle errors specifically and explicitly, avoiding generic
   error propagation. Key practices:'
 repository: microsoft/vscode
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 174887
 ---

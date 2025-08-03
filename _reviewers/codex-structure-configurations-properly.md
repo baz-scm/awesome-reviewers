@@ -6,7 +6,7 @@ description: Define a clear, hierarchical structure for application configuratio
   and passed through the application rather than loaded at arbitrary points.
 repository: openai/codex
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 31275
 ---

@@ -6,7 +6,7 @@ description: Avoid circular dependencies in asynchronous code paths that can lea
   Be particularly careful with initialization patterns and refresh mechanisms.
 repository: continuedev/continue
 label: Concurrency
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 27819
 ---

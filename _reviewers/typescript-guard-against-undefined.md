@@ -6,7 +6,7 @@ description: Always protect against potential null or undefined values before at
   objects that might be null.
 repository: microsoft/typescript
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 105378
 ---

@@ -8,7 +8,7 @@ description: 'Cache frequently accessed or computed values to avoid redundant ca
   2. Expensive computations'
 repository: microsoft/typescript
 label: Performance Optimization
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 105378
 ---

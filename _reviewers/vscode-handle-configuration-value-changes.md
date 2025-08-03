@@ -8,7 +8,7 @@ description: 'Configuration values should be properly initialized and stay updat
   change handlers:'
 repository: microsoft/vscode
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 174887
 ---

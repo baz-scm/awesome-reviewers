@@ -5,7 +5,7 @@ description: When configuring TypeScript projects, establish a clear understandi
   managers like npm or Yarn's Plug'n'Play (PnP).
 repository: microsoft/typescript
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 105378
 ---

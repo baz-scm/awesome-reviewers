@@ -6,7 +6,7 @@ description: When writing concurrent code, always execute independent operations
   operations.
 repository: microsoft/vscode
 label: Concurrency
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 174887
 ---

@@ -8,7 +8,7 @@ description: 'Functions should be documented with comprehensive JSDoc comments t
   2. All parameters with their types and constraints'
 repository: microsoft/typescript
 label: Documentation
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 105378
 ---

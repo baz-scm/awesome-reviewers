@@ -6,7 +6,7 @@ description: Always extract configuration values from appropriate sources (confi
   defaults with the ability to override when needed.
 repository: RooCodeInc/Roo-Code
 label: Configurations
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 17288
 ---

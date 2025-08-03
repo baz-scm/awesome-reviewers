@@ -7,7 +7,7 @@ description: 'Always validate AI model capabilities and configurations before at
   1. Feature support (e.g., images, embeddings)'
 repository: RooCodeInc/Roo-Code
 label: AI
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 17288
 ---

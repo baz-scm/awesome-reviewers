@@ -5,7 +5,7 @@ description: Extract and centralize configuration values instead of duplicating 
   changes only need to be made in one place and enforces consistency across the application.
 repository: supabase/supabase
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 86070
 ---

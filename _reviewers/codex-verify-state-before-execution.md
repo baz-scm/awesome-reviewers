@@ -7,7 +7,7 @@ description: When scheduling asynchronous operations in concurrent environments,
   and when it executes.
 repository: openai/codex
 label: Concurrency
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 31275
 ---

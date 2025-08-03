@@ -9,7 +9,7 @@ description: 'Names should clearly and accurately convey their purpose, behavior
   ```typescript'
 repository: continuedev/continue
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 27819
 ---

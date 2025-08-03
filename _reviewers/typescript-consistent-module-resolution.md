@@ -6,7 +6,7 @@ description: Configure consistent module resolution strategies across related pr
   which can cause subtle resolution errors and confusing tracing output.
 repository: microsoft/typescript
 label: Configurations
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 105378
 ---

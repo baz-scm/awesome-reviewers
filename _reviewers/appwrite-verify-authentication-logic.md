@@ -6,7 +6,7 @@ description: Ensure authentication validation logic follows expected semantics a
   actual security state.
 repository: appwrite/appwrite
 label: Security
-language: Javascript
+language: JavaScript
 comments_count: 1
 repository_stars: 51959
 ---

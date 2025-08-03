@@ -5,7 +5,7 @@ description: When working with network connections and HTTP requests, implement 
   ensure compatibility across environments.
 repository: appwrite/appwrite
 label: Networking
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 51959
 ---

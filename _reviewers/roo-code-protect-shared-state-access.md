@@ -7,7 +7,7 @@ description: 'Ensure thread-safe access to shared state by using appropriate syn
   1. Using atomic operations or locks when modifying shared state'
 repository: RooCodeInc/Roo-Code
 label: Concurrency
-language: Typescript
+language: TypeScript
 comments_count: 9
 repository_stars: 17288
 ---

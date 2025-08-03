@@ -8,7 +8,7 @@ description: 'Maintain clean, maintainable code by avoiding duplication and foll
   inline within component files'
 repository: supabase/supabase
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 86070
 ---

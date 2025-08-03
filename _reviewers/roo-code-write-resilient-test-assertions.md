@@ -5,7 +5,7 @@ description: Write test assertions that are resilient to implementation changes 
   partial or behavioral assertions would suffice.
 repository: RooCodeInc/Roo-Code
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 17288
 ---

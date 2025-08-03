@@ -5,7 +5,7 @@ description: When implementing AI model integrations, maintain consistent interf
   prevents runtime errors, and simplifies maintenance.
 repository: continuedev/continue
 label: AI
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 27819
 ---

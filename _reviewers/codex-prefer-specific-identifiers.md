@@ -6,7 +6,7 @@ description: Always use specific, descriptive names for identifiers rather than 
   files.
 repository: openai/codex
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 31275
 ---

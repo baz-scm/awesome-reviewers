@@ -5,7 +5,7 @@ description: Always handle null and undefined values explicitly through proper t
   type casts. This ensures type safety and prevents runtime errors.
 repository: microsoft/vscode
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 10
 repository_stars: 174887
 ---

@@ -5,7 +5,7 @@ description: All user-facing strings must be documented with translation functio
   notifications, labels, and any text displayed to users.
 repository: RooCodeInc/Roo-Code
 label: Documentation
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 17288
 ---

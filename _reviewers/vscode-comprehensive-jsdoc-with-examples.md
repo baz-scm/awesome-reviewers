@@ -7,7 +7,7 @@ description: 'Write thorough JSDoc comments for interfaces, functions, and metho
   1. A main description explaining the component''s purpose'
 repository: microsoft/vscode
 label: Documentation
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 174887
 ---

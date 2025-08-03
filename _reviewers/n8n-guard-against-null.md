@@ -6,7 +6,7 @@ description: Always use optional chaining (`?.`) and nullish coalescing (`??`) o
   when values are null or undefined.
 repository: n8n-io/n8n
 label: Null Handling
-language: Typescript
+language: TypeScript
 comments_count: 14
 repository_stars: 122978
 ---

@@ -5,7 +5,7 @@ description: Ensure each test runs in isolation by properly managing test state,
   within individual tests to prevent state leakage and test interdependence.
 repository: n8n-io/n8n
 label: Testing
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 122978
 ---

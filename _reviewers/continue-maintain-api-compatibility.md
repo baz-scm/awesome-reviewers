@@ -6,7 +6,7 @@ description: When modifying existing APIs, ensure backward compatibility to prev
   issues throughout a codebase.
 repository: continuedev/continue
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 27819
 ---

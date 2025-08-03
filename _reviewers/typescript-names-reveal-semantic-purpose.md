@@ -5,7 +5,7 @@ description: Choose names that clearly communicate the semantic purpose and beha
   return type, and intended usage.
 repository: microsoft/typescript
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 105378
 ---

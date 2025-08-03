@@ -7,7 +7,7 @@ description: 'Maintain consistent data formats, parameter units, and interface p
   1. Consistent type mappings and format handling'
 repository: RooCodeInc/Roo-Code
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 17288
 ---

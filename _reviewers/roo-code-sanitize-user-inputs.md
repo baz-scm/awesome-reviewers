@@ -5,7 +5,7 @@ description: "Always validate and sanitize user-provided inputs before using the
   \ \n"
 repository: RooCodeInc/Roo-Code
 label: Security
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 17288
 ---

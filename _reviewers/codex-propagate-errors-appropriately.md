@@ -6,7 +6,7 @@ description: Allow errors to bubble up to their appropriate handling layers rath
   limiting logic) from functioning as intended.
 repository: openai/codex
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 31275
 ---

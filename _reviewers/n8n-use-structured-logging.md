@@ -5,7 +5,7 @@ description: Always use the project's structured logger instead of direct consol
   proper level-based filtering, and integration with monitoring systems.
 repository: n8n-io/n8n
 label: Logging
-language: Typescript
+language: TypeScript
 comments_count: 8
 repository_stars: 122978
 ---

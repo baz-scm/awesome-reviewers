@@ -9,7 +9,7 @@ description: 'When implementing algorithms, ensure they are both efficient and c
   with `/(?:^|[^\\])`[^`\n]+`/` to catch backticks at string start.'
 repository: RooCodeInc/Roo-Code
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 17288
 ---

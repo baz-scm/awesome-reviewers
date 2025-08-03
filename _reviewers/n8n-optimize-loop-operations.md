@@ -6,7 +6,7 @@ description: Avoid repeated computations and object creation in loops or high-fr
   churn, and improves performance in critical code paths.
 repository: n8n-io/n8n
 label: Performance Optimization
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 122978
 ---

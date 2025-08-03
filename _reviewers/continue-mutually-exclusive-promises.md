@@ -5,7 +5,7 @@ description: Ensure that promises are either resolved or rejected, but never bot
   logic to guarantee mutual exclusion between success and error paths.
 repository: continuedev/continue
 label: Error Handling
-language: Javascript
+language: JavaScript
 comments_count: 2
 repository_stars: 27819
 ---

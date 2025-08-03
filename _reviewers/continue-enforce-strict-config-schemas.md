@@ -5,7 +5,7 @@ description: Configuration schemas should explicitly define all required fields 
   clear validation rules, and avoid marking required fields as optional.
 repository: continuedev/continue
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 27819
 ---

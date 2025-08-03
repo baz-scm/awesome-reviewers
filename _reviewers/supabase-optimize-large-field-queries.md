@@ -5,7 +5,7 @@ description: When working with database queries that process large text fields o
   This can lead to dramatic performance improvements.
 repository: supabase/supabase
 label: Performance Optimization
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 86070
 ---

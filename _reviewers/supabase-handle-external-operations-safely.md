@@ -4,7 +4,7 @@ description: 'Always implement explicit error handling for external operations s
   as network requests, database queries, and API calls. When errors occur, either:'
 repository: supabase/supabase
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 86070
 ---

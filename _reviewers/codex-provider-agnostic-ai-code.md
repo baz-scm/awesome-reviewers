@@ -5,7 +5,7 @@ description: Design AI integration code to be provider-agnostic, avoiding assump
   known models while maintaining fallback mechanisms for others.
 repository: openai/codex
 label: AI
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 31275
 ---

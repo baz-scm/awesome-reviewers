@@ -5,7 +5,7 @@ description: Choose specific, descriptive names for identifiers that accurately 
   to confusion. Names should be self-documenting and convey precise meaning.
 repository: microsoft/vscode
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 174887
 ---

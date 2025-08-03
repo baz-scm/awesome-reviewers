@@ -5,7 +5,7 @@ description: Always wrap potentially unsafe operations (like JSON parsing, Buffe
   error messages are user-friendly and actionable.
 repository: continuedev/continue
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 27819
 ---

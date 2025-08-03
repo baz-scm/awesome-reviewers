@@ -9,7 +9,7 @@ description: 'When modifying database structures or executing dynamic SQL querie
   instead of standard `CREATE INDEX`:'
 repository: supabase/supabase
 label: Database
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 86070
 ---

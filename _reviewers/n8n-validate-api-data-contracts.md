@@ -6,7 +6,7 @@ description: Always validate API request and response data using schema validati
   alone.
 repository: n8n-io/n8n
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 5
 repository_stars: 122978
 ---

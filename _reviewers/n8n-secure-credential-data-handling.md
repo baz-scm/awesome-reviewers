@@ -7,7 +7,7 @@ description: 'Always protect sensitive credential data through proper encryption
   1. Never store credentials in plaintext within source code'
 repository: n8n-io/n8n
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 122978
 ---

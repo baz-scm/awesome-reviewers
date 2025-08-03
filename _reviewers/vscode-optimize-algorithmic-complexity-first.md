@@ -4,7 +4,7 @@ description: 'When implementing algorithms, prioritize reducing computational co
   before adding special cases or optimizing for specific scenarios. Key practices:'
 repository: microsoft/vscode
 label: Algorithms
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 174887
 ---

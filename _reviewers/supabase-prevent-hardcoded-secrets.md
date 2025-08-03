@@ -6,7 +6,7 @@ description: Never store sensitive information such as API keys, passwords, toke
   significant security vulnerabilities.
 repository: supabase/supabase
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 86070
 ---

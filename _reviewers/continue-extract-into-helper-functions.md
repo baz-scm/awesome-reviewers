@@ -5,7 +5,7 @@ description: 'Break down complex or deeply nested code into smaller, well-named 
   when:'
 repository: continuedev/continue
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 27819
 ---

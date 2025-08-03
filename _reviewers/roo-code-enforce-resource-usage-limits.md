@@ -7,7 +7,7 @@ description: 'Implement explicit resource limits and monitoring to prevent perfo
   1. Define maximum sizes for buffers and caches'
 repository: RooCodeInc/Roo-Code
 label: Performance Optimization
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 17288
 ---

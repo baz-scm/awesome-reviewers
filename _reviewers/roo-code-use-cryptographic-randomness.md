@@ -7,7 +7,7 @@ description: Always use cryptographically secure random number generation for se
   by attackers.
 repository: RooCodeInc/Roo-Code
 label: Security
-language: Typescript
+language: TypeScript
 comments_count: 3
 repository_stars: 17288
 ---

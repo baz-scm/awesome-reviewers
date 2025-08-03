@@ -7,7 +7,7 @@ description: Commented-out code should be removed immediately rather than commit
   later.
 repository: n8n-io/n8n
 label: Code Style
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 122978
 ---

@@ -4,7 +4,7 @@ description: 'Always validate configuration values before use, provide sensible 
   and centralize constants in shared modules. When implementing configuration handling:'
 repository: RooCodeInc/Roo-Code
 label: Configurations
-language: Typescript
+language: TypeScript
 comments_count: 7
 repository_stars: 17288
 ---

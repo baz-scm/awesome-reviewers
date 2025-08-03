@@ -5,7 +5,7 @@ description: Error messages should not only identify problems but also guide dev
   that can resolve the issue.
 repository: microsoft/typescript
 label: Error Handling
-language: Typescript
+language: TypeScript
 comments_count: 4
 repository_stars: 105378
 ---

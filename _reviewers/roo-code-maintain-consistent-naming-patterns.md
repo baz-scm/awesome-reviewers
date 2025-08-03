@@ -7,7 +7,7 @@ description: 'Use consistent naming patterns throughout the codebase. When addin
   1. Consistent prefix/suffix patterns in related identifiers'
 repository: RooCodeInc/Roo-Code
 label: Naming Conventions
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 17288
 ---

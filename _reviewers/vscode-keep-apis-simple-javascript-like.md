@@ -5,7 +5,7 @@ description: Design APIs to be simple and idiomatic to JavaScript/TypeScript whi
   or implementation details leaking through interfaces.
 repository: microsoft/vscode
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 6
 repository_stars: 174887
 ---

@@ -5,7 +5,7 @@ description: Ensure end-to-end tests are properly isolated and follow best pract
   eliminate practices that cause flaky results.
 repository: appwrite/appwrite
 label: Testing
-language: Javascript
+language: JavaScript
 comments_count: 4
 repository_stars: 51959
 ---

@@ -5,7 +5,7 @@ description: Choose HTTP methods that align with the actual operation being perf
   modify state or require complex request bodies.
 repository: supabase/supabase
 label: API
-language: Typescript
+language: TypeScript
 comments_count: 2
 repository_stars: 86070
 ---

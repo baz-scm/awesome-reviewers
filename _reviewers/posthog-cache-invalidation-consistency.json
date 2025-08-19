@@ -1,0 +1,326 @@
+[
+  {
+    "discussion_id": "2276217891",
+    "pr_number": 36608,
+    "pr_file": "posthog/models/cache.py",
+    "created_at": "2025-08-14T10:21:43+00:00",
+    "commented_code": "+from typing import Optional\n+from django.core import serializers\n+from django.db.models import QuerySet, Manager\n+from posthog.git import get_git_commit_short\n+from posthog.redis import get_client\n+from posthog.settings import TEST\n+\n+\n+class CachedQuerySet(QuerySet):\n+    def get_commit_cache_key(self, team_id: int, key_prefix: Optional[str] = None) -> str:\n+        current_sha = get_git_commit_short()\n+        key = f\"{team_id}:{current_sha}:{self.model.__name__}\"\n+\n+        if key_prefix:\n+            key = f\"{key_prefix}:{key}\"\n+\n+        # cache key based on sha to invalidate cache on deploys in case of migrations\n+        return key\n+\n+    def fetch_cached(self, team_id: int, timeout: int = 300, key_prefix: Optional[str] = None):\n+        if TEST:\n+            return list(self)\n+\n+        redis_client = get_client()\n+        key = self.get_commit_cache_key(team_id=team_id, key_prefix=key_prefix)\n+\n+        data = redis_client.get(key)",
+    "repo_full_name": "PostHog/posthog",
+    "discussion_comments": [
+      {
+        "comment_id": "2276217891",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/models/cache.py",
+        "discussion_id": "2276217891",
+        "commented_code": "@@ -0,0 +1,43 @@\n+from typing import Optional\n+from django.core import serializers\n+from django.db.models import QuerySet, Manager\n+from posthog.git import get_git_commit_short\n+from posthog.redis import get_client\n+from posthog.settings import TEST\n+\n+\n+class CachedQuerySet(QuerySet):\n+    def get_commit_cache_key(self, team_id: int, key_prefix: Optional[str] = None) -> str:\n+        current_sha = get_git_commit_short()\n+        key = f\"{team_id}:{current_sha}:{self.model.__name__}\"\n+\n+        if key_prefix:\n+            key = f\"{key_prefix}:{key}\"\n+\n+        # cache key based on sha to invalidate cache on deploys in case of migrations\n+        return key\n+\n+    def fetch_cached(self, team_id: int, timeout: int = 300, key_prefix: Optional[str] = None):\n+        if TEST:\n+            return list(self)\n+\n+        redis_client = get_client()\n+        key = self.get_commit_cache_key(team_id=team_id, key_prefix=key_prefix)\n+\n+        data = redis_client.get(key)",
+        "comment_created_at": "2025-08-14T10:21:43+00:00",
+        "comment_author": "Gilbert09",
+        "comment_body": "We should probably be using a [hash](https://redis.io/docs/latest/develop/data-types/hashes/) in redis instead of straight up key/value. The key of the hashset can be `hogql_database:team_id:git_commit_sha`. Then each key in the hashset can be the model name (or an explicit query name). \r\n\r\nThis makes cache busting a lot easier down the line - we can either bust a single hashset key (e.g. a single model), or the whole database, with a single operation on redis - otherwise we'd need to have a list of model/query names to then rebuild all the cache entries to bust multiple entries ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2277733997",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/models/cache.py",
+        "discussion_id": "2276217891",
+        "commented_code": "@@ -0,0 +1,43 @@\n+from typing import Optional\n+from django.core import serializers\n+from django.db.models import QuerySet, Manager\n+from posthog.git import get_git_commit_short\n+from posthog.redis import get_client\n+from posthog.settings import TEST\n+\n+\n+class CachedQuerySet(QuerySet):\n+    def get_commit_cache_key(self, team_id: int, key_prefix: Optional[str] = None) -> str:\n+        current_sha = get_git_commit_short()\n+        key = f\"{team_id}:{current_sha}:{self.model.__name__}\"\n+\n+        if key_prefix:\n+            key = f\"{key_prefix}:{key}\"\n+\n+        # cache key based on sha to invalidate cache on deploys in case of migrations\n+        return key\n+\n+    def fetch_cached(self, team_id: int, timeout: int = 300, key_prefix: Optional[str] = None):\n+        if TEST:\n+            return list(self)\n+\n+        redis_client = get_client()\n+        key = self.get_commit_cache_key(team_id=team_id, key_prefix=key_prefix)\n+\n+        data = redis_client.get(key)",
+        "comment_created_at": "2025-08-14T21:13:10+00:00",
+        "comment_author": "EDsCODE",
+        "comment_body": "brilliant",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2276239394",
+    "pr_number": 36608,
+    "pr_file": "posthog/warehouse/models/datawarehouse_saved_query.py",
+    "created_at": "2025-08-14T10:31:22+00:00",
+    "commented_code": ")\n         ]\n \n+    objects: CacheManager = CacheManager()",
+    "repo_full_name": "PostHog/posthog",
+    "discussion_comments": [
+      {
+        "comment_id": "2276239394",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/warehouse/models/datawarehouse_saved_query.py",
+        "discussion_id": "2276239394",
+        "commented_code": "@@ -86,6 +89,8 @@ class Meta:\n             )\n         ]\n \n+    objects: CacheManager = CacheManager()",
+        "comment_created_at": "2025-08-14T10:31:22+00:00",
+        "comment_author": "Gilbert09",
+        "comment_body": "OH, I see, you're using a cache manager on the underlying models. Hmm, I'm unsure if this is what we want - I don't know what side effects this has. A quick search leads me to two:\r\n- ORM writes (including bulk updates, signals, admin edits, scripts) can bypass your invalidation path \u2192 stale cache.\r\n- Related-object changes (FK/M2M) often don\u2019t invalidate dependent keys.\r\n\r\nWe'd also be caching _all_ of these models in redis when they're used (for a ttl of 300s?). What would the total amount of memory be for this in Redis? I know our main redis was hitting limits not so long ago and we had to upgrade. Are we confident that caching all of these models won't exhaust redis?\r\n\r\nDo we do this anywhere else in the app yet? I think I'm of the opinion that this may not be the best idea, based on how many unknowns and potential side effects could come from this. Caching less data is preferable generally, so just caching the hogql database model calls is likely gonna lead to fewer issues down the line - what do you think?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2276261061",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/warehouse/models/datawarehouse_saved_query.py",
+        "discussion_id": "2276239394",
+        "commented_code": "@@ -86,6 +89,8 @@ class Meta:\n             )\n         ]\n \n+    objects: CacheManager = CacheManager()",
+        "comment_created_at": "2025-08-14T10:42:14+00:00",
+        "comment_author": "Gilbert09",
+        "comment_body": "I've just come back to this - so is it that we won't be reading from the cache unless if we explicitly use the `Model.fetch_cached` function - is that right? I think I feel better about this if that is true, not managing the busting of these models ourselves when the models change is good generally. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2276678601",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/warehouse/models/datawarehouse_saved_query.py",
+        "discussion_id": "2276239394",
+        "commented_code": "@@ -86,6 +89,8 @@ class Meta:\n             )\n         ]\n \n+    objects: CacheManager = CacheManager()",
+        "comment_created_at": "2025-08-14T13:42:19+00:00",
+        "comment_author": "rafaeelaudibert",
+        "comment_body": "My understanding is that the busting of the cache is happening on the receivers at the end of this file @Gilbert09, and the manager is only used at querying time - i.e. there's no proactive caching (which makes sense to me).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2276684855",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/warehouse/models/datawarehouse_saved_query.py",
+        "discussion_id": "2276239394",
+        "commented_code": "@@ -86,6 +89,8 @@ class Meta:\n             )\n         ]\n \n+    objects: CacheManager = CacheManager()",
+        "comment_created_at": "2025-08-14T13:44:35+00:00",
+        "comment_author": "rafaeelaudibert",
+        "comment_body": "I do wonder, however, if instead of creating a manager, we shouldn't instead simply have a wrapper that receives a queryset and then does the caching \"on the side\" without interfering with any Django behavior. Cache busting logic will look slightly uglier (using a manager is nice) but I'd much prefer doing that over changing the manager.\n\nAs an example on why changing the manager is bad, I believe this code change implies we are NOT adding the `RootTeamQuerySet` to it, implying we're not adding `parent_team_id` logic - and I think we need that?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2276711061",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/warehouse/models/datawarehouse_saved_query.py",
+        "discussion_id": "2276239394",
+        "commented_code": "@@ -86,6 +89,8 @@ class Meta:\n             )\n         ]\n \n+    objects: CacheManager = CacheManager()",
+        "comment_created_at": "2025-08-14T13:54:27+00:00",
+        "comment_author": "Gilbert09",
+        "comment_body": "I dont think we need `RootTeamMixin` on our warehouse models cos the models are environment-based and not project-based (in the old environment structure) I think",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2277014547",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/warehouse/models/datawarehouse_saved_query.py",
+        "discussion_id": "2276239394",
+        "commented_code": "@@ -86,6 +89,8 @@ class Meta:\n             )\n         ]\n \n+    objects: CacheManager = CacheManager()",
+        "comment_created_at": "2025-08-14T15:47:09+00:00",
+        "comment_author": "EDsCODE",
+        "comment_body": "yeah so the workflow I was thinking with this is \r\n1. the cache will _only_ be used/active when you do \"fetch_cached\" which makes the devex on adding caching to django models decent. (I think it can still get reckless if you try to cache a resultset of a lot of items but that's a general risk even without this pattern)\r\n2. the cache will be invalidated on the django signals for saves/deletes for the relevant models. This is extendable ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2277801582",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/warehouse/models/datawarehouse_saved_query.py",
+        "discussion_id": "2276239394",
+        "commented_code": "@@ -86,6 +89,8 @@ class Meta:\n             )\n         ]\n \n+    objects: CacheManager = CacheManager()",
+        "comment_created_at": "2025-08-14T22:01:46+00:00",
+        "comment_author": "EDsCODE",
+        "comment_body": "> As an example on why changing the manager is bad, I believe this code change implies we are NOT adding the RootTeamQuerySet to it, implying we're not adding parent_team_id logic - and I think we need that?\r\n\r\nWe could extend this instead (and I just did for the model that does need it to). But as mentioned above, not all of them use it and maybe they should but that issue seems separate from this",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2276246115",
+    "pr_number": 36608,
+    "pr_file": "posthog/warehouse/models/external_data_source.py",
+    "created_at": "2025-08-14T10:34:50+00:00",
+    "commented_code": "class ExternalDataSource(CreatedMetaFields, UpdatedMetaFields, UUIDModel, DeletedMetaFields):\n+    objects: CacheManager = CacheManager()",
+    "repo_full_name": "PostHog/posthog",
+    "discussion_comments": [
+      {
+        "comment_id": "2276246115",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/warehouse/models/external_data_source.py",
+        "discussion_id": "2276246115",
+        "commented_code": "@@ -20,6 +21,8 @@\n \n \n class ExternalDataSource(CreatedMetaFields, UpdatedMetaFields, UUIDModel, DeletedMetaFields):\n+    objects: CacheManager = CacheManager()",
+        "comment_created_at": "2025-08-14T10:34:50+00:00",
+        "comment_author": "Gilbert09",
+        "comment_body": "Why do we have explicit cache busting in SavedQuery but not in here, e.g. this thing:\r\n\r\n```python\r\n@receiver(post_save, sender=DataWarehouseSavedQuery)\r\ndef invalidate_hogql_database_cache(sender, instance, **kwargs):\r\n    DataWarehouseSavedQuery.objects.invalidate_cache(instance.team_id)\r\n```\r\n\r\nAn extension to my above comment, this is too easy to miss if it is a required thing we need",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2277019016",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/warehouse/models/external_data_source.py",
+        "discussion_id": "2276246115",
+        "commented_code": "@@ -20,6 +21,8 @@\n \n \n class ExternalDataSource(CreatedMetaFields, UpdatedMetaFields, UUIDModel, DeletedMetaFields):\n+    objects: CacheManager = CacheManager()",
+        "comment_created_at": "2025-08-14T15:49:03+00:00",
+        "comment_author": "EDsCODE",
+        "comment_body": "we should. I missed this one",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2278698293",
+    "pr_number": 36608,
+    "pr_file": "posthog/models/cache.py",
+    "created_at": "2025-08-15T09:40:01+00:00",
+    "commented_code": "+from typing import TYPE_CHECKING, Optional\n+from django.core import serializers\n+from django.db.models import QuerySet, Manager\n+import posthoganalytics\n+from prometheus_client import Counter\n+\n+from posthog.exceptions_capture import capture_exception\n+from posthog.git import get_git_commit_short\n+from posthog.redis import get_client\n+from posthog.settings import TEST\n+\n+if TYPE_CHECKING:\n+    from posthog.models import Team\n+\n+\n+DATABASE_CACHE_COUNTER = Counter(\n+    \"posthog_get_model_cache\",\n+    \"Metric tracking whether a database query was fetched from cache or not\",\n+    labelnames=[\"result\", \"model\"],\n+)\n+\n+DATABASE_INVALIDATION_COUNTER = Counter(\n+    \"posthog_invalidate_model_cache\",\n+    \"Metric tracking whether a database query was invalidated\",\n+    labelnames=[\"model\"],\n+)\n+\n+CACHE_TEST_OVERRIDE = False\n+\n+\n+# temporary for rollout purposes\n+def is_cache_enabled(team: \"Team\") -> bool:\n+    \"\"\"\n+    Use the hogql database cache.\n+    \"\"\"\n+\n+    return posthoganalytics.feature_enabled(\n+        \"hogql-database-cache\",\n+        str(team.uuid),\n+        groups={\n+            \"organization\": str(team.organization_id),\n+            \"project\": str(team.id),\n+        },\n+        group_properties={\n+            \"organization\": {\n+                \"id\": str(team.organization_id),\n+            },\n+            \"project\": {\n+                \"id\": str(team.id),\n+            },\n+        },\n+        only_evaluate_locally=True,\n+        send_feature_flag_events=False,\n+    )\n+\n+\n+class CachedQuerySet(QuerySet):\n+    def get_commit_cache_hash_key(self, team_id: int, key_prefix: Optional[str] = None) -> str:\n+        current_sha = get_git_commit_short()\n+        key = f\"{team_id}:{current_sha}\"\n+\n+        if key_prefix:\n+            key = f\"{key_prefix}:{key}\"\n+\n+        # cache key based on sha to invalidate cache on deploys in case of migrations\n+        return key\n+\n+    def fetch_cached(self, team: \"Team\", timeout: int = 3600, key_prefix: Optional[str] = None):\n+        cache_enabled = CACHE_TEST_OVERRIDE if TEST else is_cache_enabled(team)\n+\n+        if cache_enabled:\n+            try:\n+                redis_client = get_client()\n+                key = self.get_commit_cache_hash_key(team_id=team.pk, key_prefix=key_prefix)\n+\n+                data = redis_client.hget(key, self.model.__name__)",
+    "repo_full_name": "PostHog/posthog",
+    "discussion_comments": [
+      {
+        "comment_id": "2278698293",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/models/cache.py",
+        "discussion_id": "2278698293",
+        "commented_code": "@@ -0,0 +1,104 @@\n+from typing import TYPE_CHECKING, Optional\n+from django.core import serializers\n+from django.db.models import QuerySet, Manager\n+import posthoganalytics\n+from prometheus_client import Counter\n+\n+from posthog.exceptions_capture import capture_exception\n+from posthog.git import get_git_commit_short\n+from posthog.redis import get_client\n+from posthog.settings import TEST\n+\n+if TYPE_CHECKING:\n+    from posthog.models import Team\n+\n+\n+DATABASE_CACHE_COUNTER = Counter(\n+    \"posthog_get_model_cache\",\n+    \"Metric tracking whether a database query was fetched from cache or not\",\n+    labelnames=[\"result\", \"model\"],\n+)\n+\n+DATABASE_INVALIDATION_COUNTER = Counter(\n+    \"posthog_invalidate_model_cache\",\n+    \"Metric tracking whether a database query was invalidated\",\n+    labelnames=[\"model\"],\n+)\n+\n+CACHE_TEST_OVERRIDE = False\n+\n+\n+# temporary for rollout purposes\n+def is_cache_enabled(team: \"Team\") -> bool:\n+    \"\"\"\n+    Use the hogql database cache.\n+    \"\"\"\n+\n+    return posthoganalytics.feature_enabled(\n+        \"hogql-database-cache\",\n+        str(team.uuid),\n+        groups={\n+            \"organization\": str(team.organization_id),\n+            \"project\": str(team.id),\n+        },\n+        group_properties={\n+            \"organization\": {\n+                \"id\": str(team.organization_id),\n+            },\n+            \"project\": {\n+                \"id\": str(team.id),\n+            },\n+        },\n+        only_evaluate_locally=True,\n+        send_feature_flag_events=False,\n+    )\n+\n+\n+class CachedQuerySet(QuerySet):\n+    def get_commit_cache_hash_key(self, team_id: int, key_prefix: Optional[str] = None) -> str:\n+        current_sha = get_git_commit_short()\n+        key = f\"{team_id}:{current_sha}\"\n+\n+        if key_prefix:\n+            key = f\"{key_prefix}:{key}\"\n+\n+        # cache key based on sha to invalidate cache on deploys in case of migrations\n+        return key\n+\n+    def fetch_cached(self, team: \"Team\", timeout: int = 3600, key_prefix: Optional[str] = None):\n+        cache_enabled = CACHE_TEST_OVERRIDE if TEST else is_cache_enabled(team)\n+\n+        if cache_enabled:\n+            try:\n+                redis_client = get_client()\n+                key = self.get_commit_cache_hash_key(team_id=team.pk, key_prefix=key_prefix)\n+\n+                data = redis_client.hget(key, self.model.__name__)",
+        "comment_created_at": "2025-08-15T09:40:01+00:00",
+        "comment_author": "Gilbert09",
+        "comment_body": "Is `self.model.__name__` unique enough here? I think we're gonna have cache collision with differing queries. We want/need a unique key for each queryset I think\r\n\r\n```python\r\n# Request a queryset - this will get cached under the key `\"ExternalDataSource\"`\r\nnon_deleted_sources = ExternalDataSource.objects.filter(team_id=1, deleted=False).fetch_cached(team=team, key_prefix=CACHE_KEY_PREFIX)\r\n\r\n# Make a second request for a queryset with different filters, e.g. deleted=True instead of False\r\ndeleted_sources = ExternalDataSource.objects.filter(team_id=1, deleted=True).fetch_cached(team=team, key_prefix=CACHE_KEY_PREFIX)\r\n\r\n# I believe `deleted_sources` will hit the cache and return non-deleted sources\r\nassert non_deleted_sources == deleted_sources # True\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2278738224",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/models/cache.py",
+        "discussion_id": "2278698293",
+        "commented_code": "@@ -0,0 +1,104 @@\n+from typing import TYPE_CHECKING, Optional\n+from django.core import serializers\n+from django.db.models import QuerySet, Manager\n+import posthoganalytics\n+from prometheus_client import Counter\n+\n+from posthog.exceptions_capture import capture_exception\n+from posthog.git import get_git_commit_short\n+from posthog.redis import get_client\n+from posthog.settings import TEST\n+\n+if TYPE_CHECKING:\n+    from posthog.models import Team\n+\n+\n+DATABASE_CACHE_COUNTER = Counter(\n+    \"posthog_get_model_cache\",\n+    \"Metric tracking whether a database query was fetched from cache or not\",\n+    labelnames=[\"result\", \"model\"],\n+)\n+\n+DATABASE_INVALIDATION_COUNTER = Counter(\n+    \"posthog_invalidate_model_cache\",\n+    \"Metric tracking whether a database query was invalidated\",\n+    labelnames=[\"model\"],\n+)\n+\n+CACHE_TEST_OVERRIDE = False\n+\n+\n+# temporary for rollout purposes\n+def is_cache_enabled(team: \"Team\") -> bool:\n+    \"\"\"\n+    Use the hogql database cache.\n+    \"\"\"\n+\n+    return posthoganalytics.feature_enabled(\n+        \"hogql-database-cache\",\n+        str(team.uuid),\n+        groups={\n+            \"organization\": str(team.organization_id),\n+            \"project\": str(team.id),\n+        },\n+        group_properties={\n+            \"organization\": {\n+                \"id\": str(team.organization_id),\n+            },\n+            \"project\": {\n+                \"id\": str(team.id),\n+            },\n+        },\n+        only_evaluate_locally=True,\n+        send_feature_flag_events=False,\n+    )\n+\n+\n+class CachedQuerySet(QuerySet):\n+    def get_commit_cache_hash_key(self, team_id: int, key_prefix: Optional[str] = None) -> str:\n+        current_sha = get_git_commit_short()\n+        key = f\"{team_id}:{current_sha}\"\n+\n+        if key_prefix:\n+            key = f\"{key_prefix}:{key}\"\n+\n+        # cache key based on sha to invalidate cache on deploys in case of migrations\n+        return key\n+\n+    def fetch_cached(self, team: \"Team\", timeout: int = 3600, key_prefix: Optional[str] = None):\n+        cache_enabled = CACHE_TEST_OVERRIDE if TEST else is_cache_enabled(team)\n+\n+        if cache_enabled:\n+            try:\n+                redis_client = get_client()\n+                key = self.get_commit_cache_hash_key(team_id=team.pk, key_prefix=key_prefix)\n+\n+                data = redis_client.hget(key, self.model.__name__)",
+        "comment_created_at": "2025-08-15T10:11:28+00:00",
+        "comment_author": "Gilbert09",
+        "comment_body": "Okay, I did some more research on this - the problems we'd need to solve are:\r\n- Have unique hash field keys for each queryset\r\n- Be able to bust each queryset when an underlying model updates \r\n\r\nI think there are a couple of directions we can go in:\r\n\r\n**(1)** Dont continue down the path of a generic django cache manager, and instead move towards a more custom approach for the hoglq database with specific busting logic on each relevant model\r\n\r\nor \r\n\r\n**(2)** Stay on this path but change the implementation so that we have a unique key for each queryset - e.g.\r\n  1. Each time we call `fetch_cached()`, we give it a unique name for that specific queryset. Handling key collisions becomes a coders requirement though, and so there is still a non-zero chance of a collision\r\n  2. We build up a unique key from the queryset itself, such as taking the underlying generated SQL. I've pasted an example below of what we could do\r\n\r\nThen also add busting logic, because each hash field will be a hash in itself and we won't be able to identify the model that the hash relates to, we could either:\r\n  1. Add the model name to the hash key itself (so including it in `team_id:git_sha:model_name`) and use a redis set instead of a hash, so we do something like `SADD {prefix}:{team_id}:{git_sha}:{model_label} {queryset_key}`, then we can use `SMEMBERS` to get each queryset key for that model for the team and delete it - it's a `O(n)` operation where `n` is the amount of querysets we have cached, but it'll work\r\n  2. or, we can store a `version` for each team and model combination in redis and increment it on each update to the underlying model - then include that version in the hash key. So, every time the underlying model updates, we'll miss the cache on the next hogql database generation as the `version` would have been incremented (have made an example below showing this)\r\n\r\n\r\n**Example of generating a unique key for a queryset:**\r\n```python\r\nsql, params = self.query.get_compiler(self.db).as_sql()\r\npayload = repr((\r\n    sql, params,\r\n    self.query.annotations,\r\n    self.query.order_by,\r\n    self.query.distinct,\r\n    self.query.low_mark, self.query.high_mark,\r\n    self._fields,\r\n    getattr(self, \"_prefetch_related_lookups\", None),\r\n    getattr(self, \"_select_related\", None),\r\n    getattr(self, \"_deferred_fields\", None),\r\n))\r\nreturn hashlib.sha256(payload.encode(\"utf-8\")).hexdigest()\r\n```\r\n\r\n**Example of the `version` busting:**\r\n```python\r\ndef get_key():\r\n    # Get the current version number for the model in redis\r\n    current_version = redis.get(f\"{team_id}:{git_sha}:{model_name}:VERSION\") or 0\r\n    return f\"{team_id}:{git_sha}:{model_name}:{current_version}\"\r\n\r\ndef invalidate_cache():\r\n    # On invalidate, increment the version number, this will invalidate all existing cache entries for this model\r\n    redis.incr(f\"{team_id}:{git_sha}:{model_name}:VERSION\", 1)\r\n\r\n    # We just let all existing entries bust via the TTL organically\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2280210688",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/models/cache.py",
+        "discussion_id": "2278698293",
+        "commented_code": "@@ -0,0 +1,104 @@\n+from typing import TYPE_CHECKING, Optional\n+from django.core import serializers\n+from django.db.models import QuerySet, Manager\n+import posthoganalytics\n+from prometheus_client import Counter\n+\n+from posthog.exceptions_capture import capture_exception\n+from posthog.git import get_git_commit_short\n+from posthog.redis import get_client\n+from posthog.settings import TEST\n+\n+if TYPE_CHECKING:\n+    from posthog.models import Team\n+\n+\n+DATABASE_CACHE_COUNTER = Counter(\n+    \"posthog_get_model_cache\",\n+    \"Metric tracking whether a database query was fetched from cache or not\",\n+    labelnames=[\"result\", \"model\"],\n+)\n+\n+DATABASE_INVALIDATION_COUNTER = Counter(\n+    \"posthog_invalidate_model_cache\",\n+    \"Metric tracking whether a database query was invalidated\",\n+    labelnames=[\"model\"],\n+)\n+\n+CACHE_TEST_OVERRIDE = False\n+\n+\n+# temporary for rollout purposes\n+def is_cache_enabled(team: \"Team\") -> bool:\n+    \"\"\"\n+    Use the hogql database cache.\n+    \"\"\"\n+\n+    return posthoganalytics.feature_enabled(\n+        \"hogql-database-cache\",\n+        str(team.uuid),\n+        groups={\n+            \"organization\": str(team.organization_id),\n+            \"project\": str(team.id),\n+        },\n+        group_properties={\n+            \"organization\": {\n+                \"id\": str(team.organization_id),\n+            },\n+            \"project\": {\n+                \"id\": str(team.id),\n+            },\n+        },\n+        only_evaluate_locally=True,\n+        send_feature_flag_events=False,\n+    )\n+\n+\n+class CachedQuerySet(QuerySet):\n+    def get_commit_cache_hash_key(self, team_id: int, key_prefix: Optional[str] = None) -> str:\n+        current_sha = get_git_commit_short()\n+        key = f\"{team_id}:{current_sha}\"\n+\n+        if key_prefix:\n+            key = f\"{key_prefix}:{key}\"\n+\n+        # cache key based on sha to invalidate cache on deploys in case of migrations\n+        return key\n+\n+    def fetch_cached(self, team: \"Team\", timeout: int = 3600, key_prefix: Optional[str] = None):\n+        cache_enabled = CACHE_TEST_OVERRIDE if TEST else is_cache_enabled(team)\n+\n+        if cache_enabled:\n+            try:\n+                redis_client = get_client()\n+                key = self.get_commit_cache_hash_key(team_id=team.pk, key_prefix=key_prefix)\n+\n+                data = redis_client.hget(key, self.model.__name__)",
+        "comment_created_at": "2025-08-16T03:27:33+00:00",
+        "comment_author": "EDsCODE",
+        "comment_body": "good point on the collisions. completely forgot t his should be generalizable. Hmmm, versioning seems easy enough. \r\n\r\nCurious though as maybe I don't fully understand redis hashes, is there a tradeoff/gotcha with just making the hash key `f\"{team_id}:{git_sha}:{model_name}\"` and then deleting the entire hash during invalidation? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2282258681",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36608,
+        "pr_file": "posthog/models/cache.py",
+        "discussion_id": "2278698293",
+        "commented_code": "@@ -0,0 +1,104 @@\n+from typing import TYPE_CHECKING, Optional\n+from django.core import serializers\n+from django.db.models import QuerySet, Manager\n+import posthoganalytics\n+from prometheus_client import Counter\n+\n+from posthog.exceptions_capture import capture_exception\n+from posthog.git import get_git_commit_short\n+from posthog.redis import get_client\n+from posthog.settings import TEST\n+\n+if TYPE_CHECKING:\n+    from posthog.models import Team\n+\n+\n+DATABASE_CACHE_COUNTER = Counter(\n+    \"posthog_get_model_cache\",\n+    \"Metric tracking whether a database query was fetched from cache or not\",\n+    labelnames=[\"result\", \"model\"],\n+)\n+\n+DATABASE_INVALIDATION_COUNTER = Counter(\n+    \"posthog_invalidate_model_cache\",\n+    \"Metric tracking whether a database query was invalidated\",\n+    labelnames=[\"model\"],\n+)\n+\n+CACHE_TEST_OVERRIDE = False\n+\n+\n+# temporary for rollout purposes\n+def is_cache_enabled(team: \"Team\") -> bool:\n+    \"\"\"\n+    Use the hogql database cache.\n+    \"\"\"\n+\n+    return posthoganalytics.feature_enabled(\n+        \"hogql-database-cache\",\n+        str(team.uuid),\n+        groups={\n+            \"organization\": str(team.organization_id),\n+            \"project\": str(team.id),\n+        },\n+        group_properties={\n+            \"organization\": {\n+                \"id\": str(team.organization_id),\n+            },\n+            \"project\": {\n+                \"id\": str(team.id),\n+            },\n+        },\n+        only_evaluate_locally=True,\n+        send_feature_flag_events=False,\n+    )\n+\n+\n+class CachedQuerySet(QuerySet):\n+    def get_commit_cache_hash_key(self, team_id: int, key_prefix: Optional[str] = None) -> str:\n+        current_sha = get_git_commit_short()\n+        key = f\"{team_id}:{current_sha}\"\n+\n+        if key_prefix:\n+            key = f\"{key_prefix}:{key}\"\n+\n+        # cache key based on sha to invalidate cache on deploys in case of migrations\n+        return key\n+\n+    def fetch_cached(self, team: \"Team\", timeout: int = 3600, key_prefix: Optional[str] = None):\n+        cache_enabled = CACHE_TEST_OVERRIDE if TEST else is_cache_enabled(team)\n+\n+        if cache_enabled:\n+            try:\n+                redis_client = get_client()\n+                key = self.get_commit_cache_hash_key(team_id=team.pk, key_prefix=key_prefix)\n+\n+                data = redis_client.hget(key, self.model.__name__)",
+        "comment_created_at": "2025-08-18T12:28:09+00:00",
+        "comment_author": "Gilbert09",
+        "comment_body": "Looking back on this, dont think there's any gotcha with just making the hash key what you've listed above - I think using my first suggestion as a HASH instead of a SET would work fine here \ud83d\udc4d ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2263679310",
+    "pr_number": 36354,
+    "pr_file": "posthog/models/feature_flag/local_evaluation.py",
+    "created_at": "2025-08-08T17:52:19+00:00",
+    "commented_code": "+from django.conf import settings\n+from django.db.models.signals import post_save\n+from django.dispatch import receiver\n+import structlog\n+\n+from django.db.models import Q\n+\n+from posthog.models.cohort.cohort import Cohort, CohortOrEmpty\n+from posthog.models.feature_flag import FeatureFlag\n+from posthog.models.group_type_mapping import GroupTypeMapping\n+from posthog.models.team import Team\n+from posthog.storage.hypercache import HyperCache\n+\n+logger = structlog.get_logger(__name__)\n+\n+DATABASE_FOR_LOCAL_EVALUATION = (\n+    \"default\"\n+    if (\"local_evaluation\" not in settings.READ_REPLICA_OPT_IN or \"replica\" not in settings.DATABASES)  # noqa: F821\n+    else \"replica\"\n+)\n+\n+flags_hypercache = HyperCache(\n+    namespace=\"feature_flags\",\n+    value=\"flags_with_cohorts.json\",\n+    load_fn=lambda key: _get_flags_response_for_local_evaluation(HyperCache.team_from_key(key), include_cohorts=True),\n+)\n+\n+flags_without_cohorts_hypercache = HyperCache(\n+    namespace=\"feature_flags\",\n+    value=\"flags_without_cohorts.json\",\n+    load_fn=lambda key: _get_flags_response_for_local_evaluation(HyperCache.team_from_key(key), include_cohorts=False),\n+)\n+\n+\n+def get_flags_response_for_local_evaluation(team: Team, include_cohorts: bool) -> dict | None:\n+    return (\n+        flags_hypercache.get_from_cache(team)\n+        if include_cohorts\n+        else flags_without_cohorts_hypercache.get_from_cache(team)\n+    )\n+\n+\n+def update_flag_caches(team: Team):\n+    flags_hypercache.update_cache(team)\n+    flags_without_cohorts_hypercache.update_cache(team)\n+\n+\n+def clear_flag_caches(team: Team, kinds: list[str] | None = None):\n+    flags_hypercache.clear_cache(team, kinds=kinds)\n+    flags_without_cohorts_hypercache.clear_cache(team, kinds=kinds)\n+\n+\n+def _get_flags_for_local_evaluation(team: Team):\n+    feature_flags = FeatureFlag.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION).filter(\n+        ~Q(is_remote_configuration=True),\n+        team__project_id=team.project_id,\n+        deleted=False,\n+    )\n+\n+    return feature_flags\n+\n+\n+def _get_flags_with_cohorts_for_local_evaluation(team: Team) -> tuple[list[FeatureFlag], dict]:\n+    feature_flags = _get_flags_for_local_evaluation(team)\n+\n+    cohorts = {}\n+    seen_cohorts_cache: dict[int, CohortOrEmpty] = {}\n+\n+    try:\n+        seen_cohorts_cache = {\n+            cohort.pk: cohort\n+            for cohort in Cohort.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION).filter(\n+                team__project_id=team.project_id, deleted=False\n+            )\n+        }\n+    except Exception:\n+        logger.error(\"Error prefetching cohorts\", exc_info=True)\n+\n+    for feature_flag in feature_flags:\n+        try:\n+            filters = feature_flag.get_filters()\n+            # transform cohort filters to be evaluated locally\n+            if (\n+                len(\n+                    feature_flag.get_cohort_ids(\n+                        using_database=DATABASE_FOR_LOCAL_EVALUATION,\n+                        seen_cohorts_cache=seen_cohorts_cache,\n+                    )\n+                )\n+                == 1\n+            ):\n+                feature_flag.filters = {\n+                    **filters,\n+                    \"groups\": feature_flag.transform_cohort_filters_for_easy_evaluation(\n+                        using_database=DATABASE_FOR_LOCAL_EVALUATION,\n+                        seen_cohorts_cache=seen_cohorts_cache,\n+                    ),\n+                }\n+            else:\n+                feature_flag.filters = filters\n+\n+            cohort_ids = feature_flag.get_cohort_ids(\n+                using_database=DATABASE_FOR_LOCAL_EVALUATION,\n+                seen_cohorts_cache=seen_cohorts_cache,\n+            )\n+\n+            for id in cohort_ids:\n+                # don't duplicate queries for already added cohorts\n+                if id not in cohorts:\n+                    if id in seen_cohorts_cache:\n+                        cohort = seen_cohorts_cache[id]\n+                    else:\n+                        cohort = (\n+                            Cohort.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION)\n+                            .filter(id=id, team__project_id=team.project_id, deleted=False)\n+                            .first()\n+                        )\n+                        seen_cohorts_cache[id] = cohort or \"\"\n+\n+                    if cohort and not cohort.is_static:\n+                        try:\n+                            cohorts[str(cohort.pk)] = cohort.properties.to_dict()\n+                        except Exception:\n+                            logger.error(\n+                                \"Error processing cohort properties\",\n+                                extra={\"cohort_id\": id},\n+                                exc_info=True,\n+                            )\n+                            continue\n+\n+        except Exception:\n+            logger.error(\"Error processing feature flag\", extra={\"flag_id\": feature_flag.pk}, exc_info=True)\n+            continue\n+\n+    return feature_flags, cohorts\n+\n+\n+def _get_flags_response_for_local_evaluation(team: Team, include_cohorts: bool) -> dict:\n+    from posthog.api.feature_flag import MinimalFeatureFlagSerializer\n+\n+    cohorts: dict[str, dict] = {}\n+    if include_cohorts:\n+        flags, cohorts = _get_flags_with_cohorts_for_local_evaluation(team)\n+    else:\n+        flags = _get_flags_for_local_evaluation(team)\n+\n+    response_data = {\n+        \"flags\": [MinimalFeatureFlagSerializer(feature_flag, context={}).data for feature_flag in flags],\n+        \"group_type_mapping\": {\n+            str(row.group_type_index): row.group_type\n+            for row in GroupTypeMapping.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION).filter(\n+                project_id=team.project_id\n+            )\n+        },\n+        \"cohorts\": cohorts,\n+    }\n+    return response_data\n+\n+\n+# NOTE: All models that affect the cache should have a signal to update the cache\n+\n+\n+@receiver(post_save, sender=FeatureFlag)",
+    "repo_full_name": "PostHog/posthog",
+    "discussion_comments": [
+      {
+        "comment_id": "2263679310",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36354,
+        "pr_file": "posthog/models/feature_flag/local_evaluation.py",
+        "discussion_id": "2263679310",
+        "commented_code": "@@ -0,0 +1,174 @@\n+from django.conf import settings\n+from django.db.models.signals import post_save\n+from django.dispatch import receiver\n+import structlog\n+\n+from django.db.models import Q\n+\n+from posthog.models.cohort.cohort import Cohort, CohortOrEmpty\n+from posthog.models.feature_flag import FeatureFlag\n+from posthog.models.group_type_mapping import GroupTypeMapping\n+from posthog.models.team import Team\n+from posthog.storage.hypercache import HyperCache\n+\n+logger = structlog.get_logger(__name__)\n+\n+DATABASE_FOR_LOCAL_EVALUATION = (\n+    \"default\"\n+    if (\"local_evaluation\" not in settings.READ_REPLICA_OPT_IN or \"replica\" not in settings.DATABASES)  # noqa: F821\n+    else \"replica\"\n+)\n+\n+flags_hypercache = HyperCache(\n+    namespace=\"feature_flags\",\n+    value=\"flags_with_cohorts.json\",\n+    load_fn=lambda key: _get_flags_response_for_local_evaluation(HyperCache.team_from_key(key), include_cohorts=True),\n+)\n+\n+flags_without_cohorts_hypercache = HyperCache(\n+    namespace=\"feature_flags\",\n+    value=\"flags_without_cohorts.json\",\n+    load_fn=lambda key: _get_flags_response_for_local_evaluation(HyperCache.team_from_key(key), include_cohorts=False),\n+)\n+\n+\n+def get_flags_response_for_local_evaluation(team: Team, include_cohorts: bool) -> dict | None:\n+    return (\n+        flags_hypercache.get_from_cache(team)\n+        if include_cohorts\n+        else flags_without_cohorts_hypercache.get_from_cache(team)\n+    )\n+\n+\n+def update_flag_caches(team: Team):\n+    flags_hypercache.update_cache(team)\n+    flags_without_cohorts_hypercache.update_cache(team)\n+\n+\n+def clear_flag_caches(team: Team, kinds: list[str] | None = None):\n+    flags_hypercache.clear_cache(team, kinds=kinds)\n+    flags_without_cohorts_hypercache.clear_cache(team, kinds=kinds)\n+\n+\n+def _get_flags_for_local_evaluation(team: Team):\n+    feature_flags = FeatureFlag.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION).filter(\n+        ~Q(is_remote_configuration=True),\n+        team__project_id=team.project_id,\n+        deleted=False,\n+    )\n+\n+    return feature_flags\n+\n+\n+def _get_flags_with_cohorts_for_local_evaluation(team: Team) -> tuple[list[FeatureFlag], dict]:\n+    feature_flags = _get_flags_for_local_evaluation(team)\n+\n+    cohorts = {}\n+    seen_cohorts_cache: dict[int, CohortOrEmpty] = {}\n+\n+    try:\n+        seen_cohorts_cache = {\n+            cohort.pk: cohort\n+            for cohort in Cohort.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION).filter(\n+                team__project_id=team.project_id, deleted=False\n+            )\n+        }\n+    except Exception:\n+        logger.error(\"Error prefetching cohorts\", exc_info=True)\n+\n+    for feature_flag in feature_flags:\n+        try:\n+            filters = feature_flag.get_filters()\n+            # transform cohort filters to be evaluated locally\n+            if (\n+                len(\n+                    feature_flag.get_cohort_ids(\n+                        using_database=DATABASE_FOR_LOCAL_EVALUATION,\n+                        seen_cohorts_cache=seen_cohorts_cache,\n+                    )\n+                )\n+                == 1\n+            ):\n+                feature_flag.filters = {\n+                    **filters,\n+                    \"groups\": feature_flag.transform_cohort_filters_for_easy_evaluation(\n+                        using_database=DATABASE_FOR_LOCAL_EVALUATION,\n+                        seen_cohorts_cache=seen_cohorts_cache,\n+                    ),\n+                }\n+            else:\n+                feature_flag.filters = filters\n+\n+            cohort_ids = feature_flag.get_cohort_ids(\n+                using_database=DATABASE_FOR_LOCAL_EVALUATION,\n+                seen_cohorts_cache=seen_cohorts_cache,\n+            )\n+\n+            for id in cohort_ids:\n+                # don't duplicate queries for already added cohorts\n+                if id not in cohorts:\n+                    if id in seen_cohorts_cache:\n+                        cohort = seen_cohorts_cache[id]\n+                    else:\n+                        cohort = (\n+                            Cohort.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION)\n+                            .filter(id=id, team__project_id=team.project_id, deleted=False)\n+                            .first()\n+                        )\n+                        seen_cohorts_cache[id] = cohort or \"\"\n+\n+                    if cohort and not cohort.is_static:\n+                        try:\n+                            cohorts[str(cohort.pk)] = cohort.properties.to_dict()\n+                        except Exception:\n+                            logger.error(\n+                                \"Error processing cohort properties\",\n+                                extra={\"cohort_id\": id},\n+                                exc_info=True,\n+                            )\n+                            continue\n+\n+        except Exception:\n+            logger.error(\"Error processing feature flag\", extra={\"flag_id\": feature_flag.pk}, exc_info=True)\n+            continue\n+\n+    return feature_flags, cohorts\n+\n+\n+def _get_flags_response_for_local_evaluation(team: Team, include_cohorts: bool) -> dict:\n+    from posthog.api.feature_flag import MinimalFeatureFlagSerializer\n+\n+    cohorts: dict[str, dict] = {}\n+    if include_cohorts:\n+        flags, cohorts = _get_flags_with_cohorts_for_local_evaluation(team)\n+    else:\n+        flags = _get_flags_for_local_evaluation(team)\n+\n+    response_data = {\n+        \"flags\": [MinimalFeatureFlagSerializer(feature_flag, context={}).data for feature_flag in flags],\n+        \"group_type_mapping\": {\n+            str(row.group_type_index): row.group_type\n+            for row in GroupTypeMapping.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION).filter(\n+                project_id=team.project_id\n+            )\n+        },\n+        \"cohorts\": cohorts,\n+    }\n+    return response_data\n+\n+\n+# NOTE: All models that affect the cache should have a signal to update the cache\n+\n+\n+@receiver(post_save, sender=FeatureFlag)",
+        "comment_created_at": "2025-08-08T17:52:19+00:00",
+        "comment_author": "haacked",
+        "comment_body": "I know we implement soft deletes so only `post_save` is necessary in day-to-day operations. But suppose an admin hard deletes a flag, wouldn't we want to invalidate the cache to be on the safe side?\r\n\r\n```suggestion\r\n@receiver(post_save, sender=FeatureFlag)\r\n@receiver(post_delete, sender=FeatureFlag)\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2264033378",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36354,
+        "pr_file": "posthog/models/feature_flag/local_evaluation.py",
+        "discussion_id": "2263679310",
+        "commented_code": "@@ -0,0 +1,174 @@\n+from django.conf import settings\n+from django.db.models.signals import post_save\n+from django.dispatch import receiver\n+import structlog\n+\n+from django.db.models import Q\n+\n+from posthog.models.cohort.cohort import Cohort, CohortOrEmpty\n+from posthog.models.feature_flag import FeatureFlag\n+from posthog.models.group_type_mapping import GroupTypeMapping\n+from posthog.models.team import Team\n+from posthog.storage.hypercache import HyperCache\n+\n+logger = structlog.get_logger(__name__)\n+\n+DATABASE_FOR_LOCAL_EVALUATION = (\n+    \"default\"\n+    if (\"local_evaluation\" not in settings.READ_REPLICA_OPT_IN or \"replica\" not in settings.DATABASES)  # noqa: F821\n+    else \"replica\"\n+)\n+\n+flags_hypercache = HyperCache(\n+    namespace=\"feature_flags\",\n+    value=\"flags_with_cohorts.json\",\n+    load_fn=lambda key: _get_flags_response_for_local_evaluation(HyperCache.team_from_key(key), include_cohorts=True),\n+)\n+\n+flags_without_cohorts_hypercache = HyperCache(\n+    namespace=\"feature_flags\",\n+    value=\"flags_without_cohorts.json\",\n+    load_fn=lambda key: _get_flags_response_for_local_evaluation(HyperCache.team_from_key(key), include_cohorts=False),\n+)\n+\n+\n+def get_flags_response_for_local_evaluation(team: Team, include_cohorts: bool) -> dict | None:\n+    return (\n+        flags_hypercache.get_from_cache(team)\n+        if include_cohorts\n+        else flags_without_cohorts_hypercache.get_from_cache(team)\n+    )\n+\n+\n+def update_flag_caches(team: Team):\n+    flags_hypercache.update_cache(team)\n+    flags_without_cohorts_hypercache.update_cache(team)\n+\n+\n+def clear_flag_caches(team: Team, kinds: list[str] | None = None):\n+    flags_hypercache.clear_cache(team, kinds=kinds)\n+    flags_without_cohorts_hypercache.clear_cache(team, kinds=kinds)\n+\n+\n+def _get_flags_for_local_evaluation(team: Team):\n+    feature_flags = FeatureFlag.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION).filter(\n+        ~Q(is_remote_configuration=True),\n+        team__project_id=team.project_id,\n+        deleted=False,\n+    )\n+\n+    return feature_flags\n+\n+\n+def _get_flags_with_cohorts_for_local_evaluation(team: Team) -> tuple[list[FeatureFlag], dict]:\n+    feature_flags = _get_flags_for_local_evaluation(team)\n+\n+    cohorts = {}\n+    seen_cohorts_cache: dict[int, CohortOrEmpty] = {}\n+\n+    try:\n+        seen_cohorts_cache = {\n+            cohort.pk: cohort\n+            for cohort in Cohort.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION).filter(\n+                team__project_id=team.project_id, deleted=False\n+            )\n+        }\n+    except Exception:\n+        logger.error(\"Error prefetching cohorts\", exc_info=True)\n+\n+    for feature_flag in feature_flags:\n+        try:\n+            filters = feature_flag.get_filters()\n+            # transform cohort filters to be evaluated locally\n+            if (\n+                len(\n+                    feature_flag.get_cohort_ids(\n+                        using_database=DATABASE_FOR_LOCAL_EVALUATION,\n+                        seen_cohorts_cache=seen_cohorts_cache,\n+                    )\n+                )\n+                == 1\n+            ):\n+                feature_flag.filters = {\n+                    **filters,\n+                    \"groups\": feature_flag.transform_cohort_filters_for_easy_evaluation(\n+                        using_database=DATABASE_FOR_LOCAL_EVALUATION,\n+                        seen_cohorts_cache=seen_cohorts_cache,\n+                    ),\n+                }\n+            else:\n+                feature_flag.filters = filters\n+\n+            cohort_ids = feature_flag.get_cohort_ids(\n+                using_database=DATABASE_FOR_LOCAL_EVALUATION,\n+                seen_cohorts_cache=seen_cohorts_cache,\n+            )\n+\n+            for id in cohort_ids:\n+                # don't duplicate queries for already added cohorts\n+                if id not in cohorts:\n+                    if id in seen_cohorts_cache:\n+                        cohort = seen_cohorts_cache[id]\n+                    else:\n+                        cohort = (\n+                            Cohort.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION)\n+                            .filter(id=id, team__project_id=team.project_id, deleted=False)\n+                            .first()\n+                        )\n+                        seen_cohorts_cache[id] = cohort or \"\"\n+\n+                    if cohort and not cohort.is_static:\n+                        try:\n+                            cohorts[str(cohort.pk)] = cohort.properties.to_dict()\n+                        except Exception:\n+                            logger.error(\n+                                \"Error processing cohort properties\",\n+                                extra={\"cohort_id\": id},\n+                                exc_info=True,\n+                            )\n+                            continue\n+\n+        except Exception:\n+            logger.error(\"Error processing feature flag\", extra={\"flag_id\": feature_flag.pk}, exc_info=True)\n+            continue\n+\n+    return feature_flags, cohorts\n+\n+\n+def _get_flags_response_for_local_evaluation(team: Team, include_cohorts: bool) -> dict:\n+    from posthog.api.feature_flag import MinimalFeatureFlagSerializer\n+\n+    cohorts: dict[str, dict] = {}\n+    if include_cohorts:\n+        flags, cohorts = _get_flags_with_cohorts_for_local_evaluation(team)\n+    else:\n+        flags = _get_flags_for_local_evaluation(team)\n+\n+    response_data = {\n+        \"flags\": [MinimalFeatureFlagSerializer(feature_flag, context={}).data for feature_flag in flags],\n+        \"group_type_mapping\": {\n+            str(row.group_type_index): row.group_type\n+            for row in GroupTypeMapping.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION).filter(\n+                project_id=team.project_id\n+            )\n+        },\n+        \"cohorts\": cohorts,\n+    }\n+    return response_data\n+\n+\n+# NOTE: All models that affect the cache should have a signal to update the cache\n+\n+\n+@receiver(post_save, sender=FeatureFlag)",
+        "comment_created_at": "2025-08-08T21:43:31+00:00",
+        "comment_author": "haacked",
+        "comment_body": "I added the post_delete receivers too. Let me know if that was unnecessary or even incorrect.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2265914904",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36354,
+        "pr_file": "posthog/models/feature_flag/local_evaluation.py",
+        "discussion_id": "2263679310",
+        "commented_code": "@@ -0,0 +1,174 @@\n+from django.conf import settings\n+from django.db.models.signals import post_save\n+from django.dispatch import receiver\n+import structlog\n+\n+from django.db.models import Q\n+\n+from posthog.models.cohort.cohort import Cohort, CohortOrEmpty\n+from posthog.models.feature_flag import FeatureFlag\n+from posthog.models.group_type_mapping import GroupTypeMapping\n+from posthog.models.team import Team\n+from posthog.storage.hypercache import HyperCache\n+\n+logger = structlog.get_logger(__name__)\n+\n+DATABASE_FOR_LOCAL_EVALUATION = (\n+    \"default\"\n+    if (\"local_evaluation\" not in settings.READ_REPLICA_OPT_IN or \"replica\" not in settings.DATABASES)  # noqa: F821\n+    else \"replica\"\n+)\n+\n+flags_hypercache = HyperCache(\n+    namespace=\"feature_flags\",\n+    value=\"flags_with_cohorts.json\",\n+    load_fn=lambda key: _get_flags_response_for_local_evaluation(HyperCache.team_from_key(key), include_cohorts=True),\n+)\n+\n+flags_without_cohorts_hypercache = HyperCache(\n+    namespace=\"feature_flags\",\n+    value=\"flags_without_cohorts.json\",\n+    load_fn=lambda key: _get_flags_response_for_local_evaluation(HyperCache.team_from_key(key), include_cohorts=False),\n+)\n+\n+\n+def get_flags_response_for_local_evaluation(team: Team, include_cohorts: bool) -> dict | None:\n+    return (\n+        flags_hypercache.get_from_cache(team)\n+        if include_cohorts\n+        else flags_without_cohorts_hypercache.get_from_cache(team)\n+    )\n+\n+\n+def update_flag_caches(team: Team):\n+    flags_hypercache.update_cache(team)\n+    flags_without_cohorts_hypercache.update_cache(team)\n+\n+\n+def clear_flag_caches(team: Team, kinds: list[str] | None = None):\n+    flags_hypercache.clear_cache(team, kinds=kinds)\n+    flags_without_cohorts_hypercache.clear_cache(team, kinds=kinds)\n+\n+\n+def _get_flags_for_local_evaluation(team: Team):\n+    feature_flags = FeatureFlag.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION).filter(\n+        ~Q(is_remote_configuration=True),\n+        team__project_id=team.project_id,\n+        deleted=False,\n+    )\n+\n+    return feature_flags\n+\n+\n+def _get_flags_with_cohorts_for_local_evaluation(team: Team) -> tuple[list[FeatureFlag], dict]:\n+    feature_flags = _get_flags_for_local_evaluation(team)\n+\n+    cohorts = {}\n+    seen_cohorts_cache: dict[int, CohortOrEmpty] = {}\n+\n+    try:\n+        seen_cohorts_cache = {\n+            cohort.pk: cohort\n+            for cohort in Cohort.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION).filter(\n+                team__project_id=team.project_id, deleted=False\n+            )\n+        }\n+    except Exception:\n+        logger.error(\"Error prefetching cohorts\", exc_info=True)\n+\n+    for feature_flag in feature_flags:\n+        try:\n+            filters = feature_flag.get_filters()\n+            # transform cohort filters to be evaluated locally\n+            if (\n+                len(\n+                    feature_flag.get_cohort_ids(\n+                        using_database=DATABASE_FOR_LOCAL_EVALUATION,\n+                        seen_cohorts_cache=seen_cohorts_cache,\n+                    )\n+                )\n+                == 1\n+            ):\n+                feature_flag.filters = {\n+                    **filters,\n+                    \"groups\": feature_flag.transform_cohort_filters_for_easy_evaluation(\n+                        using_database=DATABASE_FOR_LOCAL_EVALUATION,\n+                        seen_cohorts_cache=seen_cohorts_cache,\n+                    ),\n+                }\n+            else:\n+                feature_flag.filters = filters\n+\n+            cohort_ids = feature_flag.get_cohort_ids(\n+                using_database=DATABASE_FOR_LOCAL_EVALUATION,\n+                seen_cohorts_cache=seen_cohorts_cache,\n+            )\n+\n+            for id in cohort_ids:\n+                # don't duplicate queries for already added cohorts\n+                if id not in cohorts:\n+                    if id in seen_cohorts_cache:\n+                        cohort = seen_cohorts_cache[id]\n+                    else:\n+                        cohort = (\n+                            Cohort.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION)\n+                            .filter(id=id, team__project_id=team.project_id, deleted=False)\n+                            .first()\n+                        )\n+                        seen_cohorts_cache[id] = cohort or \"\"\n+\n+                    if cohort and not cohort.is_static:\n+                        try:\n+                            cohorts[str(cohort.pk)] = cohort.properties.to_dict()\n+                        except Exception:\n+                            logger.error(\n+                                \"Error processing cohort properties\",\n+                                extra={\"cohort_id\": id},\n+                                exc_info=True,\n+                            )\n+                            continue\n+\n+        except Exception:\n+            logger.error(\"Error processing feature flag\", extra={\"flag_id\": feature_flag.pk}, exc_info=True)\n+            continue\n+\n+    return feature_flags, cohorts\n+\n+\n+def _get_flags_response_for_local_evaluation(team: Team, include_cohorts: bool) -> dict:\n+    from posthog.api.feature_flag import MinimalFeatureFlagSerializer\n+\n+    cohorts: dict[str, dict] = {}\n+    if include_cohorts:\n+        flags, cohorts = _get_flags_with_cohorts_for_local_evaluation(team)\n+    else:\n+        flags = _get_flags_for_local_evaluation(team)\n+\n+    response_data = {\n+        \"flags\": [MinimalFeatureFlagSerializer(feature_flag, context={}).data for feature_flag in flags],\n+        \"group_type_mapping\": {\n+            str(row.group_type_index): row.group_type\n+            for row in GroupTypeMapping.objects.db_manager(DATABASE_FOR_LOCAL_EVALUATION).filter(\n+                project_id=team.project_id\n+            )\n+        },\n+        \"cohorts\": cohorts,\n+    }\n+    return response_data\n+\n+\n+# NOTE: All models that affect the cache should have a signal to update the cache\n+\n+\n+@receiver(post_save, sender=FeatureFlag)",
+        "comment_created_at": "2025-08-11T07:37:57+00:00",
+        "comment_author": "benjackwhite",
+        "comment_body": "yeah makes sense although this would also be covered by the daily sync (the code is there, just not the scheduled task which I'll add in follow up)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2261385447",
+    "pr_number": 36333,
+    "pr_file": "posthog/api/feature_flag.py",
+    "created_at": "2025-08-07T21:00:08+00:00",
+    "commented_code": "),\n     )\n \n+    # Invalidate flag definitions cache when feature flags change\n+    invalidate_cache_for_feature_flag_change(after_update, activity)\n+\n+\n+@receiver(post_save, sender=Cohort)\n+@receiver(post_delete, sender=Cohort)\n+def handle_cohort_change(sender, instance, **kwargs):",
+    "repo_full_name": "PostHog/posthog",
+    "discussion_comments": [
+      {
+        "comment_id": "2261385447",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36333,
+        "pr_file": "posthog/api/feature_flag.py",
+        "discussion_id": "2261385447",
+        "commented_code": "@@ -1578,6 +1621,23 @@ def handle_feature_flag_change(sender, scope, before_update, after_update, activ\n         ),\n     )\n \n+    # Invalidate flag definitions cache when feature flags change\n+    invalidate_cache_for_feature_flag_change(after_update, activity)\n+\n+\n+@receiver(post_save, sender=Cohort)\n+@receiver(post_delete, sender=Cohort)\n+def handle_cohort_change(sender, instance, **kwargs):",
+        "comment_created_at": "2025-08-07T21:00:08+00:00",
+        "comment_author": "andyzzhao",
+        "comment_body": "Does cover the case when a cohort is recalcualted? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2261389343",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36333,
+        "pr_file": "posthog/api/feature_flag.py",
+        "discussion_id": "2261385447",
+        "commented_code": "@@ -1578,6 +1621,23 @@ def handle_feature_flag_change(sender, scope, before_update, after_update, activ\n         ),\n     )\n \n+    # Invalidate flag definitions cache when feature flags change\n+    invalidate_cache_for_feature_flag_change(after_update, activity)\n+\n+\n+@receiver(post_save, sender=Cohort)\n+@receiver(post_delete, sender=Cohort)\n+def handle_cohort_change(sender, instance, **kwargs):",
+        "comment_created_at": "2025-08-07T21:02:50+00:00",
+        "comment_author": "haacked",
+        "comment_body": "Good question. I assume that when we recalculate a cohort, we save it. But I'll test it.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2261399653",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36333,
+        "pr_file": "posthog/api/feature_flag.py",
+        "discussion_id": "2261385447",
+        "commented_code": "@@ -1578,6 +1621,23 @@ def handle_feature_flag_change(sender, scope, before_update, after_update, activ\n         ),\n     )\n \n+    # Invalidate flag definitions cache when feature flags change\n+    invalidate_cache_for_feature_flag_change(after_update, activity)\n+\n+\n+@receiver(post_save, sender=Cohort)\n+@receiver(post_delete, sender=Cohort)\n+def handle_cohort_change(sender, instance, **kwargs):",
+        "comment_created_at": "2025-08-07T21:09:55+00:00",
+        "comment_author": "haacked",
+        "comment_body": "So a cohort recalculation doesn't affect flag definitions. This is because local evaluation doesn't support static cohorts. That would require that our clients download cohort membership lists which could be huge.\r\n\r\nInstead, flags only support dynamic cohorts (that are not behavioral). In which case, the flags just expand the conditions in the cohort. So the only time we need to invalidate the cache is if the cohort definitions change.\r\n\r\nIt's possible that recalculating a cohort raises the cohort change signal in which case we're invalidating too often. However, that might not be a problem because we only recalculate once every 24 hours.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2261579395",
+        "repo_full_name": "PostHog/posthog",
+        "pr_number": 36333,
+        "pr_file": "posthog/api/feature_flag.py",
+        "discussion_id": "2261385447",
+        "commented_code": "@@ -1578,6 +1621,23 @@ def handle_feature_flag_change(sender, scope, before_update, after_update, activ\n         ),\n     )\n \n+    # Invalidate flag definitions cache when feature flags change\n+    invalidate_cache_for_feature_flag_change(after_update, activity)\n+\n+\n+@receiver(post_save, sender=Cohort)\n+@receiver(post_delete, sender=Cohort)\n+def handle_cohort_change(sender, instance, **kwargs):",
+        "comment_created_at": "2025-08-07T22:30:38+00:00",
+        "comment_author": "haacked",
+        "comment_body": "So I confirmed that recalculating a cohort will invalidate the cache. I think for now, that's fine. We can tighten up the cache invalidation logic later.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

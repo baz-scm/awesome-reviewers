@@ -1,0 +1,216 @@
+[
+  {
+    "discussion_id": "2263091322",
+    "pr_number": 17992,
+    "pr_file": "src/common/exception_format_value.cpp",
+    "created_at": "2025-08-08T14:08:12+00:00",
+    "commented_code": "ExceptionFormatValue::ExceptionFormatValue(string str_val)\n     : type(ExceptionFormatValueType::FORMAT_VALUE_TYPE_STRING), str_val(std::move(str_val)) {\n }\n+ExceptionFormatValue::ExceptionFormatValue(String str_val)\n+    : type(ExceptionFormatValueType::FORMAT_VALUE_TYPE_STRING), str_val(str_val.ToStdString()) {",
+    "repo_full_name": "duckdb/duckdb",
+    "discussion_comments": [
+      {
+        "comment_id": "2263091322",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 17992,
+        "pr_file": "src/common/exception_format_value.cpp",
+        "discussion_id": "2263091322",
+        "commented_code": "@@ -27,6 +28,9 @@ ExceptionFormatValue::ExceptionFormatValue(uhugeint_t uhuge_val)\n ExceptionFormatValue::ExceptionFormatValue(string str_val)\n     : type(ExceptionFormatValueType::FORMAT_VALUE_TYPE_STRING), str_val(std::move(str_val)) {\n }\n+ExceptionFormatValue::ExceptionFormatValue(String str_val)\n+    : type(ExceptionFormatValueType::FORMAT_VALUE_TYPE_STRING), str_val(str_val.ToStdString()) {",
+        "comment_created_at": "2025-08-08T14:08:12+00:00",
+        "comment_author": "Mytherin",
+        "comment_body": "Maybe we can make `ExceptionFormatValue` a const reference here to try to avoid having to do the `ToStdString`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1588049532",
+    "pr_number": 11905,
+    "pr_file": "src/main/appender.cpp",
+    "created_at": "2024-05-02T17:50:54+00:00",
+    "commented_code": "context->Append(*description, collection);\n }\n \n+void Appender::AppendDefault() {\n+\tif (!defaults[column]) {\n+\t\tthrow InvalidInputException(\"Failed to append DEFAULT, this column does not have a DEFAULT value\");\n+\t}\n+\tauto &default_expr = *defaults[column];\n+\tif (!default_expr.IsScalar()) {\n+\t\tthrow InvalidInputException(\"Only columns with simple DEFAULT values are supported\");\n+\t}\n+\n+\tauto default_copy = default_expr.Copy();\n+\n+\tauto &type = types[column];\n+\tauto binder = Binder::CreateBinder(*context);\n+\tConstantBinder default_binder(*binder, *context, \"DEFAULT value\");\n+\tdefault_binder.target_type = type;\n+\tauto bound_default = default_binder.Bind(default_copy);\n+\n+\tValue result_value;\n+\tif (!ExpressionExecutor::TryEvaluateScalar(*context, *bound_default, result_value)) {",
+    "repo_full_name": "duckdb/duckdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1588049532",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 11905,
+        "pr_file": "src/main/appender.cpp",
+        "discussion_id": "1588049532",
+        "commented_code": "@@ -375,6 +377,31 @@ void Appender::FlushInternal(ColumnDataCollection &collection) {\n \tcontext->Append(*description, collection);\n }\n \n+void Appender::AppendDefault() {\n+\tif (!defaults[column]) {\n+\t\tthrow InvalidInputException(\"Failed to append DEFAULT, this column does not have a DEFAULT value\");\n+\t}\n+\tauto &default_expr = *defaults[column];\n+\tif (!default_expr.IsScalar()) {\n+\t\tthrow InvalidInputException(\"Only columns with simple DEFAULT values are supported\");\n+\t}\n+\n+\tauto default_copy = default_expr.Copy();\n+\n+\tauto &type = types[column];\n+\tauto binder = Binder::CreateBinder(*context);\n+\tConstantBinder default_binder(*binder, *context, \"DEFAULT value\");\n+\tdefault_binder.target_type = type;\n+\tauto bound_default = default_binder.Bind(default_copy);\n+\n+\tValue result_value;\n+\tif (!ExpressionExecutor::TryEvaluateScalar(*context, *bound_default, result_value)) {",
+        "comment_created_at": "2024-05-02T17:50:54+00:00",
+        "comment_author": "Mytherin",
+        "comment_body": "For a performance optimization - if the expression has `IsFoldable()`, we can cache the `result_value`. This should greatly improve performance in the general case (as this can essentially just become `AppendValue`).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1588290593",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 11905,
+        "pr_file": "src/main/appender.cpp",
+        "discussion_id": "1588049532",
+        "commented_code": "@@ -375,6 +377,31 @@ void Appender::FlushInternal(ColumnDataCollection &collection) {\n \tcontext->Append(*description, collection);\n }\n \n+void Appender::AppendDefault() {\n+\tif (!defaults[column]) {\n+\t\tthrow InvalidInputException(\"Failed to append DEFAULT, this column does not have a DEFAULT value\");\n+\t}\n+\tauto &default_expr = *defaults[column];\n+\tif (!default_expr.IsScalar()) {\n+\t\tthrow InvalidInputException(\"Only columns with simple DEFAULT values are supported\");\n+\t}\n+\n+\tauto default_copy = default_expr.Copy();\n+\n+\tauto &type = types[column];\n+\tauto binder = Binder::CreateBinder(*context);\n+\tConstantBinder default_binder(*binder, *context, \"DEFAULT value\");\n+\tdefault_binder.target_type = type;\n+\tauto bound_default = default_binder.Bind(default_copy);\n+\n+\tValue result_value;\n+\tif (!ExpressionExecutor::TryEvaluateScalar(*context, *bound_default, result_value)) {",
+        "comment_created_at": "2024-05-02T20:07:18+00:00",
+        "comment_author": "Tishj",
+        "comment_body": "For another performance optimization, we could delay populating the chunk with defaults until FlushChunk is called, we then perform a masked ExecuteExpression into the chunk\r\n\r\nOne issue with this could be that things like `nextval` are not called when the user expects it though\r\nappending to two tables interleaved that both target the same sequence for example",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1588306266",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 11905,
+        "pr_file": "src/main/appender.cpp",
+        "discussion_id": "1588049532",
+        "commented_code": "@@ -375,6 +377,31 @@ void Appender::FlushInternal(ColumnDataCollection &collection) {\n \tcontext->Append(*description, collection);\n }\n \n+void Appender::AppendDefault() {\n+\tif (!defaults[column]) {\n+\t\tthrow InvalidInputException(\"Failed to append DEFAULT, this column does not have a DEFAULT value\");\n+\t}\n+\tauto &default_expr = *defaults[column];\n+\tif (!default_expr.IsScalar()) {\n+\t\tthrow InvalidInputException(\"Only columns with simple DEFAULT values are supported\");\n+\t}\n+\n+\tauto default_copy = default_expr.Copy();\n+\n+\tauto &type = types[column];\n+\tauto binder = Binder::CreateBinder(*context);\n+\tConstantBinder default_binder(*binder, *context, \"DEFAULT value\");\n+\tdefault_binder.target_type = type;\n+\tauto bound_default = default_binder.Bind(default_copy);\n+\n+\tValue result_value;\n+\tif (!ExpressionExecutor::TryEvaluateScalar(*context, *bound_default, result_value)) {",
+        "comment_created_at": "2024-05-02T20:21:39+00:00",
+        "comment_author": "Mytherin",
+        "comment_body": "That's fine. We don't offer any guarantees around Appenders aside from when they are flushed anyway.\r\n\r\nI think the bigger issue is that there is no guarantee that `AppendDefault` is called for the same columns for every row - although you could detect that and bail-out of this optimization of course.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1588888314",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 11905,
+        "pr_file": "src/main/appender.cpp",
+        "discussion_id": "1588049532",
+        "commented_code": "@@ -375,6 +377,31 @@ void Appender::FlushInternal(ColumnDataCollection &collection) {\n \tcontext->Append(*description, collection);\n }\n \n+void Appender::AppendDefault() {\n+\tif (!defaults[column]) {\n+\t\tthrow InvalidInputException(\"Failed to append DEFAULT, this column does not have a DEFAULT value\");\n+\t}\n+\tauto &default_expr = *defaults[column];\n+\tif (!default_expr.IsScalar()) {\n+\t\tthrow InvalidInputException(\"Only columns with simple DEFAULT values are supported\");\n+\t}\n+\n+\tauto default_copy = default_expr.Copy();\n+\n+\tauto &type = types[column];\n+\tauto binder = Binder::CreateBinder(*context);\n+\tConstantBinder default_binder(*binder, *context, \"DEFAULT value\");\n+\tdefault_binder.target_type = type;\n+\tauto bound_default = default_binder.Bind(default_copy);\n+\n+\tValue result_value;\n+\tif (!ExpressionExecutor::TryEvaluateScalar(*context, *bound_default, result_value)) {",
+        "comment_created_at": "2024-05-03T08:13:59+00:00",
+        "comment_author": "Tishj",
+        "comment_body": "I was thinking of using a selection vector / validity mask to mask out the rows that AppendDefault was not used on\r\nI believe I saw similar behavior for filters, though I would have to look it up in the code.\r\n\r\nIn any case it will be faster than doing an ExpressionExecutor::Execute for a single row every time AppendDefault is called for non foldable default expressions.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1589059317",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 11905,
+        "pr_file": "src/main/appender.cpp",
+        "discussion_id": "1588049532",
+        "commented_code": "@@ -375,6 +377,31 @@ void Appender::FlushInternal(ColumnDataCollection &collection) {\n \tcontext->Append(*description, collection);\n }\n \n+void Appender::AppendDefault() {\n+\tif (!defaults[column]) {\n+\t\tthrow InvalidInputException(\"Failed to append DEFAULT, this column does not have a DEFAULT value\");\n+\t}\n+\tauto &default_expr = *defaults[column];\n+\tif (!default_expr.IsScalar()) {\n+\t\tthrow InvalidInputException(\"Only columns with simple DEFAULT values are supported\");\n+\t}\n+\n+\tauto default_copy = default_expr.Copy();\n+\n+\tauto &type = types[column];\n+\tauto binder = Binder::CreateBinder(*context);\n+\tConstantBinder default_binder(*binder, *context, \"DEFAULT value\");\n+\tdefault_binder.target_type = type;\n+\tauto bound_default = default_binder.Bind(default_copy);\n+\n+\tValue result_value;\n+\tif (!ExpressionExecutor::TryEvaluateScalar(*context, *bound_default, result_value)) {",
+        "comment_created_at": "2024-05-03T11:03:02+00:00",
+        "comment_author": "Tishj",
+        "comment_body": "I might do that later though, or add a FIXME\r\nfor now we run the ExpressionExecutor::Execute every time AppendDefault is called when we could not fold the expression at Appender creation time.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2194667433",
+    "pr_number": 18069,
+    "pr_file": "src/common/types/row/tuple_data_scatter_gather.cpp",
+    "created_at": "2025-07-09T10:31:10+00:00",
+    "commented_code": "}\n \n template <class T>\n-static void TupleDataValueStore(const T &source, const data_ptr_t &row_location, const idx_t offset_in_row,\n-                                data_ptr_t &) {\n+static void TupleDataValueStore(const T &source, data_t *__restrict const &row_location, const idx_t &offset_in_row,\n+                                data_t *__restrict &) {\n \tStore<T>(source, row_location + offset_in_row);\n }\n \n template <>\n-inline void TupleDataValueStore(const string_t &source, const data_ptr_t &row_location, const idx_t offset_in_row,\n-                                data_ptr_t &heap_location) {\n+inline void TupleDataValueStore(const string_t &source, data_t *__restrict const &row_location,\n+                                const idx_t &offset_in_row, data_t *__restrict &heap_location) {\n #ifdef D_ASSERT_IS_ENABLED\n \tsource.VerifyCharacters();\n #endif\n \tif (source.IsInlined()) {\n \t\tStore<string_t>(source, row_location + offset_in_row);\n \t} else {\n-\t\tFastMemcpy(heap_location, source.GetData(), source.GetSize());\n-\t\tStore<string_t>(string_t(const_char_ptr_cast(heap_location), UnsafeNumericCast<uint32_t>(source.GetSize())),\n-\t\t                row_location + offset_in_row);\n-\t\theap_location += source.GetSize();\n+\t\tFastMemcpy(heap_location, source.GetPointer(), source.GetSize());\n+\t\tauto source_copy = source;\n+\t\tsource_copy.SetPointer(char_ptr_cast(heap_location));\n+\t\tStore<string_t>(source_copy, row_location + offset_in_row);",
+    "repo_full_name": "duckdb/duckdb",
+    "discussion_comments": [
+      {
+        "comment_id": "2194667433",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 18069,
+        "pr_file": "src/common/types/row/tuple_data_scatter_gather.cpp",
+        "discussion_id": "2194667433",
+        "commented_code": "@@ -21,24 +21,25 @@ constexpr idx_t TupleDataWithinListFixedSize<string_t>() {\n }\n \n template <class T>\n-static void TupleDataValueStore(const T &source, const data_ptr_t &row_location, const idx_t offset_in_row,\n-                                data_ptr_t &) {\n+static void TupleDataValueStore(const T &source, data_t *__restrict const &row_location, const idx_t &offset_in_row,\n+                                data_t *__restrict &) {\n \tStore<T>(source, row_location + offset_in_row);\n }\n \n template <>\n-inline void TupleDataValueStore(const string_t &source, const data_ptr_t &row_location, const idx_t offset_in_row,\n-                                data_ptr_t &heap_location) {\n+inline void TupleDataValueStore(const string_t &source, data_t *__restrict const &row_location,\n+                                const idx_t &offset_in_row, data_t *__restrict &heap_location) {\n #ifdef D_ASSERT_IS_ENABLED\n \tsource.VerifyCharacters();\n #endif\n \tif (source.IsInlined()) {\n \t\tStore<string_t>(source, row_location + offset_in_row);\n \t} else {\n-\t\tFastMemcpy(heap_location, source.GetData(), source.GetSize());\n-\t\tStore<string_t>(string_t(const_char_ptr_cast(heap_location), UnsafeNumericCast<uint32_t>(source.GetSize())),\n-\t\t                row_location + offset_in_row);\n-\t\theap_location += source.GetSize();\n+\t\tFastMemcpy(heap_location, source.GetPointer(), source.GetSize());\n+\t\tauto source_copy = source;\n+\t\tsource_copy.SetPointer(char_ptr_cast(heap_location));\n+\t\tStore<string_t>(source_copy, row_location + offset_in_row);",
+        "comment_created_at": "2025-07-09T10:31:10+00:00",
+        "comment_author": "Mytherin",
+        "comment_body": "Instead of copying the `string_t`, adjusting the pointer, and then copying it over into the row layout - we can instead directly copy over:\r\n\r\n* Prefix + length (first 8 bytes of `source`) to `row_location + offset_in_row`\r\n* Pointer (`heap_location`) to `row_location + offset_in_row + 8`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2207326255",
+    "pr_number": 18168,
+    "pr_file": "extension/core_functions/scalar/blob/encode.cpp",
+    "created_at": "2025-07-15T12:18:55+00:00",
+    "commented_code": "result.Reinterpret(args.data[0]);\n }\n \n-struct BlobDecodeOperator {\n+enum class DecodeErrorBehavior : uint8_t {\n+\tABORT = 1,  // raise error\n+\tSTRICT = 2, // return null\n+\tREPLACE = 3 // replace invalid characters with '?'\n+};\n+\n+bool TryGetDecodeErrorBehavior(const string &specifier_p, DecodeErrorBehavior &result) {\n+\tauto specifier = StringUtil::Lower(specifier_p);\n+\tif (specifier == \"abort\" || specifier == \"a\") {",
+    "repo_full_name": "duckdb/duckdb",
+    "discussion_comments": [
+      {
+        "comment_id": "2207326255",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 18168,
+        "pr_file": "extension/core_functions/scalar/blob/encode.cpp",
+        "discussion_id": "2207326255",
+        "commented_code": "@@ -12,7 +12,35 @@ void EncodeFunction(DataChunk &args, ExpressionState &state, Vector &result) {\n \tresult.Reinterpret(args.data[0]);\n }\n \n-struct BlobDecodeOperator {\n+enum class DecodeErrorBehavior : uint8_t {\n+\tABORT = 1,  // raise error\n+\tSTRICT = 2, // return null\n+\tREPLACE = 3 // replace invalid characters with '?'\n+};\n+\n+bool TryGetDecodeErrorBehavior(const string &specifier_p, DecodeErrorBehavior &result) {\n+\tauto specifier = StringUtil::Lower(specifier_p);\n+\tif (specifier == \"abort\" || specifier == \"a\") {",
+        "comment_created_at": "2025-07-15T12:18:55+00:00",
+        "comment_author": "Mytherin",
+        "comment_body": "Using a string here is quite inefficient since this creates a copy of the string for every call - it would be better to use `StringUtil::CIEquals` directly on the data in the `string_t`, e.g.:\r\n\r\n```cpp\r\nDecodeErrorBehavior GetDecodeErrorBehavior(const string_t &specifier) {\r\n    auto size = specifier.GetSize();\r\n    auto data = specifier.GetData();\r\n    if (StringUtil::CIEquals(data, size, \"strict\", 6)) {\r\n        return DecodeErrorBehavior::STRICT;\r\n    } ....\r\n}\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2236099959",
+    "pr_number": 18424,
+    "pr_file": "src/function/scalar/operator/arithmetic.cpp",
+    "created_at": "2025-07-28T12:01:18+00:00",
+    "commented_code": "}\n }\n \n+void VarintAdd(DataChunk &args, ExpressionState &state, Vector &result) {\n+\tauto &allocator = state.GetAllocator();\n+\tArenaAllocator arena(allocator);\n+\tBinaryExecutor::Execute<varint_t, varint_t, string_t>(\n+\t    args.data[0], args.data[1], result, args.size(), [&](varint_t a, varint_t b) {\n+\t\t    a.AddInPlace(arena, b);",
+    "repo_full_name": "duckdb/duckdb",
+    "discussion_comments": [
+      {
+        "comment_id": "2236099959",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 18424,
+        "pr_file": "src/function/scalar/operator/arithmetic.cpp",
+        "discussion_id": "2236099959",
+        "commented_code": "@@ -311,6 +312,22 @@ ScalarFunction AddFunction::GetFunction(const LogicalType &type) {\n \t}\n }\n \n+void VarintAdd(DataChunk &args, ExpressionState &state, Vector &result) {\n+\tauto &allocator = state.GetAllocator();\n+\tArenaAllocator arena(allocator);\n+\tBinaryExecutor::Execute<varint_t, varint_t, string_t>(\n+\t    args.data[0], args.data[1], result, args.size(), [&](varint_t a, varint_t b) {\n+\t\t    a.AddInPlace(arena, b);",
+        "comment_created_at": "2025-07-28T12:01:18+00:00",
+        "comment_author": "Mytherin",
+        "comment_body": "Can we quickly figure out the size of the resulting varint, then allocate that size with `StringVector::EmptyString`, then do the actual addition? Allocating in the arena first and then copying it over seems rather wasteful - esp since figuring out the size of the resulting varint doesn't seem that complex in the standard case of adding together two positive numbers.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "804510568",
+    "pr_number": 3065,
+    "pr_file": "src/function/scalar/list/list_contains.cpp",
+    "created_at": "2022-02-11T10:09:06+00:00",
+    "commented_code": "+#include <iostream>\n+#include \"duckdb/planner/expression/bound_function_expression.hpp\"\n+#include \"duckdb/function/scalar/nested_functions.hpp\"\n+#include \"duckdb/planner/expression_binder.hpp\"\n+\n+namespace duckdb {\n+\n+static void SetResultFalse(Vector &result) {\n+\tauto result_data = FlatVector::GetData<bool>(result);\n+\tresult_data[0] = false;\n+\treturn;\n+}\n+\n+template <class T>\n+static void TemplatedListContainsStringFunction(DataChunk &args, ExpressionState &state, Vector &result) {\n+\tD_ASSERT(args.ColumnCount() == 2);\n+\tauto count = args.size();\n+\tVector &list = args.data[0];\n+\tVector &value = args.data[1];\n+\tVectorData value_data;\n+\tvalue.Orrify(count, value_data);\n+\n+\tif (list.GetType().id() == LogicalTypeId::SQLNULL) {\n+\t\tSetResultFalse(result);\n+\t\treturn;\n+\t}\n+\n+\tauto list_size = ListVector::GetListSize(list);\n+\tif (list_size == 0) { // empty list will never contain a value\n+\t\tSetResultFalse(result);\n+\t\treturn;\n+\t}\n+\tauto &child_vector = ListVector::GetEntry(list);\n+\tif (child_vector.GetType().id() == LogicalTypeId::SQLNULL) {\n+\t\tSetResultFalse(result);\n+\t\treturn;\n+\t}\n+\tVectorData child_data;\n+\tchild_vector.Orrify(list_size, child_data);\n+\n+\tVectorData list_data;\n+\tlist.Orrify(count, list_data);\n+\tauto list_entries = (list_entry_t *)list_data.data;\n+\n+\tresult.SetVectorType(VectorType::FLAT_VECTOR);\n+\tauto result_entries = FlatVector::GetData<bool>(result); // Create a vector of bool\n+\tauto &result_validity = FlatVector::Validity(result);\n+\n+\tfor (idx_t i = 0; i < count; i++) {\n+\t\tauto list_index = list_data.sel->get_index(i);\n+\n+\t\tif (!list_data.validity.RowIsValid(list_index)) {\n+\t\t\tresult_validity.SetInvalid(i);\n+\t\t\tcontinue;\n+\t\t}\n+\t\tresult_entries[list_index] = false;\n+\n+\t\tconst auto &entry = list_entries[list_index];\n+\t\tauto source_idx = child_data.sel->get_index(entry.offset);\n+\t\tauto child_value = FlatVector::GetData<T>(child_vector);\n+\n+\t\tfor (idx_t child_idx = 0; child_idx < entry.length; child_idx++) {\n+\t\t\tauto value_idx = source_idx + child_idx;\n+\t\t\tif (!child_data.validity.RowIsValid(value_idx)) {\n+\t\t\t\tcontinue;\n+\t\t\t}\n+\t\t\tauto actual_value = child_value[value_idx];\n+\t\t\tif (StringComparisonOperators::EqualsOrNot<false>(actual_value, ((T *)value_data.data)[0])) {\n+\t\t\t\tresult_entries[list_index] = true;\n+\t\t\t\tbreak; // Found value in list, no need to look further\n+\t\t\t}\n+\t\t}\n+\t}\n+\treturn;\n+}\n+\n+template <class T>\n+static void TemplatedListContainsFunction(DataChunk &args, ExpressionState &state, Vector &result) {\n+\tD_ASSERT(args.ColumnCount() == 2);\n+\tauto count = args.size();\n+\tVector &list = args.data[0];\n+\tVector &value = args.data[1];\n+\tVectorData value_data;\n+\tvalue.Orrify(count, value_data);\n+\n+\tif (list.GetType().id() == LogicalTypeId::SQLNULL) {\n+\t\tSetResultFalse(result);\n+\t\treturn;\n+\t}\n+\n+\tauto list_size = ListVector::GetListSize(list);\n+\tif (list_size == 0) { // empty list will never contain a value\n+\t\tSetResultFalse(result);\n+\t\treturn;\n+\t}\n+\tauto &child_vector = ListVector::GetEntry(list);\n+\tif (child_vector.GetType().id() == LogicalTypeId::SQLNULL) {\n+\t\tSetResultFalse(result);\n+\t\treturn;\n+\t}\n+\tVectorData child_data;\n+\tchild_vector.Orrify(list_size, child_data);\n+\n+\tVectorData list_data;\n+\tlist.Orrify(count, list_data);\n+\tauto list_entries = (list_entry_t *)list_data.data;\n+\n+\tresult.SetVectorType(VectorType::FLAT_VECTOR);\n+\tauto result_entries = FlatVector::GetData<bool>(result); // Create a vector of bool\n+\tauto &result_validity = FlatVector::Validity(result);\n+\n+\tfor (idx_t i = 0; i < count; i++) {\n+\t\tauto list_index = list_data.sel->get_index(i);\n+\n+\t\tif (!list_data.validity.RowIsValid(list_index)) {\n+\t\t\tresult_validity.SetInvalid(i);\n+\t\t\tcontinue;\n+\t\t}\n+\t\tresult_entries[list_index] = false;\n+\n+\t\tconst auto &entry = list_entries[list_index];\n+\t\tauto source_idx = child_data.sel->get_index(entry.offset);\n+\t\tauto child_value = FlatVector::GetData<T>(child_vector);\n+\n+\t\tfor (idx_t child_idx = 0; child_idx < entry.length; child_idx++) {\n+\t\t\tauto value_idx = source_idx + child_idx;\n+\t\t\tif (!child_data.validity.RowIsValid(value_idx)) {\n+\t\t\t\tcontinue;\n+\t\t\t}\n+\t\t\tauto actual_value = child_value[value_idx];\n+\t\t\tif (actual_value == ((T *)value_data.data)[0]) {",
+    "repo_full_name": "duckdb/duckdb",
+    "discussion_comments": [
+      {
+        "comment_id": "804510568",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 3065,
+        "pr_file": "src/function/scalar/list/list_contains.cpp",
+        "discussion_id": "804510568",
+        "commented_code": "@@ -0,0 +1,226 @@\n+#include <iostream>\n+#include \"duckdb/planner/expression/bound_function_expression.hpp\"\n+#include \"duckdb/function/scalar/nested_functions.hpp\"\n+#include \"duckdb/planner/expression_binder.hpp\"\n+\n+namespace duckdb {\n+\n+static void SetResultFalse(Vector &result) {\n+\tauto result_data = FlatVector::GetData<bool>(result);\n+\tresult_data[0] = false;\n+\treturn;\n+}\n+\n+template <class T>\n+static void TemplatedListContainsStringFunction(DataChunk &args, ExpressionState &state, Vector &result) {\n+\tD_ASSERT(args.ColumnCount() == 2);\n+\tauto count = args.size();\n+\tVector &list = args.data[0];\n+\tVector &value = args.data[1];\n+\tVectorData value_data;\n+\tvalue.Orrify(count, value_data);\n+\n+\tif (list.GetType().id() == LogicalTypeId::SQLNULL) {\n+\t\tSetResultFalse(result);\n+\t\treturn;\n+\t}\n+\n+\tauto list_size = ListVector::GetListSize(list);\n+\tif (list_size == 0) { // empty list will never contain a value\n+\t\tSetResultFalse(result);\n+\t\treturn;\n+\t}\n+\tauto &child_vector = ListVector::GetEntry(list);\n+\tif (child_vector.GetType().id() == LogicalTypeId::SQLNULL) {\n+\t\tSetResultFalse(result);\n+\t\treturn;\n+\t}\n+\tVectorData child_data;\n+\tchild_vector.Orrify(list_size, child_data);\n+\n+\tVectorData list_data;\n+\tlist.Orrify(count, list_data);\n+\tauto list_entries = (list_entry_t *)list_data.data;\n+\n+\tresult.SetVectorType(VectorType::FLAT_VECTOR);\n+\tauto result_entries = FlatVector::GetData<bool>(result); // Create a vector of bool\n+\tauto &result_validity = FlatVector::Validity(result);\n+\n+\tfor (idx_t i = 0; i < count; i++) {\n+\t\tauto list_index = list_data.sel->get_index(i);\n+\n+\t\tif (!list_data.validity.RowIsValid(list_index)) {\n+\t\t\tresult_validity.SetInvalid(i);\n+\t\t\tcontinue;\n+\t\t}\n+\t\tresult_entries[list_index] = false;\n+\n+\t\tconst auto &entry = list_entries[list_index];\n+\t\tauto source_idx = child_data.sel->get_index(entry.offset);\n+\t\tauto child_value = FlatVector::GetData<T>(child_vector);\n+\n+\t\tfor (idx_t child_idx = 0; child_idx < entry.length; child_idx++) {\n+\t\t\tauto value_idx = source_idx + child_idx;\n+\t\t\tif (!child_data.validity.RowIsValid(value_idx)) {\n+\t\t\t\tcontinue;\n+\t\t\t}\n+\t\t\tauto actual_value = child_value[value_idx];\n+\t\t\tif (StringComparisonOperators::EqualsOrNot<false>(actual_value, ((T *)value_data.data)[0])) {\n+\t\t\t\tresult_entries[list_index] = true;\n+\t\t\t\tbreak; // Found value in list, no need to look further\n+\t\t\t}\n+\t\t}\n+\t}\n+\treturn;\n+}\n+\n+template <class T>\n+static void TemplatedListContainsFunction(DataChunk &args, ExpressionState &state, Vector &result) {\n+\tD_ASSERT(args.ColumnCount() == 2);\n+\tauto count = args.size();\n+\tVector &list = args.data[0];\n+\tVector &value = args.data[1];\n+\tVectorData value_data;\n+\tvalue.Orrify(count, value_data);\n+\n+\tif (list.GetType().id() == LogicalTypeId::SQLNULL) {\n+\t\tSetResultFalse(result);\n+\t\treturn;\n+\t}\n+\n+\tauto list_size = ListVector::GetListSize(list);\n+\tif (list_size == 0) { // empty list will never contain a value\n+\t\tSetResultFalse(result);\n+\t\treturn;\n+\t}\n+\tauto &child_vector = ListVector::GetEntry(list);\n+\tif (child_vector.GetType().id() == LogicalTypeId::SQLNULL) {\n+\t\tSetResultFalse(result);\n+\t\treturn;\n+\t}\n+\tVectorData child_data;\n+\tchild_vector.Orrify(list_size, child_data);\n+\n+\tVectorData list_data;\n+\tlist.Orrify(count, list_data);\n+\tauto list_entries = (list_entry_t *)list_data.data;\n+\n+\tresult.SetVectorType(VectorType::FLAT_VECTOR);\n+\tauto result_entries = FlatVector::GetData<bool>(result); // Create a vector of bool\n+\tauto &result_validity = FlatVector::Validity(result);\n+\n+\tfor (idx_t i = 0; i < count; i++) {\n+\t\tauto list_index = list_data.sel->get_index(i);\n+\n+\t\tif (!list_data.validity.RowIsValid(list_index)) {\n+\t\t\tresult_validity.SetInvalid(i);\n+\t\t\tcontinue;\n+\t\t}\n+\t\tresult_entries[list_index] = false;\n+\n+\t\tconst auto &entry = list_entries[list_index];\n+\t\tauto source_idx = child_data.sel->get_index(entry.offset);\n+\t\tauto child_value = FlatVector::GetData<T>(child_vector);\n+\n+\t\tfor (idx_t child_idx = 0; child_idx < entry.length; child_idx++) {\n+\t\t\tauto value_idx = source_idx + child_idx;\n+\t\t\tif (!child_data.validity.RowIsValid(value_idx)) {\n+\t\t\t\tcontinue;\n+\t\t\t}\n+\t\t\tauto actual_value = child_value[value_idx];\n+\t\t\tif (actual_value == ((T *)value_data.data)[0]) {",
+        "comment_created_at": "2022-02-11T10:09:06+00:00",
+        "comment_author": "lnkuiper",
+        "comment_body": "Instead of doing:\r\n```c++\r\n(T *)value_data.data)[0]\r\n```\r\nEvery iteration, you can do this before the loop:\r\n```c++\r\nauto values = (T *)value_data.data;\r\n```\r\n\r\nAnd then index with\r\n```c++\r\nvalues[0]\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2062737601",
+    "pr_number": 17268,
+    "pr_file": "src/function/window/window_value_function.cpp",
+    "created_at": "2025-04-27T22:32:52+00:00",
+    "commented_code": "auto val_idx = NumericCast<int64_t>(own_row);\n \t\t\tint64_t offset = 1;\n \t\t\tif (wexpr.offset_expr) {\n+\t\t\t\tif (leadlag_offset.CellIsNull(i)) {",
+    "repo_full_name": "duckdb/duckdb",
+    "discussion_comments": [
+      {
+        "comment_id": "2062737601",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 17268,
+        "pr_file": "src/function/window/window_value_function.cpp",
+        "discussion_id": "2062737601",
+        "commented_code": "@@ -300,6 +300,10 @@ void WindowLeadLagExecutor::EvaluateInternal(WindowExecutorGlobalState &gstate,\n \t\t\tauto val_idx = NumericCast<int64_t>(own_row);\n \t\t\tint64_t offset = 1;\n \t\t\tif (wexpr.offset_expr) {\n+\t\t\t\tif (leadlag_offset.CellIsNull(i)) {",
+        "comment_created_at": "2025-04-27T22:32:52+00:00",
+        "comment_author": "hawkfish",
+        "comment_body": "Can we move this check to the top of the loop? The `Rank` computation is potentially slow and we will throw it away.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2062758744",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 17268,
+        "pr_file": "src/function/window/window_value_function.cpp",
+        "discussion_id": "2062737601",
+        "commented_code": "@@ -300,6 +300,10 @@ void WindowLeadLagExecutor::EvaluateInternal(WindowExecutorGlobalState &gstate,\n \t\t\tauto val_idx = NumericCast<int64_t>(own_row);\n \t\t\tint64_t offset = 1;\n \t\t\tif (wexpr.offset_expr) {\n+\t\t\t\tif (leadlag_offset.CellIsNull(i)) {",
+        "comment_created_at": "2025-04-28T00:15:40+00:00",
+        "comment_author": "ditdb",
+        "comment_body": "yes, it's an optimizing. I move it.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

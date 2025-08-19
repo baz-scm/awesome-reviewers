@@ -1,0 +1,126 @@
+[
+  {
+    "discussion_id": "1965472043",
+    "pr_number": 16304,
+    "pr_file": "src/include/duckdb/function/cast/vector_cast_helpers.hpp",
+    "created_at": "2025-02-21T13:25:30+00:00",
+    "commented_code": "throw InternalException(\"Unimplemented internal type for decimal\");\n \t\t}\n \t}\n+\n+\ttemplate <bool WRITE_QUOTES = true>\n+\tstatic idx_t CalculateEscapedStringLength(const string_t &string, const char *special_chars,\n+\t                                          idx_t special_chars_length) {\n+\t\tauto base_length = string.GetSize();\n+\t\tidx_t length = 0;\n+\t\tauto string_data = string.GetData();\n+\t\tif (base_length == 0) {\n+\t\t\treturn 0;\n+\t\t}\n+\n+\t\tbool needs_quotes = false;\n+\t\tif (isspace(string_data[0])) {\n+\t\t\tneeds_quotes = true;\n+\t\t} else if (base_length >= 2 && isspace(string_data[base_length - 1])) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\t\tif (base_length == 4 && StringUtil::CIEquals(std::string(string_data, string_data + base_length), \"null\")) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\n+\t\tconst auto string_end = string_data + base_length;\n+\t\tauto res = std::find_first_of(string_data, string_end, special_chars, special_chars + special_chars_length);",
+    "repo_full_name": "duckdb/duckdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1965472043",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 16304,
+        "pr_file": "src/include/duckdb/function/cast/vector_cast_helpers.hpp",
+        "discussion_id": "1965472043",
+        "commented_code": "@@ -180,6 +180,128 @@ struct VectorCastHelpers {\n \t\t\tthrow InternalException(\"Unimplemented internal type for decimal\");\n \t\t}\n \t}\n+\n+\ttemplate <bool WRITE_QUOTES = true>\n+\tstatic idx_t CalculateEscapedStringLength(const string_t &string, const char *special_chars,\n+\t                                          idx_t special_chars_length) {\n+\t\tauto base_length = string.GetSize();\n+\t\tidx_t length = 0;\n+\t\tauto string_data = string.GetData();\n+\t\tif (base_length == 0) {\n+\t\t\treturn 0;\n+\t\t}\n+\n+\t\tbool needs_quotes = false;\n+\t\tif (isspace(string_data[0])) {\n+\t\t\tneeds_quotes = true;\n+\t\t} else if (base_length >= 2 && isspace(string_data[base_length - 1])) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\t\tif (base_length == 4 && StringUtil::CIEquals(std::string(string_data, string_data + base_length), \"null\")) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\n+\t\tconst auto string_end = string_data + base_length;\n+\t\tauto res = std::find_first_of(string_data, string_end, special_chars, special_chars + special_chars_length);",
+        "comment_created_at": "2025-02-21T13:25:30+00:00",
+        "comment_author": "Mytherin",
+        "comment_body": "Performance seems to degrade a bit - maybe we can spend some time optimizing this, e.g. by using a look-up table to find the special characters instead of doing `std::find_first_of`\r\n\r\nBelow is a benchmark that we can use to profile this\r\n\r\n```sql\r\n# name: benchmark/micro/cast/cast_string_list_varchar.benchmark\r\n# description: Cast list values to string\r\n# group: [cast]\r\n\r\nname Cast LIST -> VARCHAR\r\ngroup cast\r\n\r\nload\r\nCREATE TABLE lists AS SELECT ['thisisastring_'||i, 'str_'||(i+1)::VARCHAR, NULL, 'specialcharacter('||(i+2)::VARCHAR] l FROM range(0, 10000000) tbl(i);\r\n\r\nrun\r\nSELECT MIN(CAST(l AS VARCHAR)) FROM lists;\r\n\r\nresult I\r\n[thisisastring_0, str_1, NULL, 'specialcharacter(2']\r\n\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1966152867",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 16304,
+        "pr_file": "src/include/duckdb/function/cast/vector_cast_helpers.hpp",
+        "discussion_id": "1965472043",
+        "commented_code": "@@ -180,6 +180,128 @@ struct VectorCastHelpers {\n \t\t\tthrow InternalException(\"Unimplemented internal type for decimal\");\n \t\t}\n \t}\n+\n+\ttemplate <bool WRITE_QUOTES = true>\n+\tstatic idx_t CalculateEscapedStringLength(const string_t &string, const char *special_chars,\n+\t                                          idx_t special_chars_length) {\n+\t\tauto base_length = string.GetSize();\n+\t\tidx_t length = 0;\n+\t\tauto string_data = string.GetData();\n+\t\tif (base_length == 0) {\n+\t\t\treturn 0;\n+\t\t}\n+\n+\t\tbool needs_quotes = false;\n+\t\tif (isspace(string_data[0])) {\n+\t\t\tneeds_quotes = true;\n+\t\t} else if (base_length >= 2 && isspace(string_data[base_length - 1])) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\t\tif (base_length == 4 && StringUtil::CIEquals(std::string(string_data, string_data + base_length), \"null\")) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\n+\t\tconst auto string_end = string_data + base_length;\n+\t\tauto res = std::find_first_of(string_data, string_end, special_chars, special_chars + special_chars_length);",
+        "comment_created_at": "2025-02-21T20:49:55+00:00",
+        "comment_author": "Tishj",
+        "comment_body": "This sped it up greatly, good idea\r\nThough my results of this benchmark compared to main were 2x slower, not 10x, not sure what was up there",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1965476937",
+    "pr_number": 16304,
+    "pr_file": "src/include/duckdb/function/cast/vector_cast_helpers.hpp",
+    "created_at": "2025-02-21T13:28:46+00:00",
+    "commented_code": "throw InternalException(\"Unimplemented internal type for decimal\");\n \t\t}\n \t}\n+\n+\ttemplate <bool WRITE_QUOTES = true>\n+\tstatic idx_t CalculateEscapedStringLength(const string_t &string, const char *special_chars,\n+\t                                          idx_t special_chars_length) {\n+\t\tauto base_length = string.GetSize();\n+\t\tidx_t length = 0;\n+\t\tauto string_data = string.GetData();\n+\t\tif (base_length == 0) {\n+\t\t\treturn 0;\n+\t\t}\n+\n+\t\tbool needs_quotes = false;\n+\t\tif (isspace(string_data[0])) {\n+\t\t\tneeds_quotes = true;\n+\t\t} else if (base_length >= 2 && isspace(string_data[base_length - 1])) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\t\tif (base_length == 4 && StringUtil::CIEquals(std::string(string_data, string_data + base_length), \"null\")) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\n+\t\tconst auto string_end = string_data + base_length;\n+\t\tauto res = std::find_first_of(string_data, string_end, special_chars, special_chars + special_chars_length);\n+\t\tif (res != string_end) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\n+\t\tif (!needs_quotes) {\n+\t\t\treturn base_length;\n+\t\t}\n+\n+\t\tfor (idx_t i = 0; i < base_length; i++) {\n+\t\t\tif (string_data[i] == '\\'' || string_data[i] == '\\\\') {\n+\t\t\t\tlength++;\n+\t\t\t}\n+\t\t\tlength++;\n+\t\t}\n+\t\tif (WRITE_QUOTES) {\n+\t\t\tlength += 2;\n+\t\t}\n+\t\treturn length;\n+\t}\n+\n+\ttemplate <bool WRITE_QUOTES = false>\n+\tstatic idx_t CalculateStringLength(const string_t &string, const char *special_chars, idx_t special_chars_length) {\n+\t\treturn string.GetSize();\n+\t}\n+\n+\ttemplate <bool WRITE_QUOTES = false>\n+\tstatic idx_t WriteEscapedString(void *dest, const string_t &string, const char *special_chars,\n+\t                                idx_t special_chars_length) {\n+\t\tauto base_length = string.GetSize();\n+\t\tif (base_length == 0) {\n+\t\t\treturn 0;\n+\t\t}\n+\n+\t\tauto string_start = string.GetData();\n+\t\tauto string_data = string_start;\n+\n+\t\tbool needs_quotes = false;\n+\t\tif (isspace(string_data[0])) {\n+\t\t\tneeds_quotes = true;\n+\t\t} else if (base_length >= 2 && isspace(string_data[base_length - 1])) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\t\tif (base_length == 4 && StringUtil::CIEquals(std::string(string_data, string_data + base_length), \"null\")) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\n+\t\tconst auto string_end = string_data + base_length;\n+\t\tauto res = std::find_first_of(string_data, string_end, special_chars, special_chars + special_chars_length);\n+\t\tif (res != string_end) {",
+    "repo_full_name": "duckdb/duckdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1965476937",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 16304,
+        "pr_file": "src/include/duckdb/function/cast/vector_cast_helpers.hpp",
+        "discussion_id": "1965476937",
+        "commented_code": "@@ -180,6 +180,128 @@ struct VectorCastHelpers {\n \t\t\tthrow InternalException(\"Unimplemented internal type for decimal\");\n \t\t}\n \t}\n+\n+\ttemplate <bool WRITE_QUOTES = true>\n+\tstatic idx_t CalculateEscapedStringLength(const string_t &string, const char *special_chars,\n+\t                                          idx_t special_chars_length) {\n+\t\tauto base_length = string.GetSize();\n+\t\tidx_t length = 0;\n+\t\tauto string_data = string.GetData();\n+\t\tif (base_length == 0) {\n+\t\t\treturn 0;\n+\t\t}\n+\n+\t\tbool needs_quotes = false;\n+\t\tif (isspace(string_data[0])) {\n+\t\t\tneeds_quotes = true;\n+\t\t} else if (base_length >= 2 && isspace(string_data[base_length - 1])) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\t\tif (base_length == 4 && StringUtil::CIEquals(std::string(string_data, string_data + base_length), \"null\")) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\n+\t\tconst auto string_end = string_data + base_length;\n+\t\tauto res = std::find_first_of(string_data, string_end, special_chars, special_chars + special_chars_length);\n+\t\tif (res != string_end) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\n+\t\tif (!needs_quotes) {\n+\t\t\treturn base_length;\n+\t\t}\n+\n+\t\tfor (idx_t i = 0; i < base_length; i++) {\n+\t\t\tif (string_data[i] == '\\'' || string_data[i] == '\\\\') {\n+\t\t\t\tlength++;\n+\t\t\t}\n+\t\t\tlength++;\n+\t\t}\n+\t\tif (WRITE_QUOTES) {\n+\t\t\tlength += 2;\n+\t\t}\n+\t\treturn length;\n+\t}\n+\n+\ttemplate <bool WRITE_QUOTES = false>\n+\tstatic idx_t CalculateStringLength(const string_t &string, const char *special_chars, idx_t special_chars_length) {\n+\t\treturn string.GetSize();\n+\t}\n+\n+\ttemplate <bool WRITE_QUOTES = false>\n+\tstatic idx_t WriteEscapedString(void *dest, const string_t &string, const char *special_chars,\n+\t                                idx_t special_chars_length) {\n+\t\tauto base_length = string.GetSize();\n+\t\tif (base_length == 0) {\n+\t\t\treturn 0;\n+\t\t}\n+\n+\t\tauto string_start = string.GetData();\n+\t\tauto string_data = string_start;\n+\n+\t\tbool needs_quotes = false;\n+\t\tif (isspace(string_data[0])) {\n+\t\t\tneeds_quotes = true;\n+\t\t} else if (base_length >= 2 && isspace(string_data[base_length - 1])) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\t\tif (base_length == 4 && StringUtil::CIEquals(std::string(string_data, string_data + base_length), \"null\")) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\n+\t\tconst auto string_end = string_data + base_length;\n+\t\tauto res = std::find_first_of(string_data, string_end, special_chars, special_chars + special_chars_length);\n+\t\tif (res != string_end) {",
+        "comment_created_at": "2025-02-21T13:28:46+00:00",
+        "comment_author": "Mytherin",
+        "comment_body": "We seem to be doing this check twice - can we do this only once and cache this in a `unsafe_unique_array<bool>` (not vector bool because vector bool is evil)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1966156103",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 16304,
+        "pr_file": "src/include/duckdb/function/cast/vector_cast_helpers.hpp",
+        "discussion_id": "1965476937",
+        "commented_code": "@@ -180,6 +180,128 @@ struct VectorCastHelpers {\n \t\t\tthrow InternalException(\"Unimplemented internal type for decimal\");\n \t\t}\n \t}\n+\n+\ttemplate <bool WRITE_QUOTES = true>\n+\tstatic idx_t CalculateEscapedStringLength(const string_t &string, const char *special_chars,\n+\t                                          idx_t special_chars_length) {\n+\t\tauto base_length = string.GetSize();\n+\t\tidx_t length = 0;\n+\t\tauto string_data = string.GetData();\n+\t\tif (base_length == 0) {\n+\t\t\treturn 0;\n+\t\t}\n+\n+\t\tbool needs_quotes = false;\n+\t\tif (isspace(string_data[0])) {\n+\t\t\tneeds_quotes = true;\n+\t\t} else if (base_length >= 2 && isspace(string_data[base_length - 1])) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\t\tif (base_length == 4 && StringUtil::CIEquals(std::string(string_data, string_data + base_length), \"null\")) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\n+\t\tconst auto string_end = string_data + base_length;\n+\t\tauto res = std::find_first_of(string_data, string_end, special_chars, special_chars + special_chars_length);\n+\t\tif (res != string_end) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\n+\t\tif (!needs_quotes) {\n+\t\t\treturn base_length;\n+\t\t}\n+\n+\t\tfor (idx_t i = 0; i < base_length; i++) {\n+\t\t\tif (string_data[i] == '\\'' || string_data[i] == '\\\\') {\n+\t\t\t\tlength++;\n+\t\t\t}\n+\t\t\tlength++;\n+\t\t}\n+\t\tif (WRITE_QUOTES) {\n+\t\t\tlength += 2;\n+\t\t}\n+\t\treturn length;\n+\t}\n+\n+\ttemplate <bool WRITE_QUOTES = false>\n+\tstatic idx_t CalculateStringLength(const string_t &string, const char *special_chars, idx_t special_chars_length) {\n+\t\treturn string.GetSize();\n+\t}\n+\n+\ttemplate <bool WRITE_QUOTES = false>\n+\tstatic idx_t WriteEscapedString(void *dest, const string_t &string, const char *special_chars,\n+\t                                idx_t special_chars_length) {\n+\t\tauto base_length = string.GetSize();\n+\t\tif (base_length == 0) {\n+\t\t\treturn 0;\n+\t\t}\n+\n+\t\tauto string_start = string.GetData();\n+\t\tauto string_data = string_start;\n+\n+\t\tbool needs_quotes = false;\n+\t\tif (isspace(string_data[0])) {\n+\t\t\tneeds_quotes = true;\n+\t\t} else if (base_length >= 2 && isspace(string_data[base_length - 1])) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\t\tif (base_length == 4 && StringUtil::CIEquals(std::string(string_data, string_data + base_length), \"null\")) {\n+\t\t\tneeds_quotes = true;\n+\t\t}\n+\n+\t\tconst auto string_end = string_data + base_length;\n+\t\tauto res = std::find_first_of(string_data, string_end, special_chars, special_chars + special_chars_length);\n+\t\tif (res != string_end) {",
+        "comment_created_at": "2025-02-21T20:53:35+00:00",
+        "comment_author": "Tishj",
+        "comment_body": "Have that working now, need to make it only allocate the array if the list length is bigger than the previous row, was trashing the performance now - should be faster I imagine\r\n\r\nThough likely not very noticable for small lists with small strings",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2007563820",
+    "pr_number": 16630,
+    "pr_file": "src/include/duckdb/common/multi_file_reader_function.hpp",
+    "created_at": "2025-03-21T13:17:38+00:00",
+    "commented_code": "return partition_data;\n \t}\n \n+\tstatic void InitializeFileScanState(ClientContext &context, MultiFileLocalState &lstate,\n+\t                                    vector<idx_t> &projection_ids) {\n+\t\tauto &reader_data = lstate.reader->reader_data;\n+\t\t//! Initialize the intermediate chunk to be used by the underlying reader before being finalized\n+\t\tvector<LogicalType> intermediate_chunk_types;\n+\t\tauto &local_column_ids = reader_data.column_ids;\n+\t\tauto &local_columns = lstate.reader->GetColumns();\n+\t\tfor (idx_t i = 0; i < local_column_ids.size(); i++) {\n+\t\t\tauto local_idx = MultiFileLocalIndex(i);\n+\t\t\tauto local_id = local_column_ids[local_idx];\n+\t\t\tauto cast_entry = reader_data.cast_map.find(local_id);\n+\t\t\tif (cast_entry == reader_data.cast_map.end()) {\n+\t\t\t\tauto &col = local_columns[local_id];\n+\t\t\t\tintermediate_chunk_types.push_back(col.type);\n+\t\t\t} else {\n+\t\t\t\tintermediate_chunk_types.push_back(cast_entry->second);\n+\t\t\t}\n+\t\t}\n+\t\tlstate.scan_chunk.Destroy();\n+\t\tlstate.scan_chunk.Initialize(context, intermediate_chunk_types);\n+\n+\t\tauto &executor = lstate.executor;\n+\t\texecutor.ClearExpressions();\n+\t\tif (!projection_ids.empty()) {\n+\t\t\tfor (auto &id : projection_ids) {\n+\t\t\t\texecutor.AddExpression(*reader_data.expressions[id]);\n+\t\t\t}\n+\t\t} else {\n+\t\t\tfor (auto &expr : reader_data.expressions) {\n+\t\t\t\texecutor.AddExpression(*expr);\n+\t\t\t}\n+\t\t}\n+\t}\n+\n \tstatic void MultiFileScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {\n \t\tif (!data_p.local_state) {\n \t\t\treturn;\n \t\t}\n \t\tauto &data = data_p.local_state->Cast<MultiFileLocalState>();\n \t\tauto &gstate = data_p.global_state->Cast<MultiFileGlobalState>();\n \t\tauto &bind_data = data_p.bind_data->CastNoConst<MultiFileBindData>();\n-\t\tauto remove_columns = gstate.CanRemoveColumns();\n-\t\tif (remove_columns) {\n-\t\t\tdata.all_columns.Reset();\n-\t\t}\n+\t\tInitializeFileScanState(context, data, gstate.projection_ids);",
+    "repo_full_name": "duckdb/duckdb",
+    "discussion_comments": [
+      {
+        "comment_id": "2007563820",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 16630,
+        "pr_file": "src/include/duckdb/common/multi_file_reader_function.hpp",
+        "discussion_id": "2007563820",
+        "commented_code": "@@ -547,33 +551,70 @@ class MultiFileReaderFunction : public TableFunction {\n \t\treturn partition_data;\n \t}\n \n+\tstatic void InitializeFileScanState(ClientContext &context, MultiFileLocalState &lstate,\n+\t                                    vector<idx_t> &projection_ids) {\n+\t\tauto &reader_data = lstate.reader->reader_data;\n+\t\t//! Initialize the intermediate chunk to be used by the underlying reader before being finalized\n+\t\tvector<LogicalType> intermediate_chunk_types;\n+\t\tauto &local_column_ids = reader_data.column_ids;\n+\t\tauto &local_columns = lstate.reader->GetColumns();\n+\t\tfor (idx_t i = 0; i < local_column_ids.size(); i++) {\n+\t\t\tauto local_idx = MultiFileLocalIndex(i);\n+\t\t\tauto local_id = local_column_ids[local_idx];\n+\t\t\tauto cast_entry = reader_data.cast_map.find(local_id);\n+\t\t\tif (cast_entry == reader_data.cast_map.end()) {\n+\t\t\t\tauto &col = local_columns[local_id];\n+\t\t\t\tintermediate_chunk_types.push_back(col.type);\n+\t\t\t} else {\n+\t\t\t\tintermediate_chunk_types.push_back(cast_entry->second);\n+\t\t\t}\n+\t\t}\n+\t\tlstate.scan_chunk.Destroy();\n+\t\tlstate.scan_chunk.Initialize(context, intermediate_chunk_types);\n+\n+\t\tauto &executor = lstate.executor;\n+\t\texecutor.ClearExpressions();\n+\t\tif (!projection_ids.empty()) {\n+\t\t\tfor (auto &id : projection_ids) {\n+\t\t\t\texecutor.AddExpression(*reader_data.expressions[id]);\n+\t\t\t}\n+\t\t} else {\n+\t\t\tfor (auto &expr : reader_data.expressions) {\n+\t\t\t\texecutor.AddExpression(*expr);\n+\t\t\t}\n+\t\t}\n+\t}\n+\n \tstatic void MultiFileScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {\n \t\tif (!data_p.local_state) {\n \t\t\treturn;\n \t\t}\n \t\tauto &data = data_p.local_state->Cast<MultiFileLocalState>();\n \t\tauto &gstate = data_p.global_state->Cast<MultiFileGlobalState>();\n \t\tauto &bind_data = data_p.bind_data->CastNoConst<MultiFileBindData>();\n-\t\tauto remove_columns = gstate.CanRemoveColumns();\n-\t\tif (remove_columns) {\n-\t\t\tdata.all_columns.Reset();\n-\t\t}\n+\t\tInitializeFileScanState(context, data, gstate.projection_ids);",
+        "comment_created_at": "2025-03-21T13:17:38+00:00",
+        "comment_author": "Mytherin",
+        "comment_body": "This shouldn't happen for every chunk but should happen for after `TryInitializeBatch` (and maybe then only if the file idx changed)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1990059331",
+    "pr_number": 16597,
+    "pr_file": "third_party/httplib/httplib.hpp",
+    "created_at": "2025-03-11T20:08:38+00:00",
+    "commented_code": "inline std::string file_extension(const std::string &path) {\n   Match m;\n-  static auto re = Regex(\"\\\\.([a-zA-Z0-9]+)$\");\n+  auto re = Regex(\"\\\\.([a-zA-Z0-9]+)$\");",
+    "repo_full_name": "duckdb/duckdb",
+    "discussion_comments": [
+      {
+        "comment_id": "1990059331",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 16597,
+        "pr_file": "third_party/httplib/httplib.hpp",
+        "discussion_id": "1990059331",
+        "commented_code": "@@ -2543,7 +2543,7 @@ inline void read_file(const std::string &path, std::string &out) {\n \n inline std::string file_extension(const std::string &path) {\n   Match m;\n-  static auto re = Regex(\"\\\\.([a-zA-Z0-9]+)$\");\n+  auto re = Regex(\"\\\\.([a-zA-Z0-9]+)$\");",
+        "comment_created_at": "2025-03-11T20:08:38+00:00",
+        "comment_author": "dentiny",
+        "comment_body": "Regex objects are not free to create.\r\n \r\nI met segfault due to static variable destruction for a few times, I usually do `absl::NoDestruct` to completely avoid destruction (it's a globally-scoped variable and don't destruct anyway)\r\nReference: https://github.com/abseil/abseil-cpp/blob/master/absl/base/no_destructor.h",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1990970281",
+        "repo_full_name": "duckdb/duckdb",
+        "pr_number": 16597,
+        "pr_file": "third_party/httplib/httplib.hpp",
+        "discussion_id": "1990059331",
+        "commented_code": "@@ -2543,7 +2543,7 @@ inline void read_file(const std::string &path, std::string &out) {\n \n inline std::string file_extension(const std::string &path) {\n   Match m;\n-  static auto re = Regex(\"\\\\.([a-zA-Z0-9]+)$\");\n+  auto re = Regex(\"\\\\.([a-zA-Z0-9]+)$\");",
+        "comment_created_at": "2025-03-12T08:48:32+00:00",
+        "comment_author": "Y--",
+        "comment_body": "Absolutely, this is definitely a tradeoff for stability versus performance here. Hopefully the permanent fix in httplib will preserve both.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

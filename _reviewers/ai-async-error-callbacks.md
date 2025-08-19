@@ -8,6 +8,8 @@ description: When handling asynchronous operations, especially those that might 
 repository: vercel/ai
 label: Error Handling
 language: TypeScript
+date_added: 2025-08-10
+last_updated: 2025-08-10
 comments_count: 3
 repository_stars: 15590
 ---

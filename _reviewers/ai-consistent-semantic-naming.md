@@ -8,6 +8,8 @@ description: 'Use clear, consistent, and semantic naming patterns across your co
 repository: vercel/ai
 label: Naming Conventions
 language: TypeScript
+date_added: 2025-07-10
+last_updated: 2025-08-14
 comments_count: 10
 repository_stars: 15590
 ---

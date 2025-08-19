@@ -6,6 +6,8 @@ description: Maintain consistent naming patterns and parameter structures across
 repository: vercel/ai
 label: AI
 language: Markdown
+date_added: 2025-07-15
+last_updated: 2025-08-15
 comments_count: 2
 repository_stars: 15590
 ---

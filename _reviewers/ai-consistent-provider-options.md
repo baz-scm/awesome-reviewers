@@ -7,6 +7,8 @@ description: When designing APIs that support multiple providers or service inte
 repository: vercel/ai
 label: API
 language: TypeScript
+date_added: 2025-07-01
+last_updated: 2025-07-20
 comments_count: 5
 repository_stars: 15590
 ---

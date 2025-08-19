@@ -7,6 +7,8 @@ description: Use camelCase consistently for all property names, method names, an
 repository: vercel/ai
 label: Naming Conventions
 language: Other
+date_added: 2025-06-01
+last_updated: 2025-06-15
 comments_count: 2
 repository_stars: 15590
 ---

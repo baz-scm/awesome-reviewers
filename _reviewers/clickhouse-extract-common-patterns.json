@@ -1,0 +1,172 @@
+[
+  {
+    "discussion_id": "2228742806",
+    "pr_number": 83777,
+    "pr_file": "src/DataTypes/Serializations/SerializationObjectSharedData.cpp",
+    "created_at": "2025-07-24T14:46:15+00:00",
+    "commented_code": "+#include <DataTypes/Serializations/SerializationObjectSharedData.h>\n+#include <DataTypes/Serializations/SerializationObjectHelpers.h>\n+#include <DataTypes/Serializations/SerializationArray.h>\n+#include <DataTypes/Serializations/SerializationNumber.h>\n+#include <DataTypes/Serializations/SerializationString.h>\n+#include <DataTypes/Serializations/getSubcolumnsDeserializationOrder.h>\n+#include <DataTypes/DataTypeObject.h>\n+#include <DataTypes/DataTypesNumber.h>\n+#include <Columns/ColumnMap.h>\n+#include <Columns/ColumnArray.h>\n+#include <Columns/ColumnTuple.h>\n+#include <Storages/MergeTree/ColumnsSubstreams.h>\n+#include <Core/NamesAndTypes.h>\n+\n+namespace DB\n+{\n+\n+namespace ErrorCodes\n+{\n+    extern const int LOGICAL_ERROR;\n+    extern const int INCORRECT_DATA;\n+    extern const int NOT_IMPLEMENTED;\n+}\n+\n+SerializationObjectSharedData::SerializationObjectSharedData(SerializationVersion serialization_version_, const DataTypePtr & dynamic_type_, size_t buckets_)\n+    : serialization_version(serialization_version_)\n+    , dynamic_type(dynamic_type_)\n+    , dynamic_serialization(dynamic_type_->getDefaultSerialization())\n+    , buckets(buckets_)\n+    , serialization_map(DataTypeObject::getTypeOfSharedData()->getDefaultSerialization())\n+{\n+}\n+\n+SerializationObjectSharedData::SerializationVersion::SerializationVersion(UInt64 version) : value(static_cast<Value>(version))\n+{\n+    checkVersion(version);\n+}\n+\n+SerializationObjectSharedData::SerializationVersion::SerializationVersion(DB::MergeTreeObjectSharedDataSerializationVersion version)\n+{\n+    switch (version)\n+    {\n+        case MergeTreeObjectSharedDataSerializationVersion::MAP:\n+            value = MAP;\n+            break;\n+        case MergeTreeObjectSharedDataSerializationVersion::MAP_WITH_BUCKETS:\n+            value = MAP_WITH_BUCKETS;\n+            break;\n+        case MergeTreeObjectSharedDataSerializationVersion::ADVANCED:\n+            value = ADVANCED;\n+            break;\n+    }\n+}\n+\n+void SerializationObjectSharedData::SerializationVersion::checkVersion(UInt64 version)\n+{\n+    if (version != MAP && version != MAP_WITH_BUCKETS && version != ADVANCED)\n+        throw Exception(ErrorCodes::INCORRECT_DATA, \"Invalid version for Object shared data serialization: {}\", version);\n+}\n+\n+struct SerializeBinaryBulkStateObjectSharedData : public ISerialization::SerializeBinaryBulkState\n+{\n+    ISerialization::SerializeBinaryBulkStatePtr map_state;\n+    std::vector<ISerialization::SerializeBinaryBulkStatePtr> bucket_map_states;\n+};\n+\n+struct DeserializeBinaryBulkStateObjectSharedData : public ISerialization::DeserializeBinaryBulkState\n+{\n+    ISerialization::DeserializeBinaryBulkStatePtr map_state;\n+    std::vector<ISerialization::DeserializeBinaryBulkStatePtr> bucket_map_states;\n+    std::vector<ISerialization::DeserializeBinaryBulkStatePtr> bucket_structure_states;\n+    /// Some granules can be partially read, we need to remember how many rows\n+    /// were already read from the last incomplete granule.\n+    size_t last_incomplete_granule_offset = 0;\n+\n+    ISerialization::DeserializeBinaryBulkStatePtr clone() const override\n+    {\n+        auto new_state = std::make_shared<DeserializeBinaryBulkStateObjectSharedData>(*this);\n+        for (size_t bucket = 0; bucket != bucket_map_states.size(); ++bucket)\n+            new_state->bucket_map_states[bucket] = bucket_map_states[bucket] ? bucket_map_states[bucket]->clone() : nullptr;\n+        for (size_t bucket = 0; bucket != bucket_structure_states.size(); ++bucket)\n+            new_state->bucket_structure_states[bucket] = bucket_structure_states[bucket] ? bucket_structure_states[bucket]->clone() : nullptr;\n+        return new_state;\n+    }\n+};\n+\n+void SerializationObjectSharedData::enumerateStreams(\n+    ISerialization::EnumerateStreamsSettings & settings,\n+    const ISerialization::StreamCallback & callback,\n+    const ISerialization::SubstreamData & data) const\n+{\n+    const auto * shared_data_state = data.deserialize_state ? checkAndGetState<DeserializeBinaryBulkStateObjectSharedData>(data.deserialize_state) : nullptr;\n+\n+    if (serialization_version.value == SerializationVersion::MAP)\n+    {\n+        auto map_data = SubstreamData(serialization_map)\n+                            .withColumn(data.column)\n+                            .withType(data.type)\n+                            .withSerializationInfo(data.serialization_info)\n+                            .withDeserializeState(shared_data_state ? shared_data_state->map_state : nullptr);\n+\n+        serialization_map->enumerateStreams(settings, callback, map_data);\n+        return;\n+    }\n+\n+    /// Other 2 serializations MAP_WITH_BUCKETS and ADVAMCED support buckets.\n+    for (size_t bucket = 0; bucket != buckets; ++bucket)\n+    {\n+        settings.path.push_back(Substream::ObjectSharedDataBucket);\n+        settings.path.back().object_shared_data_bucket = bucket;\n+        if (serialization_version.value == SerializationVersion::MAP_WITH_BUCKETS)\n+        {\n+            auto map_data = SubstreamData(serialization_map)\n+                                .withColumn(data.column)\n+                                .withType(data.type)\n+                                .withSerializationInfo(data.serialization_info)\n+                                .withDeserializeState(shared_data_state ? shared_data_state->bucket_map_states[bucket] : nullptr);\n+            serialization_map->enumerateStreams(settings, callback, map_data);\n+        }\n+        else if (serialization_version.value == SerializationObjectSharedData::SerializationVersion::ADVANCED)\n+        {\n+            if (settings.use_specialized_prefixes_and_suffixes_substreams)\n+            {\n+                settings.path.push_back(Substream::ObjectSharedDataStructurePrefix);",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2228742806",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 83777,
+        "pr_file": "src/DataTypes/Serializations/SerializationObjectSharedData.cpp",
+        "discussion_id": "2228742806",
+        "commented_code": "@@ -0,0 +1,1429 @@\n+#include <DataTypes/Serializations/SerializationObjectSharedData.h>\n+#include <DataTypes/Serializations/SerializationObjectHelpers.h>\n+#include <DataTypes/Serializations/SerializationArray.h>\n+#include <DataTypes/Serializations/SerializationNumber.h>\n+#include <DataTypes/Serializations/SerializationString.h>\n+#include <DataTypes/Serializations/getSubcolumnsDeserializationOrder.h>\n+#include <DataTypes/DataTypeObject.h>\n+#include <DataTypes/DataTypesNumber.h>\n+#include <Columns/ColumnMap.h>\n+#include <Columns/ColumnArray.h>\n+#include <Columns/ColumnTuple.h>\n+#include <Storages/MergeTree/ColumnsSubstreams.h>\n+#include <Core/NamesAndTypes.h>\n+\n+namespace DB\n+{\n+\n+namespace ErrorCodes\n+{\n+    extern const int LOGICAL_ERROR;\n+    extern const int INCORRECT_DATA;\n+    extern const int NOT_IMPLEMENTED;\n+}\n+\n+SerializationObjectSharedData::SerializationObjectSharedData(SerializationVersion serialization_version_, const DataTypePtr & dynamic_type_, size_t buckets_)\n+    : serialization_version(serialization_version_)\n+    , dynamic_type(dynamic_type_)\n+    , dynamic_serialization(dynamic_type_->getDefaultSerialization())\n+    , buckets(buckets_)\n+    , serialization_map(DataTypeObject::getTypeOfSharedData()->getDefaultSerialization())\n+{\n+}\n+\n+SerializationObjectSharedData::SerializationVersion::SerializationVersion(UInt64 version) : value(static_cast<Value>(version))\n+{\n+    checkVersion(version);\n+}\n+\n+SerializationObjectSharedData::SerializationVersion::SerializationVersion(DB::MergeTreeObjectSharedDataSerializationVersion version)\n+{\n+    switch (version)\n+    {\n+        case MergeTreeObjectSharedDataSerializationVersion::MAP:\n+            value = MAP;\n+            break;\n+        case MergeTreeObjectSharedDataSerializationVersion::MAP_WITH_BUCKETS:\n+            value = MAP_WITH_BUCKETS;\n+            break;\n+        case MergeTreeObjectSharedDataSerializationVersion::ADVANCED:\n+            value = ADVANCED;\n+            break;\n+    }\n+}\n+\n+void SerializationObjectSharedData::SerializationVersion::checkVersion(UInt64 version)\n+{\n+    if (version != MAP && version != MAP_WITH_BUCKETS && version != ADVANCED)\n+        throw Exception(ErrorCodes::INCORRECT_DATA, \"Invalid version for Object shared data serialization: {}\", version);\n+}\n+\n+struct SerializeBinaryBulkStateObjectSharedData : public ISerialization::SerializeBinaryBulkState\n+{\n+    ISerialization::SerializeBinaryBulkStatePtr map_state;\n+    std::vector<ISerialization::SerializeBinaryBulkStatePtr> bucket_map_states;\n+};\n+\n+struct DeserializeBinaryBulkStateObjectSharedData : public ISerialization::DeserializeBinaryBulkState\n+{\n+    ISerialization::DeserializeBinaryBulkStatePtr map_state;\n+    std::vector<ISerialization::DeserializeBinaryBulkStatePtr> bucket_map_states;\n+    std::vector<ISerialization::DeserializeBinaryBulkStatePtr> bucket_structure_states;\n+    /// Some granules can be partially read, we need to remember how many rows\n+    /// were already read from the last incomplete granule.\n+    size_t last_incomplete_granule_offset = 0;\n+\n+    ISerialization::DeserializeBinaryBulkStatePtr clone() const override\n+    {\n+        auto new_state = std::make_shared<DeserializeBinaryBulkStateObjectSharedData>(*this);\n+        for (size_t bucket = 0; bucket != bucket_map_states.size(); ++bucket)\n+            new_state->bucket_map_states[bucket] = bucket_map_states[bucket] ? bucket_map_states[bucket]->clone() : nullptr;\n+        for (size_t bucket = 0; bucket != bucket_structure_states.size(); ++bucket)\n+            new_state->bucket_structure_states[bucket] = bucket_structure_states[bucket] ? bucket_structure_states[bucket]->clone() : nullptr;\n+        return new_state;\n+    }\n+};\n+\n+void SerializationObjectSharedData::enumerateStreams(\n+    ISerialization::EnumerateStreamsSettings & settings,\n+    const ISerialization::StreamCallback & callback,\n+    const ISerialization::SubstreamData & data) const\n+{\n+    const auto * shared_data_state = data.deserialize_state ? checkAndGetState<DeserializeBinaryBulkStateObjectSharedData>(data.deserialize_state) : nullptr;\n+\n+    if (serialization_version.value == SerializationVersion::MAP)\n+    {\n+        auto map_data = SubstreamData(serialization_map)\n+                            .withColumn(data.column)\n+                            .withType(data.type)\n+                            .withSerializationInfo(data.serialization_info)\n+                            .withDeserializeState(shared_data_state ? shared_data_state->map_state : nullptr);\n+\n+        serialization_map->enumerateStreams(settings, callback, map_data);\n+        return;\n+    }\n+\n+    /// Other 2 serializations MAP_WITH_BUCKETS and ADVAMCED support buckets.\n+    for (size_t bucket = 0; bucket != buckets; ++bucket)\n+    {\n+        settings.path.push_back(Substream::ObjectSharedDataBucket);\n+        settings.path.back().object_shared_data_bucket = bucket;\n+        if (serialization_version.value == SerializationVersion::MAP_WITH_BUCKETS)\n+        {\n+            auto map_data = SubstreamData(serialization_map)\n+                                .withColumn(data.column)\n+                                .withType(data.type)\n+                                .withSerializationInfo(data.serialization_info)\n+                                .withDeserializeState(shared_data_state ? shared_data_state->bucket_map_states[bucket] : nullptr);\n+            serialization_map->enumerateStreams(settings, callback, map_data);\n+        }\n+        else if (serialization_version.value == SerializationObjectSharedData::SerializationVersion::ADVANCED)\n+        {\n+            if (settings.use_specialized_prefixes_and_suffixes_substreams)\n+            {\n+                settings.path.push_back(Substream::ObjectSharedDataStructurePrefix);",
+        "comment_created_at": "2025-07-24T14:46:15+00:00",
+        "comment_author": "antonio2368",
+        "comment_body": "maybe\r\n```cpp\r\n    const auto call_callback_for_substream = [&](const auto substream)\r\n    {\r\n        settings.path.push_back(substream);\r\n        callback(settings.path);\r\n        settings.path.pop_back();\r\n    };\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2269718426",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 83777,
+        "pr_file": "src/DataTypes/Serializations/SerializationObjectSharedData.cpp",
+        "discussion_id": "2228742806",
+        "commented_code": "@@ -0,0 +1,1429 @@\n+#include <DataTypes/Serializations/SerializationObjectSharedData.h>\n+#include <DataTypes/Serializations/SerializationObjectHelpers.h>\n+#include <DataTypes/Serializations/SerializationArray.h>\n+#include <DataTypes/Serializations/SerializationNumber.h>\n+#include <DataTypes/Serializations/SerializationString.h>\n+#include <DataTypes/Serializations/getSubcolumnsDeserializationOrder.h>\n+#include <DataTypes/DataTypeObject.h>\n+#include <DataTypes/DataTypesNumber.h>\n+#include <Columns/ColumnMap.h>\n+#include <Columns/ColumnArray.h>\n+#include <Columns/ColumnTuple.h>\n+#include <Storages/MergeTree/ColumnsSubstreams.h>\n+#include <Core/NamesAndTypes.h>\n+\n+namespace DB\n+{\n+\n+namespace ErrorCodes\n+{\n+    extern const int LOGICAL_ERROR;\n+    extern const int INCORRECT_DATA;\n+    extern const int NOT_IMPLEMENTED;\n+}\n+\n+SerializationObjectSharedData::SerializationObjectSharedData(SerializationVersion serialization_version_, const DataTypePtr & dynamic_type_, size_t buckets_)\n+    : serialization_version(serialization_version_)\n+    , dynamic_type(dynamic_type_)\n+    , dynamic_serialization(dynamic_type_->getDefaultSerialization())\n+    , buckets(buckets_)\n+    , serialization_map(DataTypeObject::getTypeOfSharedData()->getDefaultSerialization())\n+{\n+}\n+\n+SerializationObjectSharedData::SerializationVersion::SerializationVersion(UInt64 version) : value(static_cast<Value>(version))\n+{\n+    checkVersion(version);\n+}\n+\n+SerializationObjectSharedData::SerializationVersion::SerializationVersion(DB::MergeTreeObjectSharedDataSerializationVersion version)\n+{\n+    switch (version)\n+    {\n+        case MergeTreeObjectSharedDataSerializationVersion::MAP:\n+            value = MAP;\n+            break;\n+        case MergeTreeObjectSharedDataSerializationVersion::MAP_WITH_BUCKETS:\n+            value = MAP_WITH_BUCKETS;\n+            break;\n+        case MergeTreeObjectSharedDataSerializationVersion::ADVANCED:\n+            value = ADVANCED;\n+            break;\n+    }\n+}\n+\n+void SerializationObjectSharedData::SerializationVersion::checkVersion(UInt64 version)\n+{\n+    if (version != MAP && version != MAP_WITH_BUCKETS && version != ADVANCED)\n+        throw Exception(ErrorCodes::INCORRECT_DATA, \"Invalid version for Object shared data serialization: {}\", version);\n+}\n+\n+struct SerializeBinaryBulkStateObjectSharedData : public ISerialization::SerializeBinaryBulkState\n+{\n+    ISerialization::SerializeBinaryBulkStatePtr map_state;\n+    std::vector<ISerialization::SerializeBinaryBulkStatePtr> bucket_map_states;\n+};\n+\n+struct DeserializeBinaryBulkStateObjectSharedData : public ISerialization::DeserializeBinaryBulkState\n+{\n+    ISerialization::DeserializeBinaryBulkStatePtr map_state;\n+    std::vector<ISerialization::DeserializeBinaryBulkStatePtr> bucket_map_states;\n+    std::vector<ISerialization::DeserializeBinaryBulkStatePtr> bucket_structure_states;\n+    /// Some granules can be partially read, we need to remember how many rows\n+    /// were already read from the last incomplete granule.\n+    size_t last_incomplete_granule_offset = 0;\n+\n+    ISerialization::DeserializeBinaryBulkStatePtr clone() const override\n+    {\n+        auto new_state = std::make_shared<DeserializeBinaryBulkStateObjectSharedData>(*this);\n+        for (size_t bucket = 0; bucket != bucket_map_states.size(); ++bucket)\n+            new_state->bucket_map_states[bucket] = bucket_map_states[bucket] ? bucket_map_states[bucket]->clone() : nullptr;\n+        for (size_t bucket = 0; bucket != bucket_structure_states.size(); ++bucket)\n+            new_state->bucket_structure_states[bucket] = bucket_structure_states[bucket] ? bucket_structure_states[bucket]->clone() : nullptr;\n+        return new_state;\n+    }\n+};\n+\n+void SerializationObjectSharedData::enumerateStreams(\n+    ISerialization::EnumerateStreamsSettings & settings,\n+    const ISerialization::StreamCallback & callback,\n+    const ISerialization::SubstreamData & data) const\n+{\n+    const auto * shared_data_state = data.deserialize_state ? checkAndGetState<DeserializeBinaryBulkStateObjectSharedData>(data.deserialize_state) : nullptr;\n+\n+    if (serialization_version.value == SerializationVersion::MAP)\n+    {\n+        auto map_data = SubstreamData(serialization_map)\n+                            .withColumn(data.column)\n+                            .withType(data.type)\n+                            .withSerializationInfo(data.serialization_info)\n+                            .withDeserializeState(shared_data_state ? shared_data_state->map_state : nullptr);\n+\n+        serialization_map->enumerateStreams(settings, callback, map_data);\n+        return;\n+    }\n+\n+    /// Other 2 serializations MAP_WITH_BUCKETS and ADVAMCED support buckets.\n+    for (size_t bucket = 0; bucket != buckets; ++bucket)\n+    {\n+        settings.path.push_back(Substream::ObjectSharedDataBucket);\n+        settings.path.back().object_shared_data_bucket = bucket;\n+        if (serialization_version.value == SerializationVersion::MAP_WITH_BUCKETS)\n+        {\n+            auto map_data = SubstreamData(serialization_map)\n+                                .withColumn(data.column)\n+                                .withType(data.type)\n+                                .withSerializationInfo(data.serialization_info)\n+                                .withDeserializeState(shared_data_state ? shared_data_state->bucket_map_states[bucket] : nullptr);\n+            serialization_map->enumerateStreams(settings, callback, map_data);\n+        }\n+        else if (serialization_version.value == SerializationObjectSharedData::SerializationVersion::ADVANCED)\n+        {\n+            if (settings.use_specialized_prefixes_and_suffixes_substreams)\n+            {\n+                settings.path.push_back(Substream::ObjectSharedDataStructurePrefix);",
+        "comment_created_at": "2025-08-12T12:42:29+00:00",
+        "comment_author": "Avogar",
+        "comment_body": "Good idea, will do",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2269720800",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 83777,
+        "pr_file": "src/DataTypes/Serializations/SerializationObjectSharedData.cpp",
+        "discussion_id": "2228742806",
+        "commented_code": "@@ -0,0 +1,1429 @@\n+#include <DataTypes/Serializations/SerializationObjectSharedData.h>\n+#include <DataTypes/Serializations/SerializationObjectHelpers.h>\n+#include <DataTypes/Serializations/SerializationArray.h>\n+#include <DataTypes/Serializations/SerializationNumber.h>\n+#include <DataTypes/Serializations/SerializationString.h>\n+#include <DataTypes/Serializations/getSubcolumnsDeserializationOrder.h>\n+#include <DataTypes/DataTypeObject.h>\n+#include <DataTypes/DataTypesNumber.h>\n+#include <Columns/ColumnMap.h>\n+#include <Columns/ColumnArray.h>\n+#include <Columns/ColumnTuple.h>\n+#include <Storages/MergeTree/ColumnsSubstreams.h>\n+#include <Core/NamesAndTypes.h>\n+\n+namespace DB\n+{\n+\n+namespace ErrorCodes\n+{\n+    extern const int LOGICAL_ERROR;\n+    extern const int INCORRECT_DATA;\n+    extern const int NOT_IMPLEMENTED;\n+}\n+\n+SerializationObjectSharedData::SerializationObjectSharedData(SerializationVersion serialization_version_, const DataTypePtr & dynamic_type_, size_t buckets_)\n+    : serialization_version(serialization_version_)\n+    , dynamic_type(dynamic_type_)\n+    , dynamic_serialization(dynamic_type_->getDefaultSerialization())\n+    , buckets(buckets_)\n+    , serialization_map(DataTypeObject::getTypeOfSharedData()->getDefaultSerialization())\n+{\n+}\n+\n+SerializationObjectSharedData::SerializationVersion::SerializationVersion(UInt64 version) : value(static_cast<Value>(version))\n+{\n+    checkVersion(version);\n+}\n+\n+SerializationObjectSharedData::SerializationVersion::SerializationVersion(DB::MergeTreeObjectSharedDataSerializationVersion version)\n+{\n+    switch (version)\n+    {\n+        case MergeTreeObjectSharedDataSerializationVersion::MAP:\n+            value = MAP;\n+            break;\n+        case MergeTreeObjectSharedDataSerializationVersion::MAP_WITH_BUCKETS:\n+            value = MAP_WITH_BUCKETS;\n+            break;\n+        case MergeTreeObjectSharedDataSerializationVersion::ADVANCED:\n+            value = ADVANCED;\n+            break;\n+    }\n+}\n+\n+void SerializationObjectSharedData::SerializationVersion::checkVersion(UInt64 version)\n+{\n+    if (version != MAP && version != MAP_WITH_BUCKETS && version != ADVANCED)\n+        throw Exception(ErrorCodes::INCORRECT_DATA, \"Invalid version for Object shared data serialization: {}\", version);\n+}\n+\n+struct SerializeBinaryBulkStateObjectSharedData : public ISerialization::SerializeBinaryBulkState\n+{\n+    ISerialization::SerializeBinaryBulkStatePtr map_state;\n+    std::vector<ISerialization::SerializeBinaryBulkStatePtr> bucket_map_states;\n+};\n+\n+struct DeserializeBinaryBulkStateObjectSharedData : public ISerialization::DeserializeBinaryBulkState\n+{\n+    ISerialization::DeserializeBinaryBulkStatePtr map_state;\n+    std::vector<ISerialization::DeserializeBinaryBulkStatePtr> bucket_map_states;\n+    std::vector<ISerialization::DeserializeBinaryBulkStatePtr> bucket_structure_states;\n+    /// Some granules can be partially read, we need to remember how many rows\n+    /// were already read from the last incomplete granule.\n+    size_t last_incomplete_granule_offset = 0;\n+\n+    ISerialization::DeserializeBinaryBulkStatePtr clone() const override\n+    {\n+        auto new_state = std::make_shared<DeserializeBinaryBulkStateObjectSharedData>(*this);\n+        for (size_t bucket = 0; bucket != bucket_map_states.size(); ++bucket)\n+            new_state->bucket_map_states[bucket] = bucket_map_states[bucket] ? bucket_map_states[bucket]->clone() : nullptr;\n+        for (size_t bucket = 0; bucket != bucket_structure_states.size(); ++bucket)\n+            new_state->bucket_structure_states[bucket] = bucket_structure_states[bucket] ? bucket_structure_states[bucket]->clone() : nullptr;\n+        return new_state;\n+    }\n+};\n+\n+void SerializationObjectSharedData::enumerateStreams(\n+    ISerialization::EnumerateStreamsSettings & settings,\n+    const ISerialization::StreamCallback & callback,\n+    const ISerialization::SubstreamData & data) const\n+{\n+    const auto * shared_data_state = data.deserialize_state ? checkAndGetState<DeserializeBinaryBulkStateObjectSharedData>(data.deserialize_state) : nullptr;\n+\n+    if (serialization_version.value == SerializationVersion::MAP)\n+    {\n+        auto map_data = SubstreamData(serialization_map)\n+                            .withColumn(data.column)\n+                            .withType(data.type)\n+                            .withSerializationInfo(data.serialization_info)\n+                            .withDeserializeState(shared_data_state ? shared_data_state->map_state : nullptr);\n+\n+        serialization_map->enumerateStreams(settings, callback, map_data);\n+        return;\n+    }\n+\n+    /// Other 2 serializations MAP_WITH_BUCKETS and ADVAMCED support buckets.\n+    for (size_t bucket = 0; bucket != buckets; ++bucket)\n+    {\n+        settings.path.push_back(Substream::ObjectSharedDataBucket);\n+        settings.path.back().object_shared_data_bucket = bucket;\n+        if (serialization_version.value == SerializationVersion::MAP_WITH_BUCKETS)\n+        {\n+            auto map_data = SubstreamData(serialization_map)\n+                                .withColumn(data.column)\n+                                .withType(data.type)\n+                                .withSerializationInfo(data.serialization_info)\n+                                .withDeserializeState(shared_data_state ? shared_data_state->bucket_map_states[bucket] : nullptr);\n+            serialization_map->enumerateStreams(settings, callback, map_data);\n+        }\n+        else if (serialization_version.value == SerializationObjectSharedData::SerializationVersion::ADVANCED)\n+        {\n+            if (settings.use_specialized_prefixes_and_suffixes_substreams)\n+            {\n+                settings.path.push_back(Substream::ObjectSharedDataStructurePrefix);",
+        "comment_created_at": "2025-08-12T12:43:13+00:00",
+        "comment_author": "Avogar",
+        "comment_body": "Even better, let's add a method in ISerialization for it, because it's used in a lot of places",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2278762129",
+    "pr_number": 85564,
+    "pr_file": "src/Storages/ObjectStorage/DataLakes/DeltaLake/DeltaLakeSink.cpp",
+    "created_at": "2025-08-15T10:28:35+00:00",
+    "commented_code": "+#include <Storages/ObjectStorage/DataLakes/DeltaLake/DeltaLakeSink.h>\n+\n+#if USE_DELTA_KERNEL_RS\n+#include <Common/logger_useful.h>\n+#include <Core/UUID.h>\n+#include <Storages/ObjectStorage/DataLakes/DeltaLakeMetadataDeltaKernel.h>\n+#include <Storages/ObjectStorage/DataLakes/DeltaLake/WriteTransaction.h>\n+\n+\n+namespace DB\n+{\n+\n+namespace\n+{\n+    std::string generatePath(const std::string & prefix)",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2278762129",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 85564,
+        "pr_file": "src/Storages/ObjectStorage/DataLakes/DeltaLake/DeltaLakeSink.cpp",
+        "discussion_id": "2278762129",
+        "commented_code": "@@ -0,0 +1,77 @@\n+#include <Storages/ObjectStorage/DataLakes/DeltaLake/DeltaLakeSink.h>\n+\n+#if USE_DELTA_KERNEL_RS\n+#include <Common/logger_useful.h>\n+#include <Core/UUID.h>\n+#include <Storages/ObjectStorage/DataLakes/DeltaLakeMetadataDeltaKernel.h>\n+#include <Storages/ObjectStorage/DataLakes/DeltaLake/WriteTransaction.h>\n+\n+\n+namespace DB\n+{\n+\n+namespace\n+{\n+    std::string generatePath(const std::string & prefix)",
+        "comment_created_at": "2025-08-15T10:28:35+00:00",
+        "comment_author": "scanhex12",
+        "comment_body": "1. std::string -> String\r\n2. I saw the same code above, please make common function/class",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1631063485",
+    "pr_number": 63665,
+    "pr_file": "src/Interpreters/MutationsInterpreter.cpp",
+    "created_at": "2024-06-07T11:25:56+00:00",
+    "commented_code": "return res;\n }",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "1631063485",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 63665,
+        "pr_file": "src/Interpreters/MutationsInterpreter.cpp",
+        "discussion_id": "1631063485",
+        "commented_code": "@@ -536,6 +537,42 @@ static std::optional<std::vector<ASTPtr>> getExpressionsOfUpdatedNestedSubcolumn\n     return res;\n }\n ",
+        "comment_created_at": "2024-06-07T11:25:56+00:00",
+        "comment_author": "divanik",
+        "comment_body": "This code copies logic from PlannerJoinTree.cpp. You need to put it in common place",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1632354408",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 63665,
+        "pr_file": "src/Interpreters/MutationsInterpreter.cpp",
+        "discussion_id": "1631063485",
+        "commented_code": "@@ -536,6 +537,42 @@ static std::optional<std::vector<ASTPtr>> getExpressionsOfUpdatedNestedSubcolumn\n     return res;\n }\n ",
+        "comment_created_at": "2024-06-09T17:13:33+00:00",
+        "comment_author": "wudidapaopao",
+        "comment_body": "I've moved the common logic to the AddingTableNameVirtualColumnStep.cpp file.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1300311987",
+    "pr_number": 48941,
+    "pr_file": "src/Storages/MergeTree/MergeTreeMutationEntry.cpp",
+    "created_at": "2023-08-21T15:51:06+00:00",
+    "commented_code": "}\n \n     assertEOF(*buf);\n+\n+    for (const auto & command : commands)",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "1300311987",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 48941,
+        "pr_file": "src/Storages/MergeTree/MergeTreeMutationEntry.cpp",
+        "discussion_id": "1300311987",
+        "commented_code": "@@ -154,6 +167,20 @@ MergeTreeMutationEntry::MergeTreeMutationEntry(DiskPtr disk_, const String & pat\n     }\n \n     assertEOF(*buf);\n+\n+    for (const auto & command : commands)",
+        "comment_created_at": "2023-08-21T15:51:06+00:00",
+        "comment_author": "Enmk",
+        "comment_body": "Please consider invoking `MergeTreeData::getPartitionIdsAffectedByCommands` here instead, since it looks identical to this piece of code",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2192801347",
+    "pr_number": 76802,
+    "pr_file": "src/Storages/StorageURL.cpp",
+    "created_at": "2025-07-08T15:12:53+00:00",
+    "commented_code": "storage_metadata.setConstraints(constraints_);\n     storage_metadata.setComment(comment);\n \n-    auto virtual_columns_desc = VirtualColumnUtils::getVirtualsForFileLikeStorage(\n-        storage_metadata.columns, context_, getSampleURI(uri, context_), format_settings);\n+    auto & storage_columns = storage_metadata.columns;\n+\n+    if (context_->getSettingsRef()[Setting::use_hive_partitioning])",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2192801347",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 76802,
+        "pr_file": "src/Storages/StorageURL.cpp",
+        "discussion_id": "2192801347",
+        "commented_code": "@@ -185,8 +191,37 @@ IStorageURLBase::IStorageURLBase(\n     storage_metadata.setConstraints(constraints_);\n     storage_metadata.setComment(comment);\n \n-    auto virtual_columns_desc = VirtualColumnUtils::getVirtualsForFileLikeStorage(\n-        storage_metadata.columns, context_, getSampleURI(uri, context_), format_settings);\n+    auto & storage_columns = storage_metadata.columns;\n+\n+    if (context_->getSettingsRef()[Setting::use_hive_partitioning])",
+        "comment_created_at": "2025-07-08T15:12:53+00:00",
+        "comment_author": "kssenii",
+        "comment_body": "May be move the code inside this scope into some utils file as it is shared among several storages, so it will be reused?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2197791070",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 76802,
+        "pr_file": "src/Storages/StorageURL.cpp",
+        "discussion_id": "2192801347",
+        "commented_code": "@@ -185,8 +191,37 @@ IStorageURLBase::IStorageURLBase(\n     storage_metadata.setConstraints(constraints_);\n     storage_metadata.setComment(comment);\n \n-    auto virtual_columns_desc = VirtualColumnUtils::getVirtualsForFileLikeStorage(\n-        storage_metadata.columns, context_, getSampleURI(uri, context_), format_settings);\n+    auto & storage_columns = storage_metadata.columns;\n+\n+    if (context_->getSettingsRef()[Setting::use_hive_partitioning])",
+        "comment_created_at": "2025-07-10T13:50:00+00:00",
+        "comment_author": "arthurpassos",
+        "comment_body": "I honestly tried doing that two times, but it ended up not looking good. Mostly because there are two elements that should be returned from a function: hive_partition_columns_to_read_from_file_path and storage_columns. If you think it is a must, I can give it another shot.\r\n\r\nMaybe it was something else.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2207838349",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 76802,
+        "pr_file": "src/Storages/StorageURL.cpp",
+        "discussion_id": "2192801347",
+        "commented_code": "@@ -185,8 +191,37 @@ IStorageURLBase::IStorageURLBase(\n     storage_metadata.setConstraints(constraints_);\n     storage_metadata.setComment(comment);\n \n-    auto virtual_columns_desc = VirtualColumnUtils::getVirtualsForFileLikeStorage(\n-        storage_metadata.columns, context_, getSampleURI(uri, context_), format_settings);\n+    auto & storage_columns = storage_metadata.columns;\n+\n+    if (context_->getSettingsRef()[Setting::use_hive_partitioning])",
+        "comment_created_at": "2025-07-15T15:27:49+00:00",
+        "comment_author": "arthurpassos",
+        "comment_body": "Implemented it in https://github.com/ClickHouse/ClickHouse/pull/76802/commits/f6df533c4173d14841d194191f3ace7dc402d259",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,424 @@
+[
+  {
+    "discussion_id": "2204694607",
+    "pr_number": 83505,
+    "pr_file": "src/Analyzer/Resolve/QueryAnalyzer.cpp",
+    "created_at": "2025-07-14T11:44:15+00:00",
+    "commented_code": "FunctionNodePtr function_node_ptr = std::static_pointer_cast<FunctionNode>(node);\n     auto function_name = function_node_ptr->getFunctionName();\n \n+    /* Early short-circuit for logical expressions.\n+     * If   or()   already contains a constant TRUE,\n+     * or   and()  already contains a constant FALSE,\n+     * the result of the whole function is known.\n+     * Replace the function with that constant right now,\n+     * before we start resolving (and possibly executing)\n+     * the remaining arguments \u2013 this prevents scalar\n+     * sub-queries in those arguments from running.\n+     */\n+    if (function_name == \"or\" || function_name == \"and\")",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2204694607",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 83505,
+        "pr_file": "src/Analyzer/Resolve/QueryAnalyzer.cpp",
+        "discussion_id": "2204694607",
+        "commented_code": "@@ -2779,6 +2781,87 @@ ProjectionNames QueryAnalyzer::resolveFunction(QueryTreeNodePtr & node, Identifi\n     FunctionNodePtr function_node_ptr = std::static_pointer_cast<FunctionNode>(node);\n     auto function_name = function_node_ptr->getFunctionName();\n \n+    /* Early short-circuit for logical expressions.\n+     * If   or()   already contains a constant TRUE,\n+     * or   and()  already contains a constant FALSE,\n+     * the result of the whole function is known.\n+     * Replace the function with that constant right now,\n+     * before we start resolving (and possibly executing)\n+     * the remaining arguments \u2013 this prevents scalar\n+     * sub-queries in those arguments from running.\n+     */\n+    if (function_name == \"or\" || function_name == \"and\")",
+        "comment_created_at": "2025-07-14T11:44:15+00:00",
+        "comment_author": "novikd",
+        "comment_body": "You don't need to handle only these specific functions here. There's `IFunctionBase::getConstantResultForNonConstArguments` that serves this purpose. You should call it here.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2204705653",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 83505,
+        "pr_file": "src/Analyzer/Resolve/QueryAnalyzer.cpp",
+        "discussion_id": "2204694607",
+        "commented_code": "@@ -2779,6 +2781,87 @@ ProjectionNames QueryAnalyzer::resolveFunction(QueryTreeNodePtr & node, Identifi\n     FunctionNodePtr function_node_ptr = std::static_pointer_cast<FunctionNode>(node);\n     auto function_name = function_node_ptr->getFunctionName();\n \n+    /* Early short-circuit for logical expressions.\n+     * If   or()   already contains a constant TRUE,\n+     * or   and()  already contains a constant FALSE,\n+     * the result of the whole function is known.\n+     * Replace the function with that constant right now,\n+     * before we start resolving (and possibly executing)\n+     * the remaining arguments \u2013 this prevents scalar\n+     * sub-queries in those arguments from running.\n+     */\n+    if (function_name == \"or\" || function_name == \"and\")",
+        "comment_created_at": "2025-07-14T11:50:41+00:00",
+        "comment_author": "novikd",
+        "comment_body": "This will allow the execution of invalid queries, e.g.:\r\n\r\n```sql\r\nCREATE TABLE test(\r\n    id Int\r\n)\r\nORDER BY id;\r\n\r\nSELECT 0 AND (SELECT sum(bar) FROM test) > 0;\r\n```\r\n\r\nYou should also resolve arguments, but not evaluate scalar subqueries. You can probably avoid resolving arguments, but there should be a new setting for this optimization, and it'll be applied if the setting is enabled.\r\n\r\nI suppose a new setting is a better option, because scalar subqueries may throw an exception during evaluation.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2227633273",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 83505,
+        "pr_file": "src/Analyzer/Resolve/QueryAnalyzer.cpp",
+        "discussion_id": "2204694607",
+        "commented_code": "@@ -2779,6 +2781,87 @@ ProjectionNames QueryAnalyzer::resolveFunction(QueryTreeNodePtr & node, Identifi\n     FunctionNodePtr function_node_ptr = std::static_pointer_cast<FunctionNode>(node);\n     auto function_name = function_node_ptr->getFunctionName();\n \n+    /* Early short-circuit for logical expressions.\n+     * If   or()   already contains a constant TRUE,\n+     * or   and()  already contains a constant FALSE,\n+     * the result of the whole function is known.\n+     * Replace the function with that constant right now,\n+     * before we start resolving (and possibly executing)\n+     * the remaining arguments \u2013 this prevents scalar\n+     * sub-queries in those arguments from running.\n+     */\n+    if (function_name == \"or\" || function_name == \"and\")",
+        "comment_created_at": "2025-07-24T07:11:02+00:00",
+        "comment_author": "fhw12345",
+        "comment_body": "@novikd Added a new setting `enable_function_early_short_circuit` to control whether to enable the short-circuit optimization and skip evaluation of scalar subqueries. Please take a look when you have a moment, thanks!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2248211763",
+    "pr_number": 84772,
+    "pr_file": "src/Functions/FunctionFilterContains.cpp",
+    "created_at": "2025-08-01T15:04:01+00:00",
+    "commented_code": "+#include <memory>\n+#include <Columns/ColumnString.h>\n+#include <Columns/ColumnsNumber.h>\n+#include <DataTypes/DataTypeString.h>\n+#include <DataTypes/DataTypesNumber.h>\n+#include <Functions/FunctionHelpers.h>\n+#include <Functions/FunctionFactory.h>\n+#include <Functions/IFunction.h>\n+#include <Interpreters/Context.h>\n+#include <Interpreters/BloomFilter.h>\n+#include <Processors/QueryPlan/RuntimeFilterLookup.h>\n+#include <IO/WriteHelpers.h>\n+#include <Common/CurrentThread.h>\n+\n+namespace DB\n+{\n+\n+namespace ErrorCodes\n+{\n+    extern const int ILLEGAL_TYPE_OF_ARGUMENT;\n+    extern const int BAD_ARGUMENTS;\n+    extern const int TOO_FEW_ARGUMENTS_FOR_FUNCTION;\n+}\n+\n+class FunctionFilterContains : public IFunction\n+{\n+public:\n+    static constexpr auto name = \"filterContains\";\n+    static FunctionPtr create(ContextPtr) { return std::make_shared<FunctionFilterContains>(); }\n+\n+    String getName() const override\n+    {\n+        return name;\n+    }\n+\n+    bool isVariadic() const override { return true; }\n+    bool isInjective(const ColumnsWithTypeAndName &) const override { return true; }\n+    bool isSuitableForShortCircuitArgumentsExecution(const DataTypesWithConstInfo & /*arguments*/) const override { return false; }\n+    size_t getNumberOfArguments() const override { return 0; }\n+\n+    DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override\n+    {\n+        if (arguments.size() != 2)\n+            throw Exception(ErrorCodes::TOO_FEW_ARGUMENTS_FOR_FUNCTION,\n+                            \"Number of arguments for function {} can't be {}, should be 2\",\n+                            getName(), arguments.size());\n+\n+        /// TODO: check that 1st argument is const string\n+\n+        return std::make_shared<DataTypeUInt8>();\n+    }\n+\n+    DataTypePtr getReturnTypeForDefaultImplementationForDynamic() const override\n+    {\n+        return std::make_shared<DataTypeUInt8>();\n+    }\n+\n+    bool useDefaultImplementationForConstants() const override { return true; }\n+\n+    ColumnPtr executeImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr &, size_t input_rows_count) const override\n+    {\n+        auto filter_name_column = arguments[0].column;\n+        if (/*!filter_name_column->isConst() || */filter_name_column->getDataType() != TypeIndex::String)\n+            throw Exception(ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,\n+                            \"First argument of function '{}' must be a String filter name\",\n+                            getName());\n+\n+        const auto filter_name = filter_name_column->getDataAt(0);\n+        /// Query context contains filter lookup where per-query filters are stored\n+        /// TODO: Is this the right way to get query context?\n+        auto query_context = CurrentThread::get().getQueryContext();\n+        auto filter_lookup = query_context->getRuntimeFilterLookup();\n+        auto filter = filter_lookup->find(filter_name.toString());\n+\n+        /// FIXME: properly handle\n+//        if (!filter)\n+//            throw Exception(ErrorCodes::BAD_ARGUMENTS,\n+//                            \"Filter '{}' not found\",\n+//                            filter_name.toString());\n+\n+        auto data_column = arguments[1].column;\n+\n+        auto dst = ColumnVector<UInt8>::create();\n+        auto & dst_data = dst->getData();\n+        dst_data.resize(input_rows_count);\n+\n+        for (size_t row = 0; row < input_rows_count; ++row)\n+        {\n+            /// TODO: implement efficiently\n+            const auto & value = data_column->getDataAt(row);\n+            dst_data[row] = filter ? filter->find(value.data, value.size) : true;",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2248211763",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 84772,
+        "pr_file": "src/Functions/FunctionFilterContains.cpp",
+        "discussion_id": "2248211763",
+        "commented_code": "@@ -0,0 +1,114 @@\n+#include <memory>\n+#include <Columns/ColumnString.h>\n+#include <Columns/ColumnsNumber.h>\n+#include <DataTypes/DataTypeString.h>\n+#include <DataTypes/DataTypesNumber.h>\n+#include <Functions/FunctionHelpers.h>\n+#include <Functions/FunctionFactory.h>\n+#include <Functions/IFunction.h>\n+#include <Interpreters/Context.h>\n+#include <Interpreters/BloomFilter.h>\n+#include <Processors/QueryPlan/RuntimeFilterLookup.h>\n+#include <IO/WriteHelpers.h>\n+#include <Common/CurrentThread.h>\n+\n+namespace DB\n+{\n+\n+namespace ErrorCodes\n+{\n+    extern const int ILLEGAL_TYPE_OF_ARGUMENT;\n+    extern const int BAD_ARGUMENTS;\n+    extern const int TOO_FEW_ARGUMENTS_FOR_FUNCTION;\n+}\n+\n+class FunctionFilterContains : public IFunction\n+{\n+public:\n+    static constexpr auto name = \"filterContains\";\n+    static FunctionPtr create(ContextPtr) { return std::make_shared<FunctionFilterContains>(); }\n+\n+    String getName() const override\n+    {\n+        return name;\n+    }\n+\n+    bool isVariadic() const override { return true; }\n+    bool isInjective(const ColumnsWithTypeAndName &) const override { return true; }\n+    bool isSuitableForShortCircuitArgumentsExecution(const DataTypesWithConstInfo & /*arguments*/) const override { return false; }\n+    size_t getNumberOfArguments() const override { return 0; }\n+\n+    DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override\n+    {\n+        if (arguments.size() != 2)\n+            throw Exception(ErrorCodes::TOO_FEW_ARGUMENTS_FOR_FUNCTION,\n+                            \"Number of arguments for function {} can't be {}, should be 2\",\n+                            getName(), arguments.size());\n+\n+        /// TODO: check that 1st argument is const string\n+\n+        return std::make_shared<DataTypeUInt8>();\n+    }\n+\n+    DataTypePtr getReturnTypeForDefaultImplementationForDynamic() const override\n+    {\n+        return std::make_shared<DataTypeUInt8>();\n+    }\n+\n+    bool useDefaultImplementationForConstants() const override { return true; }\n+\n+    ColumnPtr executeImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr &, size_t input_rows_count) const override\n+    {\n+        auto filter_name_column = arguments[0].column;\n+        if (/*!filter_name_column->isConst() || */filter_name_column->getDataType() != TypeIndex::String)\n+            throw Exception(ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,\n+                            \"First argument of function '{}' must be a String filter name\",\n+                            getName());\n+\n+        const auto filter_name = filter_name_column->getDataAt(0);\n+        /// Query context contains filter lookup where per-query filters are stored\n+        /// TODO: Is this the right way to get query context?\n+        auto query_context = CurrentThread::get().getQueryContext();\n+        auto filter_lookup = query_context->getRuntimeFilterLookup();\n+        auto filter = filter_lookup->find(filter_name.toString());\n+\n+        /// FIXME: properly handle\n+//        if (!filter)\n+//            throw Exception(ErrorCodes::BAD_ARGUMENTS,\n+//                            \"Filter '{}' not found\",\n+//                            filter_name.toString());\n+\n+        auto data_column = arguments[1].column;\n+\n+        auto dst = ColumnVector<UInt8>::create();\n+        auto & dst_data = dst->getData();\n+        dst_data.resize(input_rows_count);\n+\n+        for (size_t row = 0; row < input_rows_count; ++row)\n+        {\n+            /// TODO: implement efficiently\n+            const auto & value = data_column->getDataAt(row);\n+            dst_data[row] = filter ? filter->find(value.data, value.size) : true;",
+        "comment_created_at": "2025-08-01T15:04:01+00:00",
+        "comment_author": "novikd",
+        "comment_body": "If `filter` is not found, you can return a vector with `1`s immediately and avoid this condition check in the loop.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2269657274",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 84772,
+        "pr_file": "src/Functions/FunctionFilterContains.cpp",
+        "discussion_id": "2248211763",
+        "commented_code": "@@ -0,0 +1,114 @@\n+#include <memory>\n+#include <Columns/ColumnString.h>\n+#include <Columns/ColumnsNumber.h>\n+#include <DataTypes/DataTypeString.h>\n+#include <DataTypes/DataTypesNumber.h>\n+#include <Functions/FunctionHelpers.h>\n+#include <Functions/FunctionFactory.h>\n+#include <Functions/IFunction.h>\n+#include <Interpreters/Context.h>\n+#include <Interpreters/BloomFilter.h>\n+#include <Processors/QueryPlan/RuntimeFilterLookup.h>\n+#include <IO/WriteHelpers.h>\n+#include <Common/CurrentThread.h>\n+\n+namespace DB\n+{\n+\n+namespace ErrorCodes\n+{\n+    extern const int ILLEGAL_TYPE_OF_ARGUMENT;\n+    extern const int BAD_ARGUMENTS;\n+    extern const int TOO_FEW_ARGUMENTS_FOR_FUNCTION;\n+}\n+\n+class FunctionFilterContains : public IFunction\n+{\n+public:\n+    static constexpr auto name = \"filterContains\";\n+    static FunctionPtr create(ContextPtr) { return std::make_shared<FunctionFilterContains>(); }\n+\n+    String getName() const override\n+    {\n+        return name;\n+    }\n+\n+    bool isVariadic() const override { return true; }\n+    bool isInjective(const ColumnsWithTypeAndName &) const override { return true; }\n+    bool isSuitableForShortCircuitArgumentsExecution(const DataTypesWithConstInfo & /*arguments*/) const override { return false; }\n+    size_t getNumberOfArguments() const override { return 0; }\n+\n+    DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override\n+    {\n+        if (arguments.size() != 2)\n+            throw Exception(ErrorCodes::TOO_FEW_ARGUMENTS_FOR_FUNCTION,\n+                            \"Number of arguments for function {} can't be {}, should be 2\",\n+                            getName(), arguments.size());\n+\n+        /// TODO: check that 1st argument is const string\n+\n+        return std::make_shared<DataTypeUInt8>();\n+    }\n+\n+    DataTypePtr getReturnTypeForDefaultImplementationForDynamic() const override\n+    {\n+        return std::make_shared<DataTypeUInt8>();\n+    }\n+\n+    bool useDefaultImplementationForConstants() const override { return true; }\n+\n+    ColumnPtr executeImpl(const ColumnsWithTypeAndName & arguments, const DataTypePtr &, size_t input_rows_count) const override\n+    {\n+        auto filter_name_column = arguments[0].column;\n+        if (/*!filter_name_column->isConst() || */filter_name_column->getDataType() != TypeIndex::String)\n+            throw Exception(ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT,\n+                            \"First argument of function '{}' must be a String filter name\",\n+                            getName());\n+\n+        const auto filter_name = filter_name_column->getDataAt(0);\n+        /// Query context contains filter lookup where per-query filters are stored\n+        /// TODO: Is this the right way to get query context?\n+        auto query_context = CurrentThread::get().getQueryContext();\n+        auto filter_lookup = query_context->getRuntimeFilterLookup();\n+        auto filter = filter_lookup->find(filter_name.toString());\n+\n+        /// FIXME: properly handle\n+//        if (!filter)\n+//            throw Exception(ErrorCodes::BAD_ARGUMENTS,\n+//                            \"Filter '{}' not found\",\n+//                            filter_name.toString());\n+\n+        auto data_column = arguments[1].column;\n+\n+        auto dst = ColumnVector<UInt8>::create();\n+        auto & dst_data = dst->getData();\n+        dst_data.resize(input_rows_count);\n+\n+        for (size_t row = 0; row < input_rows_count; ++row)\n+        {\n+            /// TODO: implement efficiently\n+            const auto & value = data_column->getDataAt(row);\n+            dst_data[row] = filter ? filter->find(value.data, value.size) : true;",
+        "comment_created_at": "2025-08-12T12:18:54+00:00",
+        "comment_author": "davenger",
+        "comment_body": "done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2226036871",
+    "pr_number": 83777,
+    "pr_file": "src/DataTypes/DataTypesCache.cpp",
+    "created_at": "2025-07-23T15:56:32+00:00",
+    "commented_code": "+#include <DataTypes/DataTypesCache.h>\n+\n+namespace DB\n+{\n+\n+DataTypesCache & getDataTypesCache()\n+{\n+    thread_local static DataTypesCache data_types_cache;",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2226036871",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 83777,
+        "pr_file": "src/DataTypes/DataTypesCache.cpp",
+        "discussion_id": "2226036871",
+        "commented_code": "@@ -0,0 +1,12 @@\n+#include <DataTypes/DataTypesCache.h>\n+\n+namespace DB\n+{\n+\n+DataTypesCache & getDataTypesCache()\n+{\n+    thread_local static DataTypesCache data_types_cache;",
+        "comment_created_at": "2025-07-23T15:56:32+00:00",
+        "comment_author": "antonio2368",
+        "comment_body": "Be aware that ClickHouse keeps most of the threads in global thread pool and after some work is done, data type cache will persist in memory.\r\nI don't think it will take much memory, especially because with this we avoid creating data type on every access but you never know.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2269673319",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 83777,
+        "pr_file": "src/DataTypes/DataTypesCache.cpp",
+        "discussion_id": "2226036871",
+        "commented_code": "@@ -0,0 +1,12 @@\n+#include <DataTypes/DataTypesCache.h>\n+\n+namespace DB\n+{\n+\n+DataTypesCache & getDataTypesCache()\n+{\n+    thread_local static DataTypesCache data_types_cache;",
+        "comment_created_at": "2025-08-12T12:25:47+00:00",
+        "comment_author": "Avogar",
+        "comment_body": "Let's reduce MAX_DATA_TYPES_ELEMENTS for this cache to smaller number, like 16. I don't expect it to have lots of different data types, mostly simple ones like String, Int64, Date, DateTime, Bool. It should not take a lot of memory ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2228593665",
+    "pr_number": 83777,
+    "pr_file": "src/DataTypes/Serializations/SerializationObject.cpp",
+    "created_at": "2025-07-24T13:53:29+00:00",
+    "commented_code": "UInt64 serialization_version;\n         readBinaryLittleEndian(serialization_version, *structure_stream);\n         auto structure_state = std::make_shared<DeserializeBinaryBulkStateObjectStructure>(serialization_version);\n-        if (structure_state->serialization_version.value == ObjectSerializationVersion::Value::V1 || structure_state->serialization_version.value == ObjectSerializationVersion::Value::V2)\n+        if (structure_state->serialization_version.value == SerializationVersion::FLATTENED)\n         {\n-            if (structure_state->serialization_version.value == ObjectSerializationVersion::Value::V1)\n+            /// Read the list of flattened paths.\n+            size_t paths_size;\n+            readVarUInt(paths_size, *structure_stream);\n+            structure_state->flattened_paths.reserve(paths_size);",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2228593665",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 83777,
+        "pr_file": "src/DataTypes/Serializations/SerializationObject.cpp",
+        "discussion_id": "2228593665",
+        "commented_code": "@@ -577,9 +662,25 @@ ISerialization::DeserializeBinaryBulkStatePtr SerializationObject::deserializeOb\n         UInt64 serialization_version;\n         readBinaryLittleEndian(serialization_version, *structure_stream);\n         auto structure_state = std::make_shared<DeserializeBinaryBulkStateObjectStructure>(serialization_version);\n-        if (structure_state->serialization_version.value == ObjectSerializationVersion::Value::V1 || structure_state->serialization_version.value == ObjectSerializationVersion::Value::V2)\n+        if (structure_state->serialization_version.value == SerializationVersion::FLATTENED)\n         {\n-            if (structure_state->serialization_version.value == ObjectSerializationVersion::Value::V1)\n+            /// Read the list of flattened paths.\n+            size_t paths_size;\n+            readVarUInt(paths_size, *structure_stream);\n+            structure_state->flattened_paths.reserve(paths_size);",
+        "comment_created_at": "2025-07-24T13:53:29+00:00",
+        "comment_author": "antonio2368",
+        "comment_body": "why not just resize and avoid emplace_back before each read?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2269709316",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 83777,
+        "pr_file": "src/DataTypes/Serializations/SerializationObject.cpp",
+        "discussion_id": "2228593665",
+        "commented_code": "@@ -577,9 +662,25 @@ ISerialization::DeserializeBinaryBulkStatePtr SerializationObject::deserializeOb\n         UInt64 serialization_version;\n         readBinaryLittleEndian(serialization_version, *structure_stream);\n         auto structure_state = std::make_shared<DeserializeBinaryBulkStateObjectStructure>(serialization_version);\n-        if (structure_state->serialization_version.value == ObjectSerializationVersion::Value::V1 || structure_state->serialization_version.value == ObjectSerializationVersion::Value::V2)\n+        if (structure_state->serialization_version.value == SerializationVersion::FLATTENED)\n         {\n-            if (structure_state->serialization_version.value == ObjectSerializationVersion::Value::V1)\n+            /// Read the list of flattened paths.\n+            size_t paths_size;\n+            readVarUInt(paths_size, *structure_stream);\n+            structure_state->flattened_paths.reserve(paths_size);",
+        "comment_created_at": "2025-08-12T12:39:00+00:00",
+        "comment_author": "Avogar",
+        "comment_body": "No reason, will change",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2270269869",
+    "pr_number": 74344,
+    "pr_file": "src/Server/PostgreSQLHandler.cpp",
+    "created_at": "2025-08-12T15:25:42+00:00",
+    "commented_code": "format_ptr->write(materializeBlock(block));\n             format_ptr->flush();\n             output_buffer.finalize();\n-            message_transport->send(PostgreSQLProtocol::Messaging::CopyOutData(std::move(result_buf)));\n+            message_transport->send(PostgreSQLProtocol::Messaging::CopyOutData(result_buf));",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2270269869",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 74344,
+        "pr_file": "src/Server/PostgreSQLHandler.cpp",
+        "discussion_id": "2270269869",
+        "commented_code": "@@ -540,7 +540,8 @@ bool PostgreSQLHandler::processCopyQuery(const String & query)\n             format_ptr->write(materializeBlock(block));\n             format_ptr->flush();\n             output_buffer.finalize();\n-            message_transport->send(PostgreSQLProtocol::Messaging::CopyOutData(std::move(result_buf)));\n+            message_transport->send(PostgreSQLProtocol::Messaging::CopyOutData(result_buf));",
+        "comment_created_at": "2025-08-12T15:25:42+00:00",
+        "comment_author": "GrigoryPervakov",
+        "comment_body": "Maybe it's better to move it and then explicitly initialize it after.\r\nExtra empty vector allocation looks better than a full buffer copy before send",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2273724681",
+    "pr_number": 85551,
+    "pr_file": "src/Storages/MergeTree/GinIndexStore.cpp",
+    "created_at": "2025-08-13T14:52:53+00:00",
+    "commented_code": "postings_file_stream->cancel();\n }\n \n+String GinIndexStore::Statistics::toString() const\n+{\n+    return fmt::format(\n+        \"number of terms = {}, terms size = {}, metadata size = {}, bloom filter size = {}, dictionary size = {}, posting lists size = {}\",\n+        num_terms,\n+        ReadableSize(current_size),\n+        ReadableSize(metadata_file_size),\n+        ReadableSize(bloom_filter_file_size),\n+        ReadableSize(dictionary_file_size),\n+        ReadableSize(posting_lists_file_size));\n+}\n+\n+GinIndexStore::Statistics GinIndexStore::getStatistics()\n+{\n+    return {\n+        .num_terms = current_postings.size(),\n+        .current_size = current_size,\n+        .metadata_file_size = metadata_file_stream ? metadata_file_stream->offset() : 0,",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2273724681",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 85551,
+        "pr_file": "src/Storages/MergeTree/GinIndexStore.cpp",
+        "discussion_id": "2273724681",
+        "commented_code": "@@ -511,6 +513,30 @@ void GinIndexStore::cancel() noexcept\n         postings_file_stream->cancel();\n }\n \n+String GinIndexStore::Statistics::toString() const\n+{\n+    return fmt::format(\n+        \"number of terms = {}, terms size = {}, metadata size = {}, bloom filter size = {}, dictionary size = {}, posting lists size = {}\",\n+        num_terms,\n+        ReadableSize(current_size),\n+        ReadableSize(metadata_file_size),\n+        ReadableSize(bloom_filter_file_size),\n+        ReadableSize(dictionary_file_size),\n+        ReadableSize(posting_lists_file_size));\n+}\n+\n+GinIndexStore::Statistics GinIndexStore::getStatistics()\n+{\n+    return {\n+        .num_terms = current_postings.size(),\n+        .current_size = current_size,\n+        .metadata_file_size = metadata_file_stream ? metadata_file_stream->offset() : 0,",
+        "comment_created_at": "2025-08-13T14:52:53+00:00",
+        "comment_author": "rschu1ze",
+        "comment_body": "Looking at src/IO/BufferBase.h, `offset()` is only the size of the working buffer. Function `count()` returns _all_ written bytes (including those where the working buffer was flushed already)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2003119219",
+    "pr_number": 77884,
+    "pr_file": "src/Disks/IO/AsynchronousBoundedReadBuffer.cpp",
+    "created_at": "2025-03-19T11:33:20+00:00",
+    "commented_code": "{\n             ProfileEventTimeIncrement<Microseconds> watch(ProfileEvents::SynchronousRemoteReadWaitMicroseconds);\n-            result = readSync(memory.data(), memory.size());\n+            result = readSync(memory.data(), buffer_size);",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2003119219",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 77884,
+        "pr_file": "src/Disks/IO/AsynchronousBoundedReadBuffer.cpp",
+        "discussion_id": "2003119219",
+        "commented_code": "@@ -237,7 +251,7 @@ bool AsynchronousBoundedReadBuffer::nextImpl()\n \n         {\n             ProfileEventTimeIncrement<Microseconds> watch(ProfileEvents::SynchronousRemoteReadWaitMicroseconds);\n-            result = readSync(memory.data(), memory.size());\n+            result = readSync(memory.data(), buffer_size);",
+        "comment_created_at": "2025-03-19T11:33:20+00:00",
+        "comment_author": "kssenii",
+        "comment_body": "It seems `memory.size()` would anyway be equal to `buffer_size` because we did `memory.resize(buffer_size)` above and as I see by code of `resize` method, it will set `m_size = new_size` always, which is what `memory.size()` returns, so may be return `result = readSync(memory.data(), memory.size());` back (it seems more clear imo)?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2004122775",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 77884,
+        "pr_file": "src/Disks/IO/AsynchronousBoundedReadBuffer.cpp",
+        "discussion_id": "2003119219",
+        "commented_code": "@@ -237,7 +251,7 @@ bool AsynchronousBoundedReadBuffer::nextImpl()\n \n         {\n             ProfileEventTimeIncrement<Microseconds> watch(ProfileEvents::SynchronousRemoteReadWaitMicroseconds);\n-            result = readSync(memory.data(), memory.size());\n+            result = readSync(memory.data(), buffer_size);",
+        "comment_created_at": "2025-03-19T19:20:28+00:00",
+        "comment_author": "al13n321",
+        "comment_body": "Oh, I meant to skip `memory.resize` if `use_page_cache`. Fixed.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2003129966",
+    "pr_number": 77884,
+    "pr_file": "src/Disks/IO/AsynchronousBoundedReadBuffer.cpp",
+    "created_at": "2025-03-19T11:40:25+00:00",
+    "commented_code": "last_prefetch_info.submit_time = std::chrono::system_clock::now();\n     last_prefetch_info.priority = priority;\n \n-    prefetch_buffer.resize(buffer_size);\n-    prefetch_future = readAsync(prefetch_buffer.data(), prefetch_buffer.size(), priority);\n+    if (!use_page_cache)\n+        prefetch_buffer.resize(buffer_size);",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2003129966",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 77884,
+        "pr_file": "src/Disks/IO/AsynchronousBoundedReadBuffer.cpp",
+        "discussion_id": "2003129966",
+        "commented_code": "@@ -132,8 +145,9 @@ void AsynchronousBoundedReadBuffer::prefetch(Priority priority)\n     last_prefetch_info.submit_time = std::chrono::system_clock::now();\n     last_prefetch_info.priority = priority;\n \n-    prefetch_buffer.resize(buffer_size);\n-    prefetch_future = readAsync(prefetch_buffer.data(), prefetch_buffer.size(), priority);\n+    if (!use_page_cache)\n+        prefetch_buffer.resize(buffer_size);",
+        "comment_created_at": "2025-03-19T11:40:25+00:00",
+        "comment_author": "kssenii",
+        "comment_body": "We do not initialize `prefetch_buffer` in constructor, so it is the only place its size is set to a non-zero value, so, as far as I see, this change just completely disables prefetches in case `use_page_cache=true` because `prefetch_buffer.size()` would always be zero?\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2004132974",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 77884,
+        "pr_file": "src/Disks/IO/AsynchronousBoundedReadBuffer.cpp",
+        "discussion_id": "2003129966",
+        "commented_code": "@@ -132,8 +145,9 @@ void AsynchronousBoundedReadBuffer::prefetch(Priority priority)\n     last_prefetch_info.submit_time = std::chrono::system_clock::now();\n     last_prefetch_info.priority = priority;\n \n-    prefetch_buffer.resize(buffer_size);\n-    prefetch_future = readAsync(prefetch_buffer.data(), prefetch_buffer.size(), priority);\n+    if (!use_page_cache)\n+        prefetch_buffer.resize(buffer_size);",
+        "comment_created_at": "2025-03-19T19:24:33+00:00",
+        "comment_author": "al13n321",
+        "comment_body": "It doesn't allocate `prefetch_buffer`, yes. Prefetches read into PageCacheCell buffers instead.\r\n```\r\n        /// When using userspace page cache, we directly use memory owned by the cache instead of\r\n        /// allocating our own buffers.\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2010417444",
+    "pr_number": 77884,
+    "pr_file": "src/Disks/IO/AsynchronousBoundedReadBuffer.cpp",
+    "created_at": "2025-03-24T15:30:54+00:00",
+    "commented_code": "}\n     else\n     {\n-        memory.resize(buffer_size);\n+        if (!use_page_cache)\n+            memory.resize(buffer_size);",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2010417444",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 77884,
+        "pr_file": "src/Disks/IO/AsynchronousBoundedReadBuffer.cpp",
+        "discussion_id": "2010417444",
+        "commented_code": "@@ -233,11 +247,12 @@ bool AsynchronousBoundedReadBuffer::nextImpl()\n     }\n     else\n     {\n-        memory.resize(buffer_size);\n+        if (!use_page_cache)\n+            memory.resize(buffer_size);",
+        "comment_created_at": "2025-03-24T15:30:54+00:00",
+        "comment_author": "kssenii",
+        "comment_body": "```suggestion\r\n        if (!use_page_cache)\r\n            /// memory.size() would always be zero, \r\n            /// we will use buffer allocated by page cache implementation.\r\n            memory.resize(buffer_size);\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2150331985",
+    "pr_number": 76802,
+    "pr_file": "src/Storages/PartitionedSink.cpp",
+    "created_at": "2025-06-16T15:46:09+00:00",
+    "commented_code": "return it->second;\n }\n \n-void PartitionedSink::consume(Chunk & chunk)\n+void PartitionedSink::consume(Chunk & source_chunk)\n {\n-    const auto & columns = chunk.getColumns();\n+    const ColumnPtr partition_by_result_column = partition_strategy->computePartitionKey(source_chunk);\n \n-    Block block_with_partition_by_expr = sample_block.cloneWithoutColumns();\n-    block_with_partition_by_expr.setColumns(columns);\n-    partition_by_expr->execute(block_with_partition_by_expr);\n+    /*\n+     * `partition_columns_in_data_file`\n+     */\n+    const auto format_chunk = partition_strategy->getFormatChunk(source_chunk);",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2150331985",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 76802,
+        "pr_file": "src/Storages/PartitionedSink.cpp",
+        "discussion_id": "2150331985",
+        "commented_code": "@@ -52,17 +48,24 @@ SinkPtr PartitionedSink::getSinkForPartitionKey(StringRef partition_key)\n     return it->second;\n }\n \n-void PartitionedSink::consume(Chunk & chunk)\n+void PartitionedSink::consume(Chunk & source_chunk)\n {\n-    const auto & columns = chunk.getColumns();\n+    const ColumnPtr partition_by_result_column = partition_strategy->computePartitionKey(source_chunk);\n \n-    Block block_with_partition_by_expr = sample_block.cloneWithoutColumns();\n-    block_with_partition_by_expr.setColumns(columns);\n-    partition_by_expr->execute(block_with_partition_by_expr);\n+    /*\n+     * `partition_columns_in_data_file`\n+     */\n+    const auto format_chunk = partition_strategy->getFormatChunk(source_chunk);",
+        "comment_created_at": "2025-06-16T15:46:09+00:00",
+        "comment_author": "kssenii",
+        "comment_body": "AFAIS `getFormatChunk` makes a copy of a chunk (or a subset of columns), this is inefficient, let's avoid it...",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2150336600",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 76802,
+        "pr_file": "src/Storages/PartitionedSink.cpp",
+        "discussion_id": "2150331985",
+        "commented_code": "@@ -52,17 +48,24 @@ SinkPtr PartitionedSink::getSinkForPartitionKey(StringRef partition_key)\n     return it->second;\n }\n \n-void PartitionedSink::consume(Chunk & chunk)\n+void PartitionedSink::consume(Chunk & source_chunk)\n {\n-    const auto & columns = chunk.getColumns();\n+    const ColumnPtr partition_by_result_column = partition_strategy->computePartitionKey(source_chunk);\n \n-    Block block_with_partition_by_expr = sample_block.cloneWithoutColumns();\n-    block_with_partition_by_expr.setColumns(columns);\n-    partition_by_expr->execute(block_with_partition_by_expr);\n+    /*\n+     * `partition_columns_in_data_file`\n+     */\n+    const auto format_chunk = partition_strategy->getFormatChunk(source_chunk);",
+        "comment_created_at": "2025-06-16T15:48:18+00:00",
+        "comment_author": "kssenii",
+        "comment_body": "Ah, no, sorry, I see it just copied ColumnPtr's",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2150345173",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 76802,
+        "pr_file": "src/Storages/PartitionedSink.cpp",
+        "discussion_id": "2150331985",
+        "commented_code": "@@ -52,17 +48,24 @@ SinkPtr PartitionedSink::getSinkForPartitionKey(StringRef partition_key)\n     return it->second;\n }\n \n-void PartitionedSink::consume(Chunk & chunk)\n+void PartitionedSink::consume(Chunk & source_chunk)\n {\n-    const auto & columns = chunk.getColumns();\n+    const ColumnPtr partition_by_result_column = partition_strategy->computePartitionKey(source_chunk);\n \n-    Block block_with_partition_by_expr = sample_block.cloneWithoutColumns();\n-    block_with_partition_by_expr.setColumns(columns);\n-    partition_by_expr->execute(block_with_partition_by_expr);\n+    /*\n+     * `partition_columns_in_data_file`\n+     */\n+    const auto format_chunk = partition_strategy->getFormatChunk(source_chunk);",
+        "comment_created_at": "2025-06-16T15:52:13+00:00",
+        "comment_author": "kssenii",
+        "comment_body": "may be better a method would be `const Columns & format_columns = filterOutFormatColumns(chunk)`? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2158859820",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 76802,
+        "pr_file": "src/Storages/PartitionedSink.cpp",
+        "discussion_id": "2150331985",
+        "commented_code": "@@ -52,17 +48,24 @@ SinkPtr PartitionedSink::getSinkForPartitionKey(StringRef partition_key)\n     return it->second;\n }\n \n-void PartitionedSink::consume(Chunk & chunk)\n+void PartitionedSink::consume(Chunk & source_chunk)\n {\n-    const auto & columns = chunk.getColumns();\n+    const ColumnPtr partition_by_result_column = partition_strategy->computePartitionKey(source_chunk);\n \n-    Block block_with_partition_by_expr = sample_block.cloneWithoutColumns();\n-    block_with_partition_by_expr.setColumns(columns);\n-    partition_by_expr->execute(block_with_partition_by_expr);\n+    /*\n+     * `partition_columns_in_data_file`\n+     */\n+    const auto format_chunk = partition_strategy->getFormatChunk(source_chunk);",
+        "comment_created_at": "2025-06-20T12:34:27+00:00",
+        "comment_author": "arthurpassos",
+        "comment_body": "Are you suggesting this change because you want the return type to be `Columns` insntead of `Chunk` or something else?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2158871099",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 76802,
+        "pr_file": "src/Storages/PartitionedSink.cpp",
+        "discussion_id": "2150331985",
+        "commented_code": "@@ -52,17 +48,24 @@ SinkPtr PartitionedSink::getSinkForPartitionKey(StringRef partition_key)\n     return it->second;\n }\n \n-void PartitionedSink::consume(Chunk & chunk)\n+void PartitionedSink::consume(Chunk & source_chunk)\n {\n-    const auto & columns = chunk.getColumns();\n+    const ColumnPtr partition_by_result_column = partition_strategy->computePartitionKey(source_chunk);\n \n-    Block block_with_partition_by_expr = sample_block.cloneWithoutColumns();\n-    block_with_partition_by_expr.setColumns(columns);\n-    partition_by_expr->execute(block_with_partition_by_expr);\n+    /*\n+     * `partition_columns_in_data_file`\n+     */\n+    const auto format_chunk = partition_strategy->getFormatChunk(source_chunk);",
+        "comment_created_at": "2025-06-20T12:40:46+00:00",
+        "comment_author": "kssenii",
+        "comment_body": "Yes, as it would be more clear this way that we do not make any copy.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2161753600",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 76802,
+        "pr_file": "src/Storages/PartitionedSink.cpp",
+        "discussion_id": "2150331985",
+        "commented_code": "@@ -52,17 +48,24 @@ SinkPtr PartitionedSink::getSinkForPartitionKey(StringRef partition_key)\n     return it->second;\n }\n \n-void PartitionedSink::consume(Chunk & chunk)\n+void PartitionedSink::consume(Chunk & source_chunk)\n {\n-    const auto & columns = chunk.getColumns();\n+    const ColumnPtr partition_by_result_column = partition_strategy->computePartitionKey(source_chunk);\n \n-    Block block_with_partition_by_expr = sample_block.cloneWithoutColumns();\n-    block_with_partition_by_expr.setColumns(columns);\n-    partition_by_expr->execute(block_with_partition_by_expr);\n+    /*\n+     * `partition_columns_in_data_file`\n+     */\n+    const auto format_chunk = partition_strategy->getFormatChunk(source_chunk);",
+        "comment_created_at": "2025-06-23T14:18:55+00:00",
+        "comment_author": "arthurpassos",
+        "comment_body": "I am sorry, I don't see how I can apply your suggestion:\r\n\r\n> const Columns & format_columns = filterOutFormatColumns(chunk)\r\n\r\nI don't see how holding a reference would be valid here. Could you please clarify?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2192848015",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 76802,
+        "pr_file": "src/Storages/PartitionedSink.cpp",
+        "discussion_id": "2150331985",
+        "commented_code": "@@ -52,17 +48,24 @@ SinkPtr PartitionedSink::getSinkForPartitionKey(StringRef partition_key)\n     return it->second;\n }\n \n-void PartitionedSink::consume(Chunk & chunk)\n+void PartitionedSink::consume(Chunk & source_chunk)\n {\n-    const auto & columns = chunk.getColumns();\n+    const ColumnPtr partition_by_result_column = partition_strategy->computePartitionKey(source_chunk);\n \n-    Block block_with_partition_by_expr = sample_block.cloneWithoutColumns();\n-    block_with_partition_by_expr.setColumns(columns);\n-    partition_by_expr->execute(block_with_partition_by_expr);\n+    /*\n+     * `partition_columns_in_data_file`\n+     */\n+    const auto format_chunk = partition_strategy->getFormatChunk(source_chunk);",
+        "comment_created_at": "2025-07-08T15:33:14+00:00",
+        "comment_author": "kssenii",
+        "comment_body": "> I don't see how holding a reference would be valid here. Could you please clarify?\r\n\r\nSorry, I confused this as well, I rather meant returning `ColumnRawPtrs` (e.g. `std::vector<const IColumn *>`) to implicitly show that no copying is done there (the actual columns should be hold either by `source_chunk` or `sample_block` AFAIS). As you anyway need `format_chunk` to get `format_chunk.getColumns()` and then use it as is.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2222602855",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 76802,
+        "pr_file": "src/Storages/PartitionedSink.cpp",
+        "discussion_id": "2150331985",
+        "commented_code": "@@ -52,17 +48,24 @@ SinkPtr PartitionedSink::getSinkForPartitionKey(StringRef partition_key)\n     return it->second;\n }\n \n-void PartitionedSink::consume(Chunk & chunk)\n+void PartitionedSink::consume(Chunk & source_chunk)\n {\n-    const auto & columns = chunk.getColumns();\n+    const ColumnPtr partition_by_result_column = partition_strategy->computePartitionKey(source_chunk);\n \n-    Block block_with_partition_by_expr = sample_block.cloneWithoutColumns();\n-    block_with_partition_by_expr.setColumns(columns);\n-    partition_by_expr->execute(block_with_partition_by_expr);\n+    /*\n+     * `partition_columns_in_data_file`\n+     */\n+    const auto format_chunk = partition_strategy->getFormatChunk(source_chunk);",
+        "comment_created_at": "2025-07-22T13:48:30+00:00",
+        "comment_author": "kssenii",
+        "comment_body": "> I rather meant returning ColumnRawPtrs (e.g. std::vector<const IColumn *>) to implicitly show that no copying is done there (the actual columns should be hold either by source_chunk or sample_block AFAIS). As you anyway need format_chunk to get format_chunk.getColumns() and then use it as is.\r\n\r\nWDYT?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2260270549",
+    "pr_number": 85159,
+    "pr_file": "src/Interpreters/QueryLog.cpp",
+    "created_at": "2025-08-07T13:06:02+00:00",
+    "commented_code": "{\n     size_t i = 0;\n \n-    columns[i++]->insert(getFQDNOrHostName());\n-    columns[i++]->insert(type);\n-    columns[i++]->insert(DateLUT::instance().toDayNum(event_time).toUnderType());\n-    columns[i++]->insert(event_time);\n-    columns[i++]->insert(event_time_microseconds);\n-    columns[i++]->insert(query_start_time);\n-    columns[i++]->insert(query_start_time_microseconds);\n-    columns[i++]->insert(query_duration_ms);\n+    columns[i++]->insertData(getFQDNOrHostName());\n+    typeid_cast<ColumnInt8 &>(*columns[i++]).getData().push_back(type);",
+    "repo_full_name": "ClickHouse/ClickHouse",
+    "discussion_comments": [
+      {
+        "comment_id": "2260270549",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 85159,
+        "pr_file": "src/Interpreters/QueryLog.cpp",
+        "discussion_id": "2260270549",
+        "commented_code": "@@ -174,31 +176,31 @@ void QueryLogElement::appendToBlock(MutableColumns & columns) const\n {\n     size_t i = 0;\n \n-    columns[i++]->insert(getFQDNOrHostName());\n-    columns[i++]->insert(type);\n-    columns[i++]->insert(DateLUT::instance().toDayNum(event_time).toUnderType());\n-    columns[i++]->insert(event_time);\n-    columns[i++]->insert(event_time_microseconds);\n-    columns[i++]->insert(query_start_time);\n-    columns[i++]->insert(query_start_time_microseconds);\n-    columns[i++]->insert(query_duration_ms);\n+    columns[i++]->insertData(getFQDNOrHostName());\n+    typeid_cast<ColumnInt8 &>(*columns[i++]).getData().push_back(type);",
+        "comment_created_at": "2025-08-07T13:06:02+00:00",
+        "comment_author": "Algunenano",
+        "comment_body": "Should we use `assert_cast` instead so it's fast in release mode?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2260369690",
+        "repo_full_name": "ClickHouse/ClickHouse",
+        "pr_number": 85159,
+        "pr_file": "src/Interpreters/QueryLog.cpp",
+        "discussion_id": "2260270549",
+        "commented_code": "@@ -174,31 +176,31 @@ void QueryLogElement::appendToBlock(MutableColumns & columns) const\n {\n     size_t i = 0;\n \n-    columns[i++]->insert(getFQDNOrHostName());\n-    columns[i++]->insert(type);\n-    columns[i++]->insert(DateLUT::instance().toDayNum(event_time).toUnderType());\n-    columns[i++]->insert(event_time);\n-    columns[i++]->insert(event_time_microseconds);\n-    columns[i++]->insert(query_start_time);\n-    columns[i++]->insert(query_start_time_microseconds);\n-    columns[i++]->insert(query_duration_ms);\n+    columns[i++]->insertData(getFQDNOrHostName());\n+    typeid_cast<ColumnInt8 &>(*columns[i++]).getData().push_back(type);",
+        "comment_created_at": "2025-08-07T13:38:09+00:00",
+        "comment_author": "KochetovNicolai",
+        "comment_body": "We can, but I don't think it would be a noticeable speedup. We have a lot of virtual calls here anyway.\r\nMy current goal was to avoid converting to Field, which is super slow, and just improve satitizers a bit.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -16,12 +16,14 @@ Avoid executing expensive operations in logging code paths when logging is disab
 The key principle is to separate the lightweight "should log" check from expensive log message preparation. This prevents performance overhead when logging is disabled and avoids unnecessary work like duplicate string construction or complex data processing.
 
 Example of the problem:
+{% raw %}
 ```cpp
 // BAD: Always executes expensive operation
 const auto event = state.offset_in_group == (idx_t)group.num_rows ? "SkipRowGroup" : "ReadRowGroup";
-DUCKDB_LOG(context, PhysicalOperatorLogType, *state.op, "ParquetReader", event, 
+DUCKDB_LOG(context, PhysicalOperatorLogType, *state.op, "ParquetReader", event,
            {{"file", file.path}, {"row_group_id", to_string(state.group_idx_list[state.current_group])}});
 ```
+{% endraw %}
 
 Better approach:
 ```cpp

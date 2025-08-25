@@ -1,0 +1,114 @@
+[
+  {
+    "discussion_id": "2191361000",
+    "pr_number": 7704,
+    "pr_file": "python/sglang/srt/managers/cache_controller.py",
+    "created_at": "2025-07-08T02:41:06+00:00",
+    "commented_code": "raise ValueError(\n                 f\"Inconsistent states: {self.mem_pool_host.get_state(host_indices)}\"\n             )\n+\n+    def prefetch(\n+        self,\n+        request_id: str,\n+        host_indices: torch.Tensor,\n+        new_input_tokens: List[int],\n+        last_hash: Optional[str] = None,\n+    ) -> int:\n+        \"\"\"\n+        Prefetch KV caches from storage backend to host memory.\n+        \"\"\"\n+        operation = PrefetchOperation(\n+            request_id, host_indices, new_input_tokens, last_hash\n+        )\n+        self.ongoing_prefetch[request_id] = operation\n+        self.prefetch_queue.put(operation)\n+\n+    def terminate_prefetch(self, request_id: str):\n+        operation = self.ongoing_prefetch.pop(request_id, None)\n+        if operation is None:\n+            raise ValueError(\n+                f\"Request ID {request_id} not found in ongoing prefetches.\"\n+            )\n+        operation.mark_done()\n+        return operation.completed_tokens, operation.hash_value\n+\n+    def prefetch_io_aux_func(self):\n+        \"\"\"\n+        Auxiliary function conducting IO operations for prefetching.\n+        \"\"\"\n+        while not self.stop_event.is_set():\n+            try:\n+                operation = self.prefetch_buffer.get(block=True, timeout=1)\n+                for h in operation.hash_value:\n+                    page_data = self.storage_backend.get(h)\n+                    if page_data is None:\n+                        logger.warning(\n+                            f\"Prefetch operation {operation.request_id} failed to retrieve page {h}.\"\n+                        )\n+                        break\n+                    self.mem_pool_host.set_from_flat_data_page(\n+                        operation.host_indices[operation.completed_tokens],\n+                        page_data,\n+                    )\n+                    if operation.is_done():",
+    "repo_full_name": "sgl-project/sglang",
+    "discussion_comments": [
+      {
+        "comment_id": "2191361000",
+        "repo_full_name": "sgl-project/sglang",
+        "pr_number": 7704,
+        "pr_file": "python/sglang/srt/managers/cache_controller.py",
+        "discussion_id": "2191361000",
+        "commented_code": "@@ -383,3 +479,147 @@ def evict_host(self, host_indices: torch.Tensor, backup_only: bool = True) -> in\n             raise ValueError(\n                 f\"Inconsistent states: {self.mem_pool_host.get_state(host_indices)}\"\n             )\n+\n+    def prefetch(\n+        self,\n+        request_id: str,\n+        host_indices: torch.Tensor,\n+        new_input_tokens: List[int],\n+        last_hash: Optional[str] = None,\n+    ) -> int:\n+        \"\"\"\n+        Prefetch KV caches from storage backend to host memory.\n+        \"\"\"\n+        operation = PrefetchOperation(\n+            request_id, host_indices, new_input_tokens, last_hash\n+        )\n+        self.ongoing_prefetch[request_id] = operation\n+        self.prefetch_queue.put(operation)\n+\n+    def terminate_prefetch(self, request_id: str):\n+        operation = self.ongoing_prefetch.pop(request_id, None)\n+        if operation is None:\n+            raise ValueError(\n+                f\"Request ID {request_id} not found in ongoing prefetches.\"\n+            )\n+        operation.mark_done()\n+        return operation.completed_tokens, operation.hash_value\n+\n+    def prefetch_io_aux_func(self):\n+        \"\"\"\n+        Auxiliary function conducting IO operations for prefetching.\n+        \"\"\"\n+        while not self.stop_event.is_set():\n+            try:\n+                operation = self.prefetch_buffer.get(block=True, timeout=1)\n+                for h in operation.hash_value:\n+                    page_data = self.storage_backend.get(h)\n+                    if page_data is None:\n+                        logger.warning(\n+                            f\"Prefetch operation {operation.request_id} failed to retrieve page {h}.\"\n+                        )\n+                        break\n+                    self.mem_pool_host.set_from_flat_data_page(\n+                        operation.host_indices[operation.completed_tokens],\n+                        page_data,\n+                    )\n+                    if operation.is_done():",
+        "comment_created_at": "2025-07-08T02:41:06+00:00",
+        "comment_author": "ykwd",
+        "comment_body": "Will there be memory leak risk?\r\n\r\nThe Race Condition:\r\n\r\nThread A (prefetch_io_aux_func): Checks `operation.is_done()` \u2192 get False and continue execute\r\n\r\nThread B (terminate_prefetch): Calls `operation.mark_done()` and `returns (completed_tokens, hash_value)`. Later calls `self.cache_controller.mem_pool_host.free(          host_indices[min_completed_tokens:completed_tokens])`\r\n\r\nThread A (prefetch_io_aux_func): Continues execution:\r\n`operation.completed_tokens += self.page_size\r\nself.mem_pool_host.free(operation.host_indices[operation.completed_tokens :])`\r\n\r\nThe memory leak happens when Thread A and B see different value of completed_tokens when free the memory.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2191410818",
+        "repo_full_name": "sgl-project/sglang",
+        "pr_number": 7704,
+        "pr_file": "python/sglang/srt/managers/cache_controller.py",
+        "discussion_id": "2191361000",
+        "commented_code": "@@ -383,3 +479,147 @@ def evict_host(self, host_indices: torch.Tensor, backup_only: bool = True) -> in\n             raise ValueError(\n                 f\"Inconsistent states: {self.mem_pool_host.get_state(host_indices)}\"\n             )\n+\n+    def prefetch(\n+        self,\n+        request_id: str,\n+        host_indices: torch.Tensor,\n+        new_input_tokens: List[int],\n+        last_hash: Optional[str] = None,\n+    ) -> int:\n+        \"\"\"\n+        Prefetch KV caches from storage backend to host memory.\n+        \"\"\"\n+        operation = PrefetchOperation(\n+            request_id, host_indices, new_input_tokens, last_hash\n+        )\n+        self.ongoing_prefetch[request_id] = operation\n+        self.prefetch_queue.put(operation)\n+\n+    def terminate_prefetch(self, request_id: str):\n+        operation = self.ongoing_prefetch.pop(request_id, None)\n+        if operation is None:\n+            raise ValueError(\n+                f\"Request ID {request_id} not found in ongoing prefetches.\"\n+            )\n+        operation.mark_done()\n+        return operation.completed_tokens, operation.hash_value\n+\n+    def prefetch_io_aux_func(self):\n+        \"\"\"\n+        Auxiliary function conducting IO operations for prefetching.\n+        \"\"\"\n+        while not self.stop_event.is_set():\n+            try:\n+                operation = self.prefetch_buffer.get(block=True, timeout=1)\n+                for h in operation.hash_value:\n+                    page_data = self.storage_backend.get(h)\n+                    if page_data is None:\n+                        logger.warning(\n+                            f\"Prefetch operation {operation.request_id} failed to retrieve page {h}.\"\n+                        )\n+                        break\n+                    self.mem_pool_host.set_from_flat_data_page(\n+                        operation.host_indices[operation.completed_tokens],\n+                        page_data,\n+                    )\n+                    if operation.is_done():",
+        "comment_created_at": "2025-07-08T03:43:14+00:00",
+        "comment_author": "xiezhq-hermann",
+        "comment_body": "thanks for the catch, there is a slight chance of race condition, `is_done` and `operation.completed_tokens` update should be combined into a transaction, `mark_done` and querying `completed_tokens` should be in a transaction as well, will update on this.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2253078191",
+    "pr_number": 8692,
+    "pr_file": "python/sglang/srt/managers/cache_controller.py",
+    "created_at": "2025-08-05T04:30:26+00:00",
+    "commented_code": "operation = self.prefetch_buffer.get(block=True, timeout=1)\n                 if self.is_mooncake_backend():\n                     self.mooncake_page_transfer(operation)\n+                elif self.storage_backend_type == \"hf3fs\":\n+                    self.generic_page_transfer(operation, batch_size=128)\n                 else:\n                     self.generic_page_transfer(operation)\n             except Empty:\n                 continue\n \n+    def update_token_counter(self, num_tokens: int):\n+        \"\"\"\n+        Update the token counter for prefetching rate limiting.\n+        \"\"\"\n+        with self.token_counter_lock:\n+            self.prefetch_tokens_occupied += num_tokens\n+            assert (\n+                self.prefetch_tokens_occupied >= 0\n+            ), f\"Prefetch tokens occupied cannot be negative: {self.prefetch_tokens_occupied}\"",
+    "repo_full_name": "sgl-project/sglang",
+    "discussion_comments": [
+      {
+        "comment_id": "2253078191",
+        "repo_full_name": "sgl-project/sglang",
+        "pr_number": 8692,
+        "pr_file": "python/sglang/srt/managers/cache_controller.py",
+        "discussion_id": "2253078191",
+        "commented_code": "@@ -586,11 +596,33 @@ def prefetch_io_aux_func(self):\n                 operation = self.prefetch_buffer.get(block=True, timeout=1)\n                 if self.is_mooncake_backend():\n                     self.mooncake_page_transfer(operation)\n+                elif self.storage_backend_type == \"hf3fs\":\n+                    self.generic_page_transfer(operation, batch_size=128)\n                 else:\n                     self.generic_page_transfer(operation)\n             except Empty:\n                 continue\n \n+    def update_token_counter(self, num_tokens: int):\n+        \"\"\"\n+        Update the token counter for prefetching rate limiting.\n+        \"\"\"\n+        with self.token_counter_lock:\n+            self.prefetch_tokens_occupied += num_tokens\n+            assert (\n+                self.prefetch_tokens_occupied >= 0\n+            ), f\"Prefetch tokens occupied cannot be negative: {self.prefetch_tokens_occupied}\"",
+        "comment_created_at": "2025-08-05T04:30:26+00:00",
+        "comment_author": "pansicheng",
+        "comment_body": "There may be a potential race condition: In scenarios where check_prefetch_progress executes before prefetch_thread_func, the self.prefetch_tokens_occupied could be decremented first and then incremented later, potentially resulting in a negative value",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2265876305",
+    "pr_number": 7379,
+    "pr_file": "python/sglang/srt/managers/utils.py",
+    "created_at": "2025-08-11T07:17:03+00:00",
+    "commented_code": "return error_msg\n \n     return None\n+\n+\n+class DPBalanceMeta:\n+    \"\"\"\n+    This class will be use in scheduler and dp controller\n+    \"\"\"\n+\n+    def __init__(self, num_workers: int):\n+        self.num_workers = num_workers\n+        self._manager = mp.Manager()\n+        self.mutex = self._manager.Lock()\n+\n+        init_local_tokens = [0] * self.num_workers\n+        init_onfly_info = [self._manager.dict() for _ in range(self.num_workers)]\n+\n+        self.shared_state = self._manager.Namespace()\n+        self.shared_state.local_tokens = self._manager.list(init_local_tokens)\n+        self.shared_state.onfly_info = self._manager.list(init_onfly_info)\n+\n+    def destructor(self):\n+        # we must destructor this class manually\n+        self._manager.shutdown()\n+\n+    def get_shared_onfly(self) -> List[Dict[int, int]]:\n+        return [dict(d) for d in self.shared_state.onfly_info]\n+\n+    def set_shared_onfly_info(self, data: List[Dict[int, int]]):\n+        self.shared_state.onfly_info = data\n+\n+    def get_shared_local_tokens(self) -> List[int]:\n+        return list(self.shared_state.local_tokens)\n+\n+    def set_shared_local_tokens(self, data: List[int]):\n+        self.shared_state.local_tokens = data",
+    "repo_full_name": "sgl-project/sglang",
+    "discussion_comments": [
+      {
+        "comment_id": "2265876305",
+        "repo_full_name": "sgl-project/sglang",
+        "pr_number": 7379,
+        "pr_file": "python/sglang/srt/managers/utils.py",
+        "discussion_id": "2265876305",
+        "commented_code": "@@ -38,3 +39,46 @@ def validate_input_length(\n             return error_msg\n \n     return None\n+\n+\n+class DPBalanceMeta:\n+    \"\"\"\n+    This class will be use in scheduler and dp controller\n+    \"\"\"\n+\n+    def __init__(self, num_workers: int):\n+        self.num_workers = num_workers\n+        self._manager = mp.Manager()\n+        self.mutex = self._manager.Lock()\n+\n+        init_local_tokens = [0] * self.num_workers\n+        init_onfly_info = [self._manager.dict() for _ in range(self.num_workers)]\n+\n+        self.shared_state = self._manager.Namespace()\n+        self.shared_state.local_tokens = self._manager.list(init_local_tokens)\n+        self.shared_state.onfly_info = self._manager.list(init_onfly_info)\n+\n+    def destructor(self):\n+        # we must destructor this class manually\n+        self._manager.shutdown()\n+\n+    def get_shared_onfly(self) -> List[Dict[int, int]]:\n+        return [dict(d) for d in self.shared_state.onfly_info]\n+\n+    def set_shared_onfly_info(self, data: List[Dict[int, int]]):\n+        self.shared_state.onfly_info = data\n+\n+    def get_shared_local_tokens(self) -> List[int]:\n+        return list(self.shared_state.local_tokens)\n+\n+    def set_shared_local_tokens(self, data: List[int]):\n+        self.shared_state.local_tokens = data",
+        "comment_created_at": "2025-08-11T07:17:03+00:00",
+        "comment_author": "ollybbmonster",
+        "comment_body": "Not sure if this is intentional, but in both set_* functions, passing a Python list directly into a multiprocessing.Manager().List() could replace the managed object, losing the cross-process synchronization.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2220863965",
+    "pr_number": 7280,
+    "pr_file": "python/sglang/srt/managers/cache_controller.py",
+    "created_at": "2025-07-22T02:35:10+00:00",
+    "commented_code": "else:\n                         break\n \n+                storage_hit_count_tensor = torch.tensor(\n+                    storage_hit_count, dtype=torch.int\n+                )\n+                if torch.distributed.get_world_size(group=self.tp_group) > 1:",
+    "repo_full_name": "sgl-project/sglang",
+    "discussion_comments": [
+      {
+        "comment_id": "2220863965",
+        "repo_full_name": "sgl-project/sglang",
+        "pr_number": 7280,
+        "pr_file": "python/sglang/srt/managers/cache_controller.py",
+        "discussion_id": "2220863965",
+        "commented_code": "@@ -567,11 +600,32 @@ def prefetch_thread_func(self):\n                     else:\n                         break\n \n+                storage_hit_count_tensor = torch.tensor(\n+                    storage_hit_count, dtype=torch.int\n+                )\n+                if torch.distributed.get_world_size(group=self.tp_group) > 1:",
+        "comment_created_at": "2025-07-22T02:35:10+00:00",
+        "comment_author": "xiezhq-hermann",
+        "comment_body": "is this synchronization necessary? especially this is on critical path",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2222274292",
+        "repo_full_name": "sgl-project/sglang",
+        "pr_number": 7280,
+        "pr_file": "python/sglang/srt/managers/cache_controller.py",
+        "discussion_id": "2220863965",
+        "commented_code": "@@ -567,11 +600,32 @@ def prefetch_thread_func(self):\n                     else:\n                         break\n \n+                storage_hit_count_tensor = torch.tensor(\n+                    storage_hit_count, dtype=torch.int\n+                )\n+                if torch.distributed.get_world_size(group=self.tp_group) > 1:",
+        "comment_created_at": "2025-07-22T11:48:16+00:00",
+        "comment_author": "pansicheng",
+        "comment_body": "The synchronization in this section is primarily needed because different TP instances may obtain varying storage_hit_count values when querying the storage_backend. These differing values could cause the same request to be routed to different queues (prefetch_revoke_queue vs prefetch_buffer) across ranks. The synchronization ensures consistency by guaranteeing a request enters the same queue across all ranks.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

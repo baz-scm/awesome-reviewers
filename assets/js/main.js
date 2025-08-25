@@ -127,7 +127,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('[data-stars]').forEach(el => {
     const count = parseInt(el.getAttribute('data-stars'), 10);
     if (!isNaN(count)) {
-      el.textContent = `⭐ ${formatStars(count)}`;
+      el.textContent = formatStars(count);
     }
   });
   document.querySelectorAll('.stat-stars .stat-value').forEach(el => {

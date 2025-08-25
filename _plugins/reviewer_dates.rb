@@ -9,6 +9,7 @@ module ReviewerDates
 
     begin
       data = JSON.parse(File.read(json_path))
+      next unless data.is_a?(Array)
       timestamps = data.map { |entry| Time.parse(entry['created_at']) rescue nil }.compact
       doc.data['added'] = timestamps.min if timestamps.any?
     rescue StandardError

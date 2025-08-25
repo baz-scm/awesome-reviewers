@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 from datetime import datetime
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 REVIEWERS_DIR = Path('_reviewers')
 CONTRIBUTORS_PATH = Path('assets/data/contributors.json')
@@ -53,6 +55,22 @@ def get_reviewer_info(slug: str) -> dict | None:
         'comments_count': comments,
         'last_contribution': last_contrib,
     }
+
+
+ORG_FIELDS = ['blog', 'twitter_username', 'location']
+
+
+def fetch_org_profile(org: str) -> dict:
+    """Fetch minimal profile data for a GitHub organization."""
+    url = f'https://api.github.com/orgs/{org}'
+    req = Request(url, headers={'Accept': 'application/vnd.github+json'})
+    try:
+        with urlopen(req, timeout=10) as resp:
+            data = json.load(resp)
+    except (HTTPError, URLError, OSError) as exc:
+        print(f'Failed to fetch org {org}: {exc}')
+        return {}
+    return {k: data.get(k) for k in ORG_FIELDS if data.get(k)}
 
 
 def main() -> None:
@@ -111,12 +129,14 @@ def main() -> None:
                 'repos_count': len(stats.get('repos', [])),
                 'last_contribution': stats.get('last_contribution')
             })
+        profile = fetch_org_profile(name)
         output['orgs'].append({
             'name': name,
             'reviewers_count': info['reviewers_count'],
             'repos_count': len(info['repos']),
             'contributors': contributors_list,
-            'reviews': info['reviews']
+            'reviews': info['reviews'],
+            **profile
         })
     output['orgs'].sort(key=lambda x: x['reviewers_count'], reverse=True)
     OUTPUT_PATH.parent.mkdir(exist_ok=True)

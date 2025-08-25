@@ -37,9 +37,10 @@ def get_reviewer_info(slug: str) -> dict | None:
     title = info.get('title')
     comments = int(info.get('comments_count', '0'))
 
-    # find most recent comment timestamp
+    # find most recent comment timestamp and detect AI reviewers
     json_path = REVIEWERS_DIR / f'{slug}.json'
     last_contrib = None
+    ai_reviewers: set[str] = set()
     if json_path.exists():
         try:
             data = json.loads(json_path.read_text(encoding='utf-8'))
@@ -47,6 +48,15 @@ def get_reviewer_info(slug: str) -> dict | None:
                 ts = item.get('created_at')
                 if ts and (not last_contrib or ts > last_contrib):
                     last_contrib = ts
+                for comment in item.get('discussion_comments', []):
+                    cts = comment.get('comment_created_at')
+                    if cts and (not last_contrib or cts > last_contrib):
+                        last_contrib = cts
+                    author = comment.get('comment_author', '')
+                    if author:
+                        lower = author.lower()
+                        if lower == 'copilot' or '[bot]' in lower:
+                            ai_reviewers.add(author)
         except Exception:
             pass
     return {
@@ -54,6 +64,7 @@ def get_reviewer_info(slug: str) -> dict | None:
         'title': title,
         'comments_count': comments,
         'last_contribution': last_contrib,
+        'ai_reviewers': sorted(ai_reviewers),
     }
 
 
@@ -97,7 +108,8 @@ def main() -> None:
                 'contributors': set(),
                 'reviewers_count': 0,
                 'repos': set(),
-                'reviews': []
+                'reviews': [],
+                'ai_reviewers': set(),
             })
             org['contributors'].add(user)
             org['reviewers_count'] += 1
@@ -108,6 +120,8 @@ def main() -> None:
                 'repo': repo,
                 'comments': rinfo['comments_count']
             })
+            for ai in rinfo['ai_reviewers']:
+                org['ai_reviewers'].add(ai)
 
             contrib['reviewers_count'] += 1
             contrib['repos'].add(repo)
@@ -136,6 +150,7 @@ def main() -> None:
             'repos_count': len(info['repos']),
             'contributors': contributors_list,
             'reviews': info['reviews'],
+            'ai_reviewers': sorted(info['ai_reviewers']),
             **profile
         })
     output['orgs'].sort(key=lambda x: x['reviewers_count'], reverse=True)

@@ -115,3 +115,4 @@ if (menuToggle && headerEl) {
     if (closeIcon) closeIcon.style.display = open ? 'block' : 'none';
   });
 }
+

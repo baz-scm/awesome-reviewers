@@ -115,3 +115,25 @@ if (menuToggle && headerEl) {
     if (closeIcon) closeIcon.style.display = open ? 'block' : 'none';
   });
 }
+
+function formatStars(count) {
+  if (count >= 1000) {
+    return (count / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+  }
+  return count.toString();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('[data-stars]').forEach(el => {
+    const count = parseInt(el.getAttribute('data-stars'), 10);
+    if (!isNaN(count)) {
+      el.textContent = `⭐ ${formatStars(count)}`;
+    }
+  });
+  document.querySelectorAll('.stat-stars .stat-value').forEach(el => {
+    const count = parseInt(el.getAttribute('data-count'), 10);
+    if (!isNaN(count)) {
+      el.textContent = formatStars(count);
+    }
+  });
+});

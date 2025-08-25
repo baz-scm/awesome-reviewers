@@ -38,11 +38,11 @@ description: Browse reviewers grouped by organization
       </thead>
       <tbody>
         {% for org in site.data.orgs.orgs %}
-        <tr>
+        <tr data-org="{{ org.name }}">
           <td data-label="Organization">{{ org.name }}</td>
           <td data-sort="{{ org.reviewers_count }}" data-label="Reviewers">{{ org.reviewers_count }}</td>
           <td data-sort="{{ org.repos_count }}" data-label="Repositories">{{ org.repos_count }}</td>
-          <td data-label="Contributors">{{ org.contributors | join: ', ' }}</td>
+          <td data-label="Contributors">{{ org.contributors | map: 'name' | join: ', ' }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -50,28 +50,169 @@ description: Browse reviewers grouped by organization
   </div>
 </section>
 
+<div id="org-drawer" class="drawer">
+  <div class="drawer-overlay" onclick="closeDrawer()"></div>
+  <div class="drawer-panel">
+    <div class="drawer-header">
+      <button class="drawer-close" onclick="closeDrawer()">&times;</button>
+    </div>
+    <div id="org-drawer-content"></div>
+  </div>
+</div>
+
 <script>
-function sortTable(col) {
-  const table = document.getElementById('org-table');
-  const tbody = table.tBodies[0];
-  const rows = Array.from(tbody.rows);
-  const asc = table.dataset.sortCol == col && table.dataset.sortDir === 'asc' ? false : true;
-  rows.sort(function(a, b) {
-    let aVal = a.cells[col].dataset.sort || a.cells[col].innerText;
-    let bVal = b.cells[col].dataset.sort || b.cells[col].innerText;
-    const numA = parseFloat(aVal); const numB = parseFloat(bVal);
-    if(!isNaN(numA) && !isNaN(numB)) {
-      return asc ? numA - numB : numB - numA;
-    }
-    return asc ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+const orgData = {{ site.data.orgs.orgs | jsonify }};
+const profileCache = {};
+
+function makeSortable(table) {
+  function sort(col) {
+    const tbody = table.tBodies[0];
+    const rows = Array.from(tbody.rows);
+    const asc = table.dataset.sortCol == col && table.dataset.sortDir === 'asc' ? false : true;
+    rows.sort(function(a, b) {
+      let aVal = a.cells[col].dataset.sort || a.cells[col].innerText;
+      let bVal = b.cells[col].dataset.sort || b.cells[col].innerText;
+      const numA = parseFloat(aVal); const numB = parseFloat(bVal);
+      if(!isNaN(numA) && !isNaN(numB)) {
+        return asc ? numA - numB : numB - numA;
+      }
+      return asc ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+    });
+    rows.forEach(r => tbody.appendChild(r));
+    table.dataset.sortCol = col;
+    table.dataset.sortDir = asc ? 'asc' : 'desc';
+  }
+  table.querySelectorAll('th').forEach((th, i) => {
+    th.addEventListener('click', () => sort(i));
   });
-  rows.forEach(r => tbody.appendChild(r));
-  table.dataset.sortCol = col;
-  table.dataset.sortDir = asc ? 'asc' : 'desc';
+  table.sort = sort;
 }
 
-document.querySelectorAll('#org-table th').forEach((th, i) => {
-  th.addEventListener('click', () => sortTable(i));
+function loadProfileData(table) {
+  const rows = table.querySelectorAll('tr[data-contributor]');
+  rows.forEach((row, index) => {
+    const user = row.dataset.contributor;
+    const stored = profileCache[user];
+    if (stored) { applyProfile(row, stored); return; }
+    setTimeout(() => {
+      fetch(`https://api.github.com/users/${user}`, {
+        headers: {
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28'
+        }
+      })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (!data) return;
+          profileCache[user] = data;
+          applyProfile(row, data);
+        })
+        .catch(() => {});
+    }, index * 100);
+  });
+}
+
+function applyProfile(row, data) {
+  const locCell = row.querySelector('.loc-cell');
+  const compCell = row.querySelector('.company-cell');
+  const linksCell = row.querySelector('.links-cell');
+  if (data.location && locCell) {
+    locCell.dataset.sort = data.location;
+    locCell.innerHTML = `<svg class="meta-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> ${data.location}`;
+  }
+  if (data.company && compCell) {
+    compCell.dataset.sort = data.company;
+    compCell.innerHTML = `<svg class="meta-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg> ${data.company}`;
+  }
+  if (linksCell) {
+    const links = [];
+    if (data.blog) {
+      links.push(`<a href="${data.blog}" target="_blank" rel="noopener noreferrer" title="Website"><svg class="meta-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></a>`);
+    }
+    if (data.twitter_username) {
+      links.push(`<a href="https://twitter.com/${data.twitter_username}" target="_blank" rel="noopener noreferrer" title="Twitter"><svg class="meta-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 3a10.9 10.9 0 0 1-3.14 1.53 4.48 4.48 0 0 0-7.86 3v1A10.66 10.66 0 0 1 3 4s-4 9 5 13a11.64 11.64 0 0 1-7 2c9 5 20 0 20-11.5a4.5 4.5 0 0 0-.08-.83A7.72 7.72 0 0 0 23 3z"/></svg></a>`);
+    }
+    if (data.email) {
+      links.push(`<a href="mailto:${data.email}" title="Email"><svg class="meta-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></a>`);
+    }
+    linksCell.innerHTML = links.join(' ');
+  }
+}
+
+function openOrgDrawer(name) {
+  const info = orgData.find(o => o.name === name);
+  if (!info) return;
+  const drawer = document.getElementById('org-drawer');
+  const content = document.getElementById('org-drawer-content');
+  content.innerHTML = '';
+
+  const title = document.createElement('h2');
+  title.textContent = name;
+  content.appendChild(title);
+
+  // Contributors table
+  const contribSection = document.createElement('div');
+  const contribHeader = document.createElement('h3');
+  contribHeader.textContent = 'Contributors';
+  contribSection.appendChild(contribHeader);
+  const contribTable = document.createElement('table');
+  contribTable.className = 'leaderboard-table';
+  contribTable.innerHTML = `<thead><tr><th>#</th><th>Name</th><th>Reviewers</th><th>Repositories</th><th>Location</th><th>Company</th><th>Links</th><th>Last Contribution</th></tr></thead><tbody></tbody>`;
+  const cBody = contribTable.querySelector('tbody');
+  info.contributors.forEach((u, idx) => {
+    const row = document.createElement('tr');
+    row.dataset.contributor = u.name;
+    row.innerHTML = `<td>${idx + 1}</td>
+      <td class="lb-name"><img class="lb-avatar" src="https://github.com/${u.name}.png?size=32" alt="${u.name} avatar"> <a href="https://github.com/${u.name}" target="_blank" rel="noopener noreferrer">${u.name}</a></td>
+      <td data-sort="${u.reviewers_count}">${u.reviewers_count}</td>
+      <td data-sort="${u.repos_count}">${u.repos_count}</td>
+      <td class="loc-cell"></td>
+      <td class="company-cell"></td>
+      <td class="links-cell"></td>
+      <td data-sort="${u.last_contribution || ''}">${u.last_contribution ? u.last_contribution.slice(0,10) : ''}</td>`;
+    cBody.appendChild(row);
+  });
+  contribSection.appendChild(contribTable);
+  content.appendChild(contribSection);
+
+  // Reviews table
+  const reviewSection = document.createElement('div');
+  const reviewHeader = document.createElement('h3');
+  reviewHeader.textContent = 'Reviews';
+  reviewSection.appendChild(reviewHeader);
+  const reviewTable = document.createElement('table');
+  reviewTable.className = 'leaderboard-table';
+  reviewTable.innerHTML = `<thead><tr><th>Reviewer</th><th>Repository</th><th>Comments</th></tr></thead><tbody></tbody>`;
+  const rBody = reviewTable.querySelector('tbody');
+  info.reviews.forEach(r => {
+    const row = document.createElement('tr');
+    row.innerHTML = `<td data-label="Reviewer"><a href="/reviewers/${r.slug}/">${r.title}</a></td>
+      <td data-label="Repository"><a href="https://github.com/${r.repo}" target="_blank" rel="noopener noreferrer">${r.repo}</a></td>
+      <td data-sort="${r.comments}" data-label="Comments">${r.comments}</td>`;
+    rBody.appendChild(row);
+  });
+  reviewSection.appendChild(reviewTable);
+  content.appendChild(reviewSection);
+
+  drawer.classList.add('open');
+  makeSortable(contribTable);
+  makeSortable(reviewTable);
+  loadProfileData(contribTable);
+}
+
+function closeDrawer() {
+  document.getElementById('org-drawer').classList.remove('open');
+}
+
+const orgTable = document.getElementById('org-table');
+makeSortable(orgTable);
+orgTable.sort(1); orgTable.sort(1); // default sort by reviewers desc
+
+document.querySelectorAll('#org-table tbody tr').forEach(row => {
+  row.addEventListener('click', e => {
+    if (e.target.tagName.toLowerCase() === 'a') return;
+    openOrgDrawer(row.dataset.org);
+  });
 });
 
 const filterInput = document.getElementById('org-filter');

@@ -1,0 +1,102 @@
+[
+  {
+    "discussion_id": "1902197258",
+    "pr_number": 4048,
+    "pr_file": "cli/generate/src/parse_grammar.rs",
+    "created_at": "2025-01-03T21:57:01+00:00",
+    "commented_code": "ordering.push(match entry {\n                 RuleJSON::STRING { value } => PrecedenceEntry::Name(value),\n                 RuleJSON::SYMBOL { name } => PrecedenceEntry::Symbol(name),\n-                _ => {\n-                    return Err(anyhow!(\n-                        \"Invalid rule in precedences array. Only strings and symbols are allowed\"\n-                    ))\n-                }\n+                _ => Err(ParseGrammarError::InvalidRule)?,",
+    "repo_full_name": "tree-sitter/tree-sitter",
+    "discussion_comments": [
+      {
+        "comment_id": "1902197258",
+        "repo_full_name": "tree-sitter/tree-sitter",
+        "pr_number": 4048,
+        "pr_file": "cli/generate/src/parse_grammar.rs",
+        "discussion_id": "1902197258",
+        "commented_code": "@@ -186,11 +205,7 @@ pub(crate) fn parse_grammar(input: &str) -> Result<InputGrammar> {\n             ordering.push(match entry {\n                 RuleJSON::STRING { value } => PrecedenceEntry::Name(value),\n                 RuleJSON::SYMBOL { name } => PrecedenceEntry::Symbol(name),\n-                _ => {\n-                    return Err(anyhow!(\n-                        \"Invalid rule in precedences array. Only strings and symbols are allowed\"\n-                    ))\n-                }\n+                _ => Err(ParseGrammarError::InvalidRule)?,",
+        "comment_created_at": "2025-01-03T21:57:01+00:00",
+        "comment_author": "amaanq",
+        "comment_body": "I think this could be better phrased as \"unexpected\" as we expected two types of inputs and got something else - the rule itself isn't invalid",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1798751413",
+    "pr_number": 3786,
+    "pr_file": "cli/src/version.rs",
+    "created_at": "2024-10-14T05:06:41+00:00",
+    "commented_code": "+use std::{fs, path::PathBuf, process::Command};\n+\n+use anyhow::{anyhow, Context, Result};\n+use regex::Regex;\n+use tree_sitter_loader::TreeSitterJSON;\n+\n+pub struct Version {\n+    pub version: String,\n+    pub current_dir: PathBuf,\n+}\n+\n+impl Version {\n+    #[must_use]\n+    pub const fn new(version: String, current_dir: PathBuf) -> Self {\n+        Self {\n+            version,\n+            current_dir,\n+        }\n+    }\n+\n+    pub fn run(self) -> Result<()> {\n+        let tree_sitter_json = self.current_dir.join(\"tree-sitter.json\");\n+\n+        let tree_sitter_json =\n+            serde_json::from_str::<TreeSitterJSON>(&fs::read_to_string(tree_sitter_json)?)?;\n+\n+        let is_multigrammar = tree_sitter_json.grammars.len() > 1;\n+\n+        self.update_treesitter_json().with_context(|| {\n+            format!(\n+                \"Failed to update tree-sitter.json at {}\",\n+                self.current_dir.display()\n+            )\n+        })?;\n+        self.update_cargo_toml().with_context(|| {\n+            format!(\n+                \"Failed to update Cargo.toml at {}\",\n+                self.current_dir.display()\n+            )\n+        })?;\n+        self.update_package_json().with_context(|| {\n+            format!(\n+                \"Failed to update package.json at {}\",\n+                self.current_dir.display()\n+            )\n+        })?;\n+        self.update_makefile(is_multigrammar).with_context(|| {\n+            format!(\n+                \"Failed to update Makefile at {}\",\n+                self.current_dir.display()\n+            )\n+        })?;\n+        self.update_cmakelists_txt().with_context(|| {\n+            format!(\n+                \"Failed to update CMakeLists.txt at {}\",\n+                self.current_dir.display()\n+            )\n+        })?;\n+        self.update_pyproject_toml().with_context(|| {\n+            format!(\n+                \"Failed to update pyproject.toml at {}\",\n+                self.current_dir.display()\n+            )\n+        })?;\n+\n+        Ok(())\n+    }\n+\n+    fn update_treesitter_json(&self) -> Result<()> {\n+        let tree_sitter_json = &fs::read_to_string(self.current_dir.join(\"tree-sitter.json\"))?;\n+\n+        let tree_sitter_json = tree_sitter_json\n+            .lines()\n+            .map(|line| {\n+                if line.contains(\"\\\"version\\\":\") {\n+                    let prefix_index = line.find(\"\\\"version\\\":\").unwrap() + \"\\\"version\\\":\".len();\n+                    let start_quote = line[prefix_index..].find('\"').unwrap() + prefix_index + 1;\n+                    let end_quote = line[start_quote + 1..].find('\"').unwrap() + start_quote + 1;\n+\n+                    format!(\n+                        \"{}{}{}\",\n+                        &line[..start_quote],\n+                        self.version,\n+                        &line[end_quote..]\n+                    )\n+                } else {\n+                    line.to_string()\n+                }\n+            })\n+            .collect::<Vec<_>>()\n+            .join(\"\n\")\n+            + \"\n\";\n+\n+        fs::write(self.current_dir.join(\"tree-sitter.json\"), tree_sitter_json)?;\n+\n+        Ok(())\n+    }\n+\n+    fn update_cargo_toml(&self) -> Result<()> {\n+        if !self.current_dir.join(\"Cargo.toml\").exists() {\n+            return Ok(());\n+        }\n+\n+        let cargo_toml = fs::read_to_string(self.current_dir.join(\"Cargo.toml\"))?;\n+\n+        let cargo_toml = cargo_toml\n+            .lines()\n+            .map(|line| {\n+                if line.starts_with(\"version =\") {\n+                    format!(\"version = \\\"{}\\\"\", self.version)\n+                } else {\n+                    line.to_string()\n+                }\n+            })\n+            .collect::<Vec<_>>()\n+            .join(\"\n\")\n+            + \"\n\";\n+\n+        fs::write(self.current_dir.join(\"Cargo.toml\"), cargo_toml)?;\n+\n+        if self.current_dir.join(\"Cargo.lock\").exists() {\n+            let Ok(cmd) = Command::new(\"cargo\")\n+                .arg(\"update\")\n+                .current_dir(&self.current_dir)\n+                .output()\n+            else {\n+                return Ok(()); // cargo is not `executable`, ignore\n+            };\n+\n+            if !cmd.status.success() {\n+                let stderr = String::from_utf8_lossy(&cmd.stderr);\n+                return Err(anyhow!(\"Failed to run `cargo update`:\n{stderr}\"));",
+    "repo_full_name": "tree-sitter/tree-sitter",
+    "discussion_comments": [
+      {
+        "comment_id": "1798751413",
+        "repo_full_name": "tree-sitter/tree-sitter",
+        "pr_number": 3786,
+        "pr_file": "cli/src/version.rs",
+        "discussion_id": "1798751413",
+        "commented_code": "@@ -0,0 +1,260 @@\n+use std::{fs, path::PathBuf, process::Command};\n+\n+use anyhow::{anyhow, Context, Result};\n+use regex::Regex;\n+use tree_sitter_loader::TreeSitterJSON;\n+\n+pub struct Version {\n+    pub version: String,\n+    pub current_dir: PathBuf,\n+}\n+\n+impl Version {\n+    #[must_use]\n+    pub const fn new(version: String, current_dir: PathBuf) -> Self {\n+        Self {\n+            version,\n+            current_dir,\n+        }\n+    }\n+\n+    pub fn run(self) -> Result<()> {\n+        let tree_sitter_json = self.current_dir.join(\"tree-sitter.json\");\n+\n+        let tree_sitter_json =\n+            serde_json::from_str::<TreeSitterJSON>(&fs::read_to_string(tree_sitter_json)?)?;\n+\n+        let is_multigrammar = tree_sitter_json.grammars.len() > 1;\n+\n+        self.update_treesitter_json().with_context(|| {\n+            format!(\n+                \"Failed to update tree-sitter.json at {}\",\n+                self.current_dir.display()\n+            )\n+        })?;\n+        self.update_cargo_toml().with_context(|| {\n+            format!(\n+                \"Failed to update Cargo.toml at {}\",\n+                self.current_dir.display()\n+            )\n+        })?;\n+        self.update_package_json().with_context(|| {\n+            format!(\n+                \"Failed to update package.json at {}\",\n+                self.current_dir.display()\n+            )\n+        })?;\n+        self.update_makefile(is_multigrammar).with_context(|| {\n+            format!(\n+                \"Failed to update Makefile at {}\",\n+                self.current_dir.display()\n+            )\n+        })?;\n+        self.update_cmakelists_txt().with_context(|| {\n+            format!(\n+                \"Failed to update CMakeLists.txt at {}\",\n+                self.current_dir.display()\n+            )\n+        })?;\n+        self.update_pyproject_toml().with_context(|| {\n+            format!(\n+                \"Failed to update pyproject.toml at {}\",\n+                self.current_dir.display()\n+            )\n+        })?;\n+\n+        Ok(())\n+    }\n+\n+    fn update_treesitter_json(&self) -> Result<()> {\n+        let tree_sitter_json = &fs::read_to_string(self.current_dir.join(\"tree-sitter.json\"))?;\n+\n+        let tree_sitter_json = tree_sitter_json\n+            .lines()\n+            .map(|line| {\n+                if line.contains(\"\\\"version\\\":\") {\n+                    let prefix_index = line.find(\"\\\"version\\\":\").unwrap() + \"\\\"version\\\":\".len();\n+                    let start_quote = line[prefix_index..].find('\"').unwrap() + prefix_index + 1;\n+                    let end_quote = line[start_quote + 1..].find('\"').unwrap() + start_quote + 1;\n+\n+                    format!(\n+                        \"{}{}{}\",\n+                        &line[..start_quote],\n+                        self.version,\n+                        &line[end_quote..]\n+                    )\n+                } else {\n+                    line.to_string()\n+                }\n+            })\n+            .collect::<Vec<_>>()\n+            .join(\"\\n\")\n+            + \"\\n\";\n+\n+        fs::write(self.current_dir.join(\"tree-sitter.json\"), tree_sitter_json)?;\n+\n+        Ok(())\n+    }\n+\n+    fn update_cargo_toml(&self) -> Result<()> {\n+        if !self.current_dir.join(\"Cargo.toml\").exists() {\n+            return Ok(());\n+        }\n+\n+        let cargo_toml = fs::read_to_string(self.current_dir.join(\"Cargo.toml\"))?;\n+\n+        let cargo_toml = cargo_toml\n+            .lines()\n+            .map(|line| {\n+                if line.starts_with(\"version =\") {\n+                    format!(\"version = \\\"{}\\\"\", self.version)\n+                } else {\n+                    line.to_string()\n+                }\n+            })\n+            .collect::<Vec<_>>()\n+            .join(\"\\n\")\n+            + \"\\n\";\n+\n+        fs::write(self.current_dir.join(\"Cargo.toml\"), cargo_toml)?;\n+\n+        if self.current_dir.join(\"Cargo.lock\").exists() {\n+            let Ok(cmd) = Command::new(\"cargo\")\n+                .arg(\"update\")\n+                .current_dir(&self.current_dir)\n+                .output()\n+            else {\n+                return Ok(()); // cargo is not `executable`, ignore\n+            };\n+\n+            if !cmd.status.success() {\n+                let stderr = String::from_utf8_lossy(&cmd.stderr);\n+                return Err(anyhow!(\"Failed to run `cargo update`:\\n{stderr}\"));",
+        "comment_created_at": "2024-10-14T05:06:41+00:00",
+        "comment_author": "ObserverOfTime",
+        "comment_body": "```suggestion\r\n                return Err(anyhow!(\"Failed to run `cargo generate-lockfile`:\\n{stderr}\"));\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "650721553",
+    "pr_number": 1163,
+    "pr_file": "cli/src/main.rs",
+    "created_at": "2021-06-14T07:54:02+00:00",
+    "commented_code": "const BUILD_VERSION: &'static str = env!(\"CARGO_PKG_VERSION\");\n const BUILD_SHA: Option<&'static str> = option_env!(\"BUILD_SHA\");\n \n-fn main() -> Result<()> {\n+fn main() {\n     let result = run();\n-    // Ignore BrokenPipe errors\n     if let Err(err) = &result {\n+        // Ignore BrokenPipe errors\n         if let Some(error) = err.downcast_ref::<std::io::Error>() {\n             if error.kind() == std::io::ErrorKind::BrokenPipe {\n-                return Ok(());\n+                return;\n             }\n         }\n+        if !err.to_string().is_empty() {\n+            eprintln!(\"{:?}\", err);",
+    "repo_full_name": "tree-sitter/tree-sitter",
+    "discussion_comments": [
+      {
+        "comment_id": "650721553",
+        "repo_full_name": "tree-sitter/tree-sitter",
+        "pr_number": 1163,
+        "pr_file": "cli/src/main.rs",
+        "discussion_id": "650721553",
+        "commented_code": "@@ -12,17 +12,20 @@ use tree_sitter_loader as loader;\n const BUILD_VERSION: &'static str = env!(\"CARGO_PKG_VERSION\");\n const BUILD_SHA: Option<&'static str> = option_env!(\"BUILD_SHA\");\n \n-fn main() -> Result<()> {\n+fn main() {\n     let result = run();\n-    // Ignore BrokenPipe errors\n     if let Err(err) = &result {\n+        // Ignore BrokenPipe errors\n         if let Some(error) = err.downcast_ref::<std::io::Error>() {\n             if error.kind() == std::io::ErrorKind::BrokenPipe {\n-                return Ok(());\n+                return;\n             }\n         }\n+        if !err.to_string().is_empty() {\n+            eprintln!(\"{:?}\", err);",
+        "comment_created_at": "2021-06-14T07:54:02+00:00",
+        "comment_author": "ahlinc",
+        "comment_body": "Debug format needed to print extended errors with [`Caused by:`](https://github.com/dtolnay/anyhow/blob/b4f670dbe35b2a960f137da8b3ba89d6eb3c71cc/src/fmt.rs#L29) explanation what Rust makes by default.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "667523273",
+    "pr_number": 1234,
+    "pr_file": "cli/config/src/lib.rs",
+    "created_at": "2021-07-11T19:08:27+00:00",
+    "commented_code": "Some(location) => location,\n             None => return Config::initial(),\n         };\n-        let content = fs::read_to_string(&location)?;\n-        let config = serde_json::from_str(&content)?;\n+        let content = fs::read_to_string(&location).or_else(|err| {\n+            Err(anyhow!(",
+    "repo_full_name": "tree-sitter/tree-sitter",
+    "discussion_comments": [
+      {
+        "comment_id": "667523273",
+        "repo_full_name": "tree-sitter/tree-sitter",
+        "pr_number": 1234,
+        "pr_file": "cli/config/src/lib.rs",
+        "discussion_id": "667523273",
+        "commented_code": "@@ -64,8 +64,20 @@ impl Config {\n             Some(location) => location,\n             None => return Config::initial(),\n         };\n-        let content = fs::read_to_string(&location)?;\n-        let config = serde_json::from_str(&content)?;\n+        let content = fs::read_to_string(&location).or_else(|err| {\n+            Err(anyhow!(",
+        "comment_created_at": "2021-07-11T19:08:27+00:00",
+        "comment_author": "maxbrunsfeld",
+        "comment_body": "I think you could use anyhow's [`with_context`](https://docs.rs/anyhow/1.0.42/anyhow/trait.Context.html#tymethod.with_context) method to express this slightly more concisely:\r\n\r\n```rust\r\nlet content = fs::read_to_string(&location)\r\n    .with_context(|| format!(\"failed to read {}\", location.to_string_lossy()))?;\r\n// ...\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "670926582",
+        "repo_full_name": "tree-sitter/tree-sitter",
+        "pr_number": 1234,
+        "pr_file": "cli/config/src/lib.rs",
+        "discussion_id": "667523273",
+        "commented_code": "@@ -64,8 +64,20 @@ impl Config {\n             Some(location) => location,\n             None => return Config::initial(),\n         };\n-        let content = fs::read_to_string(&location)?;\n-        let config = serde_json::from_str(&content)?;\n+        let content = fs::read_to_string(&location).or_else(|err| {\n+            Err(anyhow!(",
+        "comment_created_at": "2021-07-16T02:45:14+00:00",
+        "comment_author": "ahlinc",
+        "comment_body": "Thank you for the suggestion! I've fixed it.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

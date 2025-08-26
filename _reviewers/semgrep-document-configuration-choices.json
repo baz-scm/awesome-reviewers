@@ -1,0 +1,138 @@
+[
+  {
+    "discussion_id": "1569540213",
+    "pr_number": 10119,
+    "pr_file": ".github/workflows/build-test-core-x86-ocaml5.jsonnet",
+    "created_at": "2024-04-17T20:56:46+00:00",
+    "commented_code": "uses: 'ocaml/setup-ocaml@v2',\n       with: {\n         'ocaml-compiler': opam_switch,\n+        'opam-repositories': |||\n+            default: https://github.com/ocaml/opam-repository.git\n+            beta: https://github.com/ocaml/ocaml-beta-repository.git",
+    "repo_full_name": "semgrep/semgrep",
+    "discussion_comments": [
+      {
+        "comment_id": "1569540213",
+        "repo_full_name": "semgrep/semgrep",
+        "pr_number": 10119,
+        "pr_file": ".github/workflows/build-test-core-x86-ocaml5.jsonnet",
+        "discussion_id": "1569540213",
+        "commented_code": "@@ -22,6 +21,10 @@ local job = {\n       uses: 'ocaml/setup-ocaml@v2',\n       with: {\n         'ocaml-compiler': opam_switch,\n+        'opam-repositories': |||\n+            default: https://github.com/ocaml/opam-repository.git\n+            beta: https://github.com/ocaml/ocaml-beta-repository.git",
+        "comment_created_at": "2024-04-17T20:56:46+00:00",
+        "comment_author": "aryx",
+        "comment_body": "Same here, add a comment explaining why we need those special settings.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1565917124",
+    "pr_number": 10080,
+    "pr_file": "flake.nix",
+    "created_at": "2024-04-15T14:44:01+00:00",
+    "commented_code": "+# you found our nix flake!\n+# use https://github.com/DeterminateSystems/nix-installer to get nix easily\n+# then run `nix develop` to get a shell with all the dependencies\n+#\n+# To use your shell when developing:\n+# nix develop -c $SHELL\n+#\n+# To disallow all deps outside of nix:\n+# nix develop -i\n+{\n+  description = \"Semgrep OSS is a fast, open-source, static analysis tool for searching code, finding bugs, and enforcing code standards at editor, commit, and CI time.\";\n+  inputs = {\n+    opam-nix.url = \"github:tweag/opam-nix\";\n+    flake-utils.url = \"github:numtide/flake-utils\";\n+    nixpkgs.url = \"github:nixos/nixpkgs/nixos-unstable\";\n+    opam-repository = {\n+      url = \"github:ocaml/opam-repository\";\n+      flake = false;\n+    };\n+  };\n+  outputs = { self, flake-utils, opam-nix, nixpkgs, opam-repository }@inputs:\n+    let\n+      package = \"semgrep\";\n+\n+    in\n+    flake-utils.lib.eachDefaultSystem (system:\n+      let\n+        # TODO Use pkgsStatic if on linux\n+        pkgs = nixpkgs.legacyPackages.${system};\n+        on = opam-nix.lib.${system};\n+        pythonPackages = pkgs.python310Packages;\n+        opamRepos = [ \"${opam-repository}\" ];\n+        # TODO split out osemgrep and pysemgrep into diff nix files\n+      in\n+      let\n+\n+        # osemgrep/semgrep-core inputs\n+        osemgrepInputs = with pkgs; [\n+          tree-sitter\n+        ];\n+        devOpamPackagesQuery = {\n+          # You can add \"development\" ocaml packages here. They will get added to the devShell automatically.\n+          ocaml-lsp-server = \"*\";\n+          utop = \"*\";\n+          ocamlformat = \"*\";\n+          earlybird = \"*\";\n+          merlin = \"*\";\n+        };\n+        opamQuery = devOpamPackagesQuery // {\n+          ## You can force versions of certain packages here\n+          # force the ocaml compiler to be 4.14.2 and from opam\n+          ocaml-base-compiler = \"4.14.2\";\n+          # needed for OCTS and isn't pulled in by semgrep.opam\n+          tsort = \"*\";\n+          # don't use bleeding edge cohttp\n+          cohttp-lwt = \"5.3.0\";\n+        };\n+\n+        # repos = opamRepos to force newest version of opam\n+        scope = on.buildOpamProject' { repos = opamRepos; } ./. opamQuery;\n+        scopeOverlay = final: prev: {\n+          # You can add overrides here\n+          ${package} = prev.${package}.overrideAttrs (prev: {\n+            # Prevent the ocaml dependencies from leaking into dependent environments\n+            doNixSupport = false;\n+            # add tsort since it's not pulled in for whatever reason\n+            buildInputs = prev.buildInputs ++ [ final.tsort ];\n+          });\n+        };\n+        scope' = scope.overrideScope' scopeOverlay;\n+\n+        # for development\n+        devOpamPackages = builtins.attrValues\n+          (pkgs.lib.getAttrs (builtins.attrNames devOpamPackagesQuery) scope');\n+\n+        # osemgrep/semgrep-core\n+        # package with all opam deps but nothing else\n+        baseOpamPackage = scope'.${package}; # Packages from devPackagesQuery\n+\n+        osemgrep = baseOpamPackage.overrideAttrs (prev: rec {\n+          pname = \"osemgrep\";\n+          buildInputs = prev.buildInputs ++ osemgrepInputs;\n+          # all the dune files of semgrep treesitter <LANG>\n+          # are missing the :standard field. Basically all compilers autodetct if something\n+          # is c or c++ based on file extension, and add the c stdlib based on that. Nix doesn't\n+          # because reasons: https://github.com/NixOS/nixpkgs/issues/150655\n+          # Dune also passes -xc++ if it detects a c++ file (again sane), but it's included\n+          # in the :standard var, which we don't add because ???\n+          # TODO add and commit them instead of doing this\n+          buildPhase' = ''\n+            for f in $(find -type f -iname \"dune\");do\n+              substituteInPlace $f \\\n+                --replace \"flags -fPIC\" \"flags :standard -fPIC\"\n+            done\n+            make core\n+          '';\n+          buildPhaseFail = ''\n+              echo \"Derivation ${pname} won't build outside of a nix shell without submodules:\"\n+              echo \"  nix build '.?submodules=1#' # build from local sources\"\n+              echo \"  nix build '<uri>?submodules=1#' # build from remote sources\"\n+              echo \"  nix run '.?submodules=1#osemgrep' # run osemgrep from local sources\"\n+              echo \"  nix run '<uri>.?submodules=1#osemgrep' # run osemgrep from remote source\"\n+              exit 1\n+          '';\n+          # make sure we have submodules\n+          # See https://github.com/NixOS/nix/pull/7862\n+          buildPhase = if self.submodules then osemgrep.buildPhase' else osemgrep.buildPhaseFail;\n+          # TODO check phase\n+\n+          # DONE! Copy semgrep binaries!!!!\n+          installPhase = ''\n+            mkdir -p $out/bin\n+            cp _build/install/default/bin/* $out/bin\n+          '';\n+\n+        });\n+\n+\n+        # pysemgrep inputs\n+\n+        devPipInputs = with pythonPackages; [\n+          pkgs.git\n+          flaky\n+          pytest-snapshot\n+          pytest-mock\n+          pytest-freezegun\n+          types-freezegun\n+        ];\n+\n+        # pysemgrep\n+        pysemgrep = with pythonPackages; buildPythonApplication {\n+          # thanks to @06kellyjac\n+          pname = \"semgrep\";\n+          inherit (osemgrep) version;\n+          src = ./cli;\n+          # TODO checks\n+          doCheck = false;\n+\n+          propagatedBuildInputs = [",
+    "repo_full_name": "semgrep/semgrep",
+    "discussion_comments": [
+      {
+        "comment_id": "1565917124",
+        "repo_full_name": "semgrep/semgrep",
+        "pr_number": 10080,
+        "pr_file": "flake.nix",
+        "discussion_id": "1565917124",
+        "commented_code": "@@ -0,0 +1,210 @@\n+# you found our nix flake!\n+# use https://github.com/DeterminateSystems/nix-installer to get nix easily\n+# then run `nix develop` to get a shell with all the dependencies\n+#\n+# To use your shell when developing:\n+# nix develop -c $SHELL\n+#\n+# To disallow all deps outside of nix:\n+# nix develop -i\n+{\n+  description = \"Semgrep OSS is a fast, open-source, static analysis tool for searching code, finding bugs, and enforcing code standards at editor, commit, and CI time.\";\n+  inputs = {\n+    opam-nix.url = \"github:tweag/opam-nix\";\n+    flake-utils.url = \"github:numtide/flake-utils\";\n+    nixpkgs.url = \"github:nixos/nixpkgs/nixos-unstable\";\n+    opam-repository = {\n+      url = \"github:ocaml/opam-repository\";\n+      flake = false;\n+    };\n+  };\n+  outputs = { self, flake-utils, opam-nix, nixpkgs, opam-repository }@inputs:\n+    let\n+      package = \"semgrep\";\n+\n+    in\n+    flake-utils.lib.eachDefaultSystem (system:\n+      let\n+        # TODO Use pkgsStatic if on linux\n+        pkgs = nixpkgs.legacyPackages.${system};\n+        on = opam-nix.lib.${system};\n+        pythonPackages = pkgs.python310Packages;\n+        opamRepos = [ \"${opam-repository}\" ];\n+        # TODO split out osemgrep and pysemgrep into diff nix files\n+      in\n+      let\n+\n+        # osemgrep/semgrep-core inputs\n+        osemgrepInputs = with pkgs; [\n+          tree-sitter\n+        ];\n+        devOpamPackagesQuery = {\n+          # You can add \"development\" ocaml packages here. They will get added to the devShell automatically.\n+          ocaml-lsp-server = \"*\";\n+          utop = \"*\";\n+          ocamlformat = \"*\";\n+          earlybird = \"*\";\n+          merlin = \"*\";\n+        };\n+        opamQuery = devOpamPackagesQuery // {\n+          ## You can force versions of certain packages here\n+          # force the ocaml compiler to be 4.14.2 and from opam\n+          ocaml-base-compiler = \"4.14.2\";\n+          # needed for OCTS and isn't pulled in by semgrep.opam\n+          tsort = \"*\";\n+          # don't use bleeding edge cohttp\n+          cohttp-lwt = \"5.3.0\";\n+        };\n+\n+        # repos = opamRepos to force newest version of opam\n+        scope = on.buildOpamProject' { repos = opamRepos; } ./. opamQuery;\n+        scopeOverlay = final: prev: {\n+          # You can add overrides here\n+          ${package} = prev.${package}.overrideAttrs (prev: {\n+            # Prevent the ocaml dependencies from leaking into dependent environments\n+            doNixSupport = false;\n+            # add tsort since it's not pulled in for whatever reason\n+            buildInputs = prev.buildInputs ++ [ final.tsort ];\n+          });\n+        };\n+        scope' = scope.overrideScope' scopeOverlay;\n+\n+        # for development\n+        devOpamPackages = builtins.attrValues\n+          (pkgs.lib.getAttrs (builtins.attrNames devOpamPackagesQuery) scope');\n+\n+        # osemgrep/semgrep-core\n+        # package with all opam deps but nothing else\n+        baseOpamPackage = scope'.${package}; # Packages from devPackagesQuery\n+\n+        osemgrep = baseOpamPackage.overrideAttrs (prev: rec {\n+          pname = \"osemgrep\";\n+          buildInputs = prev.buildInputs ++ osemgrepInputs;\n+          # all the dune files of semgrep treesitter <LANG>\n+          # are missing the :standard field. Basically all compilers autodetct if something\n+          # is c or c++ based on file extension, and add the c stdlib based on that. Nix doesn't\n+          # because reasons: https://github.com/NixOS/nixpkgs/issues/150655\n+          # Dune also passes -xc++ if it detects a c++ file (again sane), but it's included\n+          # in the :standard var, which we don't add because ???\n+          # TODO add and commit them instead of doing this\n+          buildPhase' = ''\n+            for f in $(find -type f -iname \"dune\");do\n+              substituteInPlace $f \\\n+                --replace \"flags -fPIC\" \"flags :standard -fPIC\"\n+            done\n+            make core\n+          '';\n+          buildPhaseFail = ''\n+              echo \"Derivation ${pname} won't build outside of a nix shell without submodules:\"\n+              echo \"  nix build '.?submodules=1#' # build from local sources\"\n+              echo \"  nix build '<uri>?submodules=1#' # build from remote sources\"\n+              echo \"  nix run '.?submodules=1#osemgrep' # run osemgrep from local sources\"\n+              echo \"  nix run '<uri>.?submodules=1#osemgrep' # run osemgrep from remote source\"\n+              exit 1\n+          '';\n+          # make sure we have submodules\n+          # See https://github.com/NixOS/nix/pull/7862\n+          buildPhase = if self.submodules then osemgrep.buildPhase' else osemgrep.buildPhaseFail;\n+          # TODO check phase\n+\n+          # DONE! Copy semgrep binaries!!!!\n+          installPhase = ''\n+            mkdir -p $out/bin\n+            cp _build/install/default/bin/* $out/bin\n+          '';\n+\n+        });\n+\n+\n+        # pysemgrep inputs\n+\n+        devPipInputs = with pythonPackages; [\n+          pkgs.git\n+          flaky\n+          pytest-snapshot\n+          pytest-mock\n+          pytest-freezegun\n+          types-freezegun\n+        ];\n+\n+        # pysemgrep\n+        pysemgrep = with pythonPackages; buildPythonApplication {\n+          # thanks to @06kellyjac\n+          pname = \"semgrep\";\n+          inherit (osemgrep) version;\n+          src = ./cli;\n+          # TODO checks\n+          doCheck = false;\n+\n+          propagatedBuildInputs = [",
+        "comment_created_at": "2024-04-15T14:44:01+00:00",
+        "comment_author": "aryx",
+        "comment_body": "maybe add some coupling: comment in this file and the related pypi file so if\r\none adds a python dependency, we know we also need to update this file.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1566328646",
+        "repo_full_name": "semgrep/semgrep",
+        "pr_number": 10080,
+        "pr_file": "flake.nix",
+        "discussion_id": "1565917124",
+        "commented_code": "@@ -0,0 +1,210 @@\n+# you found our nix flake!\n+# use https://github.com/DeterminateSystems/nix-installer to get nix easily\n+# then run `nix develop` to get a shell with all the dependencies\n+#\n+# To use your shell when developing:\n+# nix develop -c $SHELL\n+#\n+# To disallow all deps outside of nix:\n+# nix develop -i\n+{\n+  description = \"Semgrep OSS is a fast, open-source, static analysis tool for searching code, finding bugs, and enforcing code standards at editor, commit, and CI time.\";\n+  inputs = {\n+    opam-nix.url = \"github:tweag/opam-nix\";\n+    flake-utils.url = \"github:numtide/flake-utils\";\n+    nixpkgs.url = \"github:nixos/nixpkgs/nixos-unstable\";\n+    opam-repository = {\n+      url = \"github:ocaml/opam-repository\";\n+      flake = false;\n+    };\n+  };\n+  outputs = { self, flake-utils, opam-nix, nixpkgs, opam-repository }@inputs:\n+    let\n+      package = \"semgrep\";\n+\n+    in\n+    flake-utils.lib.eachDefaultSystem (system:\n+      let\n+        # TODO Use pkgsStatic if on linux\n+        pkgs = nixpkgs.legacyPackages.${system};\n+        on = opam-nix.lib.${system};\n+        pythonPackages = pkgs.python310Packages;\n+        opamRepos = [ \"${opam-repository}\" ];\n+        # TODO split out osemgrep and pysemgrep into diff nix files\n+      in\n+      let\n+\n+        # osemgrep/semgrep-core inputs\n+        osemgrepInputs = with pkgs; [\n+          tree-sitter\n+        ];\n+        devOpamPackagesQuery = {\n+          # You can add \"development\" ocaml packages here. They will get added to the devShell automatically.\n+          ocaml-lsp-server = \"*\";\n+          utop = \"*\";\n+          ocamlformat = \"*\";\n+          earlybird = \"*\";\n+          merlin = \"*\";\n+        };\n+        opamQuery = devOpamPackagesQuery // {\n+          ## You can force versions of certain packages here\n+          # force the ocaml compiler to be 4.14.2 and from opam\n+          ocaml-base-compiler = \"4.14.2\";\n+          # needed for OCTS and isn't pulled in by semgrep.opam\n+          tsort = \"*\";\n+          # don't use bleeding edge cohttp\n+          cohttp-lwt = \"5.3.0\";\n+        };\n+\n+        # repos = opamRepos to force newest version of opam\n+        scope = on.buildOpamProject' { repos = opamRepos; } ./. opamQuery;\n+        scopeOverlay = final: prev: {\n+          # You can add overrides here\n+          ${package} = prev.${package}.overrideAttrs (prev: {\n+            # Prevent the ocaml dependencies from leaking into dependent environments\n+            doNixSupport = false;\n+            # add tsort since it's not pulled in for whatever reason\n+            buildInputs = prev.buildInputs ++ [ final.tsort ];\n+          });\n+        };\n+        scope' = scope.overrideScope' scopeOverlay;\n+\n+        # for development\n+        devOpamPackages = builtins.attrValues\n+          (pkgs.lib.getAttrs (builtins.attrNames devOpamPackagesQuery) scope');\n+\n+        # osemgrep/semgrep-core\n+        # package with all opam deps but nothing else\n+        baseOpamPackage = scope'.${package}; # Packages from devPackagesQuery\n+\n+        osemgrep = baseOpamPackage.overrideAttrs (prev: rec {\n+          pname = \"osemgrep\";\n+          buildInputs = prev.buildInputs ++ osemgrepInputs;\n+          # all the dune files of semgrep treesitter <LANG>\n+          # are missing the :standard field. Basically all compilers autodetct if something\n+          # is c or c++ based on file extension, and add the c stdlib based on that. Nix doesn't\n+          # because reasons: https://github.com/NixOS/nixpkgs/issues/150655\n+          # Dune also passes -xc++ if it detects a c++ file (again sane), but it's included\n+          # in the :standard var, which we don't add because ???\n+          # TODO add and commit them instead of doing this\n+          buildPhase' = ''\n+            for f in $(find -type f -iname \"dune\");do\n+              substituteInPlace $f \\\n+                --replace \"flags -fPIC\" \"flags :standard -fPIC\"\n+            done\n+            make core\n+          '';\n+          buildPhaseFail = ''\n+              echo \"Derivation ${pname} won't build outside of a nix shell without submodules:\"\n+              echo \"  nix build '.?submodules=1#' # build from local sources\"\n+              echo \"  nix build '<uri>?submodules=1#' # build from remote sources\"\n+              echo \"  nix run '.?submodules=1#osemgrep' # run osemgrep from local sources\"\n+              echo \"  nix run '<uri>.?submodules=1#osemgrep' # run osemgrep from remote source\"\n+              exit 1\n+          '';\n+          # make sure we have submodules\n+          # See https://github.com/NixOS/nix/pull/7862\n+          buildPhase = if self.submodules then osemgrep.buildPhase' else osemgrep.buildPhaseFail;\n+          # TODO check phase\n+\n+          # DONE! Copy semgrep binaries!!!!\n+          installPhase = ''\n+            mkdir -p $out/bin\n+            cp _build/install/default/bin/* $out/bin\n+          '';\n+\n+        });\n+\n+\n+        # pysemgrep inputs\n+\n+        devPipInputs = with pythonPackages; [\n+          pkgs.git\n+          flaky\n+          pytest-snapshot\n+          pytest-mock\n+          pytest-freezegun\n+          types-freezegun\n+        ];\n+\n+        # pysemgrep\n+        pysemgrep = with pythonPackages; buildPythonApplication {\n+          # thanks to @06kellyjac\n+          pname = \"semgrep\";\n+          inherit (osemgrep) version;\n+          src = ./cli;\n+          # TODO checks\n+          doCheck = false;\n+\n+          propagatedBuildInputs = [",
+        "comment_created_at": "2024-04-15T19:26:48+00:00",
+        "comment_author": "ajbt200128",
+        "comment_body": "added",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1533882271",
+    "pr_number": 9971,
+    "pr_file": "libs/commons/Logs_.ml",
+    "created_at": "2024-03-21T13:12:52+00:00",
+    "commented_code": "\"cohttp.lwt.client\";\n     \"cohttp.lwt.io\";\n     \"conduit_lwt_server\";\n-    \"mirage-crypto-rng.lwt\";\n-    \"mirage-crypto-rng-lwt\";\n-    \"mirage-crypto-rng.unix\";\n+    \"dns*\";",
+    "repo_full_name": "semgrep/semgrep",
+    "discussion_comments": [
+      {
+        "comment_id": "1533882271",
+        "repo_full_name": "semgrep/semgrep",
+        "pr_number": 9971,
+        "pr_file": "libs/commons/Logs_.ml",
+        "discussion_id": "1533882271",
+        "commented_code": "@@ -40,9 +40,18 @@ let default_skip_libs =\n     \"cohttp.lwt.client\";\n     \"cohttp.lwt.io\";\n     \"conduit_lwt_server\";\n-    \"mirage-crypto-rng.lwt\";\n-    \"mirage-crypto-rng-lwt\";\n-    \"mirage-crypto-rng.unix\";\n+    \"dns*\";",
+        "comment_created_at": "2024-03-21T13:12:52+00:00",
+        "comment_author": "aryx",
+        "comment_body": "add a comment above before default_skip_libs explaining you can use regexps.\r\nIdeally you could even do let default_skip_libs : Pcre.regexp t = [\r\n ] |> List.map Pcre.regexp\r\n\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1498581906",
+    "pr_number": 9785,
+    "pr_file": "libs/tracing/unix/Tracing.ml",
+    "created_at": "2024-02-22T03:58:42+00:00",
+    "commented_code": "* TODO we'll probably need instructions for some system of tags?\n  *)\n \n+(*****************************************************************************)\n+(* Constants *)\n+(*****************************************************************************)\n+\n+let default_endpoint = \"https://telemetry.dev2.semgrep.dev\"",
+    "repo_full_name": "semgrep/semgrep",
+    "discussion_comments": [
+      {
+        "comment_id": "1498581906",
+        "repo_full_name": "semgrep/semgrep",
+        "pr_number": 9785,
+        "pr_file": "libs/tracing/unix/Tracing.ml",
+        "discussion_id": "1498581906",
+        "commented_code": "@@ -51,6 +51,13 @@ module Otel = Opentelemetry\n  * TODO we'll probably need instructions for some system of tags?\n  *)\n \n+(*****************************************************************************)\n+(* Constants *)\n+(*****************************************************************************)\n+\n+let default_endpoint = \"https://telemetry.dev2.semgrep.dev\"",
+        "comment_created_at": "2024-02-22T03:58:42+00:00",
+        "comment_author": "cgdolan",
+        "comment_body": "```suggestion\r\nlet default_endpoint = \"https://telemetry.semgrep.dev\"\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1498584875",
+        "repo_full_name": "semgrep/semgrep",
+        "pr_number": 9785,
+        "pr_file": "libs/tracing/unix/Tracing.ml",
+        "discussion_id": "1498581906",
+        "commented_code": "@@ -51,6 +51,13 @@ module Otel = Opentelemetry\n  * TODO we'll probably need instructions for some system of tags?\n  *)\n \n+(*****************************************************************************)\n+(* Constants *)\n+(*****************************************************************************)\n+\n+let default_endpoint = \"https://telemetry.dev2.semgrep.dev\"",
+        "comment_created_at": "2024-02-22T04:03:24+00:00",
+        "comment_author": "cgdolan",
+        "comment_body": "Suggest making prod the default and requiring explicit, additional configuration to send to non-prod.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1500046528",
+        "repo_full_name": "semgrep/semgrep",
+        "pr_number": 9785,
+        "pr_file": "libs/tracing/unix/Tracing.ml",
+        "discussion_id": "1498581906",
+        "commented_code": "@@ -51,6 +51,13 @@ module Otel = Opentelemetry\n  * TODO we'll probably need instructions for some system of tags?\n  *)\n \n+(*****************************************************************************)\n+(* Constants *)\n+(*****************************************************************************)\n+\n+let default_endpoint = \"https://telemetry.dev2.semgrep.dev\"",
+        "comment_created_at": "2024-02-22T23:04:36+00:00",
+        "comment_author": "emjin",
+        "comment_body": "I'm going to leave it as dev for now since it's still in progress but I'll make a ticket to switch it ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1500048120",
+        "repo_full_name": "semgrep/semgrep",
+        "pr_number": 9785,
+        "pr_file": "libs/tracing/unix/Tracing.ml",
+        "discussion_id": "1498581906",
+        "commented_code": "@@ -51,6 +51,13 @@ module Otel = Opentelemetry\n  * TODO we'll probably need instructions for some system of tags?\n  *)\n \n+(*****************************************************************************)\n+(* Constants *)\n+(*****************************************************************************)\n+\n+let default_endpoint = \"https://telemetry.dev2.semgrep.dev\"",
+        "comment_created_at": "2024-02-22T23:06:36+00:00",
+        "comment_author": "emjin",
+        "comment_body": "https://linear.app/semgrep/issue/SAF-869/switch-default-endpoint-to-prod",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

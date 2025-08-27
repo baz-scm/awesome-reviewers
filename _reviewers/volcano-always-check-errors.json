@@ -1,0 +1,138 @@
+[
+  {
+    "discussion_id": "2245091907",
+    "pr_number": 4498,
+    "pr_file": "pkg/controllers/hypernode/utils/utils.go",
+    "created_at": "2025-07-31T11:15:55+00:00",
+    "commented_code": "current.Annotations[k] = v\n \t\t}\n \n+\t\t_, err = vcClient.TopologyV1alpha1().HyperNodes().Update(context.Background(), current, metav1.UpdateOptions{})",
+    "repo_full_name": "volcano-sh/volcano",
+    "discussion_comments": [
+      {
+        "comment_id": "2245091907",
+        "repo_full_name": "volcano-sh/volcano",
+        "pr_number": 4498,
+        "pr_file": "pkg/controllers/hypernode/utils/utils.go",
+        "discussion_id": "2245091907",
+        "commented_code": "@@ -63,6 +63,7 @@ func UpdateHyperNode(vcClient vcclientset.Interface, lister v1alpha1.HyperNodeLi\n \t\t\tcurrent.Annotations[k] = v\n \t\t}\n \n+\t\t_, err = vcClient.TopologyV1alpha1().HyperNodes().Update(context.Background(), current, metav1.UpdateOptions{})",
+        "comment_created_at": "2025-07-31T11:15:55+00:00",
+        "comment_author": "JesseStutler",
+        "comment_body": "We still need to judge err here to avoid override\r\n```\r\nif err != nil{\r\n  return err\r\n}\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2246733832",
+        "repo_full_name": "volcano-sh/volcano",
+        "pr_number": 4498,
+        "pr_file": "pkg/controllers/hypernode/utils/utils.go",
+        "discussion_id": "2245091907",
+        "commented_code": "@@ -63,6 +63,7 @@ func UpdateHyperNode(vcClient vcclientset.Interface, lister v1alpha1.HyperNodeLi\n \t\t\tcurrent.Annotations[k] = v\n \t\t}\n \n+\t\t_, err = vcClient.TopologyV1alpha1().HyperNodes().Update(context.Background(), current, metav1.UpdateOptions{})",
+        "comment_created_at": "2025-08-01T02:12:18+00:00",
+        "comment_author": "cyf-2002",
+        "comment_body": "Thanks. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2078788565",
+    "pr_number": 4152,
+    "pr_file": "pkg/scheduler/cache/cache.go",
+    "created_at": "2025-05-08T02:33:53+00:00",
+    "commented_code": "sc.BindTask()\n }\n \n+// executePreBind executes PreBind for one bindContext\n+func (sc *SchedulerCache) executePreBind(ctx context.Context, bindContext *BindContext) error {\n+\texecutedPreBinders := make([]PreBinder, 0, len(sc.preBinderRegistry.preBinders))\n+\n+\tsc.preBinderRegistry.mu.RLock()\n+\tdefer sc.preBinderRegistry.mu.RUnlock()\n+\n+\tfor _, preBinder := range sc.preBinderRegistry.preBinders {\n+\t\tif preBinder == nil {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tif err := preBinder.PreBind(ctx, bindContext); err != nil {\n+\t\t\t// If PreBind fails, rollback the executed PreBinders\n+\t\t\tfor i := len(executedPreBinders) - 1; i >= 0; i-- {\n+\t\t\t\tif executedPreBinders[i] != nil {\n+\t\t\t\t\texecutedPreBinders[i].PreBindRollBack(ctx, bindContext)\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\treturn err\n+\t\t}\n+\t\texecutedPreBinders = append(executedPreBinders, preBinder)\n+\t}\n+\n+\treturn nil\n+}\n+\n+// executePreBinds executes PreBind for a list of bindContexts\n+func (sc *SchedulerCache) executePreBinds(ctx context.Context, bindContexts []*BindContext) []*BindContext {\n+\tlogger := klog.FromContext(ctx)\n+\tsuccessfulBindContexts := make([]*BindContext, 0, len(bindContexts))\n+\n+\tfor _, bindContext := range bindContexts {\n+\t\tif err := sc.executePreBind(ctx, bindContext); err != nil {\n+\t\t\treason := fmt.Sprintf(\"execute prebind failed: %v\", err)\n+\t\t\tklog.Error(reason)\n+\t\t\tif updateErr := sc.taskUnschedulable(bindContext.TaskInfo, schedulingapi.PodReasonSchedulerError, reason, \"\"); updateErr != nil {\n+\t\t\t\tlogger.Error(updateErr, \"Failed to update pod status\", \"pod\", klog.KObj(bindContext.TaskInfo.Pod))\n+\t\t\t}\n+\t\t\tcontinue\n+\t\t}\n+\t\tsuccessfulBindContexts = append(successfulBindContexts, bindContext)\n+\t}\n+\n+\treturn successfulBindContexts\n+}\n+\n // BindTask do k8s binding with a goroutine\n func (sc *SchedulerCache) BindTask() {\n-\tklog.V(5).Infof(\"batch bind task count %d\", len(sc.bindCache))\n-\tvar tmpBindCache []*schedulingapi.TaskInfo = make([]*schedulingapi.TaskInfo, len(sc.bindCache))\n+\tklog.V(5).Infof(\"batch bind task count %d\", sc.batchNum)\n+\ttmpBindCache := make([]*BindContext, len(sc.bindCache))\n \tcopy(tmpBindCache, sc.bindCache)\n-\tgo func(tasks []*schedulingapi.TaskInfo) {\n-\t\tsuccessfulTasks := make([]*schedulingapi.TaskInfo, 0)\n-\t\tfor _, task := range tasks {\n-\t\t\tif err := sc.VolumeBinder.BindVolumes(task, task.PodVolumes); err != nil {\n-\t\t\t\tklog.Errorf(\"task %s/%s bind Volumes failed: %#v\", task.Namespace, task.Name, err)\n-\t\t\t\tsc.VolumeBinder.RevertVolumes(task, task.PodVolumes)\n-\t\t\t\tsc.resyncTask(task)\n-\t\t\t} else {\n-\t\t\t\tsuccessfulTasks = append(successfulTasks, task)\n-\t\t\t\tklog.V(5).Infof(\"task %s/%s bind Volumes done\", task.Namespace, task.Name)\n-\t\t\t}\n-\t\t}\n \n-\t\tbindTasks := make([]*schedulingapi.TaskInfo, len(successfulTasks))\n-\t\tcopy(bindTasks, successfulTasks)\n-\t\tsc.Bind(bindTasks)\n+\t// Currently, bindContexts only contain 1 element.\n+\tgo func(bindContexts []*BindContext) {\n+\t\tlogger := klog.Background()\n+\t\tctx := klog.NewContext(context.Background(), logger)\n+\t\tcancelCtx, cancel := context.WithCancel(ctx)\n+\t\tdefer cancel()\n+\n+\t\tsuccessfulPreBindContexts := sc.executePreBinds(cancelCtx, bindContexts)",
+    "repo_full_name": "volcano-sh/volcano",
+    "discussion_comments": [
+      {
+        "comment_id": "2078788565",
+        "repo_full_name": "volcano-sh/volcano",
+        "pr_number": 4152,
+        "pr_file": "pkg/scheduler/cache/cache.go",
+        "discussion_id": "2078788565",
+        "commented_code": "@@ -1284,29 +1204,73 @@ func (sc *SchedulerCache) processBindTask() {\n \tsc.BindTask()\n }\n \n+// executePreBind executes PreBind for one bindContext\n+func (sc *SchedulerCache) executePreBind(ctx context.Context, bindContext *BindContext) error {\n+\texecutedPreBinders := make([]PreBinder, 0, len(sc.preBinderRegistry.preBinders))\n+\n+\tsc.preBinderRegistry.mu.RLock()\n+\tdefer sc.preBinderRegistry.mu.RUnlock()\n+\n+\tfor _, preBinder := range sc.preBinderRegistry.preBinders {\n+\t\tif preBinder == nil {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tif err := preBinder.PreBind(ctx, bindContext); err != nil {\n+\t\t\t// If PreBind fails, rollback the executed PreBinders\n+\t\t\tfor i := len(executedPreBinders) - 1; i >= 0; i-- {\n+\t\t\t\tif executedPreBinders[i] != nil {\n+\t\t\t\t\texecutedPreBinders[i].PreBindRollBack(ctx, bindContext)\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\treturn err\n+\t\t}\n+\t\texecutedPreBinders = append(executedPreBinders, preBinder)\n+\t}\n+\n+\treturn nil\n+}\n+\n+// executePreBinds executes PreBind for a list of bindContexts\n+func (sc *SchedulerCache) executePreBinds(ctx context.Context, bindContexts []*BindContext) []*BindContext {\n+\tlogger := klog.FromContext(ctx)\n+\tsuccessfulBindContexts := make([]*BindContext, 0, len(bindContexts))\n+\n+\tfor _, bindContext := range bindContexts {\n+\t\tif err := sc.executePreBind(ctx, bindContext); err != nil {\n+\t\t\treason := fmt.Sprintf(\"execute prebind failed: %v\", err)\n+\t\t\tklog.Error(reason)\n+\t\t\tif updateErr := sc.taskUnschedulable(bindContext.TaskInfo, schedulingapi.PodReasonSchedulerError, reason, \"\"); updateErr != nil {\n+\t\t\t\tlogger.Error(updateErr, \"Failed to update pod status\", \"pod\", klog.KObj(bindContext.TaskInfo.Pod))\n+\t\t\t}\n+\t\t\tcontinue\n+\t\t}\n+\t\tsuccessfulBindContexts = append(successfulBindContexts, bindContext)\n+\t}\n+\n+\treturn successfulBindContexts\n+}\n+\n // BindTask do k8s binding with a goroutine\n func (sc *SchedulerCache) BindTask() {\n-\tklog.V(5).Infof(\"batch bind task count %d\", len(sc.bindCache))\n-\tvar tmpBindCache []*schedulingapi.TaskInfo = make([]*schedulingapi.TaskInfo, len(sc.bindCache))\n+\tklog.V(5).Infof(\"batch bind task count %d\", sc.batchNum)\n+\ttmpBindCache := make([]*BindContext, len(sc.bindCache))\n \tcopy(tmpBindCache, sc.bindCache)\n-\tgo func(tasks []*schedulingapi.TaskInfo) {\n-\t\tsuccessfulTasks := make([]*schedulingapi.TaskInfo, 0)\n-\t\tfor _, task := range tasks {\n-\t\t\tif err := sc.VolumeBinder.BindVolumes(task, task.PodVolumes); err != nil {\n-\t\t\t\tklog.Errorf(\"task %s/%s bind Volumes failed: %#v\", task.Namespace, task.Name, err)\n-\t\t\t\tsc.VolumeBinder.RevertVolumes(task, task.PodVolumes)\n-\t\t\t\tsc.resyncTask(task)\n-\t\t\t} else {\n-\t\t\t\tsuccessfulTasks = append(successfulTasks, task)\n-\t\t\t\tklog.V(5).Infof(\"task %s/%s bind Volumes done\", task.Namespace, task.Name)\n-\t\t\t}\n-\t\t}\n \n-\t\tbindTasks := make([]*schedulingapi.TaskInfo, len(successfulTasks))\n-\t\tcopy(bindTasks, successfulTasks)\n-\t\tsc.Bind(bindTasks)\n+\t// Currently, bindContexts only contain 1 element.\n+\tgo func(bindContexts []*BindContext) {\n+\t\tlogger := klog.Background()\n+\t\tctx := klog.NewContext(context.Background(), logger)\n+\t\tcancelCtx, cancel := context.WithCancel(ctx)\n+\t\tdefer cancel()\n+\n+\t\tsuccessfulPreBindContexts := sc.executePreBinds(cancelCtx, bindContexts)",
+        "comment_created_at": "2025-05-08T02:33:53+00:00",
+        "comment_author": "Monokaix",
+        "comment_body": "When `sc.executePreBinds` failed, `sc.Bind` will not be executed, and also `resyncTask` will not be executed, is this reasonable?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2084661172",
+        "repo_full_name": "volcano-sh/volcano",
+        "pr_number": 4152,
+        "pr_file": "pkg/scheduler/cache/cache.go",
+        "discussion_id": "2078788565",
+        "commented_code": "@@ -1284,29 +1204,73 @@ func (sc *SchedulerCache) processBindTask() {\n \tsc.BindTask()\n }\n \n+// executePreBind executes PreBind for one bindContext\n+func (sc *SchedulerCache) executePreBind(ctx context.Context, bindContext *BindContext) error {\n+\texecutedPreBinders := make([]PreBinder, 0, len(sc.preBinderRegistry.preBinders))\n+\n+\tsc.preBinderRegistry.mu.RLock()\n+\tdefer sc.preBinderRegistry.mu.RUnlock()\n+\n+\tfor _, preBinder := range sc.preBinderRegistry.preBinders {\n+\t\tif preBinder == nil {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tif err := preBinder.PreBind(ctx, bindContext); err != nil {\n+\t\t\t// If PreBind fails, rollback the executed PreBinders\n+\t\t\tfor i := len(executedPreBinders) - 1; i >= 0; i-- {\n+\t\t\t\tif executedPreBinders[i] != nil {\n+\t\t\t\t\texecutedPreBinders[i].PreBindRollBack(ctx, bindContext)\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\treturn err\n+\t\t}\n+\t\texecutedPreBinders = append(executedPreBinders, preBinder)\n+\t}\n+\n+\treturn nil\n+}\n+\n+// executePreBinds executes PreBind for a list of bindContexts\n+func (sc *SchedulerCache) executePreBinds(ctx context.Context, bindContexts []*BindContext) []*BindContext {\n+\tlogger := klog.FromContext(ctx)\n+\tsuccessfulBindContexts := make([]*BindContext, 0, len(bindContexts))\n+\n+\tfor _, bindContext := range bindContexts {\n+\t\tif err := sc.executePreBind(ctx, bindContext); err != nil {\n+\t\t\treason := fmt.Sprintf(\"execute prebind failed: %v\", err)\n+\t\t\tklog.Error(reason)\n+\t\t\tif updateErr := sc.taskUnschedulable(bindContext.TaskInfo, schedulingapi.PodReasonSchedulerError, reason, \"\"); updateErr != nil {\n+\t\t\t\tlogger.Error(updateErr, \"Failed to update pod status\", \"pod\", klog.KObj(bindContext.TaskInfo.Pod))\n+\t\t\t}\n+\t\t\tcontinue\n+\t\t}\n+\t\tsuccessfulBindContexts = append(successfulBindContexts, bindContext)\n+\t}\n+\n+\treturn successfulBindContexts\n+}\n+\n // BindTask do k8s binding with a goroutine\n func (sc *SchedulerCache) BindTask() {\n-\tklog.V(5).Infof(\"batch bind task count %d\", len(sc.bindCache))\n-\tvar tmpBindCache []*schedulingapi.TaskInfo = make([]*schedulingapi.TaskInfo, len(sc.bindCache))\n+\tklog.V(5).Infof(\"batch bind task count %d\", sc.batchNum)\n+\ttmpBindCache := make([]*BindContext, len(sc.bindCache))\n \tcopy(tmpBindCache, sc.bindCache)\n-\tgo func(tasks []*schedulingapi.TaskInfo) {\n-\t\tsuccessfulTasks := make([]*schedulingapi.TaskInfo, 0)\n-\t\tfor _, task := range tasks {\n-\t\t\tif err := sc.VolumeBinder.BindVolumes(task, task.PodVolumes); err != nil {\n-\t\t\t\tklog.Errorf(\"task %s/%s bind Volumes failed: %#v\", task.Namespace, task.Name, err)\n-\t\t\t\tsc.VolumeBinder.RevertVolumes(task, task.PodVolumes)\n-\t\t\t\tsc.resyncTask(task)\n-\t\t\t} else {\n-\t\t\t\tsuccessfulTasks = append(successfulTasks, task)\n-\t\t\t\tklog.V(5).Infof(\"task %s/%s bind Volumes done\", task.Namespace, task.Name)\n-\t\t\t}\n-\t\t}\n \n-\t\tbindTasks := make([]*schedulingapi.TaskInfo, len(successfulTasks))\n-\t\tcopy(bindTasks, successfulTasks)\n-\t\tsc.Bind(bindTasks)\n+\t// Currently, bindContexts only contain 1 element.\n+\tgo func(bindContexts []*BindContext) {\n+\t\tlogger := klog.Background()\n+\t\tctx := klog.NewContext(context.Background(), logger)\n+\t\tcancelCtx, cancel := context.WithCancel(ctx)\n+\t\tdefer cancel()\n+\n+\t\tsuccessfulPreBindContexts := sc.executePreBinds(cancelCtx, bindContexts)",
+        "comment_created_at": "2025-05-12T13:19:40+00:00",
+        "comment_author": "JesseStutler",
+        "comment_body": "OK I have added resyncTask inside the executePreBinds if PreBind of the task failed",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1998326171",
+    "pr_number": 3894,
+    "pr_file": "pkg/scheduler/actions/allocate/allocate.go",
+    "created_at": "2025-03-17T09:36:44+00:00",
+    "commented_code": "break\n \t\t\t}\n \t\t}\n-\n+\t\tif softMode {\n+\t\t\ttask.JobAllocatedHyperNode = jobAllocatedNewHyperNode\n+\t\t}\n \t\tbestNode, highestScore := alloc.prioritizeNodes(ssn, task, predicateNodes)\n \t\tif bestNode == nil {\n \t\t\tcontinue\n \t\t}\n-\n-\t\talloc.sumNodeScoresInHyperNode(string(job.UID), hyperNode, highestScore)\n+\t\tif hyperNode != \"\" {\n+\t\t\t// normal vc job without networkTopology has no hyperNode, skip node scores accumulation.\n+\t\t\talloc.sumNodeScoresInHyperNode(string(job.UID), hyperNode, highestScore)\n+\t\t}\n+\t\tif softMode {\n+\t\t\thyperNode = util.FindHyperNodeForNode(bestNode.Name, ssn.RealNodesList, ssn.HyperNodesTiers, ssn.HyperNodesSetByTier)\n+\t\t\tif hyperNode != \"\" {\n+\t\t\t\tif jobAllocatedNewHyperNode == \"\" {\n+\t\t\t\t\tjobAllocatedNewHyperNode = hyperNode\n+\t\t\t\t} else {\n+\t\t\t\t\tjobAllocatedNewHyperNode = ssn.HyperNodes.GetLCAHyperNode(hyperNode, jobAllocatedNewHyperNode)\n+\t\t\t\t}\n+\t\t\t}\n+\t\t}",
+    "repo_full_name": "volcano-sh/volcano",
+    "discussion_comments": [
+      {
+        "comment_id": "1998326171",
+        "repo_full_name": "volcano-sh/volcano",
+        "pr_number": 3894,
+        "pr_file": "pkg/scheduler/actions/allocate/allocate.go",
+        "discussion_id": "1998326171",
+        "commented_code": "@@ -413,13 +403,27 @@ func (alloc *Action) allocateResourcesForTasks(tasks *util.PriorityQueue, job *a\n \t\t\t\tbreak\n \t\t\t}\n \t\t}\n-\n+\t\tif softMode {\n+\t\t\ttask.JobAllocatedHyperNode = jobAllocatedNewHyperNode\n+\t\t}\n \t\tbestNode, highestScore := alloc.prioritizeNodes(ssn, task, predicateNodes)\n \t\tif bestNode == nil {\n \t\t\tcontinue\n \t\t}\n-\n-\t\talloc.sumNodeScoresInHyperNode(string(job.UID), hyperNode, highestScore)\n+\t\tif hyperNode != \"\" {\n+\t\t\t// normal vc job without networkTopology has no hyperNode, skip node scores accumulation.\n+\t\t\talloc.sumNodeScoresInHyperNode(string(job.UID), hyperNode, highestScore)\n+\t\t}\n+\t\tif softMode {\n+\t\t\thyperNode = util.FindHyperNodeForNode(bestNode.Name, ssn.RealNodesList, ssn.HyperNodesTiers, ssn.HyperNodesSetByTier)\n+\t\t\tif hyperNode != \"\" {\n+\t\t\t\tif jobAllocatedNewHyperNode == \"\" {\n+\t\t\t\t\tjobAllocatedNewHyperNode = hyperNode\n+\t\t\t\t} else {\n+\t\t\t\t\tjobAllocatedNewHyperNode = ssn.HyperNodes.GetLCAHyperNode(hyperNode, jobAllocatedNewHyperNode)\n+\t\t\t\t}\n+\t\t\t}\n+\t\t}",
+        "comment_created_at": "2025-03-17T09:36:44+00:00",
+        "comment_author": "JesseStutler",
+        "comment_body": "Why is this code placed before `allocateResourcesForTask`? It should at least be inside. You need to determine that the node allocation was successful before updating the `jobAllocatedNewHyperNode`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2050818263",
+        "repo_full_name": "volcano-sh/volcano",
+        "pr_number": 3894,
+        "pr_file": "pkg/scheduler/actions/allocate/allocate.go",
+        "discussion_id": "1998326171",
+        "commented_code": "@@ -413,13 +403,27 @@ func (alloc *Action) allocateResourcesForTasks(tasks *util.PriorityQueue, job *a\n \t\t\t\tbreak\n \t\t\t}\n \t\t}\n-\n+\t\tif softMode {\n+\t\t\ttask.JobAllocatedHyperNode = jobAllocatedNewHyperNode\n+\t\t}\n \t\tbestNode, highestScore := alloc.prioritizeNodes(ssn, task, predicateNodes)\n \t\tif bestNode == nil {\n \t\t\tcontinue\n \t\t}\n-\n-\t\talloc.sumNodeScoresInHyperNode(string(job.UID), hyperNode, highestScore)\n+\t\tif hyperNode != \"\" {\n+\t\t\t// normal vc job without networkTopology has no hyperNode, skip node scores accumulation.\n+\t\t\talloc.sumNodeScoresInHyperNode(string(job.UID), hyperNode, highestScore)\n+\t\t}\n+\t\tif softMode {\n+\t\t\thyperNode = util.FindHyperNodeForNode(bestNode.Name, ssn.RealNodesList, ssn.HyperNodesTiers, ssn.HyperNodesSetByTier)\n+\t\t\tif hyperNode != \"\" {\n+\t\t\t\tif jobAllocatedNewHyperNode == \"\" {\n+\t\t\t\t\tjobAllocatedNewHyperNode = hyperNode\n+\t\t\t\t} else {\n+\t\t\t\t\tjobAllocatedNewHyperNode = ssn.HyperNodes.GetLCAHyperNode(hyperNode, jobAllocatedNewHyperNode)\n+\t\t\t\t}\n+\t\t\t}\n+\t\t}",
+        "comment_created_at": "2025-04-18T16:09:05+00:00",
+        "comment_author": "ecosysbin",
+        "comment_body": "You are right, But I think return a error to determine that the node allocation was successful is a better way",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2053964763",
+    "pr_number": 3894,
+    "pr_file": "pkg/scheduler/actions/allocate/allocate.go",
+    "created_at": "2025-04-22T11:59:33+00:00",
+    "commented_code": "return bestNode, higestScore\n }\n \n-func (alloc *Action) allocateResourcesForTask(stmt *framework.Statement, task *api.TaskInfo, node *api.NodeInfo, job *api.JobInfo) {\n+func (alloc *Action) allocateResourcesForTask(stmt *framework.Statement, task *api.TaskInfo, node *api.NodeInfo, job *api.JobInfo) (err error) {",
+    "repo_full_name": "volcano-sh/volcano",
+    "discussion_comments": [
+      {
+        "comment_id": "2053964763",
+        "repo_full_name": "volcano-sh/volcano",
+        "pr_number": 3894,
+        "pr_file": "pkg/scheduler/actions/allocate/allocate.go",
+        "discussion_id": "2053964763",
+        "commented_code": "@@ -504,11 +506,11 @@ func (alloc *Action) prioritizeNodes(ssn *framework.Session, task *api.TaskInfo,\n \treturn bestNode, higestScore\n }\n \n-func (alloc *Action) allocateResourcesForTask(stmt *framework.Statement, task *api.TaskInfo, node *api.NodeInfo, job *api.JobInfo) {\n+func (alloc *Action) allocateResourcesForTask(stmt *framework.Statement, task *api.TaskInfo, node *api.NodeInfo, job *api.JobInfo) (err error) {",
+        "comment_created_at": "2025-04-22T11:59:33+00:00",
+        "comment_author": "JesseStutler",
+        "comment_body": "Is there a need to return err here? I don't see any handling of `err != nil` in the outer func",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2055124070",
+        "repo_full_name": "volcano-sh/volcano",
+        "pr_number": 3894,
+        "pr_file": "pkg/scheduler/actions/allocate/allocate.go",
+        "discussion_id": "2053964763",
+        "commented_code": "@@ -504,11 +506,11 @@ func (alloc *Action) prioritizeNodes(ssn *framework.Session, task *api.TaskInfo,\n \treturn bestNode, higestScore\n }\n \n-func (alloc *Action) allocateResourcesForTask(stmt *framework.Statement, task *api.TaskInfo, node *api.NodeInfo, job *api.JobInfo) {\n+func (alloc *Action) allocateResourcesForTask(stmt *framework.Statement, task *api.TaskInfo, node *api.NodeInfo, job *api.JobInfo) (err error) {",
+        "comment_created_at": "2025-04-23T01:46:06+00:00",
+        "comment_author": "ecosysbin",
+        "comment_body": "In function allocateResourcesForTasks, need to according err to update parameter jobNewAllocatedHyperNode.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

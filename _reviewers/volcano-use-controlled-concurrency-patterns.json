@@ -1,0 +1,70 @@
+[
+  {
+    "discussion_id": "2077148434",
+    "pr_number": 4152,
+    "pr_file": "pkg/scheduler/plugins/predicates/predicates.go",
+    "created_at": "2025-05-07T08:52:39+00:00",
+    "commented_code": "ptsArgs := &config.PodTopologySpreadArgs{DefaultingType: config.SystemDefaulting}\n \tplugin, _ = podtopologyspread.New(context.TODO(), ptsArgs, handle, features)\n \tpodTopologySpreadFilter := plugin.(*podtopologyspread.PodTopologySpread)\n+\t// 9. VolumeBinding\n+\tvar volumeBindingPlugin *vbcap.VolumeBinding\n+\tvbArgs := defaultVolumeBindingArgs()\n+\tif predicate.volumeBindingEnable {\n+\t\tsetUpVolumeBindingArgs(vbArgs, pp.pluginArguments)\n+\n+\t\tvar err error\n+\t\tplugin, err = vbcap.New(context.TODO(), vbArgs.VolumeBindingArgs, handle, features)",
+    "repo_full_name": "volcano-sh/volcano",
+    "discussion_comments": [
+      {
+        "comment_id": "2077148434",
+        "repo_full_name": "volcano-sh/volcano",
+        "pr_number": 4152,
+        "pr_file": "pkg/scheduler/plugins/predicates/predicates.go",
+        "discussion_id": "2077148434",
+        "commented_code": "@@ -328,11 +351,27 @@ func (pp *predicatesPlugin) OnSessionOpen(ssn *framework.Session) {\n \tptsArgs := &config.PodTopologySpreadArgs{DefaultingType: config.SystemDefaulting}\n \tplugin, _ = podtopologyspread.New(context.TODO(), ptsArgs, handle, features)\n \tpodTopologySpreadFilter := plugin.(*podtopologyspread.PodTopologySpread)\n+\t// 9. VolumeBinding\n+\tvar volumeBindingPlugin *vbcap.VolumeBinding\n+\tvbArgs := defaultVolumeBindingArgs()\n+\tif predicate.volumeBindingEnable {\n+\t\tsetUpVolumeBindingArgs(vbArgs, pp.pluginArguments)\n+\n+\t\tvar err error\n+\t\tplugin, err = vbcap.New(context.TODO(), vbArgs.VolumeBindingArgs, handle, features)",
+        "comment_created_at": "2025-05-07T08:52:39+00:00",
+        "comment_author": "Monokaix",
+        "comment_body": "Should initiate once to avoid memory leak.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2084738721",
+        "repo_full_name": "volcano-sh/volcano",
+        "pr_number": 4152,
+        "pr_file": "pkg/scheduler/plugins/predicates/predicates.go",
+        "discussion_id": "2077148434",
+        "commented_code": "@@ -328,11 +351,27 @@ func (pp *predicatesPlugin) OnSessionOpen(ssn *framework.Session) {\n \tptsArgs := &config.PodTopologySpreadArgs{DefaultingType: config.SystemDefaulting}\n \tplugin, _ = podtopologyspread.New(context.TODO(), ptsArgs, handle, features)\n \tpodTopologySpreadFilter := plugin.(*podtopologyspread.PodTopologySpread)\n+\t// 9. VolumeBinding\n+\tvar volumeBindingPlugin *vbcap.VolumeBinding\n+\tvbArgs := defaultVolumeBindingArgs()\n+\tif predicate.volumeBindingEnable {\n+\t\tsetUpVolumeBindingArgs(vbArgs, pp.pluginArguments)\n+\n+\t\tvar err error\n+\t\tplugin, err = vbcap.New(context.TODO(), vbArgs.VolumeBindingArgs, handle, features)",
+        "comment_created_at": "2025-05-12T13:56:32+00:00",
+        "comment_author": "JesseStutler",
+        "comment_body": "OK, I have refactored it to use sync.Once",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1899054795",
+    "pr_number": 3921,
+    "pr_file": "pkg/scheduler/cache/cache.go",
+    "created_at": "2024-12-29T03:23:24+00:00",
+    "commented_code": "}\n \t// Update podCondition for tasks Allocated and Pending before job discarded\n \tfor _, status := range []schedulingapi.TaskStatus{schedulingapi.Allocated, schedulingapi.Pending, schedulingapi.Pipelined} {\n+\t\tsemaphore := make(chan struct{}, 16)\n+\t\tvar wg sync.WaitGroup\n \t\tfor _, taskInfo := range job.TaskStatusIndex[status] {\n \t\t\t// The pod of a scheduling gated task is given\n \t\t\t// the ScheduleGated condition by the api-server. Do not change it.\n \t\t\tif taskInfo.SchGated {\n \t\t\t\tcontinue\n \t\t\t}\n \n-\t\t\treason, msg, nominatedNodeName := job.TaskSchedulingReason(taskInfo.UID)\n-\t\t\tif len(msg) == 0 {\n-\t\t\t\tmsg = baseErrorMessage\n-\t\t\t}\n-\t\t\tif err := sc.taskUnschedulable(taskInfo, reason, msg, nominatedNodeName); err != nil {\n-\t\t\t\tklog.ErrorS(err, \"Failed to update unschedulable task status\", \"task\", klog.KRef(taskInfo.Namespace, taskInfo.Name),\n-\t\t\t\t\t\"reason\", reason, \"message\", msg)\n-\t\t\t}\n+\t\t\twg.Add(1)\n+\t\t\tsemaphore <- struct{}{}",
+    "repo_full_name": "volcano-sh/volcano",
+    "discussion_comments": [
+      {
+        "comment_id": "1899054795",
+        "repo_full_name": "volcano-sh/volcano",
+        "pr_number": 3921,
+        "pr_file": "pkg/scheduler/cache/cache.go",
+        "discussion_id": "1899054795",
+        "commented_code": "@@ -1486,22 +1486,35 @@ func (sc *SchedulerCache) RecordJobStatusEvent(job *schedulingapi.JobInfo, updat\n \t}\n \t// Update podCondition for tasks Allocated and Pending before job discarded\n \tfor _, status := range []schedulingapi.TaskStatus{schedulingapi.Allocated, schedulingapi.Pending, schedulingapi.Pipelined} {\n+\t\tsemaphore := make(chan struct{}, 16)\n+\t\tvar wg sync.WaitGroup\n \t\tfor _, taskInfo := range job.TaskStatusIndex[status] {\n \t\t\t// The pod of a scheduling gated task is given\n \t\t\t// the ScheduleGated condition by the api-server. Do not change it.\n \t\t\tif taskInfo.SchGated {\n \t\t\t\tcontinue\n \t\t\t}\n \n-\t\t\treason, msg, nominatedNodeName := job.TaskSchedulingReason(taskInfo.UID)\n-\t\t\tif len(msg) == 0 {\n-\t\t\t\tmsg = baseErrorMessage\n-\t\t\t}\n-\t\t\tif err := sc.taskUnschedulable(taskInfo, reason, msg, nominatedNodeName); err != nil {\n-\t\t\t\tklog.ErrorS(err, \"Failed to update unschedulable task status\", \"task\", klog.KRef(taskInfo.Namespace, taskInfo.Name),\n-\t\t\t\t\t\"reason\", reason, \"message\", msg)\n-\t\t\t}\n+\t\t\twg.Add(1)\n+\t\t\tsemaphore <- struct{}{}",
+        "comment_created_at": "2024-12-29T03:23:24+00:00",
+        "comment_author": "lowang-bh",
+        "comment_body": "Maybe it is more better using goroutines pool to update those tasks concurent.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1899347371",
+        "repo_full_name": "volcano-sh/volcano",
+        "pr_number": 3921,
+        "pr_file": "pkg/scheduler/cache/cache.go",
+        "discussion_id": "1899054795",
+        "commented_code": "@@ -1486,22 +1486,35 @@ func (sc *SchedulerCache) RecordJobStatusEvent(job *schedulingapi.JobInfo, updat\n \t}\n \t// Update podCondition for tasks Allocated and Pending before job discarded\n \tfor _, status := range []schedulingapi.TaskStatus{schedulingapi.Allocated, schedulingapi.Pending, schedulingapi.Pipelined} {\n+\t\tsemaphore := make(chan struct{}, 16)\n+\t\tvar wg sync.WaitGroup\n \t\tfor _, taskInfo := range job.TaskStatusIndex[status] {\n \t\t\t// The pod of a scheduling gated task is given\n \t\t\t// the ScheduleGated condition by the api-server. Do not change it.\n \t\t\tif taskInfo.SchGated {\n \t\t\t\tcontinue\n \t\t\t}\n \n-\t\t\treason, msg, nominatedNodeName := job.TaskSchedulingReason(taskInfo.UID)\n-\t\t\tif len(msg) == 0 {\n-\t\t\t\tmsg = baseErrorMessage\n-\t\t\t}\n-\t\t\tif err := sc.taskUnschedulable(taskInfo, reason, msg, nominatedNodeName); err != nil {\n-\t\t\t\tklog.ErrorS(err, \"Failed to update unschedulable task status\", \"task\", klog.KRef(taskInfo.Namespace, taskInfo.Name),\n-\t\t\t\t\t\"reason\", reason, \"message\", msg)\n-\t\t\t}\n+\t\t\twg.Add(1)\n+\t\t\tsemaphore <- struct{}{}",
+        "comment_created_at": "2024-12-30T07:52:28+00:00",
+        "comment_author": "lishangyuzi",
+        "comment_body": "Okay, I've already changed this using goroutines pool.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

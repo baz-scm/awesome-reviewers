@@ -21,7 +21,7 @@ For regex patterns, escape special characters in user input before using it in r
 const regex = new RegExp(`{{${userKey}}}`);
 
 // Safe - escape special characters to treat input as literal text
-const regex = new RegExp(`{{\\s*${userKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*}}`, 'g');
+const regex = new RegExp(`{{\s*${userKey.replace(/[.*+?^${}()|[\]\\]/g, '\$&')}\s*}}`, 'g');
 ```
 
 Consider the security implications of any user-controlled data and apply appropriate sanitization based on the context where it will be used.

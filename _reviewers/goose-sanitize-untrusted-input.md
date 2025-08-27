@@ -16,6 +16,7 @@ For HTML content, avoid directly rendering untrusted data. Instead of passing ra
 
 For regex patterns, escape special characters in user input before using it in regex construction:
 
+{% raw %}
 ```javascript
 // Vulnerable - user input could inject regex patterns
 const regex = new RegExp(`{{${userKey}}}`);
@@ -23,5 +24,6 @@ const regex = new RegExp(`{{${userKey}}}`);
 // Safe - escape special characters to treat input as literal text
 const regex = new RegExp(`{{\s*${userKey.replace(/[.*+?^${}()|[\]\\]/g, '\$&')}\s*}}`, 'g');
 ```
+{% endraw %}
 
 Consider the security implications of any user-controlled data and apply appropriate sanitization based on the context where it will be used.

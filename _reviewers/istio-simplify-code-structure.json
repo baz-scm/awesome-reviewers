@@ -1,0 +1,260 @@
+[
+  {
+    "discussion_id": "2154388388",
+    "pr_number": 56441,
+    "pr_file": "istioctl/pkg/writer/pilot/status.go",
+    "created_at": "2025-06-18T11:42:59+00:00",
+    "commented_code": "\"istio.io/istio/istioctl/pkg/multixds\"\n \t\"istio.io/istio/pilot/pkg/model\"\n \txdsresource \"istio.io/istio/pilot/pkg/xds/v3\"\n-\t\"istio.io/istio/pkg/log\"\n )\n \n // XdsStatusWriter enables printing of sync status using multiple xdsapi.DiscoveryResponse Istiod responses\n type XdsStatusWriter struct {\n \tWriter                 io.Writer\n \tNamespace              string\n \tInternalDebugAllIstiod bool\n+\tOutputFormat           string // Output format: \"table\" or \"json\"\n+\tVerbosity              int    // Verbosity level: 0=default, 1=max\n }\n \n+// xdsWriterStatus represents the status of a single proxy's XDS configuration\n type xdsWriterStatus struct {\n-\tproxyID               string\n-\tclusterID             string\n-\tistiodID              string\n-\tistiodVersion         string\n-\tclusterStatus         string\n-\tlistenerStatus        string\n-\trouteStatus           string\n-\tendpointStatus        string\n-\textensionconfigStatus string\n+\tproxyID       string\n+\tclusterID     string\n+\tistiodID      string\n+\tistiodVersion string\n+\ttypeStatus    map[string]string // typeURL -> status\n }\n \n const ignoredStatus = \"IGNORED\"\n \n // PrintAll takes a slice of Istiod syncz responses and outputs them using a tabwriter\n func (s *XdsStatusWriter) PrintAll(statuses map[string]*discovery.DiscoveryResponse) error {\n-\tw, fullStatus, err := s.setupStatusPrint(statuses)\n+\tif s.Verbosity > 0 {\n+\t\treturn s.printAllVerbose(statuses)\n+\t}\n+\tw, fullStatus, allTypes, err := s.setupStatusPrint(statuses)\n \tif err != nil {\n-\t\treturn err\n+\t\treturn fmt.Errorf(\"failed to setup status print: %w\", err)\n+\t}\n+\n+\t// Print header dynamically with shortened type names\n+\theaders := []string{\"NAME\", \"CLUSTER\"}\n+\tfor _, t := range allTypes {\n+\t\theaders = append(headers, xdsresource.GetShortType(t))\n \t}\n+\theaders = append(headers, \"ISTIOD\", \"VERSION\")\n+\tif _, err := fmt.Fprintln(w, joinWithTabs(headers)); err != nil {\n+\t\treturn fmt.Errorf(\"failed to write header: %w\", err)\n+\t}\n+\n+\t// Print each proxy's status\n \tfor _, status := range fullStatus {\n-\t\tif err := xdsStatusPrintln(w, status); err != nil {\n-\t\t\treturn err\n+\t\tif err := xdsStatusPrintlnDynamic(w, status, allTypes); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to print status for proxy %s: %w\", status.proxyID, err)\n \t\t}\n \t}\n+\n \tif w != nil {\n-\t\treturn w.Flush()\n+\t\tif err := w.Flush(); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to flush tabwriter: %w\", err)\n+\t\t}\n \t}\n \treturn nil\n }\n \n-func (s *XdsStatusWriter) setupStatusPrint(drs map[string]*discovery.DiscoveryResponse) (*tabwriter.Writer, []*xdsWriterStatus, error) {\n-\t// Gather the statuses before printing so they may be sorted\n+// printAllVerbose prints all known xDS types for all proxies, even if not present in the data.\n+func (s *XdsStatusWriter) printAllVerbose(statuses map[string]*discovery.DiscoveryResponse) error {\n+\t// Collect all types ever seen, plus all known xDS types (including CRDs, etc.)\n+\tw, fullStatus, allTypes, err := s.setupStatusPrint(statuses)\n+\tif err != nil {\n+\t\treturn fmt.Errorf(\"failed to setup status print: %w\", err)\n+\t}\n+\n+\t// Add all known xDS types (from pilotxds.TypeURLs)\n+\tknownTypes := getAllKnownXdsTypes()\n+\ttypeSet := map[string]struct{}{}\n+\tfor _, t := range allTypes {\n+\t\ttypeSet[t] = struct{}{}\n+\t}\n+\tfor _, t := range knownTypes {\n+\t\ttypeSet[t] = struct{}{}\n+\t}\n+\t// Rebuild allTypes with all known types, sorted\n+\tallTypesVerbose := make([]string, 0, len(typeSet))\n+\tfor t := range typeSet {\n+\t\tallTypesVerbose = append(allTypesVerbose, t)\n+\t}\n+\tsort.Strings(allTypesVerbose)\n+\n+\t// Print header\n+\theaders := []string{\"NAME\", \"CLUSTER\"}\n+\tfor _, t := range allTypesVerbose {\n+\t\theaders = append(headers, xdsresource.GetShortType(t))\n+\t}\n+\theaders = append(headers, \"ISTIOD\", \"VERSION\")\n+\tif _, err := fmt.Fprintln(w, joinWithTabs(headers)); err != nil {\n+\t\treturn fmt.Errorf(\"failed to write header: %w\", err)\n+\t}\n+\n+\t// Print each proxy's status\n+\tfor _, status := range fullStatus {\n+\t\tif err := xdsStatusPrintlnDynamic(w, status, allTypesVerbose); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to print status for proxy %s: %w\", status.proxyID, err)\n+\t\t}\n+\t}\n+\n+\tif w != nil {\n+\t\tif err := w.Flush(); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to flush tabwriter: %w\", err)\n+\t\t}\n+\t}\n+\treturn nil\n+}\n+\n+// getAllKnownXdsTypes returns a list of all known xDS type URLs, including core and extension types.\n+func getAllKnownXdsTypes() []string {\n+\t// Core types\n+\ttypes := []string{\n+\t\txdsresource.ClusterType,\n+\t\txdsresource.ListenerType,\n+\t\txdsresource.EndpointType,\n+\t\txdsresource.RouteType,\n+\t\txdsresource.ExtensionConfigurationType,\n+\t\t// Add more known types here as needed\n+\t}\n+\t// In the future, this could be extended to include CRDs or dynamically discovered types\n+\treturn types\n+}\n+\n+// joinWithTabs joins a string slice with tabs\n+func joinWithTabs(fields []string) string {",
+    "repo_full_name": "istio/istio",
+    "discussion_comments": [
+      {
+        "comment_id": "2154388388",
+        "repo_full_name": "istio/istio",
+        "pr_number": 56441,
+        "pr_file": "istioctl/pkg/writer/pilot/status.go",
+        "discussion_id": "2154388388",
+        "commented_code": "@@ -29,110 +29,256 @@ import (\n \t\"istio.io/istio/istioctl/pkg/multixds\"\n \t\"istio.io/istio/pilot/pkg/model\"\n \txdsresource \"istio.io/istio/pilot/pkg/xds/v3\"\n-\t\"istio.io/istio/pkg/log\"\n )\n \n // XdsStatusWriter enables printing of sync status using multiple xdsapi.DiscoveryResponse Istiod responses\n type XdsStatusWriter struct {\n \tWriter                 io.Writer\n \tNamespace              string\n \tInternalDebugAllIstiod bool\n+\tOutputFormat           string // Output format: \"table\" or \"json\"\n+\tVerbosity              int    // Verbosity level: 0=default, 1=max\n }\n \n+// xdsWriterStatus represents the status of a single proxy's XDS configuration\n type xdsWriterStatus struct {\n-\tproxyID               string\n-\tclusterID             string\n-\tistiodID              string\n-\tistiodVersion         string\n-\tclusterStatus         string\n-\tlistenerStatus        string\n-\trouteStatus           string\n-\tendpointStatus        string\n-\textensionconfigStatus string\n+\tproxyID       string\n+\tclusterID     string\n+\tistiodID      string\n+\tistiodVersion string\n+\ttypeStatus    map[string]string // typeURL -> status\n }\n \n const ignoredStatus = \"IGNORED\"\n \n // PrintAll takes a slice of Istiod syncz responses and outputs them using a tabwriter\n func (s *XdsStatusWriter) PrintAll(statuses map[string]*discovery.DiscoveryResponse) error {\n-\tw, fullStatus, err := s.setupStatusPrint(statuses)\n+\tif s.Verbosity > 0 {\n+\t\treturn s.printAllVerbose(statuses)\n+\t}\n+\tw, fullStatus, allTypes, err := s.setupStatusPrint(statuses)\n \tif err != nil {\n-\t\treturn err\n+\t\treturn fmt.Errorf(\"failed to setup status print: %w\", err)\n+\t}\n+\n+\t// Print header dynamically with shortened type names\n+\theaders := []string{\"NAME\", \"CLUSTER\"}\n+\tfor _, t := range allTypes {\n+\t\theaders = append(headers, xdsresource.GetShortType(t))\n \t}\n+\theaders = append(headers, \"ISTIOD\", \"VERSION\")\n+\tif _, err := fmt.Fprintln(w, joinWithTabs(headers)); err != nil {\n+\t\treturn fmt.Errorf(\"failed to write header: %w\", err)\n+\t}\n+\n+\t// Print each proxy's status\n \tfor _, status := range fullStatus {\n-\t\tif err := xdsStatusPrintln(w, status); err != nil {\n-\t\t\treturn err\n+\t\tif err := xdsStatusPrintlnDynamic(w, status, allTypes); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to print status for proxy %s: %w\", status.proxyID, err)\n \t\t}\n \t}\n+\n \tif w != nil {\n-\t\treturn w.Flush()\n+\t\tif err := w.Flush(); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to flush tabwriter: %w\", err)\n+\t\t}\n \t}\n \treturn nil\n }\n \n-func (s *XdsStatusWriter) setupStatusPrint(drs map[string]*discovery.DiscoveryResponse) (*tabwriter.Writer, []*xdsWriterStatus, error) {\n-\t// Gather the statuses before printing so they may be sorted\n+// printAllVerbose prints all known xDS types for all proxies, even if not present in the data.\n+func (s *XdsStatusWriter) printAllVerbose(statuses map[string]*discovery.DiscoveryResponse) error {\n+\t// Collect all types ever seen, plus all known xDS types (including CRDs, etc.)\n+\tw, fullStatus, allTypes, err := s.setupStatusPrint(statuses)\n+\tif err != nil {\n+\t\treturn fmt.Errorf(\"failed to setup status print: %w\", err)\n+\t}\n+\n+\t// Add all known xDS types (from pilotxds.TypeURLs)\n+\tknownTypes := getAllKnownXdsTypes()\n+\ttypeSet := map[string]struct{}{}\n+\tfor _, t := range allTypes {\n+\t\ttypeSet[t] = struct{}{}\n+\t}\n+\tfor _, t := range knownTypes {\n+\t\ttypeSet[t] = struct{}{}\n+\t}\n+\t// Rebuild allTypes with all known types, sorted\n+\tallTypesVerbose := make([]string, 0, len(typeSet))\n+\tfor t := range typeSet {\n+\t\tallTypesVerbose = append(allTypesVerbose, t)\n+\t}\n+\tsort.Strings(allTypesVerbose)\n+\n+\t// Print header\n+\theaders := []string{\"NAME\", \"CLUSTER\"}\n+\tfor _, t := range allTypesVerbose {\n+\t\theaders = append(headers, xdsresource.GetShortType(t))\n+\t}\n+\theaders = append(headers, \"ISTIOD\", \"VERSION\")\n+\tif _, err := fmt.Fprintln(w, joinWithTabs(headers)); err != nil {\n+\t\treturn fmt.Errorf(\"failed to write header: %w\", err)\n+\t}\n+\n+\t// Print each proxy's status\n+\tfor _, status := range fullStatus {\n+\t\tif err := xdsStatusPrintlnDynamic(w, status, allTypesVerbose); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to print status for proxy %s: %w\", status.proxyID, err)\n+\t\t}\n+\t}\n+\n+\tif w != nil {\n+\t\tif err := w.Flush(); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to flush tabwriter: %w\", err)\n+\t\t}\n+\t}\n+\treturn nil\n+}\n+\n+// getAllKnownXdsTypes returns a list of all known xDS type URLs, including core and extension types.\n+func getAllKnownXdsTypes() []string {\n+\t// Core types\n+\ttypes := []string{\n+\t\txdsresource.ClusterType,\n+\t\txdsresource.ListenerType,\n+\t\txdsresource.EndpointType,\n+\t\txdsresource.RouteType,\n+\t\txdsresource.ExtensionConfigurationType,\n+\t\t// Add more known types here as needed\n+\t}\n+\t// In the future, this could be extended to include CRDs or dynamically discovered types\n+\treturn types\n+}\n+\n+// joinWithTabs joins a string slice with tabs\n+func joinWithTabs(fields []string) string {",
+        "comment_created_at": "2025-06-18T11:42:59+00:00",
+        "comment_author": "MorrisLaw",
+        "comment_body": "What is the functional or performance benefit of implementing this manually? I think `strings.Join(fields, \"\\t\")` already does what you want.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2157622220",
+        "repo_full_name": "istio/istio",
+        "pr_number": 56441,
+        "pr_file": "istioctl/pkg/writer/pilot/status.go",
+        "discussion_id": "2154388388",
+        "commented_code": "@@ -29,110 +29,256 @@ import (\n \t\"istio.io/istio/istioctl/pkg/multixds\"\n \t\"istio.io/istio/pilot/pkg/model\"\n \txdsresource \"istio.io/istio/pilot/pkg/xds/v3\"\n-\t\"istio.io/istio/pkg/log\"\n )\n \n // XdsStatusWriter enables printing of sync status using multiple xdsapi.DiscoveryResponse Istiod responses\n type XdsStatusWriter struct {\n \tWriter                 io.Writer\n \tNamespace              string\n \tInternalDebugAllIstiod bool\n+\tOutputFormat           string // Output format: \"table\" or \"json\"\n+\tVerbosity              int    // Verbosity level: 0=default, 1=max\n }\n \n+// xdsWriterStatus represents the status of a single proxy's XDS configuration\n type xdsWriterStatus struct {\n-\tproxyID               string\n-\tclusterID             string\n-\tistiodID              string\n-\tistiodVersion         string\n-\tclusterStatus         string\n-\tlistenerStatus        string\n-\trouteStatus           string\n-\tendpointStatus        string\n-\textensionconfigStatus string\n+\tproxyID       string\n+\tclusterID     string\n+\tistiodID      string\n+\tistiodVersion string\n+\ttypeStatus    map[string]string // typeURL -> status\n }\n \n const ignoredStatus = \"IGNORED\"\n \n // PrintAll takes a slice of Istiod syncz responses and outputs them using a tabwriter\n func (s *XdsStatusWriter) PrintAll(statuses map[string]*discovery.DiscoveryResponse) error {\n-\tw, fullStatus, err := s.setupStatusPrint(statuses)\n+\tif s.Verbosity > 0 {\n+\t\treturn s.printAllVerbose(statuses)\n+\t}\n+\tw, fullStatus, allTypes, err := s.setupStatusPrint(statuses)\n \tif err != nil {\n-\t\treturn err\n+\t\treturn fmt.Errorf(\"failed to setup status print: %w\", err)\n+\t}\n+\n+\t// Print header dynamically with shortened type names\n+\theaders := []string{\"NAME\", \"CLUSTER\"}\n+\tfor _, t := range allTypes {\n+\t\theaders = append(headers, xdsresource.GetShortType(t))\n \t}\n+\theaders = append(headers, \"ISTIOD\", \"VERSION\")\n+\tif _, err := fmt.Fprintln(w, joinWithTabs(headers)); err != nil {\n+\t\treturn fmt.Errorf(\"failed to write header: %w\", err)\n+\t}\n+\n+\t// Print each proxy's status\n \tfor _, status := range fullStatus {\n-\t\tif err := xdsStatusPrintln(w, status); err != nil {\n-\t\t\treturn err\n+\t\tif err := xdsStatusPrintlnDynamic(w, status, allTypes); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to print status for proxy %s: %w\", status.proxyID, err)\n \t\t}\n \t}\n+\n \tif w != nil {\n-\t\treturn w.Flush()\n+\t\tif err := w.Flush(); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to flush tabwriter: %w\", err)\n+\t\t}\n \t}\n \treturn nil\n }\n \n-func (s *XdsStatusWriter) setupStatusPrint(drs map[string]*discovery.DiscoveryResponse) (*tabwriter.Writer, []*xdsWriterStatus, error) {\n-\t// Gather the statuses before printing so they may be sorted\n+// printAllVerbose prints all known xDS types for all proxies, even if not present in the data.\n+func (s *XdsStatusWriter) printAllVerbose(statuses map[string]*discovery.DiscoveryResponse) error {\n+\t// Collect all types ever seen, plus all known xDS types (including CRDs, etc.)\n+\tw, fullStatus, allTypes, err := s.setupStatusPrint(statuses)\n+\tif err != nil {\n+\t\treturn fmt.Errorf(\"failed to setup status print: %w\", err)\n+\t}\n+\n+\t// Add all known xDS types (from pilotxds.TypeURLs)\n+\tknownTypes := getAllKnownXdsTypes()\n+\ttypeSet := map[string]struct{}{}\n+\tfor _, t := range allTypes {\n+\t\ttypeSet[t] = struct{}{}\n+\t}\n+\tfor _, t := range knownTypes {\n+\t\ttypeSet[t] = struct{}{}\n+\t}\n+\t// Rebuild allTypes with all known types, sorted\n+\tallTypesVerbose := make([]string, 0, len(typeSet))\n+\tfor t := range typeSet {\n+\t\tallTypesVerbose = append(allTypesVerbose, t)\n+\t}\n+\tsort.Strings(allTypesVerbose)\n+\n+\t// Print header\n+\theaders := []string{\"NAME\", \"CLUSTER\"}\n+\tfor _, t := range allTypesVerbose {\n+\t\theaders = append(headers, xdsresource.GetShortType(t))\n+\t}\n+\theaders = append(headers, \"ISTIOD\", \"VERSION\")\n+\tif _, err := fmt.Fprintln(w, joinWithTabs(headers)); err != nil {\n+\t\treturn fmt.Errorf(\"failed to write header: %w\", err)\n+\t}\n+\n+\t// Print each proxy's status\n+\tfor _, status := range fullStatus {\n+\t\tif err := xdsStatusPrintlnDynamic(w, status, allTypesVerbose); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to print status for proxy %s: %w\", status.proxyID, err)\n+\t\t}\n+\t}\n+\n+\tif w != nil {\n+\t\tif err := w.Flush(); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to flush tabwriter: %w\", err)\n+\t\t}\n+\t}\n+\treturn nil\n+}\n+\n+// getAllKnownXdsTypes returns a list of all known xDS type URLs, including core and extension types.\n+func getAllKnownXdsTypes() []string {\n+\t// Core types\n+\ttypes := []string{\n+\t\txdsresource.ClusterType,\n+\t\txdsresource.ListenerType,\n+\t\txdsresource.EndpointType,\n+\t\txdsresource.RouteType,\n+\t\txdsresource.ExtensionConfigurationType,\n+\t\t// Add more known types here as needed\n+\t}\n+\t// In the future, this could be extended to include CRDs or dynamically discovered types\n+\treturn types\n+}\n+\n+// joinWithTabs joins a string slice with tabs\n+func joinWithTabs(fields []string) string {",
+        "comment_created_at": "2025-06-19T20:25:33+00:00",
+        "comment_author": "AritraDey-Dev",
+        "comment_body": "A custom `joinWithTabs` function allows for easy future customization or special handling beyond what `strings.Join` provides.I think it's better to replace it directly for now what you told.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2159654798",
+        "repo_full_name": "istio/istio",
+        "pr_number": 56441,
+        "pr_file": "istioctl/pkg/writer/pilot/status.go",
+        "discussion_id": "2154388388",
+        "commented_code": "@@ -29,110 +29,256 @@ import (\n \t\"istio.io/istio/istioctl/pkg/multixds\"\n \t\"istio.io/istio/pilot/pkg/model\"\n \txdsresource \"istio.io/istio/pilot/pkg/xds/v3\"\n-\t\"istio.io/istio/pkg/log\"\n )\n \n // XdsStatusWriter enables printing of sync status using multiple xdsapi.DiscoveryResponse Istiod responses\n type XdsStatusWriter struct {\n \tWriter                 io.Writer\n \tNamespace              string\n \tInternalDebugAllIstiod bool\n+\tOutputFormat           string // Output format: \"table\" or \"json\"\n+\tVerbosity              int    // Verbosity level: 0=default, 1=max\n }\n \n+// xdsWriterStatus represents the status of a single proxy's XDS configuration\n type xdsWriterStatus struct {\n-\tproxyID               string\n-\tclusterID             string\n-\tistiodID              string\n-\tistiodVersion         string\n-\tclusterStatus         string\n-\tlistenerStatus        string\n-\trouteStatus           string\n-\tendpointStatus        string\n-\textensionconfigStatus string\n+\tproxyID       string\n+\tclusterID     string\n+\tistiodID      string\n+\tistiodVersion string\n+\ttypeStatus    map[string]string // typeURL -> status\n }\n \n const ignoredStatus = \"IGNORED\"\n \n // PrintAll takes a slice of Istiod syncz responses and outputs them using a tabwriter\n func (s *XdsStatusWriter) PrintAll(statuses map[string]*discovery.DiscoveryResponse) error {\n-\tw, fullStatus, err := s.setupStatusPrint(statuses)\n+\tif s.Verbosity > 0 {\n+\t\treturn s.printAllVerbose(statuses)\n+\t}\n+\tw, fullStatus, allTypes, err := s.setupStatusPrint(statuses)\n \tif err != nil {\n-\t\treturn err\n+\t\treturn fmt.Errorf(\"failed to setup status print: %w\", err)\n+\t}\n+\n+\t// Print header dynamically with shortened type names\n+\theaders := []string{\"NAME\", \"CLUSTER\"}\n+\tfor _, t := range allTypes {\n+\t\theaders = append(headers, xdsresource.GetShortType(t))\n \t}\n+\theaders = append(headers, \"ISTIOD\", \"VERSION\")\n+\tif _, err := fmt.Fprintln(w, joinWithTabs(headers)); err != nil {\n+\t\treturn fmt.Errorf(\"failed to write header: %w\", err)\n+\t}\n+\n+\t// Print each proxy's status\n \tfor _, status := range fullStatus {\n-\t\tif err := xdsStatusPrintln(w, status); err != nil {\n-\t\t\treturn err\n+\t\tif err := xdsStatusPrintlnDynamic(w, status, allTypes); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to print status for proxy %s: %w\", status.proxyID, err)\n \t\t}\n \t}\n+\n \tif w != nil {\n-\t\treturn w.Flush()\n+\t\tif err := w.Flush(); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to flush tabwriter: %w\", err)\n+\t\t}\n \t}\n \treturn nil\n }\n \n-func (s *XdsStatusWriter) setupStatusPrint(drs map[string]*discovery.DiscoveryResponse) (*tabwriter.Writer, []*xdsWriterStatus, error) {\n-\t// Gather the statuses before printing so they may be sorted\n+// printAllVerbose prints all known xDS types for all proxies, even if not present in the data.\n+func (s *XdsStatusWriter) printAllVerbose(statuses map[string]*discovery.DiscoveryResponse) error {\n+\t// Collect all types ever seen, plus all known xDS types (including CRDs, etc.)\n+\tw, fullStatus, allTypes, err := s.setupStatusPrint(statuses)\n+\tif err != nil {\n+\t\treturn fmt.Errorf(\"failed to setup status print: %w\", err)\n+\t}\n+\n+\t// Add all known xDS types (from pilotxds.TypeURLs)\n+\tknownTypes := getAllKnownXdsTypes()\n+\ttypeSet := map[string]struct{}{}\n+\tfor _, t := range allTypes {\n+\t\ttypeSet[t] = struct{}{}\n+\t}\n+\tfor _, t := range knownTypes {\n+\t\ttypeSet[t] = struct{}{}\n+\t}\n+\t// Rebuild allTypes with all known types, sorted\n+\tallTypesVerbose := make([]string, 0, len(typeSet))\n+\tfor t := range typeSet {\n+\t\tallTypesVerbose = append(allTypesVerbose, t)\n+\t}\n+\tsort.Strings(allTypesVerbose)\n+\n+\t// Print header\n+\theaders := []string{\"NAME\", \"CLUSTER\"}\n+\tfor _, t := range allTypesVerbose {\n+\t\theaders = append(headers, xdsresource.GetShortType(t))\n+\t}\n+\theaders = append(headers, \"ISTIOD\", \"VERSION\")\n+\tif _, err := fmt.Fprintln(w, joinWithTabs(headers)); err != nil {\n+\t\treturn fmt.Errorf(\"failed to write header: %w\", err)\n+\t}\n+\n+\t// Print each proxy's status\n+\tfor _, status := range fullStatus {\n+\t\tif err := xdsStatusPrintlnDynamic(w, status, allTypesVerbose); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to print status for proxy %s: %w\", status.proxyID, err)\n+\t\t}\n+\t}\n+\n+\tif w != nil {\n+\t\tif err := w.Flush(); err != nil {\n+\t\t\treturn fmt.Errorf(\"failed to flush tabwriter: %w\", err)\n+\t\t}\n+\t}\n+\treturn nil\n+}\n+\n+// getAllKnownXdsTypes returns a list of all known xDS type URLs, including core and extension types.\n+func getAllKnownXdsTypes() []string {\n+\t// Core types\n+\ttypes := []string{\n+\t\txdsresource.ClusterType,\n+\t\txdsresource.ListenerType,\n+\t\txdsresource.EndpointType,\n+\t\txdsresource.RouteType,\n+\t\txdsresource.ExtensionConfigurationType,\n+\t\t// Add more known types here as needed\n+\t}\n+\t// In the future, this could be extended to include CRDs or dynamically discovered types\n+\treturn types\n+}\n+\n+// joinWithTabs joins a string slice with tabs\n+func joinWithTabs(fields []string) string {",
+        "comment_created_at": "2025-06-20T20:54:58+00:00",
+        "comment_author": "MorrisLaw",
+        "comment_body": "Yeah, that makes sense. If we end up needing the customization. We can add it back in. Thank you!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2193047906",
+    "pr_number": 56874,
+    "pr_file": "istioctl/pkg/admin/istiodconfig.go",
+    "created_at": "2025-07-08T17:15:01+00:00",
+    "commented_code": "return nil\n \t\t},\n \t\tRunE: func(logCmd *cobra.Command, args []string) error {\n-\t\t\tclient, err := ctx.CLIClientWithRevision(opts.Revision)\n+\t\t\tresolvedRevision := ctx.RevisionOrDefault(opts.Revision)\n+\t\t\tclient, err := ctx.CLIClientWithRevision(resolvedRevision)\n \t\t\tif err != nil {\n \t\t\t\treturn fmt.Errorf(\"failed to create k8s client: %v\", err)\n \t\t\t}\n \n \t\t\tvar podName, ns string\n \t\t\tif len(args) == 0 {\n-\t\t\t\tif opts.Revision == \"\" {\n-\t\t\t\t\topts.Revision = \"default\"\n+\t\t\t\tif resolvedRevision == \"\" {",
+    "repo_full_name": "istio/istio",
+    "discussion_comments": [
+      {
+        "comment_id": "2193047906",
+        "repo_full_name": "istio/istio",
+        "pr_number": 56874,
+        "pr_file": "istioctl/pkg/admin/istiodconfig.go",
+        "discussion_id": "2193047906",
+        "commented_code": "@@ -418,20 +418,21 @@ func istiodLogCmd(ctx cli.Context) *cobra.Command {\n \t\t\treturn nil\n \t\t},\n \t\tRunE: func(logCmd *cobra.Command, args []string) error {\n-\t\t\tclient, err := ctx.CLIClientWithRevision(opts.Revision)\n+\t\t\tresolvedRevision := ctx.RevisionOrDefault(opts.Revision)\n+\t\t\tclient, err := ctx.CLIClientWithRevision(resolvedRevision)\n \t\t\tif err != nil {\n \t\t\t\treturn fmt.Errorf(\"failed to create k8s client: %v\", err)\n \t\t\t}\n \n \t\t\tvar podName, ns string\n \t\t\tif len(args) == 0 {\n-\t\t\t\tif opts.Revision == \"\" {\n-\t\t\t\t\topts.Revision = \"default\"\n+\t\t\t\tif resolvedRevision == \"\" {",
+        "comment_created_at": "2025-07-08T17:15:01+00:00",
+        "comment_author": "howardjohn",
+        "comment_body": "Do we still need this now that we have RevisionOrDefault",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2193628281",
+        "repo_full_name": "istio/istio",
+        "pr_number": 56874,
+        "pr_file": "istioctl/pkg/admin/istiodconfig.go",
+        "discussion_id": "2193047906",
+        "commented_code": "@@ -418,20 +418,21 @@ func istiodLogCmd(ctx cli.Context) *cobra.Command {\n \t\t\treturn nil\n \t\t},\n \t\tRunE: func(logCmd *cobra.Command, args []string) error {\n-\t\t\tclient, err := ctx.CLIClientWithRevision(opts.Revision)\n+\t\t\tresolvedRevision := ctx.RevisionOrDefault(opts.Revision)\n+\t\t\tclient, err := ctx.CLIClientWithRevision(resolvedRevision)\n \t\t\tif err != nil {\n \t\t\t\treturn fmt.Errorf(\"failed to create k8s client: %v\", err)\n \t\t\t}\n \n \t\t\tvar podName, ns string\n \t\t\tif len(args) == 0 {\n-\t\t\t\tif opts.Revision == \"\" {\n-\t\t\t\t\topts.Revision = \"default\"\n+\t\t\t\tif resolvedRevision == \"\" {",
+        "comment_created_at": "2025-07-08T23:39:18+00:00",
+        "comment_author": "AritraDey-Dev",
+        "comment_body": "yes this is redundant now.will remove it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2152172994",
+    "pr_number": 56638,
+    "pr_file": "tools/docker-builder/types.go",
+    "created_at": "2025-06-17T12:44:02+00:00",
+    "commented_code": "return v\n }\n \n+func (p ImagePlan) CanBuildForPlatform(t string) bool {\n+\tfor _, platform := range p.Platforms {\n+\t\tif platform == t {\n+\t\t\treturn true\n+\t\t}\n+\t}\n+\treturn false\n+}",
+    "repo_full_name": "istio/istio",
+    "discussion_comments": [
+      {
+        "comment_id": "2152172994",
+        "repo_full_name": "istio/istio",
+        "pr_number": 56638,
+        "pr_file": "tools/docker-builder/types.go",
+        "discussion_id": "2152172994",
+        "commented_code": "@@ -129,6 +131,15 @@ func (p ImagePlan) Dependencies() []string {\n \treturn v\n }\n \n+func (p ImagePlan) CanBuildForPlatform(t string) bool {\n+\tfor _, platform := range p.Platforms {\n+\t\tif platform == t {\n+\t\t\treturn true\n+\t\t}\n+\t}\n+\treturn false\n+}",
+        "comment_created_at": "2025-06-17T12:44:02+00:00",
+        "comment_author": "dhawton",
+        "comment_body": "This can be simplified\r\n\r\n```suggestion\r\nfunc (p ImagePlan) CanBuildForPlatform(t string) bool {\r\n\treturn slices.Contains(p.Platforms, t)\r\n}\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2190514864",
+    "pr_number": 56844,
+    "pr_file": "pilot/pkg/serviceregistry/kube/controller/ambient/ambientindex.go",
+    "created_at": "2025-07-07T16:14:32+00:00",
+    "commented_code": "return res\n }\n \n+// AllLocalNetworkGlobalServices returns all known globally scoped services and local\n+// waypoints containing global services. Result is un-ordered\n+func (a *index) AllLocalNetworkGlobalServices(key model.WaypointKey) []model.ServiceInfo {\n+\tvar res []model.ServiceInfo\n+\tfor _, svc := range a.services.List() {\n+\t\tworkloads := a.workloads.ByServiceKey.Lookup(svc.ResourceName())\n+\t\t// All workloads for a service should belong in the same network\n+\t\t// Don't add a service if it is in a different network\n+\t\tif len(workloads) != 0 && workloads[0].Workload.Network != key.Network {\n+\t\t\tlog.Debugf(\"Skipping service %s/%s in network %s, as it is not in the network %s\"+\n+\t\t\t\t\" of the network gateway\", svc.Service.Namespace, svc.Service.Name, key.Network)\n+\t\t\tcontinue\n+\t\t}\n+\t\tif svc.Scope != model.Global {",
+    "repo_full_name": "istio/istio",
+    "discussion_comments": [
+      {
+        "comment_id": "2190514864",
+        "repo_full_name": "istio/istio",
+        "pr_number": 56844,
+        "pr_file": "pilot/pkg/serviceregistry/kube/controller/ambient/ambientindex.go",
+        "discussion_id": "2190514864",
+        "commented_code": "@@ -645,6 +657,52 @@ func (a *index) All() []model.AddressInfo {\n \treturn res\n }\n \n+// AllLocalNetworkGlobalServices returns all known globally scoped services and local\n+// waypoints containing global services. Result is un-ordered\n+func (a *index) AllLocalNetworkGlobalServices(key model.WaypointKey) []model.ServiceInfo {\n+\tvar res []model.ServiceInfo\n+\tfor _, svc := range a.services.List() {\n+\t\tworkloads := a.workloads.ByServiceKey.Lookup(svc.ResourceName())\n+\t\t// All workloads for a service should belong in the same network\n+\t\t// Don't add a service if it is in a different network\n+\t\tif len(workloads) != 0 && workloads[0].Workload.Network != key.Network {\n+\t\t\tlog.Debugf(\"Skipping service %s/%s in network %s, as it is not in the network %s\"+\n+\t\t\t\t\" of the network gateway\", svc.Service.Namespace, svc.Service.Name, key.Network)\n+\t\t\tcontinue\n+\t\t}\n+\t\tif svc.Scope != model.Global {",
+        "comment_created_at": "2025-07-07T16:14:32+00:00",
+        "comment_author": "keithmattix",
+        "comment_body": "Probably cleaner if we invert the loop. Something like\n\n```go\nif svc.Scope == model.Gobal {\n  res = append(res, svc) \n  log.Debugf(\"Adding global service %s/%s in network %s for the network gateway\", svc.Service.Namespace, svc.Service.Name, key.Network)\n  continue\n}\n\nwpSvcs := ...\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2191071950",
+        "repo_full_name": "istio/istio",
+        "pr_number": 56844,
+        "pr_file": "pilot/pkg/serviceregistry/kube/controller/ambient/ambientindex.go",
+        "discussion_id": "2190514864",
+        "commented_code": "@@ -645,6 +657,52 @@ func (a *index) All() []model.AddressInfo {\n \treturn res\n }\n \n+// AllLocalNetworkGlobalServices returns all known globally scoped services and local\n+// waypoints containing global services. Result is un-ordered\n+func (a *index) AllLocalNetworkGlobalServices(key model.WaypointKey) []model.ServiceInfo {\n+\tvar res []model.ServiceInfo\n+\tfor _, svc := range a.services.List() {\n+\t\tworkloads := a.workloads.ByServiceKey.Lookup(svc.ResourceName())\n+\t\t// All workloads for a service should belong in the same network\n+\t\t// Don't add a service if it is in a different network\n+\t\tif len(workloads) != 0 && workloads[0].Workload.Network != key.Network {\n+\t\t\tlog.Debugf(\"Skipping service %s/%s in network %s, as it is not in the network %s\"+\n+\t\t\t\t\" of the network gateway\", svc.Service.Namespace, svc.Service.Name, key.Network)\n+\t\t\tcontinue\n+\t\t}\n+\t\tif svc.Scope != model.Global {",
+        "comment_created_at": "2025-07-07T21:59:49+00:00",
+        "comment_author": "Stevenjin8",
+        "comment_body": "also from other PR",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2191077947",
+        "repo_full_name": "istio/istio",
+        "pr_number": 56844,
+        "pr_file": "pilot/pkg/serviceregistry/kube/controller/ambient/ambientindex.go",
+        "discussion_id": "2190514864",
+        "commented_code": "@@ -645,6 +657,52 @@ func (a *index) All() []model.AddressInfo {\n \treturn res\n }\n \n+// AllLocalNetworkGlobalServices returns all known globally scoped services and local\n+// waypoints containing global services. Result is un-ordered\n+func (a *index) AllLocalNetworkGlobalServices(key model.WaypointKey) []model.ServiceInfo {\n+\tvar res []model.ServiceInfo\n+\tfor _, svc := range a.services.List() {\n+\t\tworkloads := a.workloads.ByServiceKey.Lookup(svc.ResourceName())\n+\t\t// All workloads for a service should belong in the same network\n+\t\t// Don't add a service if it is in a different network\n+\t\tif len(workloads) != 0 && workloads[0].Workload.Network != key.Network {\n+\t\t\tlog.Debugf(\"Skipping service %s/%s in network %s, as it is not in the network %s\"+\n+\t\t\t\t\" of the network gateway\", svc.Service.Namespace, svc.Service.Name, key.Network)\n+\t\t\tcontinue\n+\t\t}\n+\t\tif svc.Scope != model.Global {",
+        "comment_created_at": "2025-07-07T22:05:44+00:00",
+        "comment_author": "keithmattix",
+        "comment_body": "/cc @jaellio ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2191033173",
+    "pr_number": 56844,
+    "pr_file": "pilot/pkg/serviceregistry/kube/controller/ambient/multicluster.go",
+    "created_at": "2025-07-07T21:24:13+00:00",
+    "commented_code": "opts,\n \t)\n \n-\tWorkloadAddressIndex := krt.NewIndex[networkAddress, model.WorkloadInfo](GlobalWorkloads, \"networkAddress\", networkAddressFromWorkload)\n-\tWorkloadServiceIndex := krt.NewIndex[string, model.WorkloadInfo](GlobalWorkloads, \"service\", func(o model.WorkloadInfo) []string {\n+\tworkloadNetworkServiceIndex := krt.NewIndex[string, model.WorkloadInfo](GlobalWorkloads, \"network;service\", func(o model.WorkloadInfo) []string {\n+\t\tres := make([]string, 0, len(o.Workload.Services))\n+\t\tfor svc := range o.Workload.Services {\n+\t\t\tres = append(res, strings.Join([]string{o.Workload.Network, svc}, \";\"))\n+\t\t}\n+\t\treturn res\n+\t})\n+\n+\tcoalescedWorkloads := krt.NewManyCollection(\n+\t\tworkloadNetworkServiceIndex.AsCollection(),\n+\t\tfunc(ctx krt.HandlerContext, i krt.IndexObject[string, model.WorkloadInfo]) []model.WorkloadInfo {\n+\t\t\tparts := strings.Split(i.Key, \";\")\n+\t\t\tif len(parts) != 2 {\n+\t\t\t\tlog.Errorf(\"Invalid key %s for SplitHorizonWorkloads, expected <network>;<service>\", i.Key)\n+\t\t\t\treturn nil\n+\t\t\t}\n+\t\t\tnetworkID := network.ID(parts[0])\n+\t\t\tlocalNetwork := a.Network(ctx).String()\n+\t\t\tif networkID.String() == localNetwork {\n+\t\t\t\t// We don't coalesce workloads for the local network\n+\t\t\t\treturn nil\n+\t\t\t}\n+\n+\t\t\tsvcName := parts[1]\n+\t\t\tsvc := krt.FetchOne(ctx, a.services.Collection, krt.FilterKey(svcName))\n+\t\t\tif svc == nil {\n+\t\t\t\tlog.Errorf(\"Failed to find service %s to coalesce workloads\", svcName)\n+\t\t\t\treturn nil\n+\t\t\t}\n+\t\t\tif svc.Scope != model.Global {\n+\t\t\t\treturn nil\n+\t\t\t}\n+\n+\t\t\tcapacity := uint32(0)\n+\t\t\tfor _, wl := range i.Objects {\n+\t\t\t\tif wl.Workload.GetCapacity().GetValue() == 0 {\n+\t\t\t\t\tcapacity++\n+\t\t\t\t} else {\n+\t\t\t\t\tcapacity += wl.Workload.Capacity.GetValue()\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tgws := LookupNetworkGateway(ctx, networkID, a.networks.NetworkGateways, a.networks.GatewaysByNetwork)\n+\t\t\tmeshCfg := krt.FetchOne(ctx, a.meshConfig.AsCollection())\n+\t\t\tif meshCfg == nil {\n+\t\t\t\tlog.Errorf(\"Failed to find mesh config for network %s\", networkID)\n+\t\t\t\treturn nil\n+\t\t\t}\n+\t\t\tif len(gws) == 0 {\n+\t\t\t\tlog.Warnf(\"No network gateway found for network %s\", networkID)\n+\t\t\t\treturn nil\n+\t\t\t}\n+\t\t\tif len(gws) > 1 {\n+\t\t\t\tlog.Warnf(\"Multiple gateways found for network %s, using the first one\", networkID)\n+\t\t\t}\n+\t\t\tgw := gws[0]\n+\t\t\twi := a.createSplitHorizonWorkload(svcName, svc.Service, &gw, capacity, meshCfg)\n+\t\t\twi = ptr.Of(precomputeWorkload(*wi))\n+\t\t\treturn []model.WorkloadInfo{*wi}\n+\t\t}, opts.WithName(\"remoteCoalesedWorkloads\")...,\n+\t)\n+\tnetworkLocalWorkloads := krt.NewCollection(GlobalWorkloads, func(ctx krt.HandlerContext, i model.WorkloadInfo) *model.WorkloadInfo {\n+\t\tif i.Workload.Network == a.Network(ctx).String() {",
+    "repo_full_name": "istio/istio",
+    "discussion_comments": [
+      {
+        "comment_id": "2191033173",
+        "repo_full_name": "istio/istio",
+        "pr_number": 56844,
+        "pr_file": "pilot/pkg/serviceregistry/kube/controller/ambient/multicluster.go",
+        "discussion_id": "2191033173",
+        "commented_code": "@@ -336,11 +298,114 @@ func (a *index) buildGlobalCollections(\n \t\topts,\n \t)\n \n-\tWorkloadAddressIndex := krt.NewIndex[networkAddress, model.WorkloadInfo](GlobalWorkloads, \"networkAddress\", networkAddressFromWorkload)\n-\tWorkloadServiceIndex := krt.NewIndex[string, model.WorkloadInfo](GlobalWorkloads, \"service\", func(o model.WorkloadInfo) []string {\n+\tworkloadNetworkServiceIndex := krt.NewIndex[string, model.WorkloadInfo](GlobalWorkloads, \"network;service\", func(o model.WorkloadInfo) []string {\n+\t\tres := make([]string, 0, len(o.Workload.Services))\n+\t\tfor svc := range o.Workload.Services {\n+\t\t\tres = append(res, strings.Join([]string{o.Workload.Network, svc}, \";\"))\n+\t\t}\n+\t\treturn res\n+\t})\n+\n+\tcoalescedWorkloads := krt.NewManyCollection(\n+\t\tworkloadNetworkServiceIndex.AsCollection(),\n+\t\tfunc(ctx krt.HandlerContext, i krt.IndexObject[string, model.WorkloadInfo]) []model.WorkloadInfo {\n+\t\t\tparts := strings.Split(i.Key, \";\")\n+\t\t\tif len(parts) != 2 {\n+\t\t\t\tlog.Errorf(\"Invalid key %s for SplitHorizonWorkloads, expected <network>;<service>\", i.Key)\n+\t\t\t\treturn nil\n+\t\t\t}\n+\t\t\tnetworkID := network.ID(parts[0])\n+\t\t\tlocalNetwork := a.Network(ctx).String()\n+\t\t\tif networkID.String() == localNetwork {\n+\t\t\t\t// We don't coalesce workloads for the local network\n+\t\t\t\treturn nil\n+\t\t\t}\n+\n+\t\t\tsvcName := parts[1]\n+\t\t\tsvc := krt.FetchOne(ctx, a.services.Collection, krt.FilterKey(svcName))\n+\t\t\tif svc == nil {\n+\t\t\t\tlog.Errorf(\"Failed to find service %s to coalesce workloads\", svcName)\n+\t\t\t\treturn nil\n+\t\t\t}\n+\t\t\tif svc.Scope != model.Global {\n+\t\t\t\treturn nil\n+\t\t\t}\n+\n+\t\t\tcapacity := uint32(0)\n+\t\t\tfor _, wl := range i.Objects {\n+\t\t\t\tif wl.Workload.GetCapacity().GetValue() == 0 {\n+\t\t\t\t\tcapacity++\n+\t\t\t\t} else {\n+\t\t\t\t\tcapacity += wl.Workload.Capacity.GetValue()\n+\t\t\t\t}\n+\t\t\t}\n+\t\t\tgws := LookupNetworkGateway(ctx, networkID, a.networks.NetworkGateways, a.networks.GatewaysByNetwork)\n+\t\t\tmeshCfg := krt.FetchOne(ctx, a.meshConfig.AsCollection())\n+\t\t\tif meshCfg == nil {\n+\t\t\t\tlog.Errorf(\"Failed to find mesh config for network %s\", networkID)\n+\t\t\t\treturn nil\n+\t\t\t}\n+\t\t\tif len(gws) == 0 {\n+\t\t\t\tlog.Warnf(\"No network gateway found for network %s\", networkID)\n+\t\t\t\treturn nil\n+\t\t\t}\n+\t\t\tif len(gws) > 1 {\n+\t\t\t\tlog.Warnf(\"Multiple gateways found for network %s, using the first one\", networkID)\n+\t\t\t}\n+\t\t\tgw := gws[0]\n+\t\t\twi := a.createSplitHorizonWorkload(svcName, svc.Service, &gw, capacity, meshCfg)\n+\t\t\twi = ptr.Of(precomputeWorkload(*wi))\n+\t\t\treturn []model.WorkloadInfo{*wi}\n+\t\t}, opts.WithName(\"remoteCoalesedWorkloads\")...,\n+\t)\n+\tnetworkLocalWorkloads := krt.NewCollection(GlobalWorkloads, func(ctx krt.HandlerContext, i model.WorkloadInfo) *model.WorkloadInfo {\n+\t\tif i.Workload.Network == a.Network(ctx).String() {",
+        "comment_created_at": "2025-07-07T21:24:13+00:00",
+        "comment_author": "keithmattix",
+        "comment_body": "nit(style): exiting early is cleaner, more idiomatic go: https://danp.net/posts/reducing-go-nesting/",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2181051873",
+    "pr_number": 56497,
+    "pr_file": "pilot/pkg/networking/core/listener_waypoint.go",
+    "created_at": "2025-07-02T22:02:41+00:00",
+    "commented_code": "var wps *waypointServices\n \tvar forwarder *listener.Listener\n \tif features.EnableAmbientMultiNetwork && isEastWestGateway(lb.node) {\n-\t\twps = nil // TODO: implement service export functionality\n+\t\t_, wps = findWaypointResources(lb.node, lb.push)",
+    "repo_full_name": "istio/istio",
+    "discussion_comments": [
+      {
+        "comment_id": "2181051873",
+        "repo_full_name": "istio/istio",
+        "pr_number": 56497,
+        "pr_file": "pilot/pkg/networking/core/listener_waypoint.go",
+        "discussion_id": "2181051873",
+        "commented_code": "@@ -85,7 +85,7 @@ func (lb *ListenerBuilder) buildWaypointInbound() []*listener.Listener {\n \tvar wps *waypointServices\n \tvar forwarder *listener.Listener\n \tif features.EnableAmbientMultiNetwork && isEastWestGateway(lb.node) {\n-\t\twps = nil // TODO: implement service export functionality\n+\t\t_, wps = findWaypointResources(lb.node, lb.push)",
+        "comment_created_at": "2025-07-02T22:02:41+00:00",
+        "comment_author": "keithmattix",
+        "comment_body": "Since we're calling the same function, can this be moved out of the conditional branches?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1012172827",
+    "pr_number": 41416,
+    "pr_file": "pkg/wasm/convert.go",
+    "created_at": "2022-11-02T18:47:51+00:00",
+    "commented_code": "udpa \"github.com/cncf/xds/go/udpa/type/v1\"\n \tcore \"github.com/envoyproxy/go-control-plane/envoy/config/core/v3\"\n+\trbac \"github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/rbac/v3\"\n \twasm \"github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/wasm/v3\"\n \t\"github.com/envoyproxy/go-control-plane/pkg/conversion\"\n \t\"go.uber.org/atomic\"\n \tanypb \"google.golang.org/protobuf/types/known/anypb\"\n \n \textensions \"istio.io/api/extensions/v1alpha1\"\n \t\"istio.io/istio/pilot/pkg/model\"\n+\t\"istio.io/istio/pilot/pkg/util/protoconv\"\n \t\"istio.io/istio/pkg/config/xds\"\n )\n \n+var (\n+\tallowWasmHTTPFilter = &rbac.RBAC{}\n+\tallowTypedConfig    = protoconv.MessageToAny(allowWasmHTTPFilter)",
+    "repo_full_name": "istio/istio",
+    "discussion_comments": [
+      {
+        "comment_id": "1012172827",
+        "repo_full_name": "istio/istio",
+        "pr_number": 41416,
+        "pr_file": "pkg/wasm/convert.go",
+        "discussion_id": "1012172827",
+        "commented_code": "@@ -20,16 +20,31 @@ import (\n \n \tudpa \"github.com/cncf/xds/go/udpa/type/v1\"\n \tcore \"github.com/envoyproxy/go-control-plane/envoy/config/core/v3\"\n+\trbac \"github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/rbac/v3\"\n \twasm \"github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/wasm/v3\"\n \t\"github.com/envoyproxy/go-control-plane/pkg/conversion\"\n \t\"go.uber.org/atomic\"\n \tanypb \"google.golang.org/protobuf/types/known/anypb\"\n \n \textensions \"istio.io/api/extensions/v1alpha1\"\n \t\"istio.io/istio/pilot/pkg/model\"\n+\t\"istio.io/istio/pilot/pkg/util/protoconv\"\n \t\"istio.io/istio/pkg/config/xds\"\n )\n \n+var (\n+\tallowWasmHTTPFilter = &rbac.RBAC{}\n+\tallowTypedConfig    = protoconv.MessageToAny(allowWasmHTTPFilter)",
+        "comment_created_at": "2022-11-02T18:47:51+00:00",
+        "comment_author": "howardjohn",
+        "comment_body": "nit: No need to make 2 variables, if its complex you can use a function (including inline function)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "846601404",
+    "pr_number": 38287,
+    "pr_file": "pkg/config/validation/validation.go",
+    "created_at": "2022-04-09T08:36:14+00:00",
+    "commented_code": "duplicateMatches++\n \t\t\t\t// no need to handle for totally duplicated match rules\n \t\t\t\tcontinue\n-\t\t\t} else {",
+    "repo_full_name": "istio/istio",
+    "discussion_comments": [
+      {
+        "comment_id": "846601404",
+        "repo_full_name": "istio/istio",
+        "pr_number": 38287,
+        "pr_file": "pkg/config/validation/validation.go",
+        "discussion_id": "846601404",
+        "commented_code": "@@ -2359,9 +2359,9 @@ func analyzeUnreachableHTTPRules(routes []*networking.HTTPRoute,\n \t\t\t\tduplicateMatches++\n \t\t\t\t// no need to handle for totally duplicated match rules\n \t\t\t\tcontinue\n-\t\t\t} else {",
+        "comment_created_at": "2022-04-09T08:36:14+00:00",
+        "comment_author": "zirain",
+        "comment_body": "[revie rule]superfluous-else: if block ends with a continue statement, so drop this else and outdent its block",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "846602346",
+    "pr_number": 38287,
+    "pr_file": "security/pkg/pki/util/san_test.go",
+    "created_at": "2022-04-09T08:46:05+00:00",
+    "commented_code": "t.Errorf(\"Unmatched identities: before encoding: %v, after decoding %v\", ids, actualIds)\n \t}\n \n-\tif san.Critical == false {\n+\tif !san.Critical {",
+    "repo_full_name": "istio/istio",
+    "discussion_comments": [
+      {
+        "comment_id": "846602346",
+        "repo_full_name": "istio/istio",
+        "pr_number": 38287,
+        "pr_file": "security/pkg/pki/util/san_test.go",
+        "discussion_id": "846602346",
+        "commented_code": "@@ -86,7 +86,7 @@ func TestBuildAndExtractIdentities(t *testing.T) {\n \t\tt.Errorf(\"Unmatched identities: before encoding: %v, after decoding %v\", ids, actualIds)\n \t}\n \n-\tif san.Critical == false {\n+\tif !san.Critical {",
+        "comment_created_at": "2022-04-09T08:46:05+00:00",
+        "comment_author": "zirain",
+        "comment_body": "bool-literal-in-expr: omit Boolean literal in expression",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

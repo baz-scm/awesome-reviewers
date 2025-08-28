@@ -1,0 +1,198 @@
+[
+  {
+    "discussion_id": "2265064733",
+    "pr_number": 3811,
+    "pr_file": "packages/better-auth/src/plugins/device-authorization/index.ts",
+    "created_at": "2025-08-10T00:45:18+00:00",
+    "commented_code": "+import * as z from \"zod/v4\";\n+import { APIError } from \"better-call\";\n+import { createAuthEndpoint } from \"../../api/call\";\n+import type { BetterAuthPlugin } from \"../../types/plugins\";\n+import { setSessionCookie } from \"../../cookies\";\n+import { generateRandomString } from \"../../crypto\";\n+import type { AuthPluginSchema } from \"../../types/plugins\";\n+import type { FieldAttribute } from \"../../db/field\";\n+import { getSessionFromCtx } from \"../../api/routes/session\";\n+\n+interface DeviceAuthorizationOptions {\n+\t/**\n+\t * Time in seconds until the device code expires.\n+\t * @default 1800 (30 minutes)\n+\t */\n+\texpiresIn?: number;\n+\t/**\n+\t * Time in seconds between polling attempts.\n+\t * @default 5\n+\t */\n+\tinterval?: number;\n+\t/**\n+\t * Length of the device code.\n+\t * @default 8\n+\t */\n+\tdeviceCodeLength?: number;\n+\t/**\n+\t * Length of the user code.\n+\t * @default 6\n+\t */\n+\tuserCodeLength?: number;\n+\t/**\n+\t * Character set for user code generation.\n+\t * @default \"A-Z0-9\" (excluding similar looking characters)\n+\t */\n+\tuserCodeCharset?: string;\n+\t/**\n+\t * Verification URI for the user to visit.\n+\t */\n+\tverificationUri?: string;\n+\t/**\n+\t * Function to generate a device code.\n+\t */\n+\tgenerateDeviceCode?: () => Promise<string> | string;\n+\t/**\n+\t * Function to generate a user code.\n+\t */\n+\tgenerateUserCode?: () => Promise<string> | string;\n+\t/**\n+\t * Whether to format user codes with hyphens for readability.\n+\t * @default true\n+\t */\n+\tformatUserCode?: boolean;\n+\t/**\n+\t * Enable rate limiting for token polling.\n+\t * @default true\n+\t */\n+\tenableRateLimiting?: boolean;\n+}\n+\n+const deviceCodeSchema: AuthPluginSchema = {\n+\tdeviceCode: {\n+\t\tfields: {\n+\t\t\tdeviceCode: {\n+\t\t\t\ttype: \"string\",\n+\t\t\t\trequired: true,\n+\t\t\t},\n+\t\t\tuserCode: {\n+\t\t\t\ttype: \"string\",\n+\t\t\t\trequired: true,\n+\t\t\t},\n+\t\t\tuserId: {\n+\t\t\t\ttype: \"string\",\n+\t\t\t\trequired: false,\n+\t\t\t},\n+\t\t\texpiresAt: {\n+\t\t\t\ttype: \"date\",\n+\t\t\t\trequired: true,\n+\t\t\t},\n+\t\t\tstatus: {\n+\t\t\t\ttype: \"string\",\n+\t\t\t\trequired: true,\n+\t\t\t\tdefaultValue: \"pending\",\n+\t\t\t},\n+\t\t\tlastPolledAt: {\n+\t\t\t\ttype: \"date\",\n+\t\t\t\trequired: false,\n+\t\t\t},\n+\t\t\tpollingInterval: {\n+\t\t\t\ttype: \"number\",\n+\t\t\t\trequired: false,\n+\t\t\t},\n+\t\t\tclientId: {\n+\t\t\t\ttype: \"string\",\n+\t\t\t\trequired: false,\n+\t\t\t},\n+\t\t\tscope: {\n+\t\t\t\ttype: \"string\",\n+\t\t\t\trequired: false,\n+\t\t\t},\n+\t\t} satisfies Record<string, FieldAttribute>,\n+\t},\n+};\n+\n+export { deviceAuthorizationClient } from \"./client\";\n+\n+const DEVICE_AUTHORIZATION_ERROR_CODES = {\n+\tINVALID_DEVICE_CODE: \"Invalid device code\",\n+\tEXPIRED_DEVICE_CODE: \"Device code has expired\",\n+\tEXPIRED_USER_CODE: \"User code has expired\",\n+\tAUTHORIZATION_PENDING: \"Authorization pending\",\n+\tACCESS_DENIED: \"Access denied\",\n+\tINVALID_USER_CODE: \"Invalid user code\",\n+\tDEVICE_CODE_ALREADY_PROCESSED: \"Device code already processed\",\n+\tPOLLING_TOO_FREQUENTLY: \"Polling too frequently\",\n+\tUSER_NOT_FOUND: \"User not found\",\n+\tFAILED_TO_CREATE_SESSION: \"Failed to create session\",\n+\tINVALID_DEVICE_CODE_STATUS: \"Invalid device code status\",\n+\tAUTHENTICATION_REQUIRED: \"Authentication required\",\n+} as const;\n+\n+export const deviceAuthorization = (\n+\toptions: DeviceAuthorizationOptions = {},\n+) => {\n+\tconst opts = {\n+\t\texpiresIn: 1800,\n+\t\tinterval: 5,\n+\t\tdeviceCodeLength: 40,\n+\t\tuserCodeLength: 8,\n+\t\tuserCodeCharset: \"ABCDEFGHJKLMNPQRSTUVWXYZ23456789\", // Excluding similar looking characters\n+\t\tformatUserCode: true,\n+\t\tenableRateLimiting: true,\n+\t\t...options,\n+\t};\n+\n+\tconst generateDeviceCode = async () => {\n+\t\tif (opts.generateDeviceCode) {\n+\t\t\treturn opts.generateDeviceCode();\n+\t\t}\n+\t\treturn generateRandomString(opts.deviceCodeLength, \"a-z\", \"A-Z\", \"0-9\");\n+\t};\n+\n+\tconst generateUserCode = async () => {\n+\t\tif (opts.generateUserCode) {\n+\t\t\treturn opts.generateUserCode();\n+\t\t}\n+\t\tconst chars = opts.userCodeCharset;\n+\t\tlet code = \"\";\n+\t\tfor (let i = 0; i < opts.userCodeLength; i++) {\n+\t\t\tcode += chars[Math.floor(Math.random() * chars.length)];\n+\t\t}\n+\t\treturn code;\n+\t};\n+\n+\tconst formatUserCode = (code: string) => {\n+\t\t// Format with hyphen for readability if enabled (e.g., \"WDJB-MJHT\")\n+\t\tif (opts.formatUserCode && code.length === 8) {\n+\t\t\treturn `${code.slice(0, 4)}-${code.slice(4)}`;\n+\t\t}\n+\t\treturn code;\n+\t};\n+\n+\treturn {\n+\t\tid: \"device-authorization\",\n+\t\tschema: deviceCodeSchema,",
+    "repo_full_name": "better-auth/better-auth",
+    "discussion_comments": [
+      {
+        "comment_id": "2265064733",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3811,
+        "pr_file": "packages/better-auth/src/plugins/device-authorization/index.ts",
+        "discussion_id": "2265064733",
+        "commented_code": "@@ -0,0 +1,855 @@\n+import * as z from \"zod/v4\";\n+import { APIError } from \"better-call\";\n+import { createAuthEndpoint } from \"../../api/call\";\n+import type { BetterAuthPlugin } from \"../../types/plugins\";\n+import { setSessionCookie } from \"../../cookies\";\n+import { generateRandomString } from \"../../crypto\";\n+import type { AuthPluginSchema } from \"../../types/plugins\";\n+import type { FieldAttribute } from \"../../db/field\";\n+import { getSessionFromCtx } from \"../../api/routes/session\";\n+\n+interface DeviceAuthorizationOptions {\n+\t/**\n+\t * Time in seconds until the device code expires.\n+\t * @default 1800 (30 minutes)\n+\t */\n+\texpiresIn?: number;\n+\t/**\n+\t * Time in seconds between polling attempts.\n+\t * @default 5\n+\t */\n+\tinterval?: number;\n+\t/**\n+\t * Length of the device code.\n+\t * @default 8\n+\t */\n+\tdeviceCodeLength?: number;\n+\t/**\n+\t * Length of the user code.\n+\t * @default 6\n+\t */\n+\tuserCodeLength?: number;\n+\t/**\n+\t * Character set for user code generation.\n+\t * @default \"A-Z0-9\" (excluding similar looking characters)\n+\t */\n+\tuserCodeCharset?: string;\n+\t/**\n+\t * Verification URI for the user to visit.\n+\t */\n+\tverificationUri?: string;\n+\t/**\n+\t * Function to generate a device code.\n+\t */\n+\tgenerateDeviceCode?: () => Promise<string> | string;\n+\t/**\n+\t * Function to generate a user code.\n+\t */\n+\tgenerateUserCode?: () => Promise<string> | string;\n+\t/**\n+\t * Whether to format user codes with hyphens for readability.\n+\t * @default true\n+\t */\n+\tformatUserCode?: boolean;\n+\t/**\n+\t * Enable rate limiting for token polling.\n+\t * @default true\n+\t */\n+\tenableRateLimiting?: boolean;\n+}\n+\n+const deviceCodeSchema: AuthPluginSchema = {\n+\tdeviceCode: {\n+\t\tfields: {\n+\t\t\tdeviceCode: {\n+\t\t\t\ttype: \"string\",\n+\t\t\t\trequired: true,\n+\t\t\t},\n+\t\t\tuserCode: {\n+\t\t\t\ttype: \"string\",\n+\t\t\t\trequired: true,\n+\t\t\t},\n+\t\t\tuserId: {\n+\t\t\t\ttype: \"string\",\n+\t\t\t\trequired: false,\n+\t\t\t},\n+\t\t\texpiresAt: {\n+\t\t\t\ttype: \"date\",\n+\t\t\t\trequired: true,\n+\t\t\t},\n+\t\t\tstatus: {\n+\t\t\t\ttype: \"string\",\n+\t\t\t\trequired: true,\n+\t\t\t\tdefaultValue: \"pending\",\n+\t\t\t},\n+\t\t\tlastPolledAt: {\n+\t\t\t\ttype: \"date\",\n+\t\t\t\trequired: false,\n+\t\t\t},\n+\t\t\tpollingInterval: {\n+\t\t\t\ttype: \"number\",\n+\t\t\t\trequired: false,\n+\t\t\t},\n+\t\t\tclientId: {\n+\t\t\t\ttype: \"string\",\n+\t\t\t\trequired: false,\n+\t\t\t},\n+\t\t\tscope: {\n+\t\t\t\ttype: \"string\",\n+\t\t\t\trequired: false,\n+\t\t\t},\n+\t\t} satisfies Record<string, FieldAttribute>,\n+\t},\n+};\n+\n+export { deviceAuthorizationClient } from \"./client\";\n+\n+const DEVICE_AUTHORIZATION_ERROR_CODES = {\n+\tINVALID_DEVICE_CODE: \"Invalid device code\",\n+\tEXPIRED_DEVICE_CODE: \"Device code has expired\",\n+\tEXPIRED_USER_CODE: \"User code has expired\",\n+\tAUTHORIZATION_PENDING: \"Authorization pending\",\n+\tACCESS_DENIED: \"Access denied\",\n+\tINVALID_USER_CODE: \"Invalid user code\",\n+\tDEVICE_CODE_ALREADY_PROCESSED: \"Device code already processed\",\n+\tPOLLING_TOO_FREQUENTLY: \"Polling too frequently\",\n+\tUSER_NOT_FOUND: \"User not found\",\n+\tFAILED_TO_CREATE_SESSION: \"Failed to create session\",\n+\tINVALID_DEVICE_CODE_STATUS: \"Invalid device code status\",\n+\tAUTHENTICATION_REQUIRED: \"Authentication required\",\n+} as const;\n+\n+export const deviceAuthorization = (\n+\toptions: DeviceAuthorizationOptions = {},\n+) => {\n+\tconst opts = {\n+\t\texpiresIn: 1800,\n+\t\tinterval: 5,\n+\t\tdeviceCodeLength: 40,\n+\t\tuserCodeLength: 8,\n+\t\tuserCodeCharset: \"ABCDEFGHJKLMNPQRSTUVWXYZ23456789\", // Excluding similar looking characters\n+\t\tformatUserCode: true,\n+\t\tenableRateLimiting: true,\n+\t\t...options,\n+\t};\n+\n+\tconst generateDeviceCode = async () => {\n+\t\tif (opts.generateDeviceCode) {\n+\t\t\treturn opts.generateDeviceCode();\n+\t\t}\n+\t\treturn generateRandomString(opts.deviceCodeLength, \"a-z\", \"A-Z\", \"0-9\");\n+\t};\n+\n+\tconst generateUserCode = async () => {\n+\t\tif (opts.generateUserCode) {\n+\t\t\treturn opts.generateUserCode();\n+\t\t}\n+\t\tconst chars = opts.userCodeCharset;\n+\t\tlet code = \"\";\n+\t\tfor (let i = 0; i < opts.userCodeLength; i++) {\n+\t\t\tcode += chars[Math.floor(Math.random() * chars.length)];\n+\t\t}\n+\t\treturn code;\n+\t};\n+\n+\tconst formatUserCode = (code: string) => {\n+\t\t// Format with hyphen for readability if enabled (e.g., \"WDJB-MJHT\")\n+\t\tif (opts.formatUserCode && code.length === 8) {\n+\t\t\treturn `${code.slice(0, 4)}-${code.slice(4)}`;\n+\t\t}\n+\t\treturn code;\n+\t};\n+\n+\treturn {\n+\t\tid: \"device-authorization\",\n+\t\tschema: deviceCodeSchema,",
+        "comment_created_at": "2025-08-10T00:45:18+00:00",
+        "comment_author": "Bekacru",
+        "comment_body": "See other plugin examples on how to make this schema configurable from the user side by accepting a schema fields in the plugin options",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2243879148",
+    "pr_number": 3706,
+    "pr_file": "packages/cli/src/commands/telemetry.ts",
+    "created_at": "2025-07-30T21:19:16+00:00",
+    "commented_code": "+import { Command } from \"commander\";\n+import { GlobalConfig } from \"../../../better-auth/src/config\";\n+import { TELEMETRY_CONFIG_KEY } from \"../../../better-auth/src/telemetry/config-key\";\n+\n+export const telemetry = new Command(\"telemetry\").action(() =>",
+    "repo_full_name": "better-auth/better-auth",
+    "discussion_comments": [
+      {
+        "comment_id": "2243879148",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3706,
+        "pr_file": "packages/cli/src/commands/telemetry.ts",
+        "discussion_id": "2243879148",
+        "commented_code": "@@ -0,0 +1,25 @@\n+import { Command } from \"commander\";\n+import { GlobalConfig } from \"../../../better-auth/src/config\";\n+import { TELEMETRY_CONFIG_KEY } from \"../../../better-auth/src/telemetry/config-key\";\n+\n+export const telemetry = new Command(\"telemetry\").action(() =>",
+        "comment_created_at": "2025-07-30T21:19:16+00:00",
+        "comment_author": "Bekacru",
+        "comment_body": "disabling telemetry should probably done through an env variable. I don't see the need for the CLI",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2243883947",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3706,
+        "pr_file": "packages/cli/src/commands/telemetry.ts",
+        "discussion_id": "2243879148",
+        "commented_code": "@@ -0,0 +1,25 @@\n+import { Command } from \"commander\";\n+import { GlobalConfig } from \"../../../better-auth/src/config\";\n+import { TELEMETRY_CONFIG_KEY } from \"../../../better-auth/src/telemetry/config-key\";\n+\n+export const telemetry = new Command(\"telemetry\").action(() =>",
+        "comment_created_at": "2025-07-30T21:20:29+00:00",
+        "comment_author": "Bekacru",
+        "comment_body": "that said maybe we should display in one of the CLI commands or post install that they can disable this behavior by passing DISBLAE_AUTH_TELEMETRY=1 or something",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2244830816",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3706,
+        "pr_file": "packages/cli/src/commands/telemetry.ts",
+        "discussion_id": "2243879148",
+        "commented_code": "@@ -0,0 +1,25 @@\n+import { Command } from \"commander\";\n+import { GlobalConfig } from \"../../../better-auth/src/config\";\n+import { TELEMETRY_CONFIG_KEY } from \"../../../better-auth/src/telemetry/config-key\";\n+\n+export const telemetry = new Command(\"telemetry\").action(() =>",
+        "comment_created_at": "2025-07-31T09:18:48+00:00",
+        "comment_author": "frectonz",
+        "comment_body": "I took they idea of having the CLI from Astro's telemetry implementation. (https://astro.build/telemetry/) Some users may want a way to disable telemetry for all better auth projects globally.\r\n\r\nThey can also still disable telemetry on a per project basis with `BETTER_AUTH_TELEMETRY` env var.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2247015864",
+    "pr_number": 3706,
+    "pr_file": "packages/better-auth/src/config/index.ts",
+    "created_at": "2025-08-01T06:01:56+00:00",
+    "commented_code": "+import fs from \"node:fs/promises\";\n+import path from \"node:path\";\n+\n+import { loadConfig } from \"./load-config\";\n+import { getConfigDir } from \"./config-dir\";\n+\n+export interface GlobalConfigOptions {\n+\tname?: string;\n+}\n+\n+type RealizedGlobalConfigOptions = Required<GlobalConfigOptions>;\n+\n+export async function createGlobalConfig(options?: GlobalConfigOptions) {",
+    "repo_full_name": "better-auth/better-auth",
+    "discussion_comments": [
+      {
+        "comment_id": "2247015864",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3706,
+        "pr_file": "packages/better-auth/src/config/index.ts",
+        "discussion_id": "2247015864",
+        "commented_code": "@@ -0,0 +1,80 @@\n+import fs from \"node:fs/promises\";\n+import path from \"node:path\";\n+\n+import { loadConfig } from \"./load-config\";\n+import { getConfigDir } from \"./config-dir\";\n+\n+export interface GlobalConfigOptions {\n+\tname?: string;\n+}\n+\n+type RealizedGlobalConfigOptions = Required<GlobalConfigOptions>;\n+\n+export async function createGlobalConfig(options?: GlobalConfigOptions) {",
+        "comment_created_at": "2025-08-01T06:01:56+00:00",
+        "comment_author": "Bekacru",
+        "comment_body": "I honestly don't see the point of storing this in a global config, assuming we're just a library and not a full-on web framework. It's mostly useful for local dev, unless you're also running a VPS in production. For serverless, since there's no persistence, this seems pretty useless (I'm assuming).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2247017708",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3706,
+        "pr_file": "packages/better-auth/src/config/index.ts",
+        "discussion_id": "2247015864",
+        "commented_code": "@@ -0,0 +1,80 @@\n+import fs from \"node:fs/promises\";\n+import path from \"node:path\";\n+\n+import { loadConfig } from \"./load-config\";\n+import { getConfigDir } from \"./config-dir\";\n+\n+export interface GlobalConfigOptions {\n+\tname?: string;\n+}\n+\n+type RealizedGlobalConfigOptions = Required<GlobalConfigOptions>;\n+\n+export async function createGlobalConfig(options?: GlobalConfigOptions) {",
+        "comment_created_at": "2025-08-01T06:02:42+00:00",
+        "comment_author": "Bekacru",
+        "comment_body": "But I haven't checked. If everyone does this, might make sense",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2247055615",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3706,
+        "pr_file": "packages/better-auth/src/config/index.ts",
+        "discussion_id": "2247015864",
+        "commented_code": "@@ -0,0 +1,80 @@\n+import fs from \"node:fs/promises\";\n+import path from \"node:path\";\n+\n+import { loadConfig } from \"./load-config\";\n+import { getConfigDir } from \"./config-dir\";\n+\n+export interface GlobalConfigOptions {\n+\tname?: string;\n+}\n+\n+type RealizedGlobalConfigOptions = Required<GlobalConfigOptions>;\n+\n+export async function createGlobalConfig(options?: GlobalConfigOptions) {",
+        "comment_created_at": "2025-08-01T06:19:30+00:00",
+        "comment_author": "frectonz",
+        "comment_body": "Yeah kinfish also suggest it, i will remove the global config.\r\n\r\nDon't we need an anonymous ID that will be reused across projects, this can be thought of as a proxy to the number of users better auth has. We will need an anonymous ID that can be reused across different projects. I am currently storing the anonymous ID in this global config.\r\n\r\nThis will let use track situations in which even though i might have 3 projects that use better-auth in my computer, all of them will have the same anonymous ID when a telemetry event is published. \r\n\r\nTo differentiate between the projects we have a separate project anonymous ID, but the global anonymous ID let's us count the number of devices that have better auth running in some way.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2247060041",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3706,
+        "pr_file": "packages/better-auth/src/config/index.ts",
+        "discussion_id": "2247015864",
+        "commented_code": "@@ -0,0 +1,80 @@\n+import fs from \"node:fs/promises\";\n+import path from \"node:path\";\n+\n+import { loadConfig } from \"./load-config\";\n+import { getConfigDir } from \"./config-dir\";\n+\n+export interface GlobalConfigOptions {\n+\tname?: string;\n+}\n+\n+type RealizedGlobalConfigOptions = Required<GlobalConfigOptions>;\n+\n+export async function createGlobalConfig(options?: GlobalConfigOptions) {",
+        "comment_created_at": "2025-08-01T06:21:35+00:00",
+        "comment_author": "Bekacru",
+        "comment_body": "but this id will be useless in prod, since you can't really persisit the config. For ID as I suggested, you should rely on a hashed base url or something",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2247082570",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3706,
+        "pr_file": "packages/better-auth/src/config/index.ts",
+        "discussion_id": "2247015864",
+        "commented_code": "@@ -0,0 +1,80 @@\n+import fs from \"node:fs/promises\";\n+import path from \"node:path\";\n+\n+import { loadConfig } from \"./load-config\";\n+import { getConfigDir } from \"./config-dir\";\n+\n+export interface GlobalConfigOptions {\n+\tname?: string;\n+}\n+\n+type RealizedGlobalConfigOptions = Required<GlobalConfigOptions>;\n+\n+export async function createGlobalConfig(options?: GlobalConfigOptions) {",
+        "comment_created_at": "2025-08-01T06:31:11+00:00",
+        "comment_author": "frectonz",
+        "comment_body": "that sounds good, i will use the project Id as the anonymous ID",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2247083686",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3706,
+        "pr_file": "packages/better-auth/src/config/index.ts",
+        "discussion_id": "2247015864",
+        "commented_code": "@@ -0,0 +1,80 @@\n+import fs from \"node:fs/promises\";\n+import path from \"node:path\";\n+\n+import { loadConfig } from \"./load-config\";\n+import { getConfigDir } from \"./config-dir\";\n+\n+export interface GlobalConfigOptions {\n+\tname?: string;\n+}\n+\n+type RealizedGlobalConfigOptions = Required<GlobalConfigOptions>;\n+\n+export async function createGlobalConfig(options?: GlobalConfigOptions) {",
+        "comment_created_at": "2025-08-01T06:31:34+00:00",
+        "comment_author": "Bekacru",
+        "comment_body": "nvm, I get what you mean",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2247088741",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3706,
+        "pr_file": "packages/better-auth/src/config/index.ts",
+        "discussion_id": "2247015864",
+        "commented_code": "@@ -0,0 +1,80 @@\n+import fs from \"node:fs/promises\";\n+import path from \"node:path\";\n+\n+import { loadConfig } from \"./load-config\";\n+import { getConfigDir } from \"./config-dir\";\n+\n+export interface GlobalConfigOptions {\n+\tname?: string;\n+}\n+\n+type RealizedGlobalConfigOptions = Required<GlobalConfigOptions>;\n+\n+export async function createGlobalConfig(options?: GlobalConfigOptions) {",
+        "comment_created_at": "2025-08-01T06:33:26+00:00",
+        "comment_author": "Bekacru",
+        "comment_body": "But yeah, I don't think we care about per-device. It would be misleading, especially since most people will host their project in a serverless environment where the same thing could generate a lot of new IDs.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2247020730",
+    "pr_number": 3706,
+    "pr_file": "packages/better-auth/src/types/options.ts",
+    "created_at": "2025-08-01T06:03:58+00:00",
+    "commented_code": "* Paths you want to disable.\n \t */\n \tdisabledPaths?: string[];\n+\t/**\n+\t * Telemetry configuration\n+\t */\n+\ttelemetry?: {\n+\t\t/**\n+\t\t * Enable telemetry collection\n+\t\t *\n+\t\t * @default true\n+\t\t */\n+\t\tenabled?: boolean;\n+\t\t/**\n+\t\t * Telemetry endpoint to send events to\n+\t\t *\n+\t\t * @default - \"https://telemetry.better-auth.com/v1/track\"\n+\t\t */\n+\t\tendpoint?: string;",
+    "repo_full_name": "better-auth/better-auth",
+    "discussion_comments": [
+      {
+        "comment_id": "2247020730",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3706,
+        "pr_file": "packages/better-auth/src/types/options.ts",
+        "discussion_id": "2247020730",
+        "commented_code": "@@ -1046,4 +1046,21 @@ export type BetterAuthOptions = {\n \t * Paths you want to disable.\n \t */\n \tdisabledPaths?: string[];\n+\t/**\n+\t * Telemetry configuration\n+\t */\n+\ttelemetry?: {\n+\t\t/**\n+\t\t * Enable telemetry collection\n+\t\t *\n+\t\t * @default true\n+\t\t */\n+\t\tenabled?: boolean;\n+\t\t/**\n+\t\t * Telemetry endpoint to send events to\n+\t\t *\n+\t\t * @default - \"https://telemetry.better-auth.com/v1/track\"\n+\t\t */\n+\t\tendpoint?: string;",
+        "comment_created_at": "2025-08-01T06:03:58+00:00",
+        "comment_author": "Bekacru",
+        "comment_body": "we shouldn't have to expose this as an option",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2247058599",
+        "repo_full_name": "better-auth/better-auth",
+        "pr_number": 3706,
+        "pr_file": "packages/better-auth/src/types/options.ts",
+        "discussion_id": "2247020730",
+        "commented_code": "@@ -1046,4 +1046,21 @@ export type BetterAuthOptions = {\n \t * Paths you want to disable.\n \t */\n \tdisabledPaths?: string[];\n+\t/**\n+\t * Telemetry configuration\n+\t */\n+\ttelemetry?: {\n+\t\t/**\n+\t\t * Enable telemetry collection\n+\t\t *\n+\t\t * @default true\n+\t\t */\n+\t\tenabled?: boolean;\n+\t\t/**\n+\t\t * Telemetry endpoint to send events to\n+\t\t *\n+\t\t * @default - \"https://telemetry.better-auth.com/v1/track\"\n+\t\t */\n+\t\tendpoint?: string;",
+        "comment_created_at": "2025-08-01T06:20:52+00:00",
+        "comment_author": "frectonz",
+        "comment_body": "oh i can remove it, i was thinking some user might want to publish to their own telemetry endpoint, i also thought it would be useful during testing.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

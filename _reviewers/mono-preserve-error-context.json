@@ -1,0 +1,112 @@
+[
+  {
+    "discussion_id": "1969602956",
+    "pr_number": 3841,
+    "pr_file": "packages/zero-op-sqlite/src/transaction.ts",
+    "created_at": "2025-02-25T11:44:19+00:00",
+    "commented_code": "+import * as OPSQLite from '@op-engineering/op-sqlite';\n+import {\n+  SQLiteTransaction,\n+  type SQLResultSetRowList,\n+} from '../../replicache/src/kv/sqlite-store.ts';\n+\n+export class OPSQLiteTransaction extends SQLiteTransaction {\n+  #tx: OPSQLite.Transaction | null = null;\n+  #transactionCommittedSubscriptions = new Set<() => void>();\n+  #txCommitted = false;\n+  #transactionEndedSubscriptions = new Set<{\n+    resolve: () => void;\n+    reject: () => void;\n+  }>();\n+  #txEnded = false;\n+\n+  // eslint-disable-next-line @typescript-eslint/parameter-properties\n+  constructor(private readonly _db: ReturnType<typeof OPSQLite.open>) {\n+    super();\n+  }\n+\n+  // op-sqlite doesn't support readonly\n+  async start() {\n+    await new Promise<void>((resolve, reject) => {\n+      let didResolve = false;\n+      try {\n+        void this._db.transaction(async tx => {\n+          didResolve = true;\n+          this.#tx = tx;\n+          resolve();\n+\n+          try {\n+            // op-sqlite auto-commits our transaction when this callback ends.\n+            // Lets artificially keep it open until we commit.\n+            await this.#waitForTransactionCommitted();\n+            this.#setTransactionEnded(false);\n+          } catch (error) {\n+            this.#setTransactionEnded(true);\n+          }\n+        });\n+      } catch {\n+        if (!didResolve) {\n+          reject(new Error('Did not resolve'));\n+        }\n+      }\n+    });\n+  }\n+\n+  async execute(\n+    sqlStatement: string,\n+    args?: (string | number | null)[] | undefined,\n+  ): Promise<SQLResultSetRowList> {\n+    const tx = this.#assertTransactionReady();\n+    const {rows} = await tx.execute(sqlStatement, args);\n+\n+    return {\n+      item: (idx: number) => ({\n+        value: String(rows?.[idx]?.value ?? ''),\n+      }),\n+      length: rows?.length ?? 0,\n+    };\n+  }\n+\n+  async commit() {\n+    const tx = this.#assertTransactionReady();\n+    await tx.commit();\n+    this.#txCommitted = true;\n+    for (const resolver of this.#transactionCommittedSubscriptions) {\n+      resolver();\n+    }\n+    this.#transactionCommittedSubscriptions.clear();\n+  }\n+\n+  waitForTransactionEnded() {\n+    if (this.#txEnded) return;\n+    return new Promise<void>((resolve, reject) => {\n+      this.#transactionEndedSubscriptions.add({resolve, reject});\n+    });\n+  }\n+\n+  #assertTransactionReady() {\n+    if (this.#tx === null) throw new Error('Transaction is not ready.');\n+    if (this.#txCommitted) throw new Error('Transaction already committed.');\n+    if (this.#txEnded) throw new Error('Transaction already ended.');\n+    return this.#tx;\n+  }\n+\n+  #waitForTransactionCommitted() {\n+    if (this.#txCommitted) return;\n+    return new Promise<void>(resolve => {\n+      this.#transactionCommittedSubscriptions.add(resolve);\n+    });\n+  }\n+\n+  #setTransactionEnded(errored = false) {\n+    this.#txEnded = true;\n+    for (const {resolve, reject} of this.#transactionEndedSubscriptions) {\n+      if (errored) {\n+        reject();",
+    "repo_full_name": "rocicorp/mono",
+    "discussion_comments": [
+      {
+        "comment_id": "1969602956",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 3841,
+        "pr_file": "packages/zero-op-sqlite/src/transaction.ts",
+        "discussion_id": "1969602956",
+        "commented_code": "@@ -0,0 +1,106 @@\n+import * as OPSQLite from '@op-engineering/op-sqlite';\n+import {\n+  SQLiteTransaction,\n+  type SQLResultSetRowList,\n+} from '../../replicache/src/kv/sqlite-store.ts';\n+\n+export class OPSQLiteTransaction extends SQLiteTransaction {\n+  #tx: OPSQLite.Transaction | null = null;\n+  #transactionCommittedSubscriptions = new Set<() => void>();\n+  #txCommitted = false;\n+  #transactionEndedSubscriptions = new Set<{\n+    resolve: () => void;\n+    reject: () => void;\n+  }>();\n+  #txEnded = false;\n+\n+  // eslint-disable-next-line @typescript-eslint/parameter-properties\n+  constructor(private readonly _db: ReturnType<typeof OPSQLite.open>) {\n+    super();\n+  }\n+\n+  // op-sqlite doesn't support readonly\n+  async start() {\n+    await new Promise<void>((resolve, reject) => {\n+      let didResolve = false;\n+      try {\n+        void this._db.transaction(async tx => {\n+          didResolve = true;\n+          this.#tx = tx;\n+          resolve();\n+\n+          try {\n+            // op-sqlite auto-commits our transaction when this callback ends.\n+            // Lets artificially keep it open until we commit.\n+            await this.#waitForTransactionCommitted();\n+            this.#setTransactionEnded(false);\n+          } catch (error) {\n+            this.#setTransactionEnded(true);\n+          }\n+        });\n+      } catch {\n+        if (!didResolve) {\n+          reject(new Error('Did not resolve'));\n+        }\n+      }\n+    });\n+  }\n+\n+  async execute(\n+    sqlStatement: string,\n+    args?: (string | number | null)[] | undefined,\n+  ): Promise<SQLResultSetRowList> {\n+    const tx = this.#assertTransactionReady();\n+    const {rows} = await tx.execute(sqlStatement, args);\n+\n+    return {\n+      item: (idx: number) => ({\n+        value: String(rows?.[idx]?.value ?? ''),\n+      }),\n+      length: rows?.length ?? 0,\n+    };\n+  }\n+\n+  async commit() {\n+    const tx = this.#assertTransactionReady();\n+    await tx.commit();\n+    this.#txCommitted = true;\n+    for (const resolver of this.#transactionCommittedSubscriptions) {\n+      resolver();\n+    }\n+    this.#transactionCommittedSubscriptions.clear();\n+  }\n+\n+  waitForTransactionEnded() {\n+    if (this.#txEnded) return;\n+    return new Promise<void>((resolve, reject) => {\n+      this.#transactionEndedSubscriptions.add({resolve, reject});\n+    });\n+  }\n+\n+  #assertTransactionReady() {\n+    if (this.#tx === null) throw new Error('Transaction is not ready.');\n+    if (this.#txCommitted) throw new Error('Transaction already committed.');\n+    if (this.#txEnded) throw new Error('Transaction already ended.');\n+    return this.#tx;\n+  }\n+\n+  #waitForTransactionCommitted() {\n+    if (this.#txCommitted) return;\n+    return new Promise<void>(resolve => {\n+      this.#transactionCommittedSubscriptions.add(resolve);\n+    });\n+  }\n+\n+  #setTransactionEnded(errored = false) {\n+    this.#txEnded = true;\n+    for (const {resolve, reject} of this.#transactionEndedSubscriptions) {\n+      if (errored) {\n+        reject();",
+        "comment_created_at": "2025-02-25T11:44:19+00:00",
+        "comment_author": "arv",
+        "comment_body": "It would be nice to pass in the error that was thrown. reject(error)?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1969604568",
+    "pr_number": 3841,
+    "pr_file": "packages/zero-expo/src/transaction.ts",
+    "created_at": "2025-02-25T11:45:34+00:00",
+    "commented_code": "+import * as SQLite from 'expo-sqlite';\n+import {SQLiteTransaction} from '../../replicache/src/kv/sqlite-store.ts';\n+\n+export class ExpoSQLiteTransaction extends SQLiteTransaction {\n+  #tx:\n+    | Parameters<\n+        Parameters<SQLite.SQLiteDatabase['withExclusiveTransactionAsync']>[0]\n+      >[0]\n+    | null = null;\n+  #transactionCommittedSubscriptions = new Set<() => void>();\n+  #txCommitted = false;\n+  #transactionEndedSubscriptions = new Set<{\n+    resolve: () => void;\n+    reject: () => void;\n+  }>();\n+  #txEnded = false;\n+\n+  // eslint-disable-next-line @typescript-eslint/parameter-properties\n+  constructor(private readonly _db: SQLite.SQLiteDatabase) {\n+    super();\n+  }\n+  // expo-sqlite doesn't support readonly\n+  start() {\n+    return new Promise<void>((resolve, reject) => {\n+      let didResolve = false;\n+      try {\n+        void this._db.withExclusiveTransactionAsync(async tx => {\n+          didResolve = true;\n+          this.#tx = tx;\n+          resolve();\n+\n+          try {\n+            // expo-sqlite auto-commits our transaction when this callback ends.\n+            // Lets artificially keep it open until we commit.\n+            await this.#waitForTransactionCommitted();\n+            this.#setTransactionEnded(false);\n+          } catch {\n+            this.#setTransactionEnded(true);",
+    "repo_full_name": "rocicorp/mono",
+    "discussion_comments": [
+      {
+        "comment_id": "1969604568",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 3841,
+        "pr_file": "packages/zero-expo/src/transaction.ts",
+        "discussion_id": "1969604568",
+        "commented_code": "@@ -0,0 +1,110 @@\n+import * as SQLite from 'expo-sqlite';\n+import {SQLiteTransaction} from '../../replicache/src/kv/sqlite-store.ts';\n+\n+export class ExpoSQLiteTransaction extends SQLiteTransaction {\n+  #tx:\n+    | Parameters<\n+        Parameters<SQLite.SQLiteDatabase['withExclusiveTransactionAsync']>[0]\n+      >[0]\n+    | null = null;\n+  #transactionCommittedSubscriptions = new Set<() => void>();\n+  #txCommitted = false;\n+  #transactionEndedSubscriptions = new Set<{\n+    resolve: () => void;\n+    reject: () => void;\n+  }>();\n+  #txEnded = false;\n+\n+  // eslint-disable-next-line @typescript-eslint/parameter-properties\n+  constructor(private readonly _db: SQLite.SQLiteDatabase) {\n+    super();\n+  }\n+  // expo-sqlite doesn't support readonly\n+  start() {\n+    return new Promise<void>((resolve, reject) => {\n+      let didResolve = false;\n+      try {\n+        void this._db.withExclusiveTransactionAsync(async tx => {\n+          didResolve = true;\n+          this.#tx = tx;\n+          resolve();\n+\n+          try {\n+            // expo-sqlite auto-commits our transaction when this callback ends.\n+            // Lets artificially keep it open until we commit.\n+            await this.#waitForTransactionCommitted();\n+            this.#setTransactionEnded(false);\n+          } catch {\n+            this.#setTransactionEnded(true);",
+        "comment_created_at": "2025-02-25T11:45:34+00:00",
+        "comment_author": "arv",
+        "comment_body": "```suggestion\r\n          } catch (e) {\r\n            this.#setTransactionEnded(true, e);\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2159488318",
+    "pr_number": 4529,
+    "pr_file": "packages/zero-pg/src/push-processor.ts",
+    "created_at": "2025-06-20T18:24:32+00:00",
+    "commented_code": ");\n   }\n }\n+\n+function makeAppErrorResponse(m: Mutation, e: unknown): MutationResponse {\n+  return {\n+    id: {\n+      clientID: m.clientID,\n+      id: m.id,\n+    },\n+    result: {\n+      error: 'app',\n+      details:\n+        e instanceof Error ? e.message : 'exception was not of type `Error`',",
+    "repo_full_name": "rocicorp/mono",
+    "discussion_comments": [
+      {
+        "comment_id": "2159488318",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 4529,
+        "pr_file": "packages/zero-pg/src/push-processor.ts",
+        "discussion_id": "2159488318",
+        "commented_code": "@@ -304,3 +308,17 @@ class OutOfOrderMutation extends Error {\n     );\n   }\n }\n+\n+function makeAppErrorResponse(m: Mutation, e: unknown): MutationResponse {\n+  return {\n+    id: {\n+      clientID: m.clientID,\n+      id: m.id,\n+    },\n+    result: {\n+      error: 'app',\n+      details:\n+        e instanceof Error ? e.message : 'exception was not of type `Error`',",
+        "comment_created_at": "2025-06-20T18:24:32+00:00",
+        "comment_author": "grgbkr",
+        "comment_body": "maybe\r\n`e instanceof Error ? e.message : String(e)`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1957810008",
+    "pr_number": 3817,
+    "pr_file": "packages/zql/src/query/static-query.ts",
+    "created_at": "2025-02-17T08:32:27+00:00",
+    "commented_code": "throw new Error('AuthQuery cannot be materialized');\n   }\n \n-  run(): HumanReadable<TReturn> {\n+  run(): Promise<HumanReadable<TReturn>> {\n     throw new Error('AuthQuery cannot be run');",
+    "repo_full_name": "rocicorp/mono",
+    "discussion_comments": [
+      {
+        "comment_id": "1957810008",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 3817,
+        "pr_file": "packages/zql/src/query/static-query.ts",
+        "discussion_id": "1957810008",
+        "commented_code": "@@ -58,7 +58,7 @@ export class StaticQuery<\n     throw new Error('AuthQuery cannot be materialized');\n   }\n \n-  run(): HumanReadable<TReturn> {\n+  run(): Promise<HumanReadable<TReturn>> {\n     throw new Error('AuthQuery cannot be run');",
+        "comment_created_at": "2025-02-17T08:32:27+00:00",
+        "comment_author": "arv",
+        "comment_body": "It is problematic to synchronously throw when a function returns a Promise. Instead prefer returning a rejected promise.\r\n\r\nreturn Promise.reject(...)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1933562120",
+    "pr_number": 3639,
+    "pr_file": "packages/zero-cache/src/services/change-source/custom/change-source.ts",
+    "created_at": "2025-01-29T09:47:32+00:00",
+    "commented_code": "+import {LogContext} from '@rocicorp/logger';\n+import {WebSocket} from 'ws';\n+import {assert, unreachable} from '../../../../../shared/src/asserts.ts';\n+import {deepEqual} from '../../../../../shared/src/json.ts';\n+import type {SchemaValue} from '../../../../../zero-schema/src/table-schema.ts';\n+import {Database} from '../../../../../zqlite/src/db.ts';\n+import {computeZqlSpecs} from '../../../db/lite-tables.ts';\n+import {StatementRunner} from '../../../db/statements.ts';\n+import {stringify} from '../../../types/bigint-json.ts';\n+import {stream} from '../../../types/streams.ts';\n+import type {\n+  ChangeSource,\n+  ChangeStream,\n+} from '../../change-streamer/change-streamer-service.ts';\n+import {type ReplicationConfig} from '../../change-streamer/schema/tables.ts';\n+import {ChangeProcessor} from '../../replicator/change-processor.ts';\n+import {initChangeLog} from '../../replicator/schema/change-log.ts';\n+import {\n+  getSubscriptionState,\n+  initReplicationState,\n+} from '../../replicator/schema/replication-state.ts';\n+import type {ShardConfig} from '../pg/shard-config.ts';\n+import {changeStreamMessageSchema} from '../protocol/current/downstream.ts';\n+import {type ChangeSourceUpstream} from '../protocol/current/upstream.ts';\n+import {initSyncSchema} from './sync-schema.ts';\n+\n+/**\n+ * Initializes a Postgres change source, including the initial sync of the\n+ * replica, before streaming changes from the corresponding logical replication\n+ * stream.\n+ */\n+export async function initializeCustomChangeSource(\n+  lc: LogContext,\n+  upstreamURI: string,\n+  shard: ShardConfig,\n+  replicaDbFile: string,\n+): Promise<{replicationConfig: ReplicationConfig; changeSource: ChangeSource}> {\n+  await initSyncSchema(\n+    lc,\n+    `replica-${shard.id}`,\n+    shard,\n+    replicaDbFile,\n+    upstreamURI,\n+  );\n+\n+  const replica = new Database(lc, replicaDbFile);\n+  const replicationConfig = getSubscriptionState(new StatementRunner(replica));\n+  replica.close();\n+\n+  if (shard.publications.length) {\n+    // Verify that the publications match what has been synced.\n+    const requested = [...shard.publications].sort();\n+    const replicated = replicationConfig.publications.sort();\n+    if (!deepEqual(requested, replicated)) {\n+      throw new Error(\n+        `Invalid ShardConfig. Requested publications [${requested}] do not match synced publications: [${replicated}]`,\n+      );\n+    }\n+  }\n+\n+  const changeSource = new CustomChangeSource(\n+    lc,\n+    upstreamURI,\n+    shard.id,\n+    replicationConfig,\n+  );\n+\n+  return {replicationConfig, changeSource};\n+}\n+\n+class CustomChangeSource implements ChangeSource {\n+  readonly #lc: LogContext;\n+  readonly #upstreamUri: string;\n+  readonly #shardID: string;\n+  readonly #replicationConfig: ReplicationConfig;\n+\n+  constructor(\n+    lc: LogContext,\n+    upstreamUri: string,\n+    shardID: string,\n+    replicationConfig: ReplicationConfig,\n+  ) {\n+    this.#lc = lc.withContext('component', 'change-source');\n+    this.#upstreamUri = upstreamUri;\n+    this.#shardID = shardID;\n+    this.#replicationConfig = replicationConfig;\n+  }\n+\n+  initialSync(): ChangeStream {\n+    return this.#startStream();\n+  }\n+\n+  startStream(clientWatermark: string): Promise<ChangeStream> {\n+    return Promise.resolve(this.#startStream(clientWatermark));",
+    "repo_full_name": "rocicorp/mono",
+    "discussion_comments": [
+      {
+        "comment_id": "1933562120",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 3639,
+        "pr_file": "packages/zero-cache/src/services/change-source/custom/change-source.ts",
+        "discussion_id": "1933562120",
+        "commented_code": "@@ -0,0 +1,248 @@\n+import {LogContext} from '@rocicorp/logger';\n+import {WebSocket} from 'ws';\n+import {assert, unreachable} from '../../../../../shared/src/asserts.ts';\n+import {deepEqual} from '../../../../../shared/src/json.ts';\n+import type {SchemaValue} from '../../../../../zero-schema/src/table-schema.ts';\n+import {Database} from '../../../../../zqlite/src/db.ts';\n+import {computeZqlSpecs} from '../../../db/lite-tables.ts';\n+import {StatementRunner} from '../../../db/statements.ts';\n+import {stringify} from '../../../types/bigint-json.ts';\n+import {stream} from '../../../types/streams.ts';\n+import type {\n+  ChangeSource,\n+  ChangeStream,\n+} from '../../change-streamer/change-streamer-service.ts';\n+import {type ReplicationConfig} from '../../change-streamer/schema/tables.ts';\n+import {ChangeProcessor} from '../../replicator/change-processor.ts';\n+import {initChangeLog} from '../../replicator/schema/change-log.ts';\n+import {\n+  getSubscriptionState,\n+  initReplicationState,\n+} from '../../replicator/schema/replication-state.ts';\n+import type {ShardConfig} from '../pg/shard-config.ts';\n+import {changeStreamMessageSchema} from '../protocol/current/downstream.ts';\n+import {type ChangeSourceUpstream} from '../protocol/current/upstream.ts';\n+import {initSyncSchema} from './sync-schema.ts';\n+\n+/**\n+ * Initializes a Postgres change source, including the initial sync of the\n+ * replica, before streaming changes from the corresponding logical replication\n+ * stream.\n+ */\n+export async function initializeCustomChangeSource(\n+  lc: LogContext,\n+  upstreamURI: string,\n+  shard: ShardConfig,\n+  replicaDbFile: string,\n+): Promise<{replicationConfig: ReplicationConfig; changeSource: ChangeSource}> {\n+  await initSyncSchema(\n+    lc,\n+    `replica-${shard.id}`,\n+    shard,\n+    replicaDbFile,\n+    upstreamURI,\n+  );\n+\n+  const replica = new Database(lc, replicaDbFile);\n+  const replicationConfig = getSubscriptionState(new StatementRunner(replica));\n+  replica.close();\n+\n+  if (shard.publications.length) {\n+    // Verify that the publications match what has been synced.\n+    const requested = [...shard.publications].sort();\n+    const replicated = replicationConfig.publications.sort();\n+    if (!deepEqual(requested, replicated)) {\n+      throw new Error(\n+        `Invalid ShardConfig. Requested publications [${requested}] do not match synced publications: [${replicated}]`,\n+      );\n+    }\n+  }\n+\n+  const changeSource = new CustomChangeSource(\n+    lc,\n+    upstreamURI,\n+    shard.id,\n+    replicationConfig,\n+  );\n+\n+  return {replicationConfig, changeSource};\n+}\n+\n+class CustomChangeSource implements ChangeSource {\n+  readonly #lc: LogContext;\n+  readonly #upstreamUri: string;\n+  readonly #shardID: string;\n+  readonly #replicationConfig: ReplicationConfig;\n+\n+  constructor(\n+    lc: LogContext,\n+    upstreamUri: string,\n+    shardID: string,\n+    replicationConfig: ReplicationConfig,\n+  ) {\n+    this.#lc = lc.withContext('component', 'change-source');\n+    this.#upstreamUri = upstreamUri;\n+    this.#shardID = shardID;\n+    this.#replicationConfig = replicationConfig;\n+  }\n+\n+  initialSync(): ChangeStream {\n+    return this.#startStream();\n+  }\n+\n+  startStream(clientWatermark: string): Promise<ChangeStream> {\n+    return Promise.resolve(this.#startStream(clientWatermark));",
+        "comment_created_at": "2025-01-29T09:47:32+00:00",
+        "comment_author": "arv",
+        "comment_body": "Can `#startStream` throw? Maybe use async function to make this return a promise rejection in case `#startStream` throws.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

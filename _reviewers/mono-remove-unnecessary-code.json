@@ -1,0 +1,168 @@
+[
+  {
+    "discussion_id": "2260033082",
+    "pr_number": 4669,
+    "pr_file": "packages/replicache/src/kv/sqlite-store.ts",
+    "created_at": "2025-08-07T11:43:02+00:00",
+    "commented_code": "+import {Lock, RWLock} from '@rocicorp/lock';\n+import type {ReadonlyJSONValue} from '../../../shared/src/json.ts';\n+import {\n+  promiseUndefined,\n+  promiseVoid,\n+} from '../../../shared/src/resolved-promises.ts';\n+import {deepFreeze} from '../frozen-json.ts';\n+import type {Read, Store, Write} from './store.ts';\n+\n+/**\n+ * A SQLite prepared statement.\n+ *\n+ * `run` executes the statement with optional parameters.\n+ * `all` executes the statement and returns the result rows.\n+ * `finalize` releases the statement.\n+ */\n+export interface PreparedStatement {\n+  run(...params: unknown[]): void;\n+  all<T>(...params: unknown[]): T[];\n+  finalize(): void;\n+}\n+\n+export interface SQLiteDatabase {\n+  /**\n+   * Close the database connection.\n+   */\n+  close(): void;\n+\n+  /**\n+   * Destroy or delete the database (e.g. delete file).\n+   */\n+  destroy(): void;\n+\n+  /**\n+   * Prepare a SQL string, returning a statement you can execute.\n+   * E.g. `const stmt = db.prepare(\"SELECT * FROM todos WHERE id=?\");`\n+   */\n+  prepare(sql: string): PreparedStatement;\n+}\n+\n+type SQLitePreparedStatements = {\n+  begin: PreparedStatement;\n+  beginImmediate: PreparedStatement;\n+  commit: PreparedStatement;\n+  rollback: PreparedStatement;\n+\n+  get: PreparedStatement;\n+  put: PreparedStatement;\n+  del: PreparedStatement;\n+};\n+\n+const getPreparedStatementsForSQLiteDatabase = (\n+  db: SQLiteDatabase,\n+): SQLitePreparedStatements => ({\n+  begin: db.prepare('BEGIN'),\n+  beginImmediate: db.prepare('BEGIN IMMEDIATE'),\n+  commit: db.prepare('COMMIT'),\n+  rollback: db.prepare('ROLLBACK'),\n+\n+  get: db.prepare('SELECT value FROM entry WHERE key = ?'),\n+  put: db.prepare('INSERT OR REPLACE INTO entry (key, value) VALUES (?, ?)'),\n+  del: db.prepare('DELETE FROM entry WHERE key = ?'),\n+});\n+\n+interface SQLiteConnectionManager {\n+  acquire(): Promise<{\n+    preparedStatements: SQLitePreparedStatements;\n+    release: () => void;\n+  }>;\n+  close(): void;\n+}\n+\n+type SQLitePreparedStatementPoolEntry = {\n+  db: SQLiteDatabase;\n+  lock: Lock;\n+  preparedStatements: SQLitePreparedStatements;\n+};\n+\n+/**\n+ * Manages a pool of read-only SQLite connections.\n+ *\n+ * Each connection in the pool is protected by its own `Lock` instance which\n+ * guarantees that it is held by at most one reader at a time. Consumers call\n+ * {@link acquire} to get access to a set of prepared statements for a\n+ * connection and must invoke the provided `release` callback when they are\n+ * finished.\n+ *\n+ * The pool eagerly creates the configured number of connections up-front so\n+ * that the first `acquire` call never has to pay the connection setup cost.\n+ */\n+class SQLiteReadConnectionManager implements SQLiteConnectionManager {\n+  #pool: SQLitePreparedStatementPoolEntry[] = [];\n+  #nextIndex = 0;\n+  readonly #rwLock: RWLock;\n+\n+  constructor(\n+    name: string,\n+    manager: SQLiteDatabaseManager,\n+    rwLock: RWLock,\n+    opts: SQLiteDatabaseManagerOptions,\n+  ) {\n+    if (opts.readPoolSize <= 1) {\n+      throw new Error('readPoolSize must be greater than 1');\n+    }\n+\n+    this.#rwLock = rwLock;\n+\n+    for (let i = 0; i < opts.readPoolSize; i++) {\n+      // create a new readonly SQLiteDatabase for each connection\n+      const db = manager.open(name, opts);\n+      const preparedStatements = getPreparedStatementsForSQLiteDatabase(db);\n+      this.#pool.push({\n+        db,\n+        lock: new Lock(),\n+        preparedStatements,\n+      });\n+    }\n+  }\n+\n+  /**\n+   * Acquire a round-robin read connection from the pool.\n+   *\n+   * The returned `release` callback **must** be invoked once the caller is done\n+   * using the prepared statements, otherwise other readers may be blocked\n+   * indefinitely.\n+   */\n+  async acquire(): Promise<{\n+    preparedStatements: SQLitePreparedStatements;\n+    release: () => void;\n+  }> {\n+    const slot = this.#nextIndex;\n+    this.#nextIndex = (this.#nextIndex + 1) % this.#pool.length;\n+\n+    const entry = this.#pool[slot];\n+\n+    // we have two levels of locking\n+    // 1. the RWLock to prevent concurrent read operations while a write is in progress\n+    // 2. the Lock to prevent concurrent read operations on the same connection\n+    const lock = async () => {\n+      const releaseRWLock = await this.#rwLock.read();\n+      const releaseLock = await entry.lock.lock();\n+\n+      return () => {\n+        releaseRWLock();\n+        releaseLock();\n+      };\n+    };\n+\n+    const release = await lock();\n+\n+    return {\n+      preparedStatements: entry.preparedStatements,\n+      release,\n+    };\n+  }",
+    "repo_full_name": "rocicorp/mono",
+    "discussion_comments": [
+      {
+        "comment_id": "2260033082",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 4669,
+        "pr_file": "packages/replicache/src/kv/sqlite-store.ts",
+        "discussion_id": "2260033082",
+        "commented_code": "@@ -0,0 +1,528 @@\n+import {Lock, RWLock} from '@rocicorp/lock';\n+import type {ReadonlyJSONValue} from '../../../shared/src/json.ts';\n+import {\n+  promiseUndefined,\n+  promiseVoid,\n+} from '../../../shared/src/resolved-promises.ts';\n+import {deepFreeze} from '../frozen-json.ts';\n+import type {Read, Store, Write} from './store.ts';\n+\n+/**\n+ * A SQLite prepared statement.\n+ *\n+ * `run` executes the statement with optional parameters.\n+ * `all` executes the statement and returns the result rows.\n+ * `finalize` releases the statement.\n+ */\n+export interface PreparedStatement {\n+  run(...params: unknown[]): void;\n+  all<T>(...params: unknown[]): T[];\n+  finalize(): void;\n+}\n+\n+export interface SQLiteDatabase {\n+  /**\n+   * Close the database connection.\n+   */\n+  close(): void;\n+\n+  /**\n+   * Destroy or delete the database (e.g. delete file).\n+   */\n+  destroy(): void;\n+\n+  /**\n+   * Prepare a SQL string, returning a statement you can execute.\n+   * E.g. `const stmt = db.prepare(\"SELECT * FROM todos WHERE id=?\");`\n+   */\n+  prepare(sql: string): PreparedStatement;\n+}\n+\n+type SQLitePreparedStatements = {\n+  begin: PreparedStatement;\n+  beginImmediate: PreparedStatement;\n+  commit: PreparedStatement;\n+  rollback: PreparedStatement;\n+\n+  get: PreparedStatement;\n+  put: PreparedStatement;\n+  del: PreparedStatement;\n+};\n+\n+const getPreparedStatementsForSQLiteDatabase = (\n+  db: SQLiteDatabase,\n+): SQLitePreparedStatements => ({\n+  begin: db.prepare('BEGIN'),\n+  beginImmediate: db.prepare('BEGIN IMMEDIATE'),\n+  commit: db.prepare('COMMIT'),\n+  rollback: db.prepare('ROLLBACK'),\n+\n+  get: db.prepare('SELECT value FROM entry WHERE key = ?'),\n+  put: db.prepare('INSERT OR REPLACE INTO entry (key, value) VALUES (?, ?)'),\n+  del: db.prepare('DELETE FROM entry WHERE key = ?'),\n+});\n+\n+interface SQLiteConnectionManager {\n+  acquire(): Promise<{\n+    preparedStatements: SQLitePreparedStatements;\n+    release: () => void;\n+  }>;\n+  close(): void;\n+}\n+\n+type SQLitePreparedStatementPoolEntry = {\n+  db: SQLiteDatabase;\n+  lock: Lock;\n+  preparedStatements: SQLitePreparedStatements;\n+};\n+\n+/**\n+ * Manages a pool of read-only SQLite connections.\n+ *\n+ * Each connection in the pool is protected by its own `Lock` instance which\n+ * guarantees that it is held by at most one reader at a time. Consumers call\n+ * {@link acquire} to get access to a set of prepared statements for a\n+ * connection and must invoke the provided `release` callback when they are\n+ * finished.\n+ *\n+ * The pool eagerly creates the configured number of connections up-front so\n+ * that the first `acquire` call never has to pay the connection setup cost.\n+ */\n+class SQLiteReadConnectionManager implements SQLiteConnectionManager {\n+  #pool: SQLitePreparedStatementPoolEntry[] = [];\n+  #nextIndex = 0;\n+  readonly #rwLock: RWLock;\n+\n+  constructor(\n+    name: string,\n+    manager: SQLiteDatabaseManager,\n+    rwLock: RWLock,\n+    opts: SQLiteDatabaseManagerOptions,\n+  ) {\n+    if (opts.readPoolSize <= 1) {\n+      throw new Error('readPoolSize must be greater than 1');\n+    }\n+\n+    this.#rwLock = rwLock;\n+\n+    for (let i = 0; i < opts.readPoolSize; i++) {\n+      // create a new readonly SQLiteDatabase for each connection\n+      const db = manager.open(name, opts);\n+      const preparedStatements = getPreparedStatementsForSQLiteDatabase(db);\n+      this.#pool.push({\n+        db,\n+        lock: new Lock(),\n+        preparedStatements,\n+      });\n+    }\n+  }\n+\n+  /**\n+   * Acquire a round-robin read connection from the pool.\n+   *\n+   * The returned `release` callback **must** be invoked once the caller is done\n+   * using the prepared statements, otherwise other readers may be blocked\n+   * indefinitely.\n+   */\n+  async acquire(): Promise<{\n+    preparedStatements: SQLitePreparedStatements;\n+    release: () => void;\n+  }> {\n+    const slot = this.#nextIndex;\n+    this.#nextIndex = (this.#nextIndex + 1) % this.#pool.length;\n+\n+    const entry = this.#pool[slot];\n+\n+    // we have two levels of locking\n+    // 1. the RWLock to prevent concurrent read operations while a write is in progress\n+    // 2. the Lock to prevent concurrent read operations on the same connection\n+    const lock = async () => {\n+      const releaseRWLock = await this.#rwLock.read();\n+      const releaseLock = await entry.lock.lock();\n+\n+      return () => {\n+        releaseRWLock();\n+        releaseLock();\n+      };\n+    };\n+\n+    const release = await lock();\n+\n+    return {\n+      preparedStatements: entry.preparedStatements,\n+      release,\n+    };\n+  }",
+        "comment_created_at": "2025-08-07T11:43:02+00:00",
+        "comment_author": "arv",
+        "comment_body": "I don't think you need the `lock` function here. You can inline it.\n  ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2124022429",
+    "pr_number": 4449,
+    "pr_file": "apps/zbugs/server/server-mutators.ts",
+    "created_at": "2025-06-03T14:26:05+00:00",
+    "commented_code": ");\n       },\n     },\n-  } as const satisfies CustomMutatorDefs<typeof schema>;",
+    "repo_full_name": "rocicorp/mono",
+    "discussion_comments": [
+      {
+        "comment_id": "2124022429",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 4449,
+        "pr_file": "apps/zbugs/server/server-mutators.ts",
+        "discussion_id": "2124022429",
+        "commented_code": "@@ -194,5 +195,5 @@ export function createServerMutators(\n         );\n       },\n     },\n-  } as const satisfies CustomMutatorDefs<typeof schema>;",
+        "comment_created_at": "2025-06-03T14:26:05+00:00",
+        "comment_author": "tantaman",
+        "comment_body": "looks like we can remove all the `satisfies` calls now.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2259911055",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 4449,
+        "pr_file": "apps/zbugs/server/server-mutators.ts",
+        "discussion_id": "2124022429",
+        "commented_code": "@@ -194,5 +195,5 @@ export function createServerMutators(\n         );\n       },\n     },\n-  } as const satisfies CustomMutatorDefs<typeof schema>;",
+        "comment_created_at": "2025-08-07T10:53:08+00:00",
+        "comment_author": "arv",
+        "comment_body": "The satisfies was never needed. It was there as an extra guard (afaict)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2054650652",
+    "pr_number": 4244,
+    "pr_file": "packages/zero-cache/src/log/context-manager.ts",
+    "created_at": "2025-04-22T18:27:43+00:00",
+    "commented_code": "+import {AsyncLocalStorage} from 'node:async_hooks';\n+import type {MaybePromise} from '../../../shared/src/types.ts';\n+\n+type ContextValues = Record<string, unknown>;\n+\n+/**\n+ * Simplify managing log context so it\n+ * is available without threading it through\n+ * a callstack.\n+ *\n+ * E.g.,\n+ *\n+ * ```ts\n+ * app.get('/foo', (req, res) => {\n+ *   withContext({userId: req.user.id}, () => {\n+ *      someFn();\n+ *   });\n+ * });\n+ *\n+ * // someFn can be arbitrarily nested\n+ * // and still access the context.\n+ * function someFn() {\n+ *  log(`User ID: ${getContext().userId}`);\n+ * }\n+ * ```\n+ */\n+export class ContextManager {",
+    "repo_full_name": "rocicorp/mono",
+    "discussion_comments": [
+      {
+        "comment_id": "2054650652",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 4244,
+        "pr_file": "packages/zero-cache/src/log/context-manager.ts",
+        "discussion_id": "2054650652",
+        "commented_code": "@@ -0,0 +1,67 @@\n+import {AsyncLocalStorage} from 'node:async_hooks';\n+import type {MaybePromise} from '../../../shared/src/types.ts';\n+\n+type ContextValues = Record<string, unknown>;\n+\n+/**\n+ * Simplify managing log context so it\n+ * is available without threading it through\n+ * a callstack.\n+ *\n+ * E.g.,\n+ *\n+ * ```ts\n+ * app.get('/foo', (req, res) => {\n+ *   withContext({userId: req.user.id}, () => {\n+ *      someFn();\n+ *   });\n+ * });\n+ *\n+ * // someFn can be arbitrarily nested\n+ * // and still access the context.\n+ * function someFn() {\n+ *  log(`User ID: ${getContext().userId}`);\n+ * }\n+ * ```\n+ */\n+export class ContextManager {",
+        "comment_created_at": "2025-04-22T18:27:43+00:00",
+        "comment_author": "tantaman",
+        "comment_body": "nit: technically doesn't need to be a class since we just have a singleton instance.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1992209081",
+    "pr_number": 3972,
+    "pr_file": "packages/zero-client/src/client/context.ts",
+    "created_at": "2025-03-12T20:00:08+00:00",
+    "commented_code": "constructor(\n     lc: LogContext,\n     mainSources: IVMSourceBranch,\n-    addQuery: AddQuery,\n+    queryManager: QueryManager,",
+    "repo_full_name": "rocicorp/mono",
+    "discussion_comments": [
+      {
+        "comment_id": "1992209081",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 3972,
+        "pr_file": "packages/zero-client/src/client/context.ts",
+        "discussion_id": "1992209081",
+        "commented_code": "@@ -43,12 +46,12 @@ export class ZeroContext implements QueryDelegate {\n   constructor(\n     lc: LogContext,\n     mainSources: IVMSourceBranch,\n-    addQuery: AddQuery,\n+    queryManager: QueryManager,",
+        "comment_created_at": "2025-03-12T20:00:08+00:00",
+        "comment_author": "aboodman",
+        "comment_body": "I think maybe `ZeroContext` isn't buying us much and should just be folded into `Zero`. I get why `UpdateManager` exists - it encapsulates some logic. But `ZeroContext` doesn't really seem to play a role that's clearly separate from `Zero`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1977087901",
+    "pr_number": 3884,
+    "pr_file": "packages/zero-cache/src/services/change-source/pg/schema/ddl.ts",
+    "created_at": "2025-03-03T08:41:56+00:00",
+    "commented_code": "export type ReplicationEvent = v.Infer<typeof replicationEventSchema>;\n \n-// Creates a function that appends `_SHARD_ID` to the input.\n-export function append(shardID: string) {\n-  return (name: string) => id(name + '_' + shardID);\n+// Creates a function that appends `_{shard-num}` to the input and\n+// quotes the result to be a valid identifier.\n+function append(shardNum: number) {\n+  return (name: string) => id(name + '_' + String(shardNum));",
+    "repo_full_name": "rocicorp/mono",
+    "discussion_comments": [
+      {
+        "comment_id": "1977087901",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 3884,
+        "pr_file": "packages/zero-cache/src/services/change-source/pg/schema/ddl.ts",
+        "discussion_id": "1977087901",
+        "commented_code": "@@ -120,9 +121,10 @@ export const replicationEventSchema = v.union(\n \n export type ReplicationEvent = v.Infer<typeof replicationEventSchema>;\n \n-// Creates a function that appends `_SHARD_ID` to the input.\n-export function append(shardID: string) {\n-  return (name: string) => id(name + '_' + shardID);\n+// Creates a function that appends `_{shard-num}` to the input and\n+// quotes the result to be a valid identifier.\n+function append(shardNum: number) {\n+  return (name: string) => id(name + '_' + String(shardNum));",
+        "comment_created_at": "2025-03-03T08:41:56+00:00",
+        "comment_author": "arv",
+        "comment_body": "`String()` is not really needed in cases like these.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1969006644",
+    "pr_number": 3856,
+    "pr_file": "prod/sst/sst.config.ts",
+    "created_at": "2025-02-25T06:08:29+00:00",
+    "commented_code": "AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID!,\n       AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY!,\n       ZERO_LOG_FORMAT: \"json\",\n-      ZERO_REPLICA_FILE: \"sync-replica.db\",\n-      ZERO_LITESTREAM_BACKUP_URL: $interpolate`s3://${replicationBucket.name}/backup/20250211-00`,\n+      ZERO_REPLICA_FILE: IS_EBS_STAGE\n+        ? \"/data/sync-replica.db\"\n+        : \"sync-replica.db\",\n+      ZERO_LITESTREAM_BACKUP_URL: $interpolate`s3://${replicationBucket.name}/backup/20250219-01`,\n       ZERO_IMAGE_URL: process.env.ZERO_IMAGE_URL!,\n     };\n+\n+    const ecsVolumeRole = IS_EBS_STAGE\n+      ? new aws.iam.Role(`${$app.name}-${$app.stage}-ECSVolumeRole`, {\n+          assumeRolePolicy: JSON.stringify({\n+            Version: \"2012-10-17\",\n+            Statement: [\n+              {\n+                Effect: \"Allow\",\n+                Principal: {\n+                  Service: [\"ecs-tasks.amazonaws.com\", \"ecs.amazonaws.com\"],\n+                },\n+                Action: \"sts:AssumeRole\",\n+              },\n+            ],\n+          }),\n+        })\n+      : undefined;\n+\n+    if (ecsVolumeRole) {\n+      new aws.iam.RolePolicyAttachment(\n+        `${$app.name}-${$app.stage}-ECSVolumePolicyAttachment`,\n+        {\n+          role: ecsVolumeRole.name,\n+          policyArn:\n+            \"arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRolePolicyForVolumes\",\n+        },\n+      );\n+    }\n+\n+    // Common base transform configuration\n+    const BASE_TRANSFORM: any = {",
+    "repo_full_name": "rocicorp/mono",
+    "discussion_comments": [
+      {
+        "comment_id": "1969006644",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 3856,
+        "pr_file": "prod/sst/sst.config.ts",
+        "discussion_id": "1969006644",
+        "commented_code": "@@ -49,10 +62,97 @@ export default $config({\n       AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID!,\n       AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY!,\n       ZERO_LOG_FORMAT: \"json\",\n-      ZERO_REPLICA_FILE: \"sync-replica.db\",\n-      ZERO_LITESTREAM_BACKUP_URL: $interpolate`s3://${replicationBucket.name}/backup/20250211-00`,\n+      ZERO_REPLICA_FILE: IS_EBS_STAGE\n+        ? \"/data/sync-replica.db\"\n+        : \"sync-replica.db\",\n+      ZERO_LITESTREAM_BACKUP_URL: $interpolate`s3://${replicationBucket.name}/backup/20250219-01`,\n       ZERO_IMAGE_URL: process.env.ZERO_IMAGE_URL!,\n     };\n+\n+    const ecsVolumeRole = IS_EBS_STAGE\n+      ? new aws.iam.Role(`${$app.name}-${$app.stage}-ECSVolumeRole`, {\n+          assumeRolePolicy: JSON.stringify({\n+            Version: \"2012-10-17\",\n+            Statement: [\n+              {\n+                Effect: \"Allow\",\n+                Principal: {\n+                  Service: [\"ecs-tasks.amazonaws.com\", \"ecs.amazonaws.com\"],\n+                },\n+                Action: \"sts:AssumeRole\",\n+              },\n+            ],\n+          }),\n+        })\n+      : undefined;\n+\n+    if (ecsVolumeRole) {\n+      new aws.iam.RolePolicyAttachment(\n+        `${$app.name}-${$app.stage}-ECSVolumePolicyAttachment`,\n+        {\n+          role: ecsVolumeRole.name,\n+          policyArn:\n+            \"arn:aws:iam::aws:policy/service-role/AmazonECSInfrastructureRolePolicyForVolumes\",\n+        },\n+      );\n+    }\n+\n+    // Common base transform configuration\n+    const BASE_TRANSFORM: any = {",
+        "comment_created_at": "2025-02-25T06:08:29+00:00",
+        "comment_author": "darkgnotic",
+        "comment_body": "Nit: Is the `: any` type specification necessary? If not, maybe we can remove it. I don't think it adds any value.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1859111547",
+    "pr_number": 3118,
+    "pr_file": "packages/zero-cache/src/services/view-syncer/cvr.ts",
+    "created_at": "2024-11-26T19:19:42+00:00",
+    "commented_code": "return gotQueryPatch ? [gotQueryPatch] : [];\n   }\n \n+  #trackGotAndTransformed(queryID: string, transformationHash: string) {",
+    "repo_full_name": "rocicorp/mono",
+    "discussion_comments": [
+      {
+        "comment_id": "1859111547",
+        "repo_full_name": "rocicorp/mono",
+        "pr_number": 3118,
+        "pr_file": "packages/zero-cache/src/services/view-syncer/cvr.ts",
+        "discussion_id": "1859111547",
+        "commented_code": "@@ -431,6 +443,22 @@ export class CVRQueryDrivenUpdater extends CVRUpdater {\n     return gotQueryPatch ? [gotQueryPatch] : [];\n   }\n \n+  #trackGotAndTransformed(queryID: string, transformationHash: string) {",
+        "comment_created_at": "2024-11-26T19:19:42+00:00",
+        "comment_author": "darkgnotic",
+        "comment_body": "I couldn't find the motivation for this new method. Would things work if we continued using `#trackExecuted()`? There is already logic in there for handling when a transformationHash has changed, so it's meant to handle the lifetime of (non-deleted) query.\r\n\r\nThen perhaps we can revert the changes in this file.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,160 @@
+[
+  {
+    "discussion_id": "2228896120",
+    "pr_number": 4591,
+    "pr_file": "src/node/internal/internal_http_incoming.ts",
+    "created_at": "2025-07-24T15:44:41+00:00",
+    "commented_code": "});\n \n     this.on('timeout', () => {\n-      this.#reading = false;\n+      this._consuming = false;\n     });\n \n-    this.#reader = this.#response.body?.getReader();\n-    // eslint-disable-next-line @typescript-eslint/no-floating-promises\n-    this.#tryRead();\n+    this._stream = this.#response.body;\n   }\n \n-  async #tryRead(): Promise<void> {\n-    if (!this.#reader || this.#reading || this.#aborted) return;\n+  // As this is an implementation of stream.Readable, we provide a _read()\n+  // function that pumps the next chunk out of the underlying ReadableStream.\n+  // eslint-disable-next-line @typescript-eslint/no-misused-promises\n+  override async _read(_n: number): Promise<void> {\n+    if (!this._consuming) {\n+      if (this._readableState) {\n+        this._readableState.readingMore = false;\n+      }\n+      this._consuming = true;\n+    }\n \n-    this.#reading = true;\n+    // Difference from Node.js -\n+    // The Node.js implementation will already have its internal buffer\n+    // filled by the parserOnBody function.\n+    // For our implementation, we use the ReadableStream instance.\n+    if (this._stream == null) {\n+      // For GET and HEAD requests, the stream would be empty.\n+      // Simply signal that we're done.\n+      this.complete = true;\n+      this.push(null);\n+      return;\n+    }\n \n+    const reader = this._stream.getReader();\n     try {\n-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition\n-      while (true) {\n-        const { done, value } = await this.#reader.read();\n-        if (done) {\n-          break;\n-        }\n-        this.push(value);\n+      const data = await reader.read();\n+      if (data.done) {\n+        // Done with stream, tell Readable we have no more data;\n+        this.complete = true;\n+        this.push(null);\n+      } else {\n+        this.push(data.value);\n       }\n-    } catch (error) {\n-      this.emit('error', error);\n+    } catch (e) {\n+      this.destroy(e as Error);\n     } finally {\n-      this.#reading = false;\n-      this.#resetTimers({ finished: true });\n-      this.push(null);\n+      reader.releaseLock();",
+    "repo_full_name": "cloudflare/workerd",
+    "discussion_comments": [
+      {
+        "comment_id": "2228896120",
+        "repo_full_name": "cloudflare/workerd",
+        "pr_number": 4591,
+        "pr_file": "src/node/internal/internal_http_incoming.ts",
+        "discussion_id": "2228896120",
+        "commented_code": "@@ -60,86 +93,330 @@ export class IncomingMessage extends Readable implements _IncomingMessage {\n     });\n \n     this.on('timeout', () => {\n-      this.#reading = false;\n+      this._consuming = false;\n     });\n \n-    this.#reader = this.#response.body?.getReader();\n-    // eslint-disable-next-line @typescript-eslint/no-floating-promises\n-    this.#tryRead();\n+    this._stream = this.#response.body;\n   }\n \n-  async #tryRead(): Promise<void> {\n-    if (!this.#reader || this.#reading || this.#aborted) return;\n+  // As this is an implementation of stream.Readable, we provide a _read()\n+  // function that pumps the next chunk out of the underlying ReadableStream.\n+  // eslint-disable-next-line @typescript-eslint/no-misused-promises\n+  override async _read(_n: number): Promise<void> {\n+    if (!this._consuming) {\n+      if (this._readableState) {\n+        this._readableState.readingMore = false;\n+      }\n+      this._consuming = true;\n+    }\n \n-    this.#reading = true;\n+    // Difference from Node.js -\n+    // The Node.js implementation will already have its internal buffer\n+    // filled by the parserOnBody function.\n+    // For our implementation, we use the ReadableStream instance.\n+    if (this._stream == null) {\n+      // For GET and HEAD requests, the stream would be empty.\n+      // Simply signal that we're done.\n+      this.complete = true;\n+      this.push(null);\n+      return;\n+    }\n \n+    const reader = this._stream.getReader();\n     try {\n-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition\n-      while (true) {\n-        const { done, value } = await this.#reader.read();\n-        if (done) {\n-          break;\n-        }\n-        this.push(value);\n+      const data = await reader.read();\n+      if (data.done) {\n+        // Done with stream, tell Readable we have no more data;\n+        this.complete = true;\n+        this.push(null);\n+      } else {\n+        this.push(data.value);\n       }\n-    } catch (error) {\n-      this.emit('error', error);\n+    } catch (e) {\n+      this.destroy(e as Error);\n     } finally {\n-      this.#reading = false;\n-      this.#resetTimers({ finished: true });\n-      this.push(null);\n+      reader.releaseLock();",
+        "comment_created_at": "2025-07-24T15:44:41+00:00",
+        "comment_author": "jasnell",
+        "comment_body": "Actually... do we need to be creating a new `Reader` on every call to `_read(...)`? Couldn't we create one and cache/reuse it?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2194969803",
+    "pr_number": 4480,
+    "pr_file": "src/node/internal/public_process.ts",
+    "created_at": "2025-07-09T12:56:17+00:00",
+    "commented_code": "export { platform, nextTick, emitWarning, env, features };\n \n-// TODO(soon): Implement stdio along with TTY streams (and as a requirement for removing experimental).\n-export const stdin = undefined;\n-export const stdout = undefined;\n-export const stderr = undefined;\n+/**\n+ * Mock non-TTY TTY ReadStream\n+ */\n+class ReadStream extends Readable {\n+  fd: number = 0;\n+  isTTY: boolean = false;\n+  isRaw: boolean = false;\n+  setRawMode(_mode: boolean): this {\n+    return this;\n+  }\n+}\n+\n+export const stdin = new ReadStream({\n+  read(): void {\n+    this.push(null);\n+  },\n+});\n+\n+function chunkToBuffer(\n+  chunk: Buffer | ArrayBufferView | DataView | string,\n+  encoding: BufferEncoding\n+): Uint8Array {\n+  if (typeof chunk === 'string') {\n+    return new Uint8Array(Buffer.from(chunk, encoding));",
+    "repo_full_name": "cloudflare/workerd",
+    "discussion_comments": [
+      {
+        "comment_id": "2194969803",
+        "repo_full_name": "cloudflare/workerd",
+        "pr_number": 4480,
+        "pr_file": "src/node/internal/public_process.ts",
+        "discussion_id": "2194969803",
+        "commented_code": "@@ -32,10 +34,103 @@ import {\n \n export { platform, nextTick, emitWarning, env, features };\n \n-// TODO(soon): Implement stdio along with TTY streams (and as a requirement for removing experimental).\n-export const stdin = undefined;\n-export const stdout = undefined;\n-export const stderr = undefined;\n+/**\n+ * Mock non-TTY TTY ReadStream\n+ */\n+class ReadStream extends Readable {\n+  fd: number = 0;\n+  isTTY: boolean = false;\n+  isRaw: boolean = false;\n+  setRawMode(_mode: boolean): this {\n+    return this;\n+  }\n+}\n+\n+export const stdin = new ReadStream({\n+  read(): void {\n+    this.push(null);\n+  },\n+});\n+\n+function chunkToBuffer(\n+  chunk: Buffer | ArrayBufferView | DataView | string,\n+  encoding: BufferEncoding\n+): Uint8Array {\n+  if (typeof chunk === 'string') {\n+    return new Uint8Array(Buffer.from(chunk, encoding));",
+        "comment_created_at": "2025-07-09T12:56:17+00:00",
+        "comment_author": "jasnell",
+        "comment_body": "This is going to copy twice, once to create the `Buffer` and again to copy into the `Uint8Array`.\r\n\r\n```suggestion\r\n    const buf = Buffer.from(chunk, encoding);\r\n    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2205583794",
+        "repo_full_name": "cloudflare/workerd",
+        "pr_number": 4480,
+        "pr_file": "src/node/internal/public_process.ts",
+        "discussion_id": "2194969803",
+        "commented_code": "@@ -32,10 +34,103 @@ import {\n \n export { platform, nextTick, emitWarning, env, features };\n \n-// TODO(soon): Implement stdio along with TTY streams (and as a requirement for removing experimental).\n-export const stdin = undefined;\n-export const stdout = undefined;\n-export const stderr = undefined;\n+/**\n+ * Mock non-TTY TTY ReadStream\n+ */\n+class ReadStream extends Readable {\n+  fd: number = 0;\n+  isTTY: boolean = false;\n+  isRaw: boolean = false;\n+  setRawMode(_mode: boolean): this {\n+    return this;\n+  }\n+}\n+\n+export const stdin = new ReadStream({\n+  read(): void {\n+    this.push(null);\n+  },\n+});\n+\n+function chunkToBuffer(\n+  chunk: Buffer | ArrayBufferView | DataView | string,\n+  encoding: BufferEncoding\n+): Uint8Array {\n+  if (typeof chunk === 'string') {\n+    return new Uint8Array(Buffer.from(chunk, encoding));",
+        "comment_created_at": "2025-07-14T18:44:51+00:00",
+        "comment_author": "guybedford",
+        "comment_body": "Good catch thanks.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2087642849",
+    "pr_number": 4141,
+    "pr_file": "src/cloudflare/internal/images-api.ts",
+    "created_at": "2025-05-13T21:13:19+00:00",
+    "commented_code": "return contentType;\n   }\n \n-  public image(): ReadableStream<Uint8Array> {\n-    return this.bindingsResponse.body || new ReadableStream();\n+  public image(\n+    options?: ImageTransformationOutputOptions\n+  ): ReadableStream<Uint8Array> {\n+    let stream = this.bindingsResponse.body || new ReadableStream();\n+\n+    if (options?.encoding === 'base64') {\n+      stream = stream.pipeThrough(createBase64EncoderTransformStream());\n+    }\n+\n+    return stream;",
+    "repo_full_name": "cloudflare/workerd",
+    "discussion_comments": [
+      {
+        "comment_id": "2087642849",
+        "repo_full_name": "cloudflare/workerd",
+        "pr_number": 4141,
+        "pr_file": "src/cloudflare/internal/images-api.ts",
+        "discussion_id": "2087642849",
+        "commented_code": "@@ -40,8 +40,16 @@ class TransformationResultImpl implements ImageTransformationResult {\n     return contentType;\n   }\n \n-  public image(): ReadableStream<Uint8Array> {\n-    return this.bindingsResponse.body || new ReadableStream();\n+  public image(\n+    options?: ImageTransformationOutputOptions\n+  ): ReadableStream<Uint8Array> {\n+    let stream = this.bindingsResponse.body || new ReadableStream();\n+\n+    if (options?.encoding === 'base64') {\n+      stream = stream.pipeThrough(createBase64EncoderTransformStream());\n+    }\n+\n+    return stream;",
+        "comment_created_at": "2025-05-13T21:13:19+00:00",
+        "comment_author": "anonrig",
+        "comment_body": "Right now, we always create a new ReadableStream even though we override it in the next statement. This would avoid creating unnecessary readable streams.\r\n\r\n```suggestion\r\n    return options?.encoding === 'base64' ?\r\n      stream.pipeThrough(createBase64EncoderTransformStream()) : (this.bindingsResponse.body || new ReadableStream());\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2093196694",
+        "repo_full_name": "cloudflare/workerd",
+        "pr_number": 4141,
+        "pr_file": "src/cloudflare/internal/images-api.ts",
+        "discussion_id": "2087642849",
+        "commented_code": "@@ -40,8 +40,16 @@ class TransformationResultImpl implements ImageTransformationResult {\n     return contentType;\n   }\n \n-  public image(): ReadableStream<Uint8Array> {\n-    return this.bindingsResponse.body || new ReadableStream();\n+  public image(\n+    options?: ImageTransformationOutputOptions\n+  ): ReadableStream<Uint8Array> {\n+    let stream = this.bindingsResponse.body || new ReadableStream();\n+\n+    if (options?.encoding === 'base64') {\n+      stream = stream.pipeThrough(createBase64EncoderTransformStream());\n+    }\n+\n+    return stream;",
+        "comment_created_at": "2025-05-16T14:46:28+00:00",
+        "comment_author": "ns476",
+        "comment_body": "`||` shortcircuits so we'll only create the empty stream if it is needed here (also changed to use `Blob` anyway due to comment further down)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2087930747",
+    "pr_number": 4141,
+    "pr_file": "src/cloudflare/internal/images-api.ts",
+    "created_at": "2025-05-14T02:45:33+00:00",
+    "commented_code": "return outputStream;\n }\n \n+function concatUint8Arrays(a: Uint8Array, b: Uint8Array): Uint8Array {\n+  const result = new Uint8Array(a.length + b.length);\n+  result.set(a, 0);\n+  result.set(b, a.length);\n+  return result;",
+    "repo_full_name": "cloudflare/workerd",
+    "discussion_comments": [
+      {
+        "comment_id": "2087930747",
+        "repo_full_name": "cloudflare/workerd",
+        "pr_number": 4141,
+        "pr_file": "src/cloudflare/internal/images-api.ts",
+        "discussion_id": "2087930747",
+        "commented_code": "@@ -303,6 +327,165 @@ function chainStreams<T>(streams: ReadableStream<T>[]): ReadableStream<T> {\n   return outputStream;\n }\n \n+function concatUint8Arrays(a: Uint8Array, b: Uint8Array): Uint8Array {\n+  const result = new Uint8Array(a.length + b.length);\n+  result.set(a, 0);\n+  result.set(b, a.length);\n+  return result;",
+        "comment_created_at": "2025-05-14T02:45:33+00:00",
+        "comment_author": "jasnell",
+        "comment_body": "This is going to become quite expensive as the buffers get bigger. If nodejs_compat was enabled then we could use `Buffer.concat` to be far more efficient.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2210580413",
+    "pr_number": 4141,
+    "pr_file": "src/cloudflare/internal/streaming-base64.ts",
+    "created_at": "2025-07-16T14:19:55+00:00",
+    "commented_code": "+import base64 from 'cloudflare-internal:base64';\n+\n+function base64Error(cause: unknown): Error {\n+  // @ts-expect-error: Error.isError seems to be missing from types?\n+  const isError: (_: unknown) => boolean = Error.isError; // eslint-disable-line @typescript-eslint/no-unsafe-assignment\n+  if (isError(cause)) {\n+    const e = cause as Error;\n+    return new Error(`base64 error: ${e.message}`, { cause });\n+  } else {\n+    return new Error('unknown base64 error');\n+  }\n+}\n+\n+function toBase64(input: Uint8Array): Uint8Array {\n+  return new Uint8Array(base64.encodeArray(input));",
+    "repo_full_name": "cloudflare/workerd",
+    "discussion_comments": [
+      {
+        "comment_id": "2210580413",
+        "repo_full_name": "cloudflare/workerd",
+        "pr_number": 4141,
+        "pr_file": "src/cloudflare/internal/streaming-base64.ts",
+        "discussion_id": "2210580413",
+        "commented_code": "@@ -0,0 +1,194 @@\n+import base64 from 'cloudflare-internal:base64';\n+\n+function base64Error(cause: unknown): Error {\n+  // @ts-expect-error: Error.isError seems to be missing from types?\n+  const isError: (_: unknown) => boolean = Error.isError; // eslint-disable-line @typescript-eslint/no-unsafe-assignment\n+  if (isError(cause)) {\n+    const e = cause as Error;\n+    return new Error(`base64 error: ${e.message}`, { cause });\n+  } else {\n+    return new Error('unknown base64 error');\n+  }\n+}\n+\n+function toBase64(input: Uint8Array): Uint8Array {\n+  return new Uint8Array(base64.encodeArray(input));",
+        "comment_created_at": "2025-07-16T14:19:55+00:00",
+        "comment_author": "anonrig",
+        "comment_body": "You can use the following since encodeArray returns an ArrayBuffer, which will be faster afaik:\r\n\r\n```\r\nnew Uint8Array(buffer, byteOffset, length)\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2210582999",
+        "repo_full_name": "cloudflare/workerd",
+        "pr_number": 4141,
+        "pr_file": "src/cloudflare/internal/streaming-base64.ts",
+        "discussion_id": "2210580413",
+        "commented_code": "@@ -0,0 +1,194 @@\n+import base64 from 'cloudflare-internal:base64';\n+\n+function base64Error(cause: unknown): Error {\n+  // @ts-expect-error: Error.isError seems to be missing from types?\n+  const isError: (_: unknown) => boolean = Error.isError; // eslint-disable-line @typescript-eslint/no-unsafe-assignment\n+  if (isError(cause)) {\n+    const e = cause as Error;\n+    return new Error(`base64 error: ${e.message}`, { cause });\n+  } else {\n+    return new Error('unknown base64 error');\n+  }\n+}\n+\n+function toBase64(input: Uint8Array): Uint8Array {\n+  return new Uint8Array(base64.encodeArray(input));",
+        "comment_created_at": "2025-07-16T14:20:54+00:00",
+        "comment_author": "anonrig",
+        "comment_body": "This also applies to other places",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2210705350",
+        "repo_full_name": "cloudflare/workerd",
+        "pr_number": 4141,
+        "pr_file": "src/cloudflare/internal/streaming-base64.ts",
+        "discussion_id": "2210580413",
+        "commented_code": "@@ -0,0 +1,194 @@\n+import base64 from 'cloudflare-internal:base64';\n+\n+function base64Error(cause: unknown): Error {\n+  // @ts-expect-error: Error.isError seems to be missing from types?\n+  const isError: (_: unknown) => boolean = Error.isError; // eslint-disable-line @typescript-eslint/no-unsafe-assignment\n+  if (isError(cause)) {\n+    const e = cause as Error;\n+    return new Error(`base64 error: ${e.message}`, { cause });\n+  } else {\n+    return new Error('unknown base64 error');\n+  }\n+}\n+\n+function toBase64(input: Uint8Array): Uint8Array {\n+  return new Uint8Array(base64.encodeArray(input));",
+        "comment_created_at": "2025-07-16T15:09:04+00:00",
+        "comment_author": "ns476",
+        "comment_body": "I think these are the same things - `new Uint8Array(arrayBuffer)` will point at the same memory:\r\n```\r\n> ab = new ArrayBuffer(1)\r\nArrayBuffer { [Uint8Contents]: <00>, byteLength: 1 }\r\n> u8a = new Uint8Array(ab)\r\nUint8Array(1) [ 0 ]\r\n> u8a.set([1], 0)\r\nundefined\r\n> u8a\r\nUint8Array(1) [ 1 ]\r\n> ab\r\nArrayBuffer { [Uint8Contents]: <01>, byteLength: 1 }\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

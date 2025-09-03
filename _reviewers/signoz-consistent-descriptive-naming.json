@@ -1,0 +1,398 @@
+[
+  {
+    "discussion_id": "2307323172",
+    "pr_number": 8936,
+    "pr_file": "ee/query-service/app/api/export.go",
+    "created_at": "2025-08-28T12:51:52+00:00",
+    "commented_code": "+package api\n+\n+import (\n+\t\"compress/gzip\"\n+\t\"encoding/csv\"\n+\t\"encoding/json\"\n+\t\"fmt\"\n+\t\"net/http\"\n+\t\"net/url\"\n+\t\"runtime\"\n+\t\"runtime/debug\"\n+\t\"strconv\"\n+\t\"strings\"\n+\n+\t\"github.com/SigNoz/signoz/pkg/errors\"\n+\t\"github.com/SigNoz/signoz/pkg/http/render\"\n+\t\"github.com/SigNoz/signoz/pkg/types/authtypes\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n+\t\"github.com/SigNoz/signoz/pkg/valuer\"\n+\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+)\n+\n+const MAX_EXPORT_ROW_COUNT_LIMIT = 50000\n+const DEFAULT_EXPORT_ROW_COUNT_LIMIT = 10000\n+const MAX_EXPORT_BYTES_LIMIT = 10 * 1024 * 1024 * 1024 // 10 GB\n+const CHUNK_SIZE = 1000\n+\n+func (aH *APIHandler) Export(rw http.ResponseWriter, req *http.Request) {\n+\n+\tqueryParams := req.URL.Query()\n+\n+\tstartTime, endTime, err := getExportQueryTimeRange(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tlimit, err := getExportQueryLimit(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tformat, err := getExportQueryFormat(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tfilterExpression := queryParams.Get(\"filter\")\n+\n+\tselectColumns, err := getExportQueryColumns(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tsource, err := getExportQuerySource(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tclaims, err := authtypes.ClaimsFromContext(req.Context())\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tflusher, ok := rw.(http.Flusher)\n+\tif !ok {\n+\t\trender.Error(rw, errors.Newf(errors.TypeUnsupported, errors.CodeUnsupported, \"export is not supported\"))\n+\t\treturn\n+\t}\n+\n+\tdefer func() {\n+\t\tif r := recover(); r != nil {\n+\t\t\tstackTrace := string(debug.Stack())\n+\n+\t\t\taH.Signoz.Instrumentation.Logger().ErrorContext(req.Context(), \"panic in export\",\n+\t\t\t\t\"error\", r,\n+\t\t\t\t\"user\", claims.UserID,\n+\t\t\t\t\"stacktrace\", stackTrace,\n+\t\t\t)\n+\n+\t\t\trender.Error(rw, errors.NewInternalf(\n+\t\t\t\terrors.CodeInternal,\n+\t\t\t\t\"Something went wrong on our end. It's not you, it's us. Our team is notified about it. Reach out to support if issue persists.\",\n+\t\t\t))\n+\t\t}\n+\t}()\n+\n+\tqueryRangeRequest := qbtypes.QueryRangeRequest{\n+\t\tStart:       startTime,\n+\t\tEnd:         endTime,\n+\t\tRequestType: qbtypes.RequestTypeRaw,\n+\t\tCompositeQuery: qbtypes.CompositeQuery{\n+\t\t\tQueries: []qbtypes.QueryEnvelope{\n+\t\t\t\t{\n+\t\t\t\t\tType: qbtypes.QueryTypeBuilder,\n+\t\t\t\t\tSpec: nil,\n+\t\t\t\t},\n+\t\t\t},\n+\t\t},\n+\t}\n+\n+\tswitch source {\n+\tcase \"logs\":\n+\t\tspec := qbtypes.QueryBuilderQuery[qbtypes.LogAggregation]{\n+\t\t\tSignal: telemetrytypes.SignalLogs,\n+\t\t\tName:   \"raw\",\n+\t\t\tFilter: &qbtypes.Filter{\n+\t\t\t\tExpression: filterExpression,\n+\t\t\t},\n+\t\t\tLimit:        limit,\n+\t\t\tSelectFields: selectColumns,\n+\t\t\tOrder: []qbtypes.OrderBy{\n+\t\t\t\t{\n+\t\t\t\t\tDirection: qbtypes.OrderDirectionAsc,\n+\t\t\t\t\tKey: qbtypes.OrderByKey{\n+\t\t\t\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\t\t\t\tName:         \"timestamp\",\n+\t\t\t\t\t\t\tMaterialized: true,\n+\t\t\t\t\t\t},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t\t{\n+\t\t\t\t\tDirection: qbtypes.OrderDirectionAsc,\n+\t\t\t\t\tKey: qbtypes.OrderByKey{\n+\t\t\t\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\t\t\t\tName:         \"id\",\n+\t\t\t\t\t\t\tMaterialized: true,\n+\t\t\t\t\t\t},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t}\n+\n+\t\tqueryRangeRequest.CompositeQuery.Queries[0].Spec = spec",
+    "repo_full_name": "SigNoz/signoz",
+    "discussion_comments": [
+      {
+        "comment_id": "2307323172",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8936,
+        "pr_file": "ee/query-service/app/api/export.go",
+        "discussion_id": "2307323172",
+        "commented_code": "@@ -0,0 +1,429 @@\n+package api\n+\n+import (\n+\t\"compress/gzip\"\n+\t\"encoding/csv\"\n+\t\"encoding/json\"\n+\t\"fmt\"\n+\t\"net/http\"\n+\t\"net/url\"\n+\t\"runtime\"\n+\t\"runtime/debug\"\n+\t\"strconv\"\n+\t\"strings\"\n+\n+\t\"github.com/SigNoz/signoz/pkg/errors\"\n+\t\"github.com/SigNoz/signoz/pkg/http/render\"\n+\t\"github.com/SigNoz/signoz/pkg/types/authtypes\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n+\t\"github.com/SigNoz/signoz/pkg/valuer\"\n+\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+)\n+\n+const MAX_EXPORT_ROW_COUNT_LIMIT = 50000\n+const DEFAULT_EXPORT_ROW_COUNT_LIMIT = 10000\n+const MAX_EXPORT_BYTES_LIMIT = 10 * 1024 * 1024 * 1024 // 10 GB\n+const CHUNK_SIZE = 1000\n+\n+func (aH *APIHandler) Export(rw http.ResponseWriter, req *http.Request) {\n+\n+\tqueryParams := req.URL.Query()\n+\n+\tstartTime, endTime, err := getExportQueryTimeRange(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tlimit, err := getExportQueryLimit(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tformat, err := getExportQueryFormat(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tfilterExpression := queryParams.Get(\"filter\")\n+\n+\tselectColumns, err := getExportQueryColumns(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tsource, err := getExportQuerySource(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tclaims, err := authtypes.ClaimsFromContext(req.Context())\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tflusher, ok := rw.(http.Flusher)\n+\tif !ok {\n+\t\trender.Error(rw, errors.Newf(errors.TypeUnsupported, errors.CodeUnsupported, \"export is not supported\"))\n+\t\treturn\n+\t}\n+\n+\tdefer func() {\n+\t\tif r := recover(); r != nil {\n+\t\t\tstackTrace := string(debug.Stack())\n+\n+\t\t\taH.Signoz.Instrumentation.Logger().ErrorContext(req.Context(), \"panic in export\",\n+\t\t\t\t\"error\", r,\n+\t\t\t\t\"user\", claims.UserID,\n+\t\t\t\t\"stacktrace\", stackTrace,\n+\t\t\t)\n+\n+\t\t\trender.Error(rw, errors.NewInternalf(\n+\t\t\t\terrors.CodeInternal,\n+\t\t\t\t\"Something went wrong on our end. It's not you, it's us. Our team is notified about it. Reach out to support if issue persists.\",\n+\t\t\t))\n+\t\t}\n+\t}()\n+\n+\tqueryRangeRequest := qbtypes.QueryRangeRequest{\n+\t\tStart:       startTime,\n+\t\tEnd:         endTime,\n+\t\tRequestType: qbtypes.RequestTypeRaw,\n+\t\tCompositeQuery: qbtypes.CompositeQuery{\n+\t\t\tQueries: []qbtypes.QueryEnvelope{\n+\t\t\t\t{\n+\t\t\t\t\tType: qbtypes.QueryTypeBuilder,\n+\t\t\t\t\tSpec: nil,\n+\t\t\t\t},\n+\t\t\t},\n+\t\t},\n+\t}\n+\n+\tswitch source {\n+\tcase \"logs\":\n+\t\tspec := qbtypes.QueryBuilderQuery[qbtypes.LogAggregation]{\n+\t\t\tSignal: telemetrytypes.SignalLogs,\n+\t\t\tName:   \"raw\",\n+\t\t\tFilter: &qbtypes.Filter{\n+\t\t\t\tExpression: filterExpression,\n+\t\t\t},\n+\t\t\tLimit:        limit,\n+\t\t\tSelectFields: selectColumns,\n+\t\t\tOrder: []qbtypes.OrderBy{\n+\t\t\t\t{\n+\t\t\t\t\tDirection: qbtypes.OrderDirectionAsc,\n+\t\t\t\t\tKey: qbtypes.OrderByKey{\n+\t\t\t\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\t\t\t\tName:         \"timestamp\",\n+\t\t\t\t\t\t\tMaterialized: true,\n+\t\t\t\t\t\t},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t\t{\n+\t\t\t\t\tDirection: qbtypes.OrderDirectionAsc,\n+\t\t\t\t\tKey: qbtypes.OrderByKey{\n+\t\t\t\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\t\t\t\tName:         \"id\",\n+\t\t\t\t\t\t\tMaterialized: true,\n+\t\t\t\t\t\t},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t}\n+\n+\t\tqueryRangeRequest.CompositeQuery.Queries[0].Spec = spec",
+        "comment_created_at": "2025-08-28T12:51:52+00:00",
+        "comment_author": "nityanandagohain",
+        "comment_body": "ctx := context.WithValue(ctx, \"clickhouse_max_threads\", 2)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2315923653",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8936,
+        "pr_file": "ee/query-service/app/api/export.go",
+        "discussion_id": "2307323172",
+        "commented_code": "@@ -0,0 +1,429 @@\n+package api\n+\n+import (\n+\t\"compress/gzip\"\n+\t\"encoding/csv\"\n+\t\"encoding/json\"\n+\t\"fmt\"\n+\t\"net/http\"\n+\t\"net/url\"\n+\t\"runtime\"\n+\t\"runtime/debug\"\n+\t\"strconv\"\n+\t\"strings\"\n+\n+\t\"github.com/SigNoz/signoz/pkg/errors\"\n+\t\"github.com/SigNoz/signoz/pkg/http/render\"\n+\t\"github.com/SigNoz/signoz/pkg/types/authtypes\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n+\t\"github.com/SigNoz/signoz/pkg/valuer\"\n+\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+)\n+\n+const MAX_EXPORT_ROW_COUNT_LIMIT = 50000\n+const DEFAULT_EXPORT_ROW_COUNT_LIMIT = 10000\n+const MAX_EXPORT_BYTES_LIMIT = 10 * 1024 * 1024 * 1024 // 10 GB\n+const CHUNK_SIZE = 1000\n+\n+func (aH *APIHandler) Export(rw http.ResponseWriter, req *http.Request) {\n+\n+\tqueryParams := req.URL.Query()\n+\n+\tstartTime, endTime, err := getExportQueryTimeRange(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tlimit, err := getExportQueryLimit(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tformat, err := getExportQueryFormat(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tfilterExpression := queryParams.Get(\"filter\")\n+\n+\tselectColumns, err := getExportQueryColumns(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tsource, err := getExportQuerySource(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tclaims, err := authtypes.ClaimsFromContext(req.Context())\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tflusher, ok := rw.(http.Flusher)\n+\tif !ok {\n+\t\trender.Error(rw, errors.Newf(errors.TypeUnsupported, errors.CodeUnsupported, \"export is not supported\"))\n+\t\treturn\n+\t}\n+\n+\tdefer func() {\n+\t\tif r := recover(); r != nil {\n+\t\t\tstackTrace := string(debug.Stack())\n+\n+\t\t\taH.Signoz.Instrumentation.Logger().ErrorContext(req.Context(), \"panic in export\",\n+\t\t\t\t\"error\", r,\n+\t\t\t\t\"user\", claims.UserID,\n+\t\t\t\t\"stacktrace\", stackTrace,\n+\t\t\t)\n+\n+\t\t\trender.Error(rw, errors.NewInternalf(\n+\t\t\t\terrors.CodeInternal,\n+\t\t\t\t\"Something went wrong on our end. It's not you, it's us. Our team is notified about it. Reach out to support if issue persists.\",\n+\t\t\t))\n+\t\t}\n+\t}()\n+\n+\tqueryRangeRequest := qbtypes.QueryRangeRequest{\n+\t\tStart:       startTime,\n+\t\tEnd:         endTime,\n+\t\tRequestType: qbtypes.RequestTypeRaw,\n+\t\tCompositeQuery: qbtypes.CompositeQuery{\n+\t\t\tQueries: []qbtypes.QueryEnvelope{\n+\t\t\t\t{\n+\t\t\t\t\tType: qbtypes.QueryTypeBuilder,\n+\t\t\t\t\tSpec: nil,\n+\t\t\t\t},\n+\t\t\t},\n+\t\t},\n+\t}\n+\n+\tswitch source {\n+\tcase \"logs\":\n+\t\tspec := qbtypes.QueryBuilderQuery[qbtypes.LogAggregation]{\n+\t\t\tSignal: telemetrytypes.SignalLogs,\n+\t\t\tName:   \"raw\",\n+\t\t\tFilter: &qbtypes.Filter{\n+\t\t\t\tExpression: filterExpression,\n+\t\t\t},\n+\t\t\tLimit:        limit,\n+\t\t\tSelectFields: selectColumns,\n+\t\t\tOrder: []qbtypes.OrderBy{\n+\t\t\t\t{\n+\t\t\t\t\tDirection: qbtypes.OrderDirectionAsc,\n+\t\t\t\t\tKey: qbtypes.OrderByKey{\n+\t\t\t\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\t\t\t\tName:         \"timestamp\",\n+\t\t\t\t\t\t\tMaterialized: true,\n+\t\t\t\t\t\t},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t\t{\n+\t\t\t\t\tDirection: qbtypes.OrderDirectionAsc,\n+\t\t\t\t\tKey: qbtypes.OrderByKey{\n+\t\t\t\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\t\t\t\tName:         \"id\",\n+\t\t\t\t\t\t\tMaterialized: true,\n+\t\t\t\t\t\t},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t}\n+\n+\t\tqueryRangeRequest.CompositeQuery.Queries[0].Spec = spec",
+        "comment_created_at": "2025-09-02T12:24:30+00:00",
+        "comment_author": "tushar-signoz",
+        "comment_body": "\"clickhouse_max_threads\" is there a const declared for this ? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2316049505",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8936,
+        "pr_file": "ee/query-service/app/api/export.go",
+        "discussion_id": "2307323172",
+        "commented_code": "@@ -0,0 +1,429 @@\n+package api\n+\n+import (\n+\t\"compress/gzip\"\n+\t\"encoding/csv\"\n+\t\"encoding/json\"\n+\t\"fmt\"\n+\t\"net/http\"\n+\t\"net/url\"\n+\t\"runtime\"\n+\t\"runtime/debug\"\n+\t\"strconv\"\n+\t\"strings\"\n+\n+\t\"github.com/SigNoz/signoz/pkg/errors\"\n+\t\"github.com/SigNoz/signoz/pkg/http/render\"\n+\t\"github.com/SigNoz/signoz/pkg/types/authtypes\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n+\t\"github.com/SigNoz/signoz/pkg/valuer\"\n+\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+)\n+\n+const MAX_EXPORT_ROW_COUNT_LIMIT = 50000\n+const DEFAULT_EXPORT_ROW_COUNT_LIMIT = 10000\n+const MAX_EXPORT_BYTES_LIMIT = 10 * 1024 * 1024 * 1024 // 10 GB\n+const CHUNK_SIZE = 1000\n+\n+func (aH *APIHandler) Export(rw http.ResponseWriter, req *http.Request) {\n+\n+\tqueryParams := req.URL.Query()\n+\n+\tstartTime, endTime, err := getExportQueryTimeRange(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tlimit, err := getExportQueryLimit(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tformat, err := getExportQueryFormat(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tfilterExpression := queryParams.Get(\"filter\")\n+\n+\tselectColumns, err := getExportQueryColumns(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tsource, err := getExportQuerySource(queryParams)\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tclaims, err := authtypes.ClaimsFromContext(req.Context())\n+\tif err != nil {\n+\t\trender.Error(rw, err)\n+\t\treturn\n+\t}\n+\n+\tflusher, ok := rw.(http.Flusher)\n+\tif !ok {\n+\t\trender.Error(rw, errors.Newf(errors.TypeUnsupported, errors.CodeUnsupported, \"export is not supported\"))\n+\t\treturn\n+\t}\n+\n+\tdefer func() {\n+\t\tif r := recover(); r != nil {\n+\t\t\tstackTrace := string(debug.Stack())\n+\n+\t\t\taH.Signoz.Instrumentation.Logger().ErrorContext(req.Context(), \"panic in export\",\n+\t\t\t\t\"error\", r,\n+\t\t\t\t\"user\", claims.UserID,\n+\t\t\t\t\"stacktrace\", stackTrace,\n+\t\t\t)\n+\n+\t\t\trender.Error(rw, errors.NewInternalf(\n+\t\t\t\terrors.CodeInternal,\n+\t\t\t\t\"Something went wrong on our end. It's not you, it's us. Our team is notified about it. Reach out to support if issue persists.\",\n+\t\t\t))\n+\t\t}\n+\t}()\n+\n+\tqueryRangeRequest := qbtypes.QueryRangeRequest{\n+\t\tStart:       startTime,\n+\t\tEnd:         endTime,\n+\t\tRequestType: qbtypes.RequestTypeRaw,\n+\t\tCompositeQuery: qbtypes.CompositeQuery{\n+\t\t\tQueries: []qbtypes.QueryEnvelope{\n+\t\t\t\t{\n+\t\t\t\t\tType: qbtypes.QueryTypeBuilder,\n+\t\t\t\t\tSpec: nil,\n+\t\t\t\t},\n+\t\t\t},\n+\t\t},\n+\t}\n+\n+\tswitch source {\n+\tcase \"logs\":\n+\t\tspec := qbtypes.QueryBuilderQuery[qbtypes.LogAggregation]{\n+\t\t\tSignal: telemetrytypes.SignalLogs,\n+\t\t\tName:   \"raw\",\n+\t\t\tFilter: &qbtypes.Filter{\n+\t\t\t\tExpression: filterExpression,\n+\t\t\t},\n+\t\t\tLimit:        limit,\n+\t\t\tSelectFields: selectColumns,\n+\t\t\tOrder: []qbtypes.OrderBy{\n+\t\t\t\t{\n+\t\t\t\t\tDirection: qbtypes.OrderDirectionAsc,\n+\t\t\t\t\tKey: qbtypes.OrderByKey{\n+\t\t\t\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\t\t\t\tName:         \"timestamp\",\n+\t\t\t\t\t\t\tMaterialized: true,\n+\t\t\t\t\t\t},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t\t{\n+\t\t\t\t\tDirection: qbtypes.OrderDirectionAsc,\n+\t\t\t\t\tKey: qbtypes.OrderByKey{\n+\t\t\t\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\t\t\t\tName:         \"id\",\n+\t\t\t\t\t\t\tMaterialized: true,\n+\t\t\t\t\t\t},\n+\t\t\t\t\t},\n+\t\t\t\t},\n+\t\t\t},\n+\t\t}\n+\n+\t\tqueryRangeRequest.CompositeQuery.Queries[0].Spec = spec",
+        "comment_created_at": "2025-09-02T13:10:42+00:00",
+        "comment_author": "nityanandagohain",
+        "comment_body": "don't think there is a constant, you can create one.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2296729637",
+    "pr_number": 8822,
+    "pr_file": "pkg/query-service/app/integrations/thirdPartyApi/translator.go",
+    "created_at": "2025-08-24T16:34:23+00:00",
+    "commented_code": "package thirdPartyApi\n \n import (\n+\t\"fmt\"\n \t\"net\"\n+\t\"time\"\n \n-\tv3 \"github.com/SigNoz/signoz/pkg/query-service/model/v3\"\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n )\n \n const (\n-\turlPathKey    = \"http.url\"\n-\tserverNameKey = \"net.peer.name\"\n+\turlPathKeyLegacy    = \"http.url\"\n+\tserverNameKeyLegacy = \"net.peer.name\"\n+\n+\turlPathKeyCurrent    = \"url.full\"\n+\tserverNameKeyCurrent = \"server.address\"\n )\n \n-var defaultStepInterval int64 = 60\n+var defaultStepInterval = 60 * time.Second\n+\n+// SemconvFieldMapping defines the mapping between legacy and current semconv\n+type SemconvFieldMapping struct {\n+\tLegacyField  string\n+\tCurrentField string\n+\tFieldType    telemetrytypes.FieldDataType\n+\tContext      telemetrytypes.FieldContext\n+}\n+\n+var semconvMappings = []SemconvFieldMapping{\n+\t{\n+\t\tLegacyField:  urlPathKeyLegacy,\n+\t\tCurrentField: urlPathKeyCurrent,\n+\t\tFieldType:    telemetrytypes.FieldDataTypeString,\n+\t\tContext:      telemetrytypes.FieldContextAttribute,\n+\t},\n+\t{\n+\t\tLegacyField:  serverNameKeyLegacy,\n+\t\tCurrentField: serverNameKeyCurrent,\n+\t\tFieldType:    telemetrytypes.FieldDataTypeString,\n+\t\tContext:      telemetrytypes.FieldContextAttribute,\n+\t},\n+}\n+\n+// CreateDualSemconvGroupByKeys creates group by keys supporting both semconv versions\n+func CreateDualSemconvGroupByKeysServer() []qbtypes.GroupByKey {\n+\treturn createDualSemconvGroupBy(semconvMappings[1]) // server name mapping\n+}\n+\n+func CreateDualSemconvGroupByKeysUrl() []qbtypes.GroupByKey {\n+\treturn createDualSemconvGroupBy(semconvMappings[0]) // url path mapping\n+}\n+\n+func createDualSemconvGroupBy(mapping SemconvFieldMapping) []qbtypes.GroupByKey {\n+\treturn []qbtypes.GroupByKey{\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          mapping.CurrentField,\n+\t\t\t\tFieldDataType: mapping.FieldType,\n+\t\t\t\tFieldContext:  mapping.Context,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          mapping.LegacyField,\n+\t\t\t\tFieldDataType: mapping.FieldType,\n+\t\t\t\tFieldContext:  mapping.Context,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t}\n+}\n+\n+func MergeSemconvColumns(result *qbtypes.QueryRangeResponse) *qbtypes.QueryRangeResponse {\n+\tif result == nil || result.Data.Results == nil {\n+\t\treturn result\n+\t}\n+\n+\tfor _, res := range result.Data.Results {\n+\t\tscalarData, ok := res.(*qbtypes.ScalarData)\n+\t\tif !ok {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tserverAddrIdx := -1\n+\t\tnetPeerIdx := -1\n+\n+\t\tfor i, col := range scalarData.Columns {\n+\t\t\tif col.Name == serverNameKeyCurrent {\n+\t\t\t\tserverAddrIdx = i\n+\t\t\t} else if col.Name == serverNameKeyLegacy {\n+\t\t\t\tnetPeerIdx = i",
+    "repo_full_name": "SigNoz/signoz",
+    "discussion_comments": [
+      {
+        "comment_id": "2296729637",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8822,
+        "pr_file": "pkg/query-service/app/integrations/thirdPartyApi/translator.go",
+        "discussion_id": "2296729637",
+        "commented_code": "@@ -1,598 +1,514 @@\n package thirdPartyApi\n \n import (\n+\t\"fmt\"\n \t\"net\"\n+\t\"time\"\n \n-\tv3 \"github.com/SigNoz/signoz/pkg/query-service/model/v3\"\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n )\n \n const (\n-\turlPathKey    = \"http.url\"\n-\tserverNameKey = \"net.peer.name\"\n+\turlPathKeyLegacy    = \"http.url\"\n+\tserverNameKeyLegacy = \"net.peer.name\"\n+\n+\turlPathKeyCurrent    = \"url.full\"\n+\tserverNameKeyCurrent = \"server.address\"\n )\n \n-var defaultStepInterval int64 = 60\n+var defaultStepInterval = 60 * time.Second\n+\n+// SemconvFieldMapping defines the mapping between legacy and current semconv\n+type SemconvFieldMapping struct {\n+\tLegacyField  string\n+\tCurrentField string\n+\tFieldType    telemetrytypes.FieldDataType\n+\tContext      telemetrytypes.FieldContext\n+}\n+\n+var semconvMappings = []SemconvFieldMapping{\n+\t{\n+\t\tLegacyField:  urlPathKeyLegacy,\n+\t\tCurrentField: urlPathKeyCurrent,\n+\t\tFieldType:    telemetrytypes.FieldDataTypeString,\n+\t\tContext:      telemetrytypes.FieldContextAttribute,\n+\t},\n+\t{\n+\t\tLegacyField:  serverNameKeyLegacy,\n+\t\tCurrentField: serverNameKeyCurrent,\n+\t\tFieldType:    telemetrytypes.FieldDataTypeString,\n+\t\tContext:      telemetrytypes.FieldContextAttribute,\n+\t},\n+}\n+\n+// CreateDualSemconvGroupByKeys creates group by keys supporting both semconv versions\n+func CreateDualSemconvGroupByKeysServer() []qbtypes.GroupByKey {\n+\treturn createDualSemconvGroupBy(semconvMappings[1]) // server name mapping\n+}\n+\n+func CreateDualSemconvGroupByKeysUrl() []qbtypes.GroupByKey {\n+\treturn createDualSemconvGroupBy(semconvMappings[0]) // url path mapping\n+}\n+\n+func createDualSemconvGroupBy(mapping SemconvFieldMapping) []qbtypes.GroupByKey {\n+\treturn []qbtypes.GroupByKey{\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          mapping.CurrentField,\n+\t\t\t\tFieldDataType: mapping.FieldType,\n+\t\t\t\tFieldContext:  mapping.Context,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          mapping.LegacyField,\n+\t\t\t\tFieldDataType: mapping.FieldType,\n+\t\t\t\tFieldContext:  mapping.Context,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t}\n+}\n+\n+func MergeSemconvColumns(result *qbtypes.QueryRangeResponse) *qbtypes.QueryRangeResponse {\n+\tif result == nil || result.Data.Results == nil {\n+\t\treturn result\n+\t}\n+\n+\tfor _, res := range result.Data.Results {\n+\t\tscalarData, ok := res.(*qbtypes.ScalarData)\n+\t\tif !ok {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tserverAddrIdx := -1\n+\t\tnetPeerIdx := -1\n+\n+\t\tfor i, col := range scalarData.Columns {\n+\t\t\tif col.Name == serverNameKeyCurrent {\n+\t\t\t\tserverAddrIdx = i\n+\t\t\t} else if col.Name == serverNameKeyLegacy {\n+\t\t\t\tnetPeerIdx = i",
+        "comment_created_at": "2025-08-24T16:34:23+00:00",
+        "comment_author": "nityanandagohain",
+        "comment_body": "this doesn't seem right",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2296732851",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8822,
+        "pr_file": "pkg/query-service/app/integrations/thirdPartyApi/translator.go",
+        "discussion_id": "2296729637",
+        "commented_code": "@@ -1,598 +1,514 @@\n package thirdPartyApi\n \n import (\n+\t\"fmt\"\n \t\"net\"\n+\t\"time\"\n \n-\tv3 \"github.com/SigNoz/signoz/pkg/query-service/model/v3\"\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n )\n \n const (\n-\turlPathKey    = \"http.url\"\n-\tserverNameKey = \"net.peer.name\"\n+\turlPathKeyLegacy    = \"http.url\"\n+\tserverNameKeyLegacy = \"net.peer.name\"\n+\n+\turlPathKeyCurrent    = \"url.full\"\n+\tserverNameKeyCurrent = \"server.address\"\n )\n \n-var defaultStepInterval int64 = 60\n+var defaultStepInterval = 60 * time.Second\n+\n+// SemconvFieldMapping defines the mapping between legacy and current semconv\n+type SemconvFieldMapping struct {\n+\tLegacyField  string\n+\tCurrentField string\n+\tFieldType    telemetrytypes.FieldDataType\n+\tContext      telemetrytypes.FieldContext\n+}\n+\n+var semconvMappings = []SemconvFieldMapping{\n+\t{\n+\t\tLegacyField:  urlPathKeyLegacy,\n+\t\tCurrentField: urlPathKeyCurrent,\n+\t\tFieldType:    telemetrytypes.FieldDataTypeString,\n+\t\tContext:      telemetrytypes.FieldContextAttribute,\n+\t},\n+\t{\n+\t\tLegacyField:  serverNameKeyLegacy,\n+\t\tCurrentField: serverNameKeyCurrent,\n+\t\tFieldType:    telemetrytypes.FieldDataTypeString,\n+\t\tContext:      telemetrytypes.FieldContextAttribute,\n+\t},\n+}\n+\n+// CreateDualSemconvGroupByKeys creates group by keys supporting both semconv versions\n+func CreateDualSemconvGroupByKeysServer() []qbtypes.GroupByKey {\n+\treturn createDualSemconvGroupBy(semconvMappings[1]) // server name mapping\n+}\n+\n+func CreateDualSemconvGroupByKeysUrl() []qbtypes.GroupByKey {\n+\treturn createDualSemconvGroupBy(semconvMappings[0]) // url path mapping\n+}\n+\n+func createDualSemconvGroupBy(mapping SemconvFieldMapping) []qbtypes.GroupByKey {\n+\treturn []qbtypes.GroupByKey{\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          mapping.CurrentField,\n+\t\t\t\tFieldDataType: mapping.FieldType,\n+\t\t\t\tFieldContext:  mapping.Context,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          mapping.LegacyField,\n+\t\t\t\tFieldDataType: mapping.FieldType,\n+\t\t\t\tFieldContext:  mapping.Context,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t}\n+}\n+\n+func MergeSemconvColumns(result *qbtypes.QueryRangeResponse) *qbtypes.QueryRangeResponse {\n+\tif result == nil || result.Data.Results == nil {\n+\t\treturn result\n+\t}\n+\n+\tfor _, res := range result.Data.Results {\n+\t\tscalarData, ok := res.(*qbtypes.ScalarData)\n+\t\tif !ok {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tserverAddrIdx := -1\n+\t\tnetPeerIdx := -1\n+\n+\t\tfor i, col := range scalarData.Columns {\n+\t\t\tif col.Name == serverNameKeyCurrent {\n+\t\t\t\tserverAddrIdx = i\n+\t\t\t} else if col.Name == serverNameKeyLegacy {\n+\t\t\t\tnetPeerIdx = i",
+        "comment_created_at": "2025-08-24T16:45:11+00:00",
+        "comment_author": "nityanandagohain",
+        "comment_body": "please add test cases specifc to this function so that I can get proper idea.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2296734728",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8822,
+        "pr_file": "pkg/query-service/app/integrations/thirdPartyApi/translator.go",
+        "discussion_id": "2296729637",
+        "commented_code": "@@ -1,598 +1,514 @@\n package thirdPartyApi\n \n import (\n+\t\"fmt\"\n \t\"net\"\n+\t\"time\"\n \n-\tv3 \"github.com/SigNoz/signoz/pkg/query-service/model/v3\"\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n )\n \n const (\n-\turlPathKey    = \"http.url\"\n-\tserverNameKey = \"net.peer.name\"\n+\turlPathKeyLegacy    = \"http.url\"\n+\tserverNameKeyLegacy = \"net.peer.name\"\n+\n+\turlPathKeyCurrent    = \"url.full\"\n+\tserverNameKeyCurrent = \"server.address\"\n )\n \n-var defaultStepInterval int64 = 60\n+var defaultStepInterval = 60 * time.Second\n+\n+// SemconvFieldMapping defines the mapping between legacy and current semconv\n+type SemconvFieldMapping struct {\n+\tLegacyField  string\n+\tCurrentField string\n+\tFieldType    telemetrytypes.FieldDataType\n+\tContext      telemetrytypes.FieldContext\n+}\n+\n+var semconvMappings = []SemconvFieldMapping{\n+\t{\n+\t\tLegacyField:  urlPathKeyLegacy,\n+\t\tCurrentField: urlPathKeyCurrent,\n+\t\tFieldType:    telemetrytypes.FieldDataTypeString,\n+\t\tContext:      telemetrytypes.FieldContextAttribute,\n+\t},\n+\t{\n+\t\tLegacyField:  serverNameKeyLegacy,\n+\t\tCurrentField: serverNameKeyCurrent,\n+\t\tFieldType:    telemetrytypes.FieldDataTypeString,\n+\t\tContext:      telemetrytypes.FieldContextAttribute,\n+\t},\n+}\n+\n+// CreateDualSemconvGroupByKeys creates group by keys supporting both semconv versions\n+func CreateDualSemconvGroupByKeysServer() []qbtypes.GroupByKey {\n+\treturn createDualSemconvGroupBy(semconvMappings[1]) // server name mapping\n+}\n+\n+func CreateDualSemconvGroupByKeysUrl() []qbtypes.GroupByKey {\n+\treturn createDualSemconvGroupBy(semconvMappings[0]) // url path mapping\n+}\n+\n+func createDualSemconvGroupBy(mapping SemconvFieldMapping) []qbtypes.GroupByKey {\n+\treturn []qbtypes.GroupByKey{\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          mapping.CurrentField,\n+\t\t\t\tFieldDataType: mapping.FieldType,\n+\t\t\t\tFieldContext:  mapping.Context,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          mapping.LegacyField,\n+\t\t\t\tFieldDataType: mapping.FieldType,\n+\t\t\t\tFieldContext:  mapping.Context,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t}\n+}\n+\n+func MergeSemconvColumns(result *qbtypes.QueryRangeResponse) *qbtypes.QueryRangeResponse {\n+\tif result == nil || result.Data.Results == nil {\n+\t\treturn result\n+\t}\n+\n+\tfor _, res := range result.Data.Results {\n+\t\tscalarData, ok := res.(*qbtypes.ScalarData)\n+\t\tif !ok {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tserverAddrIdx := -1\n+\t\tnetPeerIdx := -1\n+\n+\t\tfor i, col := range scalarData.Columns {\n+\t\t\tif col.Name == serverNameKeyCurrent {\n+\t\t\t\tserverAddrIdx = i\n+\t\t\t} else if col.Name == serverNameKeyLegacy {\n+\t\t\t\tnetPeerIdx = i",
+        "comment_created_at": "2025-08-24T16:52:02+00:00",
+        "comment_author": "nityanandagohain",
+        "comment_body": "Please use same naming convention to avoid confusion. Above you are using `legacy` and `current` for serverName, please use the same here as well.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2298085900",
+    "pr_number": 8822,
+    "pr_file": "pkg/modules/thirdPartyApi/translator.go",
+    "created_at": "2025-08-25T13:19:16+00:00",
+    "commented_code": "+package thirdPartyApi\n+\n+import (\n+\t\"fmt\"\n+\t\"net\"\n+\t\"regexp\"\n+\t\"time\"\n+\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n+)\n+\n+const (\n+\turlPathKeyLegacy    = \"http.url\"\n+\tserverNameKeyLegacy = \"net.peer.name\"\n+\n+\turlPathKey    = \"url.full\"\n+\tserverNameKey = \"server.address\"\n+)\n+\n+var defaultStepInterval = 60 * time.Second\n+\n+type SemconvFieldMapping struct {\n+\tLegacyField  string\n+\tCurrentField string\n+\tFieldType    telemetrytypes.FieldDataType\n+\tContext      telemetrytypes.FieldContext\n+}\n+\n+var dualSemconvGroupByKeys = map[string][]qbtypes.GroupByKey{\n+\t\"server\": {\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          serverNameKey,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          serverNameKeyLegacy,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t},\n+\t\"url\": {\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          urlPathKey,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          urlPathKeyLegacy,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t},\n+}\n+\n+func CreateDualSemconvGroupByKeysServer() []qbtypes.GroupByKey {\n+\treturn dualSemconvGroupByKeys[\"server\"]\n+}\n+\n+func CreateDualSemconvGroupByKeysUrl() []qbtypes.GroupByKey {\n+\treturn dualSemconvGroupByKeys[\"url\"]\n+}\n+\n+func MergeSemconvColumns(result *qbtypes.QueryRangeResponse) *qbtypes.QueryRangeResponse {\n+\tif result == nil || result.Data.Results == nil {\n+\t\treturn result\n+\t}\n+\n+\tfor _, res := range result.Data.Results {\n+\t\tscalarData, ok := res.(*qbtypes.ScalarData)\n+\t\tif !ok {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tserverAddrIdx := -1\n+\t\tnetPeerIdx := -1",
+    "repo_full_name": "SigNoz/signoz",
+    "discussion_comments": [
+      {
+        "comment_id": "2298085900",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8822,
+        "pr_file": "pkg/modules/thirdPartyApi/translator.go",
+        "discussion_id": "2298085900",
+        "commented_code": "@@ -0,0 +1,510 @@\n+package thirdPartyApi\n+\n+import (\n+\t\"fmt\"\n+\t\"net\"\n+\t\"regexp\"\n+\t\"time\"\n+\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n+)\n+\n+const (\n+\turlPathKeyLegacy    = \"http.url\"\n+\tserverNameKeyLegacy = \"net.peer.name\"\n+\n+\turlPathKey    = \"url.full\"\n+\tserverNameKey = \"server.address\"\n+)\n+\n+var defaultStepInterval = 60 * time.Second\n+\n+type SemconvFieldMapping struct {\n+\tLegacyField  string\n+\tCurrentField string\n+\tFieldType    telemetrytypes.FieldDataType\n+\tContext      telemetrytypes.FieldContext\n+}\n+\n+var dualSemconvGroupByKeys = map[string][]qbtypes.GroupByKey{\n+\t\"server\": {\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          serverNameKey,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          serverNameKeyLegacy,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t},\n+\t\"url\": {\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          urlPathKey,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          urlPathKeyLegacy,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t},\n+}\n+\n+func CreateDualSemconvGroupByKeysServer() []qbtypes.GroupByKey {\n+\treturn dualSemconvGroupByKeys[\"server\"]\n+}\n+\n+func CreateDualSemconvGroupByKeysUrl() []qbtypes.GroupByKey {\n+\treturn dualSemconvGroupByKeys[\"url\"]\n+}\n+\n+func MergeSemconvColumns(result *qbtypes.QueryRangeResponse) *qbtypes.QueryRangeResponse {\n+\tif result == nil || result.Data.Results == nil {\n+\t\treturn result\n+\t}\n+\n+\tfor _, res := range result.Data.Results {\n+\t\tscalarData, ok := res.(*qbtypes.ScalarData)\n+\t\tif !ok {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tserverAddrIdx := -1\n+\t\tnetPeerIdx := -1",
+        "comment_created_at": "2025-08-25T13:19:16+00:00",
+        "comment_author": "nityanandagohain",
+        "comment_body": "this was pointed out in the previous review as well.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2298154363",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8822,
+        "pr_file": "pkg/modules/thirdPartyApi/translator.go",
+        "discussion_id": "2298085900",
+        "commented_code": "@@ -0,0 +1,510 @@\n+package thirdPartyApi\n+\n+import (\n+\t\"fmt\"\n+\t\"net\"\n+\t\"regexp\"\n+\t\"time\"\n+\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n+)\n+\n+const (\n+\turlPathKeyLegacy    = \"http.url\"\n+\tserverNameKeyLegacy = \"net.peer.name\"\n+\n+\turlPathKey    = \"url.full\"\n+\tserverNameKey = \"server.address\"\n+)\n+\n+var defaultStepInterval = 60 * time.Second\n+\n+type SemconvFieldMapping struct {\n+\tLegacyField  string\n+\tCurrentField string\n+\tFieldType    telemetrytypes.FieldDataType\n+\tContext      telemetrytypes.FieldContext\n+}\n+\n+var dualSemconvGroupByKeys = map[string][]qbtypes.GroupByKey{\n+\t\"server\": {\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          serverNameKey,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          serverNameKeyLegacy,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t},\n+\t\"url\": {\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          urlPathKey,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          urlPathKeyLegacy,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t},\n+}\n+\n+func CreateDualSemconvGroupByKeysServer() []qbtypes.GroupByKey {\n+\treturn dualSemconvGroupByKeys[\"server\"]\n+}\n+\n+func CreateDualSemconvGroupByKeysUrl() []qbtypes.GroupByKey {\n+\treturn dualSemconvGroupByKeys[\"url\"]\n+}\n+\n+func MergeSemconvColumns(result *qbtypes.QueryRangeResponse) *qbtypes.QueryRangeResponse {\n+\tif result == nil || result.Data.Results == nil {\n+\t\treturn result\n+\t}\n+\n+\tfor _, res := range result.Data.Results {\n+\t\tscalarData, ok := res.(*qbtypes.ScalarData)\n+\t\tif !ok {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tserverAddrIdx := -1\n+\t\tnetPeerIdx := -1",
+        "comment_created_at": "2025-08-25T13:44:56+00:00",
+        "comment_author": "eKuG",
+        "comment_body": "Wanted to check where is the confusion : \r\n\r\n What the function does:\r\n\r\n  The function merges two semantic convention fields for server addressing:\r\n  - New semconv: server.address\r\n  - Legacy semconv: net.peer.name\r\n\r\n  The process:\r\n\r\n  1. Find column indices: It searches for both server.address and net.peer.name columns, initializing their indices to -1\r\n  2. Skip if either missing: If either column isn't found (index remains -1), it continues to the next result\r\n  3. Merge logic: For each row, it prioritizes server.address over net.peer.name, taking the first valid value\r\n  4. Column reduction: It creates new columns removing the duplicate net.peer.name column, keeping only server.address (but renamed to use the legacy field name for backward compatibility)\r\n  \r\n  \r\n  \r\nThe function is designed for a transition period where both semconv versions coexist for backwards compatibility.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2298161422",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8822,
+        "pr_file": "pkg/modules/thirdPartyApi/translator.go",
+        "discussion_id": "2298085900",
+        "commented_code": "@@ -0,0 +1,510 @@\n+package thirdPartyApi\n+\n+import (\n+\t\"fmt\"\n+\t\"net\"\n+\t\"regexp\"\n+\t\"time\"\n+\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n+)\n+\n+const (\n+\turlPathKeyLegacy    = \"http.url\"\n+\tserverNameKeyLegacy = \"net.peer.name\"\n+\n+\turlPathKey    = \"url.full\"\n+\tserverNameKey = \"server.address\"\n+)\n+\n+var defaultStepInterval = 60 * time.Second\n+\n+type SemconvFieldMapping struct {\n+\tLegacyField  string\n+\tCurrentField string\n+\tFieldType    telemetrytypes.FieldDataType\n+\tContext      telemetrytypes.FieldContext\n+}\n+\n+var dualSemconvGroupByKeys = map[string][]qbtypes.GroupByKey{\n+\t\"server\": {\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          serverNameKey,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          serverNameKeyLegacy,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t},\n+\t\"url\": {\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          urlPathKey,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          urlPathKeyLegacy,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t},\n+}\n+\n+func CreateDualSemconvGroupByKeysServer() []qbtypes.GroupByKey {\n+\treturn dualSemconvGroupByKeys[\"server\"]\n+}\n+\n+func CreateDualSemconvGroupByKeysUrl() []qbtypes.GroupByKey {\n+\treturn dualSemconvGroupByKeys[\"url\"]\n+}\n+\n+func MergeSemconvColumns(result *qbtypes.QueryRangeResponse) *qbtypes.QueryRangeResponse {\n+\tif result == nil || result.Data.Results == nil {\n+\t\treturn result\n+\t}\n+\n+\tfor _, res := range result.Data.Results {\n+\t\tscalarData, ok := res.(*qbtypes.ScalarData)\n+\t\tif !ok {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tserverAddrIdx := -1\n+\t\tnetPeerIdx := -1",
+        "comment_created_at": "2025-08-25T13:47:25+00:00",
+        "comment_author": "nityanandagohain",
+        "comment_body": "I meant just keeping the variable naming consistant i.e `serverAddrIdx` and `serverAddrLegacyIdx`, nothing apart from that. It would have been easier for me to review.\r\n\r\nreason, in the top of the code you have already addressed `netPeerIdx` as `serverAddrLegacy`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2298191588",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8822,
+        "pr_file": "pkg/modules/thirdPartyApi/translator.go",
+        "discussion_id": "2298085900",
+        "commented_code": "@@ -0,0 +1,510 @@\n+package thirdPartyApi\n+\n+import (\n+\t\"fmt\"\n+\t\"net\"\n+\t\"regexp\"\n+\t\"time\"\n+\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n+)\n+\n+const (\n+\turlPathKeyLegacy    = \"http.url\"\n+\tserverNameKeyLegacy = \"net.peer.name\"\n+\n+\turlPathKey    = \"url.full\"\n+\tserverNameKey = \"server.address\"\n+)\n+\n+var defaultStepInterval = 60 * time.Second\n+\n+type SemconvFieldMapping struct {\n+\tLegacyField  string\n+\tCurrentField string\n+\tFieldType    telemetrytypes.FieldDataType\n+\tContext      telemetrytypes.FieldContext\n+}\n+\n+var dualSemconvGroupByKeys = map[string][]qbtypes.GroupByKey{\n+\t\"server\": {\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          serverNameKey,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          serverNameKeyLegacy,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t},\n+\t\"url\": {\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          urlPathKey,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          urlPathKeyLegacy,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t},\n+}\n+\n+func CreateDualSemconvGroupByKeysServer() []qbtypes.GroupByKey {\n+\treturn dualSemconvGroupByKeys[\"server\"]\n+}\n+\n+func CreateDualSemconvGroupByKeysUrl() []qbtypes.GroupByKey {\n+\treturn dualSemconvGroupByKeys[\"url\"]\n+}\n+\n+func MergeSemconvColumns(result *qbtypes.QueryRangeResponse) *qbtypes.QueryRangeResponse {\n+\tif result == nil || result.Data.Results == nil {\n+\t\treturn result\n+\t}\n+\n+\tfor _, res := range result.Data.Results {\n+\t\tscalarData, ok := res.(*qbtypes.ScalarData)\n+\t\tif !ok {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tserverAddrIdx := -1\n+\t\tnetPeerIdx := -1",
+        "comment_created_at": "2025-08-25T13:59:11+00:00",
+        "comment_author": "eKuG",
+        "comment_body": "Sure @nityanandagohain \r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2298198584",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8822,
+        "pr_file": "pkg/modules/thirdPartyApi/translator.go",
+        "discussion_id": "2298085900",
+        "commented_code": "@@ -0,0 +1,510 @@\n+package thirdPartyApi\n+\n+import (\n+\t\"fmt\"\n+\t\"net\"\n+\t\"regexp\"\n+\t\"time\"\n+\n+\tqbtypes \"github.com/SigNoz/signoz/pkg/types/querybuildertypes/querybuildertypesv5\"\n+\t\"github.com/SigNoz/signoz/pkg/types/telemetrytypes\"\n+)\n+\n+const (\n+\turlPathKeyLegacy    = \"http.url\"\n+\tserverNameKeyLegacy = \"net.peer.name\"\n+\n+\turlPathKey    = \"url.full\"\n+\tserverNameKey = \"server.address\"\n+)\n+\n+var defaultStepInterval = 60 * time.Second\n+\n+type SemconvFieldMapping struct {\n+\tLegacyField  string\n+\tCurrentField string\n+\tFieldType    telemetrytypes.FieldDataType\n+\tContext      telemetrytypes.FieldContext\n+}\n+\n+var dualSemconvGroupByKeys = map[string][]qbtypes.GroupByKey{\n+\t\"server\": {\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          serverNameKey,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          serverNameKeyLegacy,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t},\n+\t\"url\": {\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          urlPathKey,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t\t{\n+\t\t\tTelemetryFieldKey: telemetrytypes.TelemetryFieldKey{\n+\t\t\t\tName:          urlPathKeyLegacy,\n+\t\t\t\tFieldDataType: telemetrytypes.FieldDataTypeString,\n+\t\t\t\tFieldContext:  telemetrytypes.FieldContextAttribute,\n+\t\t\t\tSignal:        telemetrytypes.SignalTraces,\n+\t\t\t},\n+\t\t},\n+\t},\n+}\n+\n+func CreateDualSemconvGroupByKeysServer() []qbtypes.GroupByKey {\n+\treturn dualSemconvGroupByKeys[\"server\"]\n+}\n+\n+func CreateDualSemconvGroupByKeysUrl() []qbtypes.GroupByKey {\n+\treturn dualSemconvGroupByKeys[\"url\"]\n+}\n+\n+func MergeSemconvColumns(result *qbtypes.QueryRangeResponse) *qbtypes.QueryRangeResponse {\n+\tif result == nil || result.Data.Results == nil {\n+\t\treturn result\n+\t}\n+\n+\tfor _, res := range result.Data.Results {\n+\t\tscalarData, ok := res.(*qbtypes.ScalarData)\n+\t\tif !ok {\n+\t\t\tcontinue\n+\t\t}\n+\n+\t\tserverAddrIdx := -1\n+\t\tnetPeerIdx := -1",
+        "comment_created_at": "2025-08-25T14:01:47+00:00",
+        "comment_author": "eKuG",
+        "comment_body": "Resolved",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2203163415",
+    "pr_number": 8513,
+    "pr_file": "pkg/query-service/model/queryParams.go",
+    "created_at": "2025-07-13T05:25:00+00:00",
+    "commented_code": "DelDuration           int64  // Seconds after which data will be deleted.\n }\n \n+type CustomRetentionTTLParams struct {\n+\tType           string                `json:\"type\"`\n+\tDefaultTTLDays int                   `json:\"defaultTTLDays\"`\n+\tResourceRules  []CustomRetentionRule `json:\"resourceRules\"`\n+}\n+\n+type CustomRetentionTTLResponse struct {\n+\tMessage string `json:\"message\"`\n+}\n+\n+type GetCustomRetentionTTLResponse struct {\n+\tDefaultTTLDays int                   `json:\"defaultTTLDays\"`\n+\tResourceRules  []CustomRetentionRule `json:\"resourceRules\"`\n+\tStatus         string                `json:\"status\"`\n+}\n+\n+type CustomRetentionRule struct {\n+\tKey   string `json:\"key\"`\n+\tName  string `json:\"name\"`",
+    "repo_full_name": "SigNoz/signoz",
+    "discussion_comments": [
+      {
+        "comment_id": "2203163415",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8513,
+        "pr_file": "pkg/query-service/model/queryParams.go",
+        "discussion_id": "2203163415",
+        "commented_code": "@@ -404,6 +404,28 @@ type TTLParams struct {\n \tDelDuration           int64  // Seconds after which data will be deleted.\n }\n \n+type CustomRetentionTTLParams struct {\n+\tType           string                `json:\"type\"`\n+\tDefaultTTLDays int                   `json:\"defaultTTLDays\"`\n+\tResourceRules  []CustomRetentionRule `json:\"resourceRules\"`\n+}\n+\n+type CustomRetentionTTLResponse struct {\n+\tMessage string `json:\"message\"`\n+}\n+\n+type GetCustomRetentionTTLResponse struct {\n+\tDefaultTTLDays int                   `json:\"defaultTTLDays\"`\n+\tResourceRules  []CustomRetentionRule `json:\"resourceRules\"`\n+\tStatus         string                `json:\"status\"`\n+}\n+\n+type CustomRetentionRule struct {\n+\tKey   string `json:\"key\"`\n+\tName  string `json:\"name\"`",
+        "comment_created_at": "2025-07-13T05:25:00+00:00",
+        "comment_author": "nityanandagohain",
+        "comment_body": "Key = service.name\r\nValue = application \r\nTTL = 90 days.\r\n\r\nMore cleaner ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2203215320",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8513,
+        "pr_file": "pkg/query-service/model/queryParams.go",
+        "discussion_id": "2203163415",
+        "commented_code": "@@ -404,6 +404,28 @@ type TTLParams struct {\n \tDelDuration           int64  // Seconds after which data will be deleted.\n }\n \n+type CustomRetentionTTLParams struct {\n+\tType           string                `json:\"type\"`\n+\tDefaultTTLDays int                   `json:\"defaultTTLDays\"`\n+\tResourceRules  []CustomRetentionRule `json:\"resourceRules\"`\n+}\n+\n+type CustomRetentionTTLResponse struct {\n+\tMessage string `json:\"message\"`\n+}\n+\n+type GetCustomRetentionTTLResponse struct {\n+\tDefaultTTLDays int                   `json:\"defaultTTLDays\"`\n+\tResourceRules  []CustomRetentionRule `json:\"resourceRules\"`\n+\tStatus         string                `json:\"status\"`\n+}\n+\n+type CustomRetentionRule struct {\n+\tKey   string `json:\"key\"`\n+\tName  string `json:\"name\"`",
+        "comment_created_at": "2025-07-13T07:17:31+00:00",
+        "comment_author": "eKuG",
+        "comment_body": "`Value` should be the final value of the TTL, so IMO, name can be replaced to resource_key or something, but `value` can't be the `name` ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2286784400",
+    "pr_number": 8855,
+    "pr_file": "pkg/query-service/rules/prom_rule_task.go",
+    "created_at": "2025-08-20T01:46:25+00:00",
+    "commented_code": "rule.SetEvaluationTimestamp(t)\n \t\t\t}(time.Now())\n \n-\t\t\tkvs := map[string]string{\n-\t\t\t\t\"alertID\": rule.ID(),\n-\t\t\t\t\"source\":  \"alerts\",\n-\t\t\t\t\"client\":  \"query-service\",\n-\t\t\t}\n-\t\t\tctx = context.WithValue(ctx, common.LogCommentKey, kvs)\n+\t\t\tcomment := ctxtypes.CommentFromContext(ctx)\n+\t\t\tcomment.Set(\"alertID\", rule.ID())",
+    "repo_full_name": "SigNoz/signoz",
+    "discussion_comments": [
+      {
+        "comment_id": "2286784400",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8855,
+        "pr_file": "pkg/query-service/rules/prom_rule_task.go",
+        "discussion_id": "2286784400",
+        "commented_code": "@@ -369,12 +369,11 @@ func (g *PromRuleTask) Eval(ctx context.Context, ts time.Time) {\n \t\t\t\trule.SetEvaluationTimestamp(t)\n \t\t\t}(time.Now())\n \n-\t\t\tkvs := map[string]string{\n-\t\t\t\t\"alertID\": rule.ID(),\n-\t\t\t\t\"source\":  \"alerts\",\n-\t\t\t\t\"client\":  \"query-service\",\n-\t\t\t}\n-\t\t\tctx = context.WithValue(ctx, common.LogCommentKey, kvs)\n+\t\t\tcomment := ctxtypes.CommentFromContext(ctx)\n+\t\t\tcomment.Set(\"alertID\", rule.ID())",
+        "comment_created_at": "2025-08-20T01:46:25+00:00",
+        "comment_author": "srikanthccv",
+        "comment_body": "change this to `alert_id` in consistency with `dashboardID` -> `dashboard_id` change?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2288325251",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8855,
+        "pr_file": "pkg/query-service/rules/prom_rule_task.go",
+        "discussion_id": "2286784400",
+        "commented_code": "@@ -369,12 +369,11 @@ func (g *PromRuleTask) Eval(ctx context.Context, ts time.Time) {\n \t\t\t\trule.SetEvaluationTimestamp(t)\n \t\t\t}(time.Now())\n \n-\t\t\tkvs := map[string]string{\n-\t\t\t\t\"alertID\": rule.ID(),\n-\t\t\t\t\"source\":  \"alerts\",\n-\t\t\t\t\"client\":  \"query-service\",\n-\t\t\t}\n-\t\t\tctx = context.WithValue(ctx, common.LogCommentKey, kvs)\n+\t\t\tcomment := ctxtypes.CommentFromContext(ctx)\n+\t\t\tcomment.Set(\"alertID\", rule.ID())",
+        "comment_created_at": "2025-08-20T14:13:40+00:00",
+        "comment_author": "grandwizard28",
+        "comment_body": "Addressed",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2221208786",
+    "pr_number": 8518,
+    "pr_file": "pkg/query-service/app/querier/v2/helper.go",
+    "created_at": "2025-07-22T05:22:28+00:00",
+    "commented_code": "Series: resultSeries,\n \t}\n }\n+\n+// ValidateMetricNames function is used to print all those queries who are still using old normalized metrics and not new metrics.\n+func (q *querier) ValidateMetricNames(ctx context.Context, query *v3.CompositeQuery, orgID valuer.UUID) {\n+\tvar metricNames []string\n+\tswitch query.QueryType {\n+\tcase v3.QueryTypePromQL:\n+\t\tfor _, query := range query.PromQueries {\n+\t\t\texpr, err := parser.ParseExpr(query.Query)\n+\t\t\tif err != nil {\n+\t\t\t\tzap.L().Debug(\"error parsing promQL expression\", zap.String(\"query\", query.Query), zap.Error(err))\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tparser.Inspect(expr, func(node parser.Node, path []parser.Node) error {\n+\t\t\t\tif vs, ok := node.(*parser.VectorSelector); ok {\n+\t\t\t\t\tfor _, m := range vs.LabelMatchers {\n+\t\t\t\t\t\tif m.Name == \"__name__\" {\n+\t\t\t\t\t\t\tmetricNames = append(metricNames, m.Value)\n+\t\t\t\t\t\t}\n+\t\t\t\t\t}\n+\t\t\t\t}\n+\t\t\t\treturn nil\n+\t\t\t})\n+\t\t}\n+\t\tmetrics, err := q.reader.GetNormalizedStatus(ctx, orgID, metricNames)\n+\t\tif err != nil {\n+\t\t\tzap.L().Debug(\"error getting corresponding normalized metrics\", zap.Error(err))\n+\t\t\treturn\n+\t\t}\n+\t\tfor k, m := range metrics {\n+\t\t\tif m {\n+\t\t\t\tcontinue\n+\t\t\t} else {\n+\t\t\t\tzap.L().Warn(\"using normalized metric name\", zap.String(\"metrics\", k))\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t}\n+\tcase v3.QueryTypeBuilder:\n+\t\tfor _, query := range query.BuilderQueries {\n+\t\t\tmetricName := query.AggregateAttribute.Key\n+\t\t\tmetricNames = append(metricNames, metricName)\n+\t\t}\n+\t\tmetrics, err := q.reader.GetNormalizedStatus(ctx, orgID, metricNames)\n+\t\tif err != nil {\n+\t\t\tzap.L().Debug(\"error getting corresponding normalized metrics\", zap.Error(err))\n+\t\t\treturn\n+\t\t}\n+\t\tfor k, m := range metrics {\n+\t\t\tif m {\n+\t\t\t\tcontinue\n+\t\t\t} else {\n+\t\t\t\tzap.L().Warn(\"using normalized metric name\", zap.String(\"metrics\", k))\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t}",
+    "repo_full_name": "SigNoz/signoz",
+    "discussion_comments": [
+      {
+        "comment_id": "2221208786",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 8518,
+        "pr_file": "pkg/query-service/app/querier/v2/helper.go",
+        "discussion_id": "2221208786",
+        "commented_code": "@@ -276,3 +277,59 @@ func (q *querier) runBuilderQuery(\n \t\tSeries: resultSeries,\n \t}\n }\n+\n+// ValidateMetricNames function is used to print all those queries who are still using old normalized metrics and not new metrics.\n+func (q *querier) ValidateMetricNames(ctx context.Context, query *v3.CompositeQuery, orgID valuer.UUID) {\n+\tvar metricNames []string\n+\tswitch query.QueryType {\n+\tcase v3.QueryTypePromQL:\n+\t\tfor _, query := range query.PromQueries {\n+\t\t\texpr, err := parser.ParseExpr(query.Query)\n+\t\t\tif err != nil {\n+\t\t\t\tzap.L().Debug(\"error parsing promQL expression\", zap.String(\"query\", query.Query), zap.Error(err))\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tparser.Inspect(expr, func(node parser.Node, path []parser.Node) error {\n+\t\t\t\tif vs, ok := node.(*parser.VectorSelector); ok {\n+\t\t\t\t\tfor _, m := range vs.LabelMatchers {\n+\t\t\t\t\t\tif m.Name == \"__name__\" {\n+\t\t\t\t\t\t\tmetricNames = append(metricNames, m.Value)\n+\t\t\t\t\t\t}\n+\t\t\t\t\t}\n+\t\t\t\t}\n+\t\t\t\treturn nil\n+\t\t\t})\n+\t\t}\n+\t\tmetrics, err := q.reader.GetNormalizedStatus(ctx, orgID, metricNames)\n+\t\tif err != nil {\n+\t\t\tzap.L().Debug(\"error getting corresponding normalized metrics\", zap.Error(err))\n+\t\t\treturn\n+\t\t}\n+\t\tfor k, m := range metrics {\n+\t\t\tif m {\n+\t\t\t\tcontinue\n+\t\t\t} else {\n+\t\t\t\tzap.L().Warn(\"using normalized metric name\", zap.String(\"metrics\", k))\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t}\n+\tcase v3.QueryTypeBuilder:\n+\t\tfor _, query := range query.BuilderQueries {\n+\t\t\tmetricName := query.AggregateAttribute.Key\n+\t\t\tmetricNames = append(metricNames, metricName)\n+\t\t}\n+\t\tmetrics, err := q.reader.GetNormalizedStatus(ctx, orgID, metricNames)\n+\t\tif err != nil {\n+\t\t\tzap.L().Debug(\"error getting corresponding normalized metrics\", zap.Error(err))\n+\t\t\treturn\n+\t\t}\n+\t\tfor k, m := range metrics {\n+\t\t\tif m {\n+\t\t\t\tcontinue\n+\t\t\t} else {\n+\t\t\t\tzap.L().Warn(\"using normalized metric name\", zap.String(\"metrics\", k))\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t}",
+        "comment_created_at": "2025-07-22T05:22:28+00:00",
+        "comment_author": "srikanthccv",
+        "comment_body": "Please use readable names, what should the reader interpret as just reading the `k, m`?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2068040848",
+    "pr_number": 7674,
+    "pr_file": "pkg/prometheus/clickhouseprometheus/client.go",
+    "created_at": "2025-04-30T07:21:36+00:00",
+    "commented_code": "import (\n \t\"context\"\n \t\"fmt\"\n+\tvalue2 \"github.com/prometheus/prometheus/model/value\"",
+    "repo_full_name": "SigNoz/signoz",
+    "discussion_comments": [
+      {
+        "comment_id": "2068040848",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 7674,
+        "pr_file": "pkg/prometheus/clickhouseprometheus/client.go",
+        "discussion_id": "2068040848",
+        "commented_code": "@@ -3,6 +3,8 @@ package clickhouseprometheus\n import (\n \t\"context\"\n \t\"fmt\"\n+\tvalue2 \"github.com/prometheus/prometheus/model/value\"",
+        "comment_created_at": "2025-04-30T07:21:36+00:00",
+        "comment_author": "srikanthccv",
+        "comment_body": "please use some sensible name - \"value2\" is very random and move the import to the rest of the prom imports below.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2111694768",
+    "pr_number": 7919,
+    "pr_file": "pkg/query-service/metrics/transition.go",
+    "created_at": "2025-05-28T12:12:30+00:00",
+    "commented_code": "\"k8s_node_cpu_utilization\":  \"k8s_node_cpu_usage\",\n \t\"container_cpu_utilization\": \"container_cpu_usage\",\n }\n+\n+var DotMetricsUnderTransition = map[string]string{\n+\t\"k8s.pod.cpu.utilization\":   \"k8s.pod.cpu.usage\",\n+\t\"k8s.node.cpu.utilization\":  \"k8s.node.cpu.usage\",\n+\t\"container.cpu.utilization\": \"container.cpu.usage\",\n+}\n+\n+func GetTransitionedMetrics(metrics string, normalized bool) string {\n+\tif normalized {\n+\t\tif _, ok := MetricsUnderTransition[metrics]; ok {\n+\t\t\treturn MetricsUnderTransition[metrics]\n+\t\t}\n+\t\treturn metrics\n+\t} else {\n+\t\tif _, ok := DotMetricsUnderTransition[metrics]; ok {\n+\t\t\treturn DotMetricsUnderTransition[metrics]\n+\t\t}\n+\t\treturn metrics\n+\t}\n+}",
+    "repo_full_name": "SigNoz/signoz",
+    "discussion_comments": [
+      {
+        "comment_id": "2111694768",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 7919,
+        "pr_file": "pkg/query-service/metrics/transition.go",
+        "discussion_id": "2111694768",
+        "commented_code": "@@ -5,3 +5,23 @@ var MetricsUnderTransition = map[string]string{\n \t\"k8s_node_cpu_utilization\":  \"k8s_node_cpu_usage\",\n \t\"container_cpu_utilization\": \"container_cpu_usage\",\n }\n+\n+var DotMetricsUnderTransition = map[string]string{\n+\t\"k8s.pod.cpu.utilization\":   \"k8s.pod.cpu.usage\",\n+\t\"k8s.node.cpu.utilization\":  \"k8s.node.cpu.usage\",\n+\t\"container.cpu.utilization\": \"container.cpu.usage\",\n+}\n+\n+func GetTransitionedMetrics(metrics string, normalized bool) string {\n+\tif normalized {\n+\t\tif _, ok := MetricsUnderTransition[metrics]; ok {\n+\t\t\treturn MetricsUnderTransition[metrics]\n+\t\t}\n+\t\treturn metrics\n+\t} else {\n+\t\tif _, ok := DotMetricsUnderTransition[metrics]; ok {\n+\t\t\treturn DotMetricsUnderTransition[metrics]\n+\t\t}\n+\t\treturn metrics\n+\t}\n+}",
+        "comment_created_at": "2025-05-28T12:12:30+00:00",
+        "comment_author": "srikanthccv",
+        "comment_body": "```suggestion\r\nfunc GetTransitionedMetric(metric string, normalized bool) string {\r\n\tif normalized {\r\n\t\tif _, ok := MetricsUnderTransition[metric]; ok {\r\n\t\t\treturn MetricsUnderTransition[metric]\r\n\t\t}\r\n\t\treturn metric\r\n\t} else {\r\n\t\tif _, ok := DotMetricsUnderTransition[metric]; ok {\r\n\t\t\treturn DotMetricsUnderTransition[metric]\r\n\t\t}\r\n\t\treturn metric\r\n\t}\r\n}\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1959429130",
+    "pr_number": 7081,
+    "pr_file": "pkg/query-service/model/metrics_explorer/summary.go",
+    "created_at": "2025-02-18T10:03:38+00:00",
+    "commented_code": "+package metrics_explorer\n+\n+import (\n+\tv3 \"go.signoz.io/signoz/pkg/query-service/model/v3\"\n+)\n+\n+type SummaryListMetricsRequest struct {\n+\tOffset    int          `json:\"offset\"`\n+\tLimit     int          `json:\"limit\"`\n+\tOrderBy   []v3.OrderBy `json:\"orderBy\"`\n+\tStartDate int64        `json:\"startDate\"`\n+\tEndDate   int64        `json:\"endDate\"`",
+    "repo_full_name": "SigNoz/signoz",
+    "discussion_comments": [
+      {
+        "comment_id": "1959429130",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 7081,
+        "pr_file": "pkg/query-service/model/metrics_explorer/summary.go",
+        "discussion_id": "1959429130",
+        "commented_code": "@@ -0,0 +1,123 @@\n+package metrics_explorer\n+\n+import (\n+\tv3 \"go.signoz.io/signoz/pkg/query-service/model/v3\"\n+)\n+\n+type SummaryListMetricsRequest struct {\n+\tOffset    int          `json:\"offset\"`\n+\tLimit     int          `json:\"limit\"`\n+\tOrderBy   []v3.OrderBy `json:\"orderBy\"`\n+\tStartDate int64        `json:\"startDate\"`\n+\tEndDate   int64        `json:\"endDate\"`",
+        "comment_created_at": "2025-02-18T10:03:38+00:00",
+        "comment_author": "srikanthccv",
+        "comment_body": "These are not dates\r\n\r\n```suggestion\r\n\tStart int64        `json:\"start\"`\r\n\tEnd   int64        `json:\"end\"`\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2086660898",
+    "pr_number": 7718,
+    "pr_file": "pkg/errors/type.go",
+    "created_at": "2025-05-13T12:05:46+00:00",
+    "commented_code": "// Defines custom error types\n type typ struct{ s string }\n+\n+func NotFoundWrap(cause error, code Code, format string, args ...interface{}) *base {\n+\treturn Wrapf(cause, TypeNotFound, code, format, args...)\n+}\n+\n+func NotFoundNew(code Code, format string, args ...interface{}) *base {\n+\treturn Newf(TypeNotFound, code, format, args...)\n+}\n+\n+func InternalWrap(cause error, code Code, format string, args ...interface{}) *base {\n+\treturn Wrapf(cause, TypeInternal, code, format, args...)\n+}\n+\n+func InternalNew(code Code, format string, args ...interface{}) *base {\n+\treturn Newf(TypeInternal, code, format, args...)\n+}",
+    "repo_full_name": "SigNoz/signoz",
+    "discussion_comments": [
+      {
+        "comment_id": "2086660898",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 7718,
+        "pr_file": "pkg/errors/type.go",
+        "discussion_id": "2086660898",
+        "commented_code": "@@ -13,3 +13,19 @@ var (\n \n // Defines custom error types\n type typ struct{ s string }\n+\n+func NotFoundWrap(cause error, code Code, format string, args ...interface{}) *base {\n+\treturn Wrapf(cause, TypeNotFound, code, format, args...)\n+}\n+\n+func NotFoundNew(code Code, format string, args ...interface{}) *base {\n+\treturn Newf(TypeNotFound, code, format, args...)\n+}\n+\n+func InternalWrap(cause error, code Code, format string, args ...interface{}) *base {\n+\treturn Wrapf(cause, TypeInternal, code, format, args...)\n+}\n+\n+func InternalNew(code Code, format string, args ...interface{}) *base {\n+\treturn Newf(TypeInternal, code, format, args...)\n+}",
+        "comment_created_at": "2025-05-13T12:05:46+00:00",
+        "comment_author": "grandwizard28",
+        "comment_body": "```suggestion\r\nfunc WrapNotFoundf(cause error, code Code, format string, args ...interface{}) *base {\r\n\treturn Wrapf(cause, TypeNotFound, code, format, args...)\r\n}\r\n\r\nfunc NewNotFoundf(code Code, format string, args ...interface{}) *base {\r\n\treturn Newf(TypeNotFound, code, format, args...)\r\n}\r\n\r\nfunc WrapInternalf(cause error, code Code, format string, args ...interface{}) *base {\r\n\treturn Wrapf(cause, TypeInternal, code, format, args...)\r\n}\r\n\r\nfunc NewInternalf(code Code, format string, args ...interface{}) *base {\r\n\treturn Newf(TypeInternal, code, format, args...)\r\n}\r\n```\r\n1. Please move them to `errors.go` file. `type.go` is just meant for declaring the typ struct.\r\n2. When naming functions, try to say them out loud. `NewNotFound` v/s `NotFoundNew`.\r\n3. The `f` after all functions indicates that it takes some formatting input. Similar to `Printf`, `Errorf` etc. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2087582637",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 7718,
+        "pr_file": "pkg/errors/type.go",
+        "discussion_id": "2086660898",
+        "commented_code": "@@ -13,3 +13,19 @@ var (\n \n // Defines custom error types\n type typ struct{ s string }\n+\n+func NotFoundWrap(cause error, code Code, format string, args ...interface{}) *base {\n+\treturn Wrapf(cause, TypeNotFound, code, format, args...)\n+}\n+\n+func NotFoundNew(code Code, format string, args ...interface{}) *base {\n+\treturn Newf(TypeNotFound, code, format, args...)\n+}\n+\n+func InternalWrap(cause error, code Code, format string, args ...interface{}) *base {\n+\treturn Wrapf(cause, TypeInternal, code, format, args...)\n+}\n+\n+func InternalNew(code Code, format string, args ...interface{}) *base {\n+\treturn Newf(TypeInternal, code, format, args...)\n+}",
+        "comment_created_at": "2025-05-13T20:29:00+00:00",
+        "comment_author": "piyushsingariya",
+        "comment_body": "@grandwizard28 I have implemented the changes mentioned except point 2.\r\n\r\nSlack Discussion reference: https://signoz-team.slack.com/archives/C089D1B5516/p1747107589304479\r\n\r\nIf we\u2019re still not aligned on this point, I\u2019d suggest we have an open discussion to decide what works best for the team. Otherwise, I\u2019m happy to adjust or revert that part in a follow-up PR if needed.\r\n\r\nWould request you for an approval on this PR, as this feature is 1 week due on it's initial release.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2056567095",
+    "pr_number": 7684,
+    "pr_file": "pkg/types/organization.go",
+    "created_at": "2025-04-23T17:31:14+00:00",
+    "commented_code": "package types\n \n import (\n+\t\"context\"\n+\t\"time\"\n+\n+\t\"github.com/SigNoz/signoz/pkg/valuer\"\n \t\"github.com/uptrace/bun\"\n )\n \n-// TODO: check constraints are not working\n type Organization struct {\n \tbun.BaseModel `bun:\"table:organizations\"`\n \tTimeAuditable\n-\tID              string `bun:\"id,pk,type:text\" json:\"id\"`\n-\tName            string `bun:\"name,type:text,notnull\" json:\"name\"`\n-\tIsAnonymous     bool   `bun:\"is_anonymous,notnull,default:0,CHECK(is_anonymous IN (0,1))\" json:\"isAnonymous\"`\n-\tHasOptedUpdates bool   `bun:\"has_opted_updates,notnull,default:1,CHECK(has_opted_updates IN (0,1))\" json:\"hasOptedUpdates\"`\n+\tIdentifiable\n+\tName  string `bun:\"name,type:text,nullzero\" json:\"name\"`\n+\tAlias string `bun:\"alias,type:text,nullzero\" json:\"alias\"`\n+\tHName string `bun:\"h_name,type:text,notnull\" json:\"h_name\"`",
+    "repo_full_name": "SigNoz/signoz",
+    "discussion_comments": [
+      {
+        "comment_id": "2056567095",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 7684,
+        "pr_file": "pkg/types/organization.go",
+        "discussion_id": "2056567095",
+        "commented_code": "@@ -1,17 +1,34 @@\n package types\n \n import (\n+\t\"context\"\n+\t\"time\"\n+\n+\t\"github.com/SigNoz/signoz/pkg/valuer\"\n \t\"github.com/uptrace/bun\"\n )\n \n-// TODO: check constraints are not working\n type Organization struct {\n \tbun.BaseModel `bun:\"table:organizations\"`\n \tTimeAuditable\n-\tID              string `bun:\"id,pk,type:text\" json:\"id\"`\n-\tName            string `bun:\"name,type:text,notnull\" json:\"name\"`\n-\tIsAnonymous     bool   `bun:\"is_anonymous,notnull,default:0,CHECK(is_anonymous IN (0,1))\" json:\"isAnonymous\"`\n-\tHasOptedUpdates bool   `bun:\"has_opted_updates,notnull,default:1,CHECK(has_opted_updates IN (0,1))\" json:\"hasOptedUpdates\"`\n+\tIdentifiable\n+\tName  string `bun:\"name,type:text,nullzero\" json:\"name\"`\n+\tAlias string `bun:\"alias,type:text,nullzero\" json:\"alias\"`\n+\tHName string `bun:\"h_name,type:text,notnull\" json:\"h_name\"`",
+        "comment_created_at": "2025-04-23T17:31:14+00:00",
+        "comment_author": "grandwizard28",
+        "comment_body": "`HName json:\"h_name\"` hName` is all very confusing and isn't intuitive at all. \r\n\r\nWe agreed on `h_name` before but looking at this PR, we should change it to `fullName/displayName/humanReadableName`.\r\n\r\nAlso whatever name is decided, use `camelCase` in json.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2056571106",
+    "pr_number": 7684,
+    "pr_file": "pkg/modules/organization/usecase.go",
+    "created_at": "2025-04-23T17:34:13+00:00",
+    "commented_code": "+package organization\n+\n+import (\n+\t\"context\"\n+\n+\t\"github.com/SigNoz/signoz/pkg/types\"\n+\t\"github.com/SigNoz/signoz/pkg/valuer\"\n+)\n+\n+type Usecase interface {",
+    "repo_full_name": "SigNoz/signoz",
+    "discussion_comments": [
+      {
+        "comment_id": "2056571106",
+        "repo_full_name": "SigNoz/signoz",
+        "pr_number": 7684,
+        "pr_file": "pkg/modules/organization/usecase.go",
+        "discussion_id": "2056571106",
+        "commented_code": "@@ -0,0 +1,15 @@\n+package organization\n+\n+import (\n+\t\"context\"\n+\n+\t\"github.com/SigNoz/signoz/pkg/types\"\n+\t\"github.com/SigNoz/signoz/pkg/valuer\"\n+)\n+\n+type Usecase interface {",
+        "comment_created_at": "2025-04-23T17:34:13+00:00",
+        "comment_author": "grandwizard28",
+        "comment_body": "```suggestion\r\ntype Usecase interface {\r\n```\r\nLet's start calling this `Module`. `Usecase` seems like a forced introduction of a new concept.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

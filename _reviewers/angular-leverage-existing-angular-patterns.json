@@ -1,0 +1,182 @@
+[
+  {
+    "discussion_id": "2184786230",
+    "pr_number": 62465,
+    "pr_file": "devtools/projects/ng-devtools/src/lib/devtools-tabs/transfer-state/transfer-state.component.ts",
+    "created_at": "2025-07-04T09:00:01+00:00",
+    "commented_code": "+/**\n+ * @license\n+ * Copyright Google LLC All Rights Reserved.\n+ *\n+ * Use of this source code is governed by an MIT-style license that can be\n+ * found in the LICENSE file at https://angular.dev/license\n+ */\n+\n+import {Component, inject, signal, computed, ChangeDetectionStrategy} from '@angular/core';\n+import {MatIcon} from '@angular/material/icon';\n+import {MatTooltip} from '@angular/material/tooltip';\n+import {\n+  MatTable,\n+  MatHeaderCell,\n+  MatCell,\n+  MatHeaderRow,\n+  MatRow,\n+  MatColumnDef,\n+  MatHeaderCellDef,\n+  MatCellDef,\n+  MatHeaderRowDef,\n+  MatRowDef,\n+} from '@angular/material/table';\n+import {MatCard, MatCardContent, MatCardHeader, MatCardTitle} from '@angular/material/card';\n+import {CommonModule} from '@angular/common';\n+import {Events, MessageBus, TransferStateValue} from '../../../../../protocol';\n+\n+interface TransferStateItem {\n+  key: string;\n+  value: TransferStateValue;\n+  type: string;\n+  size: string;\n+  isExpanded?: boolean;\n+  isCopied?: boolean;\n+}\n+\n+@Component({\n+  selector: 'ng-transfer-state',\n+  imports: [\n+    CommonModule,\n+    MatIcon,\n+    MatTooltip,\n+    MatTable,\n+    MatHeaderCell,\n+    MatCell,\n+    MatHeaderRow,\n+    MatRow,\n+    MatColumnDef,\n+    MatHeaderCellDef,\n+    MatCellDef,\n+    MatHeaderRowDef,\n+    MatRowDef,\n+    MatCard,\n+    MatCardContent,\n+    MatCardHeader,\n+    MatCardTitle,\n+  ],\n+  templateUrl: './transfer-state.component.html',\n+  styleUrls: ['./transfer-state.component.scss'],\n+  changeDetection: ChangeDetectionStrategy.OnPush,\n+})\n+export class TransferStateComponent {\n+  private _messageBus = inject(MessageBus) as MessageBus<Events>;\n+  readonly MAX_DISPLAY_LENGTH = 200;\n+\n+  readonly transferStateData = signal<Record<string, TransferStateValue> | null>(null);\n+  readonly error = signal<string | null>(null);\n+  readonly isLoading = signal(false);\n+\n+  readonly transferStateItems = computed<TransferStateItem[]>(() => {\n+    const data = this.transferStateData();\n+    if (!data) return [];\n+\n+    return Object.entries(data).map(([key, value]) => ({\n+      key,\n+      value,\n+      type: this.getValueType(value),\n+      size: this.getValueSize(value),\n+      isExpanded: false,\n+      isCopied: false,\n+    }));\n+  });\n+\n+  readonly hasData = computed(() => this.transferStateItems().length > 0);\n+\n+  readonly totalSize = computed(() => {\n+    const items = this.transferStateItems();\n+    if (items.length === 0) return '0 B';\n+\n+    let totalBytes = 0;\n+    for (const item of items) {\n+      const str = typeof item.value === 'string' ? item.value : JSON.stringify(item.value);\n+      totalBytes += new Blob([str]).size;\n+    }\n+\n+    if (totalBytes < 1024) return `${totalBytes} B`;\n+    if (totalBytes < 1024 * 1024) return `${(totalBytes / 1024).toFixed(1)} KB`;\n+    return `${(totalBytes / (1024 * 1024)).toFixed(1)} MB`;\n+  });\n+\n+  displayedColumns: string[] = ['key', 'type', 'size', 'value'];\n+\n+  constructor() {\n+    this.loadTransferState();\n+  }\n+\n+  private getValueType(value: TransferStateValue): string {\n+    if (value === null) return 'null';\n+    if (Array.isArray(value)) return 'array';\n+    return typeof value;\n+  }\n+\n+  getValueSize(value: TransferStateValue): string {\n+    try {\n+      const str = JSON.stringify(value);\n+      const bytes = new Blob([str]).size;\n+      if (bytes < 1024) return `${bytes} B`;\n+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;\n+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;\n+    } catch {\n+      return 'unknown';\n+    }\n+  }\n+\n+  private formatValue(value: TransferStateValue, isExpanded = false): string {\n+    const formatters = {\n+      null: () => 'null',\n+      undefined: () => 'undefined',\n+      string: (val: string) => `\"${val}\"`,\n+      object: (val: object) => JSON.stringify(val, null, 2),\n+      default: (val: unknown) => String(val),\n+    };\n+\n+    const getFormattedValue = (val: TransferStateValue): string => {\n+      if (val === null) return formatters.null();\n+      if (val === undefined) return formatters.undefined();\n+      if (typeof val === 'string') return formatters.string(val);\n+      if (typeof val === 'object') return formatters.object(val);\n+      return formatters.default(val);\n+    };\n+\n+    const formatted = getFormattedValue(value);\n+\n+    return this.truncateIfNeeded(formatted, isExpanded);\n+  }\n+\n+  private truncateIfNeeded(text: string, isExpanded: boolean): string {\n+    if (isExpanded || text.length <= this.MAX_DISPLAY_LENGTH) {\n+      return text;\n+    }\n+\n+    return text.substring(0, this.MAX_DISPLAY_LENGTH) + '...';\n+  }\n+\n+  loadTransferState(): void {\n+    this.isLoading.set(true);\n+    this.error.set(null);\n+\n+    try {\n+      this._messageBus.emit('getTransferState');\n+      this._messageBus.on(\n+        'transferStateData',\n+        (data: Record<string, TransferStateValue> | null) => {\n+          this.transferStateData.set(data);\n+          this.isLoading.set(false);\n+          if (!data) {\n+            this.error.set(\n+              'No transfer state found. Make sure you are inspecting a page with Server-Side Rendering (SSR) enabled.',\n+            );\n+          }\n+        },\n+      );\n+    } catch (err) {\n+      this.error.set(`Error loading transfer state: ${err}`);\n+      this.isLoading.set(false);\n+    }\n+  }\n+\n+  refresh(): void {\n+    this.loadTransferState();\n+  }\n+\n+  getFormattedValue(item: TransferStateItem): string {\n+    return this.formatValue(item.value, item.isExpanded);\n+  }\n+\n+  isValueLong(value: TransferStateValue): boolean {\n+    const formatted = this.formatValue(value, true);\n+    return formatted.length > this.MAX_DISPLAY_LENGTH;\n+  }\n+\n+  toggleExpanded(item: TransferStateItem): void {\n+    item.isExpanded = !item.isExpanded;\n+  }\n+\n+  async copyToClipboard(item: TransferStateItem): Promise<void> {",
+    "repo_full_name": "angular/angular",
+    "discussion_comments": [
+      {
+        "comment_id": "2184786230",
+        "repo_full_name": "angular/angular",
+        "pr_number": 62465,
+        "pr_file": "devtools/projects/ng-devtools/src/lib/devtools-tabs/transfer-state/transfer-state.component.ts",
+        "discussion_id": "2184786230",
+        "commented_code": "@@ -0,0 +1,214 @@\n+/**\n+ * @license\n+ * Copyright Google LLC All Rights Reserved.\n+ *\n+ * Use of this source code is governed by an MIT-style license that can be\n+ * found in the LICENSE file at https://angular.dev/license\n+ */\n+\n+import {Component, inject, signal, computed, ChangeDetectionStrategy} from '@angular/core';\n+import {MatIcon} from '@angular/material/icon';\n+import {MatTooltip} from '@angular/material/tooltip';\n+import {\n+  MatTable,\n+  MatHeaderCell,\n+  MatCell,\n+  MatHeaderRow,\n+  MatRow,\n+  MatColumnDef,\n+  MatHeaderCellDef,\n+  MatCellDef,\n+  MatHeaderRowDef,\n+  MatRowDef,\n+} from '@angular/material/table';\n+import {MatCard, MatCardContent, MatCardHeader, MatCardTitle} from '@angular/material/card';\n+import {CommonModule} from '@angular/common';\n+import {Events, MessageBus, TransferStateValue} from '../../../../../protocol';\n+\n+interface TransferStateItem {\n+  key: string;\n+  value: TransferStateValue;\n+  type: string;\n+  size: string;\n+  isExpanded?: boolean;\n+  isCopied?: boolean;\n+}\n+\n+@Component({\n+  selector: 'ng-transfer-state',\n+  imports: [\n+    CommonModule,\n+    MatIcon,\n+    MatTooltip,\n+    MatTable,\n+    MatHeaderCell,\n+    MatCell,\n+    MatHeaderRow,\n+    MatRow,\n+    MatColumnDef,\n+    MatHeaderCellDef,\n+    MatCellDef,\n+    MatHeaderRowDef,\n+    MatRowDef,\n+    MatCard,\n+    MatCardContent,\n+    MatCardHeader,\n+    MatCardTitle,\n+  ],\n+  templateUrl: './transfer-state.component.html',\n+  styleUrls: ['./transfer-state.component.scss'],\n+  changeDetection: ChangeDetectionStrategy.OnPush,\n+})\n+export class TransferStateComponent {\n+  private _messageBus = inject(MessageBus) as MessageBus<Events>;\n+  readonly MAX_DISPLAY_LENGTH = 200;\n+\n+  readonly transferStateData = signal<Record<string, TransferStateValue> | null>(null);\n+  readonly error = signal<string | null>(null);\n+  readonly isLoading = signal(false);\n+\n+  readonly transferStateItems = computed<TransferStateItem[]>(() => {\n+    const data = this.transferStateData();\n+    if (!data) return [];\n+\n+    return Object.entries(data).map(([key, value]) => ({\n+      key,\n+      value,\n+      type: this.getValueType(value),\n+      size: this.getValueSize(value),\n+      isExpanded: false,\n+      isCopied: false,\n+    }));\n+  });\n+\n+  readonly hasData = computed(() => this.transferStateItems().length > 0);\n+\n+  readonly totalSize = computed(() => {\n+    const items = this.transferStateItems();\n+    if (items.length === 0) return '0 B';\n+\n+    let totalBytes = 0;\n+    for (const item of items) {\n+      const str = typeof item.value === 'string' ? item.value : JSON.stringify(item.value);\n+      totalBytes += new Blob([str]).size;\n+    }\n+\n+    if (totalBytes < 1024) return `${totalBytes} B`;\n+    if (totalBytes < 1024 * 1024) return `${(totalBytes / 1024).toFixed(1)} KB`;\n+    return `${(totalBytes / (1024 * 1024)).toFixed(1)} MB`;\n+  });\n+\n+  displayedColumns: string[] = ['key', 'type', 'size', 'value'];\n+\n+  constructor() {\n+    this.loadTransferState();\n+  }\n+\n+  private getValueType(value: TransferStateValue): string {\n+    if (value === null) return 'null';\n+    if (Array.isArray(value)) return 'array';\n+    return typeof value;\n+  }\n+\n+  getValueSize(value: TransferStateValue): string {\n+    try {\n+      const str = JSON.stringify(value);\n+      const bytes = new Blob([str]).size;\n+      if (bytes < 1024) return `${bytes} B`;\n+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;\n+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;\n+    } catch {\n+      return 'unknown';\n+    }\n+  }\n+\n+  private formatValue(value: TransferStateValue, isExpanded = false): string {\n+    const formatters = {\n+      null: () => 'null',\n+      undefined: () => 'undefined',\n+      string: (val: string) => `\"${val}\"`,\n+      object: (val: object) => JSON.stringify(val, null, 2),\n+      default: (val: unknown) => String(val),\n+    };\n+\n+    const getFormattedValue = (val: TransferStateValue): string => {\n+      if (val === null) return formatters.null();\n+      if (val === undefined) return formatters.undefined();\n+      if (typeof val === 'string') return formatters.string(val);\n+      if (typeof val === 'object') return formatters.object(val);\n+      return formatters.default(val);\n+    };\n+\n+    const formatted = getFormattedValue(value);\n+\n+    return this.truncateIfNeeded(formatted, isExpanded);\n+  }\n+\n+  private truncateIfNeeded(text: string, isExpanded: boolean): string {\n+    if (isExpanded || text.length <= this.MAX_DISPLAY_LENGTH) {\n+      return text;\n+    }\n+\n+    return text.substring(0, this.MAX_DISPLAY_LENGTH) + '...';\n+  }\n+\n+  loadTransferState(): void {\n+    this.isLoading.set(true);\n+    this.error.set(null);\n+\n+    try {\n+      this._messageBus.emit('getTransferState');\n+      this._messageBus.on(\n+        'transferStateData',\n+        (data: Record<string, TransferStateValue> | null) => {\n+          this.transferStateData.set(data);\n+          this.isLoading.set(false);\n+          if (!data) {\n+            this.error.set(\n+              'No transfer state found. Make sure you are inspecting a page with Server-Side Rendering (SSR) enabled.',\n+            );\n+          }\n+        },\n+      );\n+    } catch (err) {\n+      this.error.set(`Error loading transfer state: ${err}`);\n+      this.isLoading.set(false);\n+    }\n+  }\n+\n+  refresh(): void {\n+    this.loadTransferState();\n+  }\n+\n+  getFormattedValue(item: TransferStateItem): string {\n+    return this.formatValue(item.value, item.isExpanded);\n+  }\n+\n+  isValueLong(value: TransferStateValue): boolean {\n+    const formatted = this.formatValue(value, true);\n+    return formatted.length > this.MAX_DISPLAY_LENGTH;\n+  }\n+\n+  toggleExpanded(item: TransferStateItem): void {\n+    item.isExpanded = !item.isExpanded;\n+  }\n+\n+  async copyToClipboard(item: TransferStateItem): Promise<void> {",
+        "comment_created_at": "2025-07-04T09:00:01+00:00",
+        "comment_author": "alan-agius4",
+        "comment_body": "Use the clip board service to copy the text.\r\n\r\n```ts\r\ninject(Clipboard).copy(textToCopy);\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2184815513",
+    "pr_number": 62465,
+    "pr_file": "devtools/projects/ng-devtools-backend/src/lib/client-event-subscribers.ts",
+    "created_at": "2025-07-04T09:14:34+00:00",
+    "commented_code": "console.groupEnd();\n };\n \n+const getTransferStateCallback = (messageBus: MessageBus<Events>) => () => {\n+  try {\n+    const transferStateData = extractTransferStateFromDocument();\n+    messageBus.emit('transferStateData', [transferStateData]);\n+  } catch (error) {\n+    console.error('Error extracting transfer state:', error);\n+    messageBus.emit('transferStateData', [null]);\n+  }\n+};\n+\n+const extractTransferStateFromDocument = (): Record<string, TransferStateValue> | null => {\n+  try {\n+    let script = document.getElementById('ng-state') as HTMLScriptElement | null;",
+    "repo_full_name": "angular/angular",
+    "discussion_comments": [
+      {
+        "comment_id": "2184815513",
+        "repo_full_name": "angular/angular",
+        "pr_number": 62465,
+        "pr_file": "devtools/projects/ng-devtools-backend/src/lib/client-event-subscribers.ts",
+        "discussion_id": "2184815513",
+        "commented_code": "@@ -661,6 +664,41 @@ const logProvider = (\n   console.groupEnd();\n };\n \n+const getTransferStateCallback = (messageBus: MessageBus<Events>) => () => {\n+  try {\n+    const transferStateData = extractTransferStateFromDocument();\n+    messageBus.emit('transferStateData', [transferStateData]);\n+  } catch (error) {\n+    console.error('Error extracting transfer state:', error);\n+    messageBus.emit('transferStateData', [null]);\n+  }\n+};\n+\n+const extractTransferStateFromDocument = (): Record<string, TransferStateValue> | null => {\n+  try {\n+    let script = document.getElementById('ng-state') as HTMLScriptElement | null;",
+        "comment_created_at": "2025-07-04T09:14:34+00:00",
+        "comment_author": "JeanMeche",
+        "comment_body": "I think we should do something via the `ng` global like we do it on any other API that are accessed by the devtools. \r\n\r\nHave a look at `devtools/projects/ng-devtools-backend/src/lib/ng-debug-api/ng-debug-api.ts` and `packages/core/src/render3/util/global_utils.ts`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2193095734",
+    "pr_number": 62465,
+    "pr_file": "packages/core/src/render3/util/transfer_state_utils.ts",
+    "created_at": "2025-07-08T17:39:27+00:00",
+    "commented_code": "+/**\n+ * @license\n+ * Copyright Google LLC All Rights Reserved.\n+ *\n+ * Use of this source code is governed by an MIT-style license that can be\n+ * found in the LICENSE file at https://angular.dev/license\n+ */\n+\n+import {getDocument} from '../interfaces/document';\n+import {APP_ID} from '../../core';\n+import {Injector} from '../../di';\n+\n+/**\n+ * Retrieves transfer state data from the DOM using the provided injector to get APP_ID.\n+ * This approach works by getting the APP_ID from the injector and then finding the\n+ * corresponding transfer state script tag.\n+ *\n+ * @param injector - The injector to use for getting APP_ID\n+ * @returns The transfer state data as an object, or empty object if not available\n+ */\n+export function getTransferState(injector: Injector): Record<string, unknown> {\n+  const doc = getDocument();\n+\n+  const appId = injector.get(APP_ID);\n+  const scriptId = appId + '-state';\n+  const script = doc.getElementById(scriptId) as HTMLScriptElement;\n+\n+  if (!script) {\n+    return {};\n+  }\n+\n+  if (!script.textContent || script.textContent.trim() === '') {\n+    return {};\n+  }\n+  return JSON.parse(script.textContent) as Record<string, unknown>;",
+    "repo_full_name": "angular/angular",
+    "discussion_comments": [
+      {
+        "comment_id": "2193095734",
+        "repo_full_name": "angular/angular",
+        "pr_number": 62465,
+        "pr_file": "packages/core/src/render3/util/transfer_state_utils.ts",
+        "discussion_id": "2193095734",
+        "commented_code": "@@ -0,0 +1,36 @@\n+/**\n+ * @license\n+ * Copyright Google LLC All Rights Reserved.\n+ *\n+ * Use of this source code is governed by an MIT-style license that can be\n+ * found in the LICENSE file at https://angular.dev/license\n+ */\n+\n+import {getDocument} from '../interfaces/document';\n+import {APP_ID} from '../../core';\n+import {Injector} from '../../di';\n+\n+/**\n+ * Retrieves transfer state data from the DOM using the provided injector to get APP_ID.\n+ * This approach works by getting the APP_ID from the injector and then finding the\n+ * corresponding transfer state script tag.\n+ *\n+ * @param injector - The injector to use for getting APP_ID\n+ * @returns The transfer state data as an object, or empty object if not available\n+ */\n+export function getTransferState(injector: Injector): Record<string, unknown> {\n+  const doc = getDocument();\n+\n+  const appId = injector.get(APP_ID);\n+  const scriptId = appId + '-state';\n+  const script = doc.getElementById(scriptId) as HTMLScriptElement;\n+\n+  if (!script) {\n+    return {};\n+  }\n+\n+  if (!script.textContent || script.textContent.trim() === '') {\n+    return {};\n+  }\n+  return JSON.parse(script.textContent) as Record<string, unknown>;",
+        "comment_created_at": "2025-07-08T17:39:27+00:00",
+        "comment_author": "JeanMeche",
+        "comment_body": "This can basically be replaced by `retrieveTransferredState()` located in `transfer_state.ts` (we'll need to export it first). ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2193261830",
+        "repo_full_name": "angular/angular",
+        "pr_number": 62465,
+        "pr_file": "packages/core/src/render3/util/transfer_state_utils.ts",
+        "discussion_id": "2193095734",
+        "commented_code": "@@ -0,0 +1,36 @@\n+/**\n+ * @license\n+ * Copyright Google LLC All Rights Reserved.\n+ *\n+ * Use of this source code is governed by an MIT-style license that can be\n+ * found in the LICENSE file at https://angular.dev/license\n+ */\n+\n+import {getDocument} from '../interfaces/document';\n+import {APP_ID} from '../../core';\n+import {Injector} from '../../di';\n+\n+/**\n+ * Retrieves transfer state data from the DOM using the provided injector to get APP_ID.\n+ * This approach works by getting the APP_ID from the injector and then finding the\n+ * corresponding transfer state script tag.\n+ *\n+ * @param injector - The injector to use for getting APP_ID\n+ * @returns The transfer state data as an object, or empty object if not available\n+ */\n+export function getTransferState(injector: Injector): Record<string, unknown> {\n+  const doc = getDocument();\n+\n+  const appId = injector.get(APP_ID);\n+  const scriptId = appId + '-state';\n+  const script = doc.getElementById(scriptId) as HTMLScriptElement;\n+\n+  if (!script) {\n+    return {};\n+  }\n+\n+  if (!script.textContent || script.textContent.trim() === '') {\n+    return {};\n+  }\n+  return JSON.parse(script.textContent) as Record<string, unknown>;",
+        "comment_created_at": "2025-07-08T19:08:56+00:00",
+        "comment_author": "JeanMeche",
+        "comment_body": "I would expect this function to strip internal framework keys from `packages/core/src/hydration/utils.ts` : `__nghData__` & `__nghDeferData__` which are used for (incremental) hydration and don't have real meaning for developers. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2208960716",
+    "pr_number": 62659,
+    "pr_file": "packages/forms/experimental/src/api/validators/min_length.ts",
+    "created_at": "2025-07-16T00:41:32+00:00",
+    "commented_code": "metadata(path, MIN_LENGTH, reactiveMinLengthValue);\n \n   validate(path, (ctx) => {\n+    // TODO: resolve TODO below",
+    "repo_full_name": "angular/angular",
+    "discussion_comments": [
+      {
+        "comment_id": "2208960716",
+        "repo_full_name": "angular/angular",
+        "pr_number": 62659,
+        "pr_file": "packages/forms/experimental/src/api/validators/min_length.ts",
+        "discussion_id": "2208960716",
+        "commented_code": "@@ -28,6 +33,7 @@ export function minLength<TPathKind extends PathKind = PathKind.Root>(\n   metadata(path, MIN_LENGTH, reactiveMinLengthValue);\n \n   validate(path, (ctx) => {\n+    // TODO: resolve TODO below",
+        "comment_created_at": "2025-07-16T00:41:32+00:00",
+        "comment_author": "mmalerba",
+        "comment_body": "I vote no, sets don't have a length, they have a size. I could see just supporting `{length: number}` though, as is suggested in another TODO somewhere",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2208979822",
+        "repo_full_name": "angular/angular",
+        "pr_number": 62659,
+        "pr_file": "packages/forms/experimental/src/api/validators/min_length.ts",
+        "discussion_id": "2208960716",
+        "commented_code": "@@ -28,6 +33,7 @@ export function minLength<TPathKind extends PathKind = PathKind.Root>(\n   metadata(path, MIN_LENGTH, reactiveMinLengthValue);\n \n   validate(path, (ctx) => {\n+    // TODO: resolve TODO below",
+        "comment_created_at": "2025-07-16T00:59:56+00:00",
+        "comment_author": "michael-small",
+        "comment_body": "Relatively recently in the current forms API in [19.2 ](https://github.com/angular/angular/releases/tag/19.2.0), sets were accounted for with a helper `lengthOrSize` https://github.com/angular/angular/pull/45793/files#diff-9b7158180baa4cab9fa2e451531c658358a253e496809f3e305e1c15866e711cR38",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2209138146",
+        "repo_full_name": "angular/angular",
+        "pr_number": 62659,
+        "pr_file": "packages/forms/experimental/src/api/validators/min_length.ts",
+        "discussion_id": "2208960716",
+        "commented_code": "@@ -28,6 +33,7 @@ export function minLength<TPathKind extends PathKind = PathKind.Root>(\n   metadata(path, MIN_LENGTH, reactiveMinLengthValue);\n \n   validate(path, (ctx) => {\n+    // TODO: resolve TODO below",
+        "comment_created_at": "2025-07-16T03:37:24+00:00",
+        "comment_author": "mmalerba",
+        "comment_body": "Ah thanks for pointing that out, I wasn't aware of that. Given that history I'm fine supporting size as well",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2260861620",
+    "pr_number": 63050,
+    "pr_file": "devtools/projects/ng-devtools/src/lib/application-providers/window_provider.ts",
+    "created_at": "2025-08-07T16:38:04+00:00",
+    "commented_code": "* found in the LICENSE file at https://angular.dev/license\n  */\n \n-import {InjectionToken, Provider} from '@angular/core';\n+import {InjectionToken} from '@angular/core';\n \n-export const WINDOW = new InjectionToken<Window>('WINDOW');\n-\n-export const WINDOW_PROVIDER: Provider = {\n-  provide: WINDOW,\n-  useValue: window,\n-};\n+export const WINDOW = new InjectionToken<Window>('WINDOW', {\n+  factory: () => window,\n+  providedIn: 'root',\n+});",
+    "repo_full_name": "angular/angular",
+    "discussion_comments": [
+      {
+        "comment_id": "2260861620",
+        "repo_full_name": "angular/angular",
+        "pr_number": 63050,
+        "pr_file": "devtools/projects/ng-devtools/src/lib/application-providers/window_provider.ts",
+        "discussion_id": "2260861620",
+        "commented_code": "@@ -6,11 +6,9 @@\n  * found in the LICENSE file at https://angular.dev/license\n  */\n \n-import {InjectionToken, Provider} from '@angular/core';\n+import {InjectionToken} from '@angular/core';\n \n-export const WINDOW = new InjectionToken<Window>('WINDOW');\n-\n-export const WINDOW_PROVIDER: Provider = {\n-  provide: WINDOW,\n-  useValue: window,\n-};\n+export const WINDOW = new InjectionToken<Window>('WINDOW', {\n+  factory: () => window,\n+  providedIn: 'root',\n+});",
+        "comment_created_at": "2025-08-07T16:38:04+00:00",
+        "comment_author": "JeanMeche",
+        "comment_body": "```suggestion\r\nexport const WINDOW = new InjectionToken<Window>('WINDOW', {\r\n  factory: () => window,\r\n});\r\n```\r\nFwiw, this is implicit if `factory` is defined. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2262203817",
+        "repo_full_name": "angular/angular",
+        "pr_number": 63050,
+        "pr_file": "devtools/projects/ng-devtools/src/lib/application-providers/window_provider.ts",
+        "discussion_id": "2260861620",
+        "commented_code": "@@ -6,11 +6,9 @@\n  * found in the LICENSE file at https://angular.dev/license\n  */\n \n-import {InjectionToken, Provider} from '@angular/core';\n+import {InjectionToken} from '@angular/core';\n \n-export const WINDOW = new InjectionToken<Window>('WINDOW');\n-\n-export const WINDOW_PROVIDER: Provider = {\n-  provide: WINDOW,\n-  useValue: window,\n-};\n+export const WINDOW = new InjectionToken<Window>('WINDOW', {\n+  factory: () => window,\n+  providedIn: 'root',\n+});",
+        "comment_created_at": "2025-08-08T07:50:07+00:00",
+        "comment_author": "hawkgs",
+        "comment_body": "[This](https://github.com/angular/angular/blob/main/packages/core/src/di/injection_token.ts#L91)? The docs need to address that, I think.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2190016418",
+    "pr_number": 62429,
+    "pr_file": "devtools/src/local-storage.provider.ts",
+    "created_at": "2025-07-07T13:03:30+00:00",
+    "commented_code": "+/**\n+ * @license\n+ * Copyright Google LLC All Rights Reserved.\n+ *\n+ * Use of this source code is governed by an MIT-style license that can be\n+ * found in the LICENSE file at https://angular.dev/license\n+ */\n+\n+import {InjectionToken, Provider} from '@angular/core';\n+\n+export const LOCAL_STORAGE = new InjectionToken<typeof localStorage>('LOCAL_STORAGE');\n+\n+export const provideLocalStorage = (): Provider => ({\n+  provide: LOCAL_STORAGE,\n+  useValue: localStorage,\n+});",
+    "repo_full_name": "angular/angular",
+    "discussion_comments": [
+      {
+        "comment_id": "2190016418",
+        "repo_full_name": "angular/angular",
+        "pr_number": 62429,
+        "pr_file": "devtools/src/local-storage.provider.ts",
+        "discussion_id": "2190016418",
+        "commented_code": "@@ -0,0 +1,16 @@\n+/**\n+ * @license\n+ * Copyright Google LLC All Rights Reserved.\n+ *\n+ * Use of this source code is governed by an MIT-style license that can be\n+ * found in the LICENSE file at https://angular.dev/license\n+ */\n+\n+import {InjectionToken, Provider} from '@angular/core';\n+\n+export const LOCAL_STORAGE = new InjectionToken<typeof localStorage>('LOCAL_STORAGE');\n+\n+export const provideLocalStorage = (): Provider => ({\n+  provide: LOCAL_STORAGE,\n+  useValue: localStorage,\n+});",
+        "comment_created_at": "2025-07-07T13:03:30+00:00",
+        "comment_author": "JeanMeche",
+        "comment_body": "we could provide a default factory to the token :\r\n```suggestion\r\nexport const LOCAL_STORAGE = new InjectionToken<typeof localStorage>('LOCAL_STORAGE', { factory: () => localStorage });\r\n```\r\n\r\nThis way the token behaves like a providedIn root service. ",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

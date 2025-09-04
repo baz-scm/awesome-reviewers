@@ -15,6 +15,7 @@ Use CSS utility functions and avoid complex inline calculations for better maint
 
 **Recommended patterns:**
 
+{% raw %}
 ```ts
 // ✅ Good: Use cx() for combining classes
 const { styles, cx } = useStyles();
@@ -34,5 +35,6 @@ const extraTitle = css`
 // ❌ Avoid: Complex CSS calculations that are fragile
 style={{ maxHeight: `calc(75vh - 56px - 13px - ${gap}px)` }}
 ```
+{% endraw %}
 
 Avoid overly complex CSS calculations that depend on magic numbers, as they become fragile when layouts change. Consider using CSS inheritance properties or more robust layout solutions instead.

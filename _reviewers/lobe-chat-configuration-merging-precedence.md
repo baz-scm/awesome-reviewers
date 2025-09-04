@@ -21,6 +21,7 @@ When merging configuration objects, always preserve existing values and follow c
 **Examples:**
 
 ❌ **Problematic merging** - overwrites existing footerAction:
+{% raw %}
 ```tsx
 appearance={{
   ...appearance,
@@ -30,8 +31,10 @@ appearance={{
   }
 }}
 ```
+{% endraw %}
 
 ✅ **Proper conditional merging**:
+{% raw %}
 ```tsx
 appearance={{
   ...appearance,
@@ -41,6 +44,7 @@ appearance={{
   }
 }}
 ```
+{% endraw %}
 
 ❌ **Component-level merging**:
 ```tsx

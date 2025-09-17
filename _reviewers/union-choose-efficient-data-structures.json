@@ -1,0 +1,228 @@
+[
+  {
+    "discussion_id": "2259579304",
+    "pr_number": 4937,
+    "pr_file": "cosmwasm/cw-escrow-vault/src/contract.rs",
+    "created_at": "2025-08-07T08:42:51+00:00",
+    "commented_code": "+use cosmwasm_schema::cw_serde;\n+use cosmwasm_std::{\n+    entry_point, to_json_binary, wasm_execute, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut,\n+    Env, MessageInfo, Response, StdResult, Uint128,\n+};\n+use cw20::Cw20ExecuteMsg;\n+use depolama::StorageExt;\n+use frissitheto::UpgradeMsg;\n+use ibc_union_spec::path::commit_packets;\n+\n+use crate::{\n+    error::Error,\n+    msg::{ExecuteMsg, InstantiateMsg, QueryMsg},\n+    state::{Admin, FungibleCounterparty, FungibleLane, IntentWhitelist, Zkgm},\n+};\n+\n+#[entry_point]\n+pub fn instantiate(_: DepsMut, _: Env, _: MessageInfo, _: ()) -> StdResult<Response> {\n+    panic!(\"this contract cannot be instantiated directly, but must be migrated from an existing instantiated contract.\");\n+}\n+\n+#[cw_serde]\n+pub struct MigrateMsg {}\n+\n+#[entry_point]\n+pub fn migrate(\n+    deps: DepsMut,\n+    _: Env,\n+    msg: UpgradeMsg<InstantiateMsg, MigrateMsg>,\n+) -> Result<Response, Error> {\n+    msg.run(\n+        deps,\n+        |deps, msg| {\n+            deps.storage.write_item::<Admin>(&msg.admin);\n+            Ok((Response::new(), None))\n+        },\n+        |_, _, _| Ok((Response::default(), None)),\n+    )\n+}\n+\n+fn ensure_zkgm(deps: Deps, info: &MessageInfo) -> Result<(), Error> {\n+    let admin = deps.storage.read_item::<Zkgm>()?;\n+    if info.sender != admin {\n+        return Err(Error::OnlyZkgm);\n+    }\n+    Ok(())\n+}\n+\n+fn ensure_admin(deps: Deps, info: &MessageInfo) -> Result<(), Error> {\n+    let admin = deps.storage.read_item::<Admin>()?;\n+    if info.sender != admin {\n+        return Err(Error::OnlyAdmin);\n+    }\n+    Ok(())\n+}\n+\n+#[entry_point]\n+pub fn execute(\n+    deps: DepsMut,\n+    _env: Env,\n+    info: MessageInfo,\n+    msg: ExecuteMsg,\n+) -> Result<Response, Error> {\n+    match msg {\n+        ExecuteMsg::WhitelistIntents { hashes_whitelist } => {\n+            ensure_admin(deps.as_ref(), &info)?;\n+            for (packet_hash, allowed) in hashes_whitelist {\n+                deps.storage\n+                    .write::<IntentWhitelist>(&packet_hash, &allowed);\n+            }\n+            Ok(Response::new())\n+        }\n+        ExecuteMsg::SetFungibleCounterparty {\n+            channel_id,\n+            base_token,\n+            counterparty_beneficiary,\n+            escrowed_denom,\n+        } => {\n+            ensure_admin(deps.as_ref(), &info)?;\n+            let is_cw20 = deps\n+                .querier\n+                .query_wasm_contract_info(escrowed_denom.clone())\n+                .is_ok();\n+            deps.storage.write::<FungibleCounterparty>(\n+                &(channel_id, base_token),\n+                &FungibleLane {\n+                    counterparty_beneficiary,\n+                    escrowed_denom,\n+                    is_cw20,\n+                },\n+            );\n+            Ok(Response::new())\n+        }\n+        ExecuteMsg::DoSolve {\n+            packet,\n+            order,\n+            caller: _,\n+            relayer,\n+            relayer_msg: _,\n+            intent,\n+        } => {\n+            ensure_zkgm(deps.as_ref(), &info)?;\n+            if intent {\n+                let whitelisted = deps\n+                    .storage\n+                    .read::<IntentWhitelist>(&commit_packets(&[packet.clone()]))\n+                    .unwrap_or(false);\n+                if !whitelisted {\n+                    return Err(Error::IntentMustBeWhitelisted);\n+                }\n+            }\n+\n+            let fungible_lane = deps\n+                .storage\n+                .read::<FungibleCounterparty>(&(packet.destination_channel_id, order.base_token))\n+                .map_err(|_| Error::LaneIsNotFungible {\n+                    channel_id: packet.destination_channel_id,\n+                })?;\n+\n+            if order.quote_amount > order.base_amount {\n+                return Err(Error::BaseAmountMustCoverQuoteAmount);\n+            }\n+\n+            let mut messages = Vec::<CosmosMsg>::with_capacity(2);\n+            let mut push_transfer = move |to, amount: Uint128| -> StdResult<()> {\n+                if !amount.is_zero() {\n+                    if fungible_lane.is_cw20 {\n+                        messages.push(\n+                            wasm_execute(\n+                                fungible_lane.escrowed_denom.clone(),\n+                                &Cw20ExecuteMsg::Transfer {\n+                                    recipient: to,\n+                                    amount,\n+                                },\n+                                vec![],\n+                            )?\n+                            .into(),\n+                        );\n+                    } else {\n+                        messages.push(\n+                            BankMsg::Send {\n+                                to_address: to,\n+                                amount: vec![Coin::new(\n+                                    amount,\n+                                    fungible_lane.escrowed_denom.clone(),\n+                                )],\n+                            }\n+                            .into(),\n+                        );\n+                    }\n+                }\n+                Ok(())\n+            };\n+\n+            let fee = order\n+                .base_amount\n+                .checked_sub(order.quote_amount)\n+                .expect(\"impossible\");",
+    "repo_full_name": "unionlabs/union",
+    "discussion_comments": [
+      {
+        "comment_id": "2259579304",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 4937,
+        "pr_file": "cosmwasm/cw-escrow-vault/src/contract.rs",
+        "discussion_id": "2259579304",
+        "commented_code": "@@ -0,0 +1,183 @@\n+use cosmwasm_schema::cw_serde;\n+use cosmwasm_std::{\n+    entry_point, to_json_binary, wasm_execute, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut,\n+    Env, MessageInfo, Response, StdResult, Uint128,\n+};\n+use cw20::Cw20ExecuteMsg;\n+use depolama::StorageExt;\n+use frissitheto::UpgradeMsg;\n+use ibc_union_spec::path::commit_packets;\n+\n+use crate::{\n+    error::Error,\n+    msg::{ExecuteMsg, InstantiateMsg, QueryMsg},\n+    state::{Admin, FungibleCounterparty, FungibleLane, IntentWhitelist, Zkgm},\n+};\n+\n+#[entry_point]\n+pub fn instantiate(_: DepsMut, _: Env, _: MessageInfo, _: ()) -> StdResult<Response> {\n+    panic!(\"this contract cannot be instantiated directly, but must be migrated from an existing instantiated contract.\");\n+}\n+\n+#[cw_serde]\n+pub struct MigrateMsg {}\n+\n+#[entry_point]\n+pub fn migrate(\n+    deps: DepsMut,\n+    _: Env,\n+    msg: UpgradeMsg<InstantiateMsg, MigrateMsg>,\n+) -> Result<Response, Error> {\n+    msg.run(\n+        deps,\n+        |deps, msg| {\n+            deps.storage.write_item::<Admin>(&msg.admin);\n+            Ok((Response::new(), None))\n+        },\n+        |_, _, _| Ok((Response::default(), None)),\n+    )\n+}\n+\n+fn ensure_zkgm(deps: Deps, info: &MessageInfo) -> Result<(), Error> {\n+    let admin = deps.storage.read_item::<Zkgm>()?;\n+    if info.sender != admin {\n+        return Err(Error::OnlyZkgm);\n+    }\n+    Ok(())\n+}\n+\n+fn ensure_admin(deps: Deps, info: &MessageInfo) -> Result<(), Error> {\n+    let admin = deps.storage.read_item::<Admin>()?;\n+    if info.sender != admin {\n+        return Err(Error::OnlyAdmin);\n+    }\n+    Ok(())\n+}\n+\n+#[entry_point]\n+pub fn execute(\n+    deps: DepsMut,\n+    _env: Env,\n+    info: MessageInfo,\n+    msg: ExecuteMsg,\n+) -> Result<Response, Error> {\n+    match msg {\n+        ExecuteMsg::WhitelistIntents { hashes_whitelist } => {\n+            ensure_admin(deps.as_ref(), &info)?;\n+            for (packet_hash, allowed) in hashes_whitelist {\n+                deps.storage\n+                    .write::<IntentWhitelist>(&packet_hash, &allowed);\n+            }\n+            Ok(Response::new())\n+        }\n+        ExecuteMsg::SetFungibleCounterparty {\n+            channel_id,\n+            base_token,\n+            counterparty_beneficiary,\n+            escrowed_denom,\n+        } => {\n+            ensure_admin(deps.as_ref(), &info)?;\n+            let is_cw20 = deps\n+                .querier\n+                .query_wasm_contract_info(escrowed_denom.clone())\n+                .is_ok();\n+            deps.storage.write::<FungibleCounterparty>(\n+                &(channel_id, base_token),\n+                &FungibleLane {\n+                    counterparty_beneficiary,\n+                    escrowed_denom,\n+                    is_cw20,\n+                },\n+            );\n+            Ok(Response::new())\n+        }\n+        ExecuteMsg::DoSolve {\n+            packet,\n+            order,\n+            caller: _,\n+            relayer,\n+            relayer_msg: _,\n+            intent,\n+        } => {\n+            ensure_zkgm(deps.as_ref(), &info)?;\n+            if intent {\n+                let whitelisted = deps\n+                    .storage\n+                    .read::<IntentWhitelist>(&commit_packets(&[packet.clone()]))\n+                    .unwrap_or(false);\n+                if !whitelisted {\n+                    return Err(Error::IntentMustBeWhitelisted);\n+                }\n+            }\n+\n+            let fungible_lane = deps\n+                .storage\n+                .read::<FungibleCounterparty>(&(packet.destination_channel_id, order.base_token))\n+                .map_err(|_| Error::LaneIsNotFungible {\n+                    channel_id: packet.destination_channel_id,\n+                })?;\n+\n+            if order.quote_amount > order.base_amount {\n+                return Err(Error::BaseAmountMustCoverQuoteAmount);\n+            }\n+\n+            let mut messages = Vec::<CosmosMsg>::with_capacity(2);\n+            let mut push_transfer = move |to, amount: Uint128| -> StdResult<()> {\n+                if !amount.is_zero() {\n+                    if fungible_lane.is_cw20 {\n+                        messages.push(\n+                            wasm_execute(\n+                                fungible_lane.escrowed_denom.clone(),\n+                                &Cw20ExecuteMsg::Transfer {\n+                                    recipient: to,\n+                                    amount,\n+                                },\n+                                vec![],\n+                            )?\n+                            .into(),\n+                        );\n+                    } else {\n+                        messages.push(\n+                            BankMsg::Send {\n+                                to_address: to,\n+                                amount: vec![Coin::new(\n+                                    amount,\n+                                    fungible_lane.escrowed_denom.clone(),\n+                                )],\n+                            }\n+                            .into(),\n+                        );\n+                    }\n+                }\n+                Ok(())\n+            };\n+\n+            let fee = order\n+                .base_amount\n+                .checked_sub(order.quote_amount)\n+                .expect(\"impossible\");",
+        "comment_created_at": "2025-08-07T08:42:51+00:00",
+        "comment_author": "benluelo",
+        "comment_body": "perhaps I'm missing some context but why is this impossible?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2260709926",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 4937,
+        "pr_file": "cosmwasm/cw-escrow-vault/src/contract.rs",
+        "discussion_id": "2259579304",
+        "commented_code": "@@ -0,0 +1,183 @@\n+use cosmwasm_schema::cw_serde;\n+use cosmwasm_std::{\n+    entry_point, to_json_binary, wasm_execute, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut,\n+    Env, MessageInfo, Response, StdResult, Uint128,\n+};\n+use cw20::Cw20ExecuteMsg;\n+use depolama::StorageExt;\n+use frissitheto::UpgradeMsg;\n+use ibc_union_spec::path::commit_packets;\n+\n+use crate::{\n+    error::Error,\n+    msg::{ExecuteMsg, InstantiateMsg, QueryMsg},\n+    state::{Admin, FungibleCounterparty, FungibleLane, IntentWhitelist, Zkgm},\n+};\n+\n+#[entry_point]\n+pub fn instantiate(_: DepsMut, _: Env, _: MessageInfo, _: ()) -> StdResult<Response> {\n+    panic!(\"this contract cannot be instantiated directly, but must be migrated from an existing instantiated contract.\");\n+}\n+\n+#[cw_serde]\n+pub struct MigrateMsg {}\n+\n+#[entry_point]\n+pub fn migrate(\n+    deps: DepsMut,\n+    _: Env,\n+    msg: UpgradeMsg<InstantiateMsg, MigrateMsg>,\n+) -> Result<Response, Error> {\n+    msg.run(\n+        deps,\n+        |deps, msg| {\n+            deps.storage.write_item::<Admin>(&msg.admin);\n+            Ok((Response::new(), None))\n+        },\n+        |_, _, _| Ok((Response::default(), None)),\n+    )\n+}\n+\n+fn ensure_zkgm(deps: Deps, info: &MessageInfo) -> Result<(), Error> {\n+    let admin = deps.storage.read_item::<Zkgm>()?;\n+    if info.sender != admin {\n+        return Err(Error::OnlyZkgm);\n+    }\n+    Ok(())\n+}\n+\n+fn ensure_admin(deps: Deps, info: &MessageInfo) -> Result<(), Error> {\n+    let admin = deps.storage.read_item::<Admin>()?;\n+    if info.sender != admin {\n+        return Err(Error::OnlyAdmin);\n+    }\n+    Ok(())\n+}\n+\n+#[entry_point]\n+pub fn execute(\n+    deps: DepsMut,\n+    _env: Env,\n+    info: MessageInfo,\n+    msg: ExecuteMsg,\n+) -> Result<Response, Error> {\n+    match msg {\n+        ExecuteMsg::WhitelistIntents { hashes_whitelist } => {\n+            ensure_admin(deps.as_ref(), &info)?;\n+            for (packet_hash, allowed) in hashes_whitelist {\n+                deps.storage\n+                    .write::<IntentWhitelist>(&packet_hash, &allowed);\n+            }\n+            Ok(Response::new())\n+        }\n+        ExecuteMsg::SetFungibleCounterparty {\n+            channel_id,\n+            base_token,\n+            counterparty_beneficiary,\n+            escrowed_denom,\n+        } => {\n+            ensure_admin(deps.as_ref(), &info)?;\n+            let is_cw20 = deps\n+                .querier\n+                .query_wasm_contract_info(escrowed_denom.clone())\n+                .is_ok();\n+            deps.storage.write::<FungibleCounterparty>(\n+                &(channel_id, base_token),\n+                &FungibleLane {\n+                    counterparty_beneficiary,\n+                    escrowed_denom,\n+                    is_cw20,\n+                },\n+            );\n+            Ok(Response::new())\n+        }\n+        ExecuteMsg::DoSolve {\n+            packet,\n+            order,\n+            caller: _,\n+            relayer,\n+            relayer_msg: _,\n+            intent,\n+        } => {\n+            ensure_zkgm(deps.as_ref(), &info)?;\n+            if intent {\n+                let whitelisted = deps\n+                    .storage\n+                    .read::<IntentWhitelist>(&commit_packets(&[packet.clone()]))\n+                    .unwrap_or(false);\n+                if !whitelisted {\n+                    return Err(Error::IntentMustBeWhitelisted);\n+                }\n+            }\n+\n+            let fungible_lane = deps\n+                .storage\n+                .read::<FungibleCounterparty>(&(packet.destination_channel_id, order.base_token))\n+                .map_err(|_| Error::LaneIsNotFungible {\n+                    channel_id: packet.destination_channel_id,\n+                })?;\n+\n+            if order.quote_amount > order.base_amount {\n+                return Err(Error::BaseAmountMustCoverQuoteAmount);\n+            }\n+\n+            let mut messages = Vec::<CosmosMsg>::with_capacity(2);\n+            let mut push_transfer = move |to, amount: Uint128| -> StdResult<()> {\n+                if !amount.is_zero() {\n+                    if fungible_lane.is_cw20 {\n+                        messages.push(\n+                            wasm_execute(\n+                                fungible_lane.escrowed_denom.clone(),\n+                                &Cw20ExecuteMsg::Transfer {\n+                                    recipient: to,\n+                                    amount,\n+                                },\n+                                vec![],\n+                            )?\n+                            .into(),\n+                        );\n+                    } else {\n+                        messages.push(\n+                            BankMsg::Send {\n+                                to_address: to,\n+                                amount: vec![Coin::new(\n+                                    amount,\n+                                    fungible_lane.escrowed_denom.clone(),\n+                                )],\n+                            }\n+                            .into(),\n+                        );\n+                    }\n+                }\n+                Ok(())\n+            };\n+\n+            let fee = order\n+                .base_amount\n+                .checked_sub(order.quote_amount)\n+                .expect(\"impossible\");",
+        "comment_created_at": "2025-08-07T15:36:56+00:00",
+        "comment_author": "hussein-aitlahcen",
+        "comment_body": "we check that base covers quote in term of amount just before",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2261015500",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 4937,
+        "pr_file": "cosmwasm/cw-escrow-vault/src/contract.rs",
+        "discussion_id": "2259579304",
+        "commented_code": "@@ -0,0 +1,183 @@\n+use cosmwasm_schema::cw_serde;\n+use cosmwasm_std::{\n+    entry_point, to_json_binary, wasm_execute, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut,\n+    Env, MessageInfo, Response, StdResult, Uint128,\n+};\n+use cw20::Cw20ExecuteMsg;\n+use depolama::StorageExt;\n+use frissitheto::UpgradeMsg;\n+use ibc_union_spec::path::commit_packets;\n+\n+use crate::{\n+    error::Error,\n+    msg::{ExecuteMsg, InstantiateMsg, QueryMsg},\n+    state::{Admin, FungibleCounterparty, FungibleLane, IntentWhitelist, Zkgm},\n+};\n+\n+#[entry_point]\n+pub fn instantiate(_: DepsMut, _: Env, _: MessageInfo, _: ()) -> StdResult<Response> {\n+    panic!(\"this contract cannot be instantiated directly, but must be migrated from an existing instantiated contract.\");\n+}\n+\n+#[cw_serde]\n+pub struct MigrateMsg {}\n+\n+#[entry_point]\n+pub fn migrate(\n+    deps: DepsMut,\n+    _: Env,\n+    msg: UpgradeMsg<InstantiateMsg, MigrateMsg>,\n+) -> Result<Response, Error> {\n+    msg.run(\n+        deps,\n+        |deps, msg| {\n+            deps.storage.write_item::<Admin>(&msg.admin);\n+            Ok((Response::new(), None))\n+        },\n+        |_, _, _| Ok((Response::default(), None)),\n+    )\n+}\n+\n+fn ensure_zkgm(deps: Deps, info: &MessageInfo) -> Result<(), Error> {\n+    let admin = deps.storage.read_item::<Zkgm>()?;\n+    if info.sender != admin {\n+        return Err(Error::OnlyZkgm);\n+    }\n+    Ok(())\n+}\n+\n+fn ensure_admin(deps: Deps, info: &MessageInfo) -> Result<(), Error> {\n+    let admin = deps.storage.read_item::<Admin>()?;\n+    if info.sender != admin {\n+        return Err(Error::OnlyAdmin);\n+    }\n+    Ok(())\n+}\n+\n+#[entry_point]\n+pub fn execute(\n+    deps: DepsMut,\n+    _env: Env,\n+    info: MessageInfo,\n+    msg: ExecuteMsg,\n+) -> Result<Response, Error> {\n+    match msg {\n+        ExecuteMsg::WhitelistIntents { hashes_whitelist } => {\n+            ensure_admin(deps.as_ref(), &info)?;\n+            for (packet_hash, allowed) in hashes_whitelist {\n+                deps.storage\n+                    .write::<IntentWhitelist>(&packet_hash, &allowed);\n+            }\n+            Ok(Response::new())\n+        }\n+        ExecuteMsg::SetFungibleCounterparty {\n+            channel_id,\n+            base_token,\n+            counterparty_beneficiary,\n+            escrowed_denom,\n+        } => {\n+            ensure_admin(deps.as_ref(), &info)?;\n+            let is_cw20 = deps\n+                .querier\n+                .query_wasm_contract_info(escrowed_denom.clone())\n+                .is_ok();\n+            deps.storage.write::<FungibleCounterparty>(\n+                &(channel_id, base_token),\n+                &FungibleLane {\n+                    counterparty_beneficiary,\n+                    escrowed_denom,\n+                    is_cw20,\n+                },\n+            );\n+            Ok(Response::new())\n+        }\n+        ExecuteMsg::DoSolve {\n+            packet,\n+            order,\n+            caller: _,\n+            relayer,\n+            relayer_msg: _,\n+            intent,\n+        } => {\n+            ensure_zkgm(deps.as_ref(), &info)?;\n+            if intent {\n+                let whitelisted = deps\n+                    .storage\n+                    .read::<IntentWhitelist>(&commit_packets(&[packet.clone()]))\n+                    .unwrap_or(false);\n+                if !whitelisted {\n+                    return Err(Error::IntentMustBeWhitelisted);\n+                }\n+            }\n+\n+            let fungible_lane = deps\n+                .storage\n+                .read::<FungibleCounterparty>(&(packet.destination_channel_id, order.base_token))\n+                .map_err(|_| Error::LaneIsNotFungible {\n+                    channel_id: packet.destination_channel_id,\n+                })?;\n+\n+            if order.quote_amount > order.base_amount {\n+                return Err(Error::BaseAmountMustCoverQuoteAmount);\n+            }\n+\n+            let mut messages = Vec::<CosmosMsg>::with_capacity(2);\n+            let mut push_transfer = move |to, amount: Uint128| -> StdResult<()> {\n+                if !amount.is_zero() {\n+                    if fungible_lane.is_cw20 {\n+                        messages.push(\n+                            wasm_execute(\n+                                fungible_lane.escrowed_denom.clone(),\n+                                &Cw20ExecuteMsg::Transfer {\n+                                    recipient: to,\n+                                    amount,\n+                                },\n+                                vec![],\n+                            )?\n+                            .into(),\n+                        );\n+                    } else {\n+                        messages.push(\n+                            BankMsg::Send {\n+                                to_address: to,\n+                                amount: vec![Coin::new(\n+                                    amount,\n+                                    fungible_lane.escrowed_denom.clone(),\n+                                )],\n+                            }\n+                            .into(),\n+                        );\n+                    }\n+                }\n+                Ok(())\n+            };\n+\n+            let fee = order\n+                .base_amount\n+                .checked_sub(order.quote_amount)\n+                .expect(\"impossible\");",
+        "comment_created_at": "2025-08-07T17:37:55+00:00",
+        "comment_author": "benluelo",
+        "comment_body": "ah ok i missed that line. maybe good to do the comparison as the checked_sub call then? then we can match on the result, instead of doing the check twice?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2217744026",
+    "pr_number": 4859,
+    "pr_file": "cosmwasm/ibc-union/core/msg/src/lightclient.rs",
+    "created_at": "2025-07-20T10:06:03+00:00",
+    "commented_code": "#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]\n #[cfg_attr(feature = \"schemars\", derive(schemars::JsonSchema))]\n #[serde(deny_unknown_fields, rename_all = \"snake_case\")]\n+#[repr(u8)]\n pub enum Status {\n-    Active,\n-    Expired,\n-    Frozen,\n+    Active = 0,",
+    "repo_full_name": "unionlabs/union",
+    "discussion_comments": [
+      {
+        "comment_id": "2217744026",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 4859,
+        "pr_file": "cosmwasm/ibc-union/core/msg/src/lightclient.rs",
+        "discussion_id": "2217744026",
+        "commented_code": "@@ -6,10 +6,11 @@ use unionlabs_primitives::Bytes;\n #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]\n #[cfg_attr(feature = \"schemars\", derive(schemars::JsonSchema))]\n #[serde(deny_unknown_fields, rename_all = \"snake_case\")]\n+#[repr(u8)]\n pub enum Status {\n-    Active,\n-    Expired,\n-    Frozen,\n+    Active = 0,",
+        "comment_created_at": "2025-07-20T10:06:03+00:00",
+        "comment_author": "benluelo",
+        "comment_body": "this needs to be non-zero (i.e. starting at 1) such that it can be reliably differentiated from an empty storage value",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2049590087",
+    "pr_number": 4369,
+    "pr_file": "hubble/src/abi_fetcher/mod.rs",
+    "created_at": "2025-04-17T20:17:18+00:00",
+    "commented_code": "+use std::fmt::Display;\n+\n+use serde_json::Value;\n+\n+mod client;\n+mod fetcher;\n+mod postgres;\n+\n+#[derive(Clone, Debug)]\n+pub struct AbiDependency {\n+    commit: Vec<u8>,",
+    "repo_full_name": "unionlabs/union",
+    "discussion_comments": [
+      {
+        "comment_id": "2049590087",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 4369,
+        "pr_file": "hubble/src/abi_fetcher/mod.rs",
+        "discussion_id": "2049590087",
+        "commented_code": "@@ -0,0 +1,58 @@\n+use std::fmt::Display;\n+\n+use serde_json::Value;\n+\n+mod client;\n+mod fetcher;\n+mod postgres;\n+\n+#[derive(Clone, Debug)]\n+pub struct AbiDependency {\n+    commit: Vec<u8>,",
+        "comment_created_at": "2025-04-17T20:17:18+00:00",
+        "comment_author": "benluelo",
+        "comment_body": "a commit is a fixed 20 byte hash",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2050429534",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 4369,
+        "pr_file": "hubble/src/abi_fetcher/mod.rs",
+        "discussion_id": "2049590087",
+        "commented_code": "@@ -0,0 +1,58 @@\n+use std::fmt::Display;\n+\n+use serde_json::Value;\n+\n+mod client;\n+mod fetcher;\n+mod postgres;\n+\n+#[derive(Clone, Debug)]\n+pub struct AbiDependency {\n+    commit: Vec<u8>,",
+        "comment_created_at": "2025-04-18T09:47:44+00:00",
+        "comment_author": "qlp",
+        "comment_body": "decided to create a new type",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1988167613",
+    "pr_number": 3910,
+    "pr_file": "cosmwasm/ibc-union/core/msg/src/lightclient.rs",
+    "created_at": "2025-03-10T23:54:33+00:00",
+    "commented_code": "},\n }\n \n+pub type StorageWrites = Vec<(Bytes, Bytes)>;",
+    "repo_full_name": "unionlabs/union",
+    "discussion_comments": [
+      {
+        "comment_id": "1988167613",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 3910,
+        "pr_file": "cosmwasm/ibc-union/core/msg/src/lightclient.rs",
+        "discussion_id": "1988167613",
+        "commented_code": "@@ -32,12 +24,29 @@ pub enum VerifyCreationResponseEvent {\n     },\n }\n \n+pub type StorageWrites = Vec<(Bytes, Bytes)>;",
+        "comment_created_at": "2025-03-10T23:54:33+00:00",
+        "comment_author": "benluelo",
+        "comment_body": "we should use a newtype or a map structure (btreemap), some way to enforce no duplicate keys",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1988170488",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 3910,
+        "pr_file": "cosmwasm/ibc-union/core/msg/src/lightclient.rs",
+        "discussion_id": "1988167613",
+        "commented_code": "@@ -32,12 +24,29 @@ pub enum VerifyCreationResponseEvent {\n     },\n }\n \n+pub type StorageWrites = Vec<(Bytes, Bytes)>;",
+        "comment_created_at": "2025-03-10T23:58:44+00:00",
+        "comment_author": "aeryz",
+        "comment_body": "I would say btreemap is the simplest",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1929494644",
+    "pr_number": 3639,
+    "pr_file": "tools/slot-calculator/src/main.rs",
+    "created_at": "2025-01-25T07:36:09+00:00",
+    "commented_code": "+use std::{collections::VecDeque, str::FromStr, vec};\n+\n+use clap::{Arg, Command};\n+use slotlib::{MappingKey, Slot};\n+use typed_arena::Arena;\n+use unionlabs::primitives::{H256, U256};\n+\n+// Examples:\n+// mapping(uint256 => uint256) => [\"uint256\"]\n+// mapping(uint256 => uint256[]) => [\"uint256\", \"uint256[]\"]\n+// mapping(uint256 => mapping(uint256 => uint256)) => [\"uint256\", \"uint256\"]\n+// mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256)[])[]) => [\"uint256\", \"mapping[]\", \"uint256\", \"mapping[]\", \"uint256\"]\n+// mapping(uint256 => mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256)[]))[]) => [\"uint256\", \"mapping[]\", \"uint256\", \"uint256\", \"mapping[]\", \"uint256\"]\n+// mapping(uint256 => mapping(uint256 => uint256)[]) => [\"uint256\", \"mapping[]\", \"uint256\"]\n+fn parse_layout(layout: &str) -> Result<Vec<String>, String> {",
+    "repo_full_name": "unionlabs/union",
+    "discussion_comments": [
+      {
+        "comment_id": "1929494644",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 3639,
+        "pr_file": "tools/slot-calculator/src/main.rs",
+        "discussion_id": "1929494644",
+        "commented_code": "@@ -0,0 +1,206 @@\n+use std::{collections::VecDeque, str::FromStr, vec};\n+\n+use clap::{Arg, Command};\n+use slotlib::{MappingKey, Slot};\n+use typed_arena::Arena;\n+use unionlabs::primitives::{H256, U256};\n+\n+// Examples:\n+// mapping(uint256 => uint256) => [\"uint256\"]\n+// mapping(uint256 => uint256[]) => [\"uint256\", \"uint256[]\"]\n+// mapping(uint256 => mapping(uint256 => uint256)) => [\"uint256\", \"uint256\"]\n+// mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256)[])[]) => [\"uint256\", \"mapping[]\", \"uint256\", \"mapping[]\", \"uint256\"]\n+// mapping(uint256 => mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256)[]))[]) => [\"uint256\", \"mapping[]\", \"uint256\", \"uint256\", \"mapping[]\", \"uint256\"]\n+// mapping(uint256 => mapping(uint256 => uint256)[]) => [\"uint256\", \"mapping[]\", \"uint256\"]\n+fn parse_layout(layout: &str) -> Result<Vec<String>, String> {",
+        "comment_created_at": "2025-01-25T07:36:09+00:00",
+        "comment_author": "aeryz",
+        "comment_body": "@benluelo Do you know of a simple parsing lib for rust where we can define the grammar and do the parsing? It would be cleaner and safer to use a well tested parser.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1929499506",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 3639,
+        "pr_file": "tools/slot-calculator/src/main.rs",
+        "discussion_id": "1929494644",
+        "commented_code": "@@ -0,0 +1,206 @@\n+use std::{collections::VecDeque, str::FromStr, vec};\n+\n+use clap::{Arg, Command};\n+use slotlib::{MappingKey, Slot};\n+use typed_arena::Arena;\n+use unionlabs::primitives::{H256, U256};\n+\n+// Examples:\n+// mapping(uint256 => uint256) => [\"uint256\"]\n+// mapping(uint256 => uint256[]) => [\"uint256\", \"uint256[]\"]\n+// mapping(uint256 => mapping(uint256 => uint256)) => [\"uint256\", \"uint256\"]\n+// mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256)[])[]) => [\"uint256\", \"mapping[]\", \"uint256\", \"mapping[]\", \"uint256\"]\n+// mapping(uint256 => mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256)[]))[]) => [\"uint256\", \"mapping[]\", \"uint256\", \"uint256\", \"mapping[]\", \"uint256\"]\n+// mapping(uint256 => mapping(uint256 => uint256)[]) => [\"uint256\", \"mapping[]\", \"uint256\"]\n+fn parse_layout(layout: &str) -> Result<Vec<String>, String> {",
+        "comment_created_at": "2025-01-25T08:13:54+00:00",
+        "comment_author": "benluelo",
+        "comment_body": "I highly recommend peg for this usecase, it makes it very trivial to define recursive grammars: https://docs.rs/peg/latest/peg/",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1929566685",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 3639,
+        "pr_file": "tools/slot-calculator/src/main.rs",
+        "discussion_id": "1929494644",
+        "commented_code": "@@ -0,0 +1,206 @@\n+use std::{collections::VecDeque, str::FromStr, vec};\n+\n+use clap::{Arg, Command};\n+use slotlib::{MappingKey, Slot};\n+use typed_arena::Arena;\n+use unionlabs::primitives::{H256, U256};\n+\n+// Examples:\n+// mapping(uint256 => uint256) => [\"uint256\"]\n+// mapping(uint256 => uint256[]) => [\"uint256\", \"uint256[]\"]\n+// mapping(uint256 => mapping(uint256 => uint256)) => [\"uint256\", \"uint256\"]\n+// mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256)[])[]) => [\"uint256\", \"mapping[]\", \"uint256\", \"mapping[]\", \"uint256\"]\n+// mapping(uint256 => mapping(uint256 => mapping(uint256 => mapping(uint256 => uint256)[]))[]) => [\"uint256\", \"mapping[]\", \"uint256\", \"uint256\", \"mapping[]\", \"uint256\"]\n+// mapping(uint256 => mapping(uint256 => uint256)[]) => [\"uint256\", \"mapping[]\", \"uint256\"]\n+fn parse_layout(layout: &str) -> Result<Vec<String>, String> {",
+        "comment_created_at": "2025-01-25T15:52:23+00:00",
+        "comment_author": "cozfuttu",
+        "comment_body": "i'll give it a shot, thanks for the feedback guys",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1823092958",
+    "pr_number": 3175,
+    "pr_file": "lib/ethereum-verifier/src/utils.rs",
+    "created_at": "2024-10-30T17:26:40+00:00",
+    "commented_code": "// Returns if at least 2/3 of the sync committee signed\n //\n // https://github.com/ethereum/consensus-specs/blob/dev/specs/altair/light-client/sync-protocol.md#process_light_client_update\n-pub fn validate_signature_supermajority<C: SYNC_COMMITTEE_SIZE>(\n-    sync_committee_bits: &BitVector<C::SYNC_COMMITTEE_SIZE>,\n-) -> bool {\n-    sync_committee_bits.num_set_bits() * 3 >= sync_committee_bits.len() * 2\n+pub fn validate_signature_supermajority(sync_committee_bits: &[u8]) -> bool {\n+    sync_committee_bits\n+        .iter()\n+        .map(|i| *i as usize)\n+        .sum::<usize>()",
+    "repo_full_name": "unionlabs/union",
+    "discussion_comments": [
+      {
+        "comment_id": "1823092958",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 3175,
+        "pr_file": "lib/ethereum-verifier/src/utils.rs",
+        "discussion_id": "1823092958",
+        "commented_code": "@@ -122,10 +122,13 @@ pub fn compute_slot_at_timestamp<C: SECONDS_PER_SLOT>(\n // Returns if at least 2/3 of the sync committee signed\n //\n // https://github.com/ethereum/consensus-specs/blob/dev/specs/altair/light-client/sync-protocol.md#process_light_client_update\n-pub fn validate_signature_supermajority<C: SYNC_COMMITTEE_SIZE>(\n-    sync_committee_bits: &BitVector<C::SYNC_COMMITTEE_SIZE>,\n-) -> bool {\n-    sync_committee_bits.num_set_bits() * 3 >= sync_committee_bits.len() * 2\n+pub fn validate_signature_supermajority(sync_committee_bits: &[u8]) -> bool {\n+    sync_committee_bits\n+        .iter()\n+        .map(|i| *i as usize)\n+        .sum::<usize>()",
+        "comment_created_at": "2024-10-30T17:26:40+00:00",
+        "comment_author": "benluelo",
+        "comment_body": "this is invalid, shouldn't you do [`i.count_ones()`](https://doc.rust-lang.org/stable/std/primitive.u8.html#method.count_ones)?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1784413898",
+    "pr_number": 3025,
+    "pr_file": "hubble/src/postgres.rs",
+    "created_at": "2024-10-02T12:21:47+00:00",
+    "commented_code": "Ok(())\n }\n+\n+pub async fn get_chain_ids_and_ids<'a, A: Acquire<'a, Database = Postgres>>(\n+    db: A,\n+) -> sqlx::Result<Vec<(String, i32)>> {\n+    let mut conn = db.acquire().await?;\n+\n+    let rows = sqlx::query!(\"SELECT chain_id, id FROM v0.chains\")\n+        .fetch_all(&mut *conn)\n+        .await?;\n+\n+    let chain_ids_and_ids: Vec<(String, i32)> =",
+    "repo_full_name": "unionlabs/union",
+    "discussion_comments": [
+      {
+        "comment_id": "1784413898",
+        "repo_full_name": "unionlabs/union",
+        "pr_number": 3025,
+        "pr_file": "hubble/src/postgres.rs",
+        "discussion_id": "1784413898",
+        "commented_code": "@@ -605,3 +605,80 @@ pub async fn insert_client_mapping<'a, A: Acquire<'a, Database = Postgres>>(\n \n     Ok(())\n }\n+\n+pub async fn get_chain_ids_and_ids<'a, A: Acquire<'a, Database = Postgres>>(\n+    db: A,\n+) -> sqlx::Result<Vec<(String, i32)>> {\n+    let mut conn = db.acquire().await?;\n+\n+    let rows = sqlx::query!(\"SELECT chain_id, id FROM v0.chains\")\n+        .fetch_all(&mut *conn)\n+        .await?;\n+\n+    let chain_ids_and_ids: Vec<(String, i32)> =",
+        "comment_created_at": "2024-10-02T12:21:47+00:00",
+        "comment_author": "qlp",
+        "comment_body": "try to use a HashMap<String, i32> here. will make the code using it easier",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

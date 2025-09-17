@@ -1,0 +1,238 @@
+[
+  {
+    "discussion_id": "2325190713",
+    "pr_number": 535,
+    "pr_file": "src/parlant/adapters/nlp/qwen_service.py",
+    "created_at": "2025-09-05T14:01:41+00:00",
+    "commented_code": "+# Copyright 2025 Emcie Co Ltd.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+from __future__ import annotations\n+import time\n+from openai import (\n+    APIConnectionError,\n+    APIResponseValidationError,\n+    APITimeoutError,\n+    AsyncClient,\n+    ConflictError,\n+    InternalServerError,\n+    RateLimitError,\n+)\n+from typing import Any, Mapping\n+from typing_extensions import override\n+import json\n+import jsonfinder  # type: ignore\n+import os\n+\n+from pydantic import ValidationError\n+import tiktoken\n+\n+from parlant.adapters.nlp.common import normalize_json_output\n+from parlant.core.engines.alpha.prompt_builder import PromptBuilder\n+from parlant.core.loggers import Logger\n+from parlant.core.nlp.policies import policy, retry\n+from parlant.core.nlp.tokenization import EstimatingTokenizer\n+from parlant.core.nlp.service import NLPService\n+from parlant.core.nlp.embedding import Embedder, EmbeddingResult\n+from parlant.core.nlp.generation import (\n+    T,\n+    SchematicGenerator,\n+    SchematicGenerationResult,\n+)\n+from parlant.core.nlp.generation_info import GenerationInfo, UsageInfo\n+from parlant.core.nlp.moderation import (\n+    ModerationService,\n+    NoModeration,\n+)\n+\n+RATE_LIMIT_ERROR_MESSAGE = (\n+    \"Qwen API rate limit exceeded. Possible reasons:\n\"\n+    \"1. Your account may have insufficient API credits.\n\"\n+    \"2. You may be using a free-tier account with limited request capacity.\n\"\n+    \"3. You might have exceeded the requests-per-minute limit for your account.\n\n\"\n+    \"Recommended actions:\n\"\n+    \"- Check your Qwen account balance and billing status.\n\"\n+    \"- Review your API usage limits in Qwen's dashboard.\n\"\n+    \"- For more details on rate limits and usage tiers, visit:\n\"\n+    \"  https://docs.bigmodel.cn/cn/faq/api-code\n\",\n+)\n+\n+\n+class QwenEstimatingTokenizer(EstimatingTokenizer):\n+    def __init__(self, model_name: str) -> None:\n+        self.model_name = model_name\n+        self.encoding = tiktoken.encoding_for_model(\"gpt-4o-2024-08-06\")\n+\n+    @override\n+    async def estimate_token_count(self, prompt: str) -> int:\n+        tokens = self.encoding.encode(prompt)\n+        return len(tokens)\n+\n+\n+class QwenEmbedder(Embedder):\n+    supported_arguments = [\"dimensions\"]\n+\n+    def __init__(self, model_name: str, logger: Logger) -> None:\n+        self.model_name = model_name\n+\n+        self._logger = logger\n+        self._client = AsyncClient(\n+            base_url=\"https://dashscope.aliyuncs.com/compatible-mode/v1\",",
+    "repo_full_name": "emcie-co/parlant",
+    "discussion_comments": [
+      {
+        "comment_id": "2325190713",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 535,
+        "pr_file": "src/parlant/adapters/nlp/qwen_service.py",
+        "discussion_id": "2325190713",
+        "commented_code": "@@ -0,0 +1,345 @@\n+# Copyright 2025 Emcie Co Ltd.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+from __future__ import annotations\n+import time\n+from openai import (\n+    APIConnectionError,\n+    APIResponseValidationError,\n+    APITimeoutError,\n+    AsyncClient,\n+    ConflictError,\n+    InternalServerError,\n+    RateLimitError,\n+)\n+from typing import Any, Mapping\n+from typing_extensions import override\n+import json\n+import jsonfinder  # type: ignore\n+import os\n+\n+from pydantic import ValidationError\n+import tiktoken\n+\n+from parlant.adapters.nlp.common import normalize_json_output\n+from parlant.core.engines.alpha.prompt_builder import PromptBuilder\n+from parlant.core.loggers import Logger\n+from parlant.core.nlp.policies import policy, retry\n+from parlant.core.nlp.tokenization import EstimatingTokenizer\n+from parlant.core.nlp.service import NLPService\n+from parlant.core.nlp.embedding import Embedder, EmbeddingResult\n+from parlant.core.nlp.generation import (\n+    T,\n+    SchematicGenerator,\n+    SchematicGenerationResult,\n+)\n+from parlant.core.nlp.generation_info import GenerationInfo, UsageInfo\n+from parlant.core.nlp.moderation import (\n+    ModerationService,\n+    NoModeration,\n+)\n+\n+RATE_LIMIT_ERROR_MESSAGE = (\n+    \"Qwen API rate limit exceeded. Possible reasons:\\n\"\n+    \"1. Your account may have insufficient API credits.\\n\"\n+    \"2. You may be using a free-tier account with limited request capacity.\\n\"\n+    \"3. You might have exceeded the requests-per-minute limit for your account.\\n\\n\"\n+    \"Recommended actions:\\n\"\n+    \"- Check your Qwen account balance and billing status.\\n\"\n+    \"- Review your API usage limits in Qwen's dashboard.\\n\"\n+    \"- For more details on rate limits and usage tiers, visit:\\n\"\n+    \"  https://docs.bigmodel.cn/cn/faq/api-code\\n\",\n+)\n+\n+\n+class QwenEstimatingTokenizer(EstimatingTokenizer):\n+    def __init__(self, model_name: str) -> None:\n+        self.model_name = model_name\n+        self.encoding = tiktoken.encoding_for_model(\"gpt-4o-2024-08-06\")\n+\n+    @override\n+    async def estimate_token_count(self, prompt: str) -> int:\n+        tokens = self.encoding.encode(prompt)\n+        return len(tokens)\n+\n+\n+class QwenEmbedder(Embedder):\n+    supported_arguments = [\"dimensions\"]\n+\n+    def __init__(self, model_name: str, logger: Logger) -> None:\n+        self.model_name = model_name\n+\n+        self._logger = logger\n+        self._client = AsyncClient(\n+            base_url=\"https://dashscope.aliyuncs.com/compatible-mode/v1\",",
+        "comment_created_at": "2025-09-05T14:01:41+00:00",
+        "comment_author": "kichanyurd",
+        "comment_body": "Question here mate. I see there's dashscope.aliyuncs.com but their API docs also show dashscope-intl.aliyuncs.com. also I see they recommend the environment variable to be called DASHSCOPE_API_KEY in their docs.\n\nCould you please help me understand\n\n1. The difference between these URLs\n2. Why you preferred the name QWEN_API_KEY?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2332071143",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 535,
+        "pr_file": "src/parlant/adapters/nlp/qwen_service.py",
+        "discussion_id": "2325190713",
+        "commented_code": "@@ -0,0 +1,345 @@\n+# Copyright 2025 Emcie Co Ltd.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+from __future__ import annotations\n+import time\n+from openai import (\n+    APIConnectionError,\n+    APIResponseValidationError,\n+    APITimeoutError,\n+    AsyncClient,\n+    ConflictError,\n+    InternalServerError,\n+    RateLimitError,\n+)\n+from typing import Any, Mapping\n+from typing_extensions import override\n+import json\n+import jsonfinder  # type: ignore\n+import os\n+\n+from pydantic import ValidationError\n+import tiktoken\n+\n+from parlant.adapters.nlp.common import normalize_json_output\n+from parlant.core.engines.alpha.prompt_builder import PromptBuilder\n+from parlant.core.loggers import Logger\n+from parlant.core.nlp.policies import policy, retry\n+from parlant.core.nlp.tokenization import EstimatingTokenizer\n+from parlant.core.nlp.service import NLPService\n+from parlant.core.nlp.embedding import Embedder, EmbeddingResult\n+from parlant.core.nlp.generation import (\n+    T,\n+    SchematicGenerator,\n+    SchematicGenerationResult,\n+)\n+from parlant.core.nlp.generation_info import GenerationInfo, UsageInfo\n+from parlant.core.nlp.moderation import (\n+    ModerationService,\n+    NoModeration,\n+)\n+\n+RATE_LIMIT_ERROR_MESSAGE = (\n+    \"Qwen API rate limit exceeded. Possible reasons:\\n\"\n+    \"1. Your account may have insufficient API credits.\\n\"\n+    \"2. You may be using a free-tier account with limited request capacity.\\n\"\n+    \"3. You might have exceeded the requests-per-minute limit for your account.\\n\\n\"\n+    \"Recommended actions:\\n\"\n+    \"- Check your Qwen account balance and billing status.\\n\"\n+    \"- Review your API usage limits in Qwen's dashboard.\\n\"\n+    \"- For more details on rate limits and usage tiers, visit:\\n\"\n+    \"  https://docs.bigmodel.cn/cn/faq/api-code\\n\",\n+)\n+\n+\n+class QwenEstimatingTokenizer(EstimatingTokenizer):\n+    def __init__(self, model_name: str) -> None:\n+        self.model_name = model_name\n+        self.encoding = tiktoken.encoding_for_model(\"gpt-4o-2024-08-06\")\n+\n+    @override\n+    async def estimate_token_count(self, prompt: str) -> int:\n+        tokens = self.encoding.encode(prompt)\n+        return len(tokens)\n+\n+\n+class QwenEmbedder(Embedder):\n+    supported_arguments = [\"dimensions\"]\n+\n+    def __init__(self, model_name: str, logger: Logger) -> None:\n+        self.model_name = model_name\n+\n+        self._logger = logger\n+        self._client = AsyncClient(\n+            base_url=\"https://dashscope.aliyuncs.com/compatible-mode/v1\",",
+        "comment_created_at": "2025-09-09T05:39:18+00:00",
+        "comment_author": "CaptainJi",
+        "comment_body": "Hi @kichanyurd , thank you for bringing these points up!\r\n\r\nRegarding the URLs:\r\n\u2022 https://dashscope-intl.aliyuncs.com is the Singapore endpoint, designed for international users.\r\n\u2022 https://dashscope.aliyuncs.com is the Beijing endpoint.\r\n\r\nThe current code uses the Beijing endpoint. \u200bI plan to add a BASE_URLparameter, with the Singapore endpoint (https://dashscope-intl.aliyuncs.com) as the default to improve accessibility.\u200b\u200b\r\n\r\nRegarding the API key name:\r\nMy initial reasoning for QWEN_API_KEYwas that this implementation specifically uses the Qwen model, even though DashScope hosts multiple models (like GLM, LLama, etc.). However, to maintain consistency with the official DashScope documentation and broader project standards, \u200bI am happy to change it to DASHSCOPE_API_KEY.\u200b\u200b\r\n\r\n\u200bWhat do you think about these two changes?\u200b\u200b I can implement them once we agree on the approach.\r\n\r\nThanks again for the review!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2347366362",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 535,
+        "pr_file": "src/parlant/adapters/nlp/qwen_service.py",
+        "discussion_id": "2325190713",
+        "commented_code": "@@ -0,0 +1,345 @@\n+# Copyright 2025 Emcie Co Ltd.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\n+from __future__ import annotations\n+import time\n+from openai import (\n+    APIConnectionError,\n+    APIResponseValidationError,\n+    APITimeoutError,\n+    AsyncClient,\n+    ConflictError,\n+    InternalServerError,\n+    RateLimitError,\n+)\n+from typing import Any, Mapping\n+from typing_extensions import override\n+import json\n+import jsonfinder  # type: ignore\n+import os\n+\n+from pydantic import ValidationError\n+import tiktoken\n+\n+from parlant.adapters.nlp.common import normalize_json_output\n+from parlant.core.engines.alpha.prompt_builder import PromptBuilder\n+from parlant.core.loggers import Logger\n+from parlant.core.nlp.policies import policy, retry\n+from parlant.core.nlp.tokenization import EstimatingTokenizer\n+from parlant.core.nlp.service import NLPService\n+from parlant.core.nlp.embedding import Embedder, EmbeddingResult\n+from parlant.core.nlp.generation import (\n+    T,\n+    SchematicGenerator,\n+    SchematicGenerationResult,\n+)\n+from parlant.core.nlp.generation_info import GenerationInfo, UsageInfo\n+from parlant.core.nlp.moderation import (\n+    ModerationService,\n+    NoModeration,\n+)\n+\n+RATE_LIMIT_ERROR_MESSAGE = (\n+    \"Qwen API rate limit exceeded. Possible reasons:\\n\"\n+    \"1. Your account may have insufficient API credits.\\n\"\n+    \"2. You may be using a free-tier account with limited request capacity.\\n\"\n+    \"3. You might have exceeded the requests-per-minute limit for your account.\\n\\n\"\n+    \"Recommended actions:\\n\"\n+    \"- Check your Qwen account balance and billing status.\\n\"\n+    \"- Review your API usage limits in Qwen's dashboard.\\n\"\n+    \"- For more details on rate limits and usage tiers, visit:\\n\"\n+    \"  https://docs.bigmodel.cn/cn/faq/api-code\\n\",\n+)\n+\n+\n+class QwenEstimatingTokenizer(EstimatingTokenizer):\n+    def __init__(self, model_name: str) -> None:\n+        self.model_name = model_name\n+        self.encoding = tiktoken.encoding_for_model(\"gpt-4o-2024-08-06\")\n+\n+    @override\n+    async def estimate_token_count(self, prompt: str) -> int:\n+        tokens = self.encoding.encode(prompt)\n+        return len(tokens)\n+\n+\n+class QwenEmbedder(Embedder):\n+    supported_arguments = [\"dimensions\"]\n+\n+    def __init__(self, model_name: str, logger: Logger) -> None:\n+        self.model_name = model_name\n+\n+        self._logger = logger\n+        self._client = AsyncClient(\n+            base_url=\"https://dashscope.aliyuncs.com/compatible-mode/v1\",",
+        "comment_created_at": "2025-09-14T14:33:40+00:00",
+        "comment_author": "kichanyurd",
+        "comment_body": "Hey @CaptainJi, yes, both changes sound good!\r\n\r\nSo I think the roadmap is:\r\n1. Implementing them\r\n2. Final cleanup if needed\r\n3. Merge",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1869278387",
+    "pr_number": 157,
+    "pr_file": "tests/api/test_customers.py",
+    "created_at": "2024-12-04T11:22:58+00:00",
+    "commented_code": "\"tags\": {\"add\": [tag.id]},\n         },\n     )\n-    assert update_response.status_code == status.HTTP_204_NO_CONTENT\n+    assert update_response.status_code == status.HTTP_200_OK",
+    "repo_full_name": "emcie-co/parlant",
+    "discussion_comments": [
+      {
+        "comment_id": "1869278387",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 157,
+        "pr_file": "tests/api/test_customers.py",
+        "discussion_id": "1869278387",
+        "commented_code": "@@ -164,7 +164,7 @@ async def test_that_a_tag_can_be_added(\n             \"tags\": {\"add\": [tag.id]},\n         },\n     )\n-    assert update_response.status_code == status.HTTP_204_NO_CONTENT\n+    assert update_response.status_code == status.HTTP_200_OK",
+        "comment_created_at": "2024-12-04T11:22:58+00:00",
+        "comment_author": "kichanyurd",
+        "comment_body": "Why did we change 204 to 200?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1869280307",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 157,
+        "pr_file": "tests/api/test_customers.py",
+        "discussion_id": "1869278387",
+        "commented_code": "@@ -164,7 +164,7 @@ async def test_that_a_tag_can_be_added(\n             \"tags\": {\"add\": [tag.id]},\n         },\n     )\n-    assert update_response.status_code == status.HTTP_204_NO_CONTENT\n+    assert update_response.status_code == status.HTTP_200_OK",
+        "comment_created_at": "2024-12-04T11:24:02+00:00",
+        "comment_author": "kichanyurd",
+        "comment_body": "Oh never mind I see why... Because we're actually returning values in updates now... Good catch!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1869324239",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 157,
+        "pr_file": "tests/api/test_customers.py",
+        "discussion_id": "1869278387",
+        "commented_code": "@@ -164,7 +164,7 @@ async def test_that_a_tag_can_be_added(\n             \"tags\": {\"add\": [tag.id]},\n         },\n     )\n-    assert update_response.status_code == status.HTTP_204_NO_CONTENT\n+    assert update_response.status_code == status.HTTP_200_OK",
+        "comment_created_at": "2024-12-04T11:42:57+00:00",
+        "comment_author": "MCNatsu",
+        "comment_body": "because you're calling this endpoint, right?\r\n```python\r\n    @router.patch(\r\n        \"/{customer_id}\",\r\n        operation_id=\"update_customer\",\r\n        response_model=CustomerDTO,\r\n        responses={\r\n            status.HTTP_200_OK: {\r\n                \"description\": \"Customer successfully updated. Returns the updated Customer object.\",\r\n                \"content\": example_json_content(customer_example),\r\n            },\r\n            status.HTTP_404_NOT_FOUND: {\r\n                \"description\": \"Customer not found. The specified customer_id does not exist\"\r\n            },\r\n            status.HTTP_422_UNPROCESSABLE_ENTITY: {\r\n                \"description\": \"Validation error in update parameters\"\r\n            },\r\n        },\r\n        **apigen_config(group_name=API_GROUP, method_name=\"update\"),\r\n    )\r\n    async def update_customer(\r\n        customer_id: CustomerIdPath,\r\n        params: CustomerUpdateParamsDTO,\r\n    ) -> CustomerDTO:\r\n```\r\n    \r\nSince update endpoints return the updated entity they no longer return 204 **no content** rather 200.\r\nUnless I'm misunderstanding something \ud83d\ude07 ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1846477777",
+    "pr_number": 148,
+    "pr_file": "src/parlant/api/app.py",
+    "created_at": "2024-11-18T12:09:28+00:00",
+    "commented_code": "),\n     )\n \n+    api_app.include_router(\n+        prefix=\"/end_users\",",
+    "repo_full_name": "emcie-co/parlant",
+    "discussion_comments": [
+      {
+        "comment_id": "1846477777",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 148,
+        "pr_file": "src/parlant/api/app.py",
+        "discussion_id": "1846477777",
+        "commented_code": "@@ -185,4 +186,11 @@ async def root() -> Response:\n         ),\n     )\n \n+    api_app.include_router(\n+        prefix=\"/end_users\",",
+        "comment_created_at": "2024-11-18T12:09:28+00:00",
+        "comment_author": "kichanyurd",
+        "comment_body": "in API endpoints we normally don't use underscores, but dashes. So change to `end-user`. You can also see the same pattern under `context-variables`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1822139962",
+    "pr_number": 120,
+    "pr_file": "sdk/src/emcie/sdk/bin/emcie.py",
+    "created_at": "2024-10-30T08:48:02+00:00",
+    "commented_code": "Interface._write_error(f\"Error: {type(e).__name__}: {e}\")\n             set_exit_status(1)\n \n+    @staticmethod",
+    "repo_full_name": "emcie-co/parlant",
+    "discussion_comments": [
+      {
+        "comment_id": "1822139962",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 120,
+        "pr_file": "sdk/src/emcie/sdk/bin/emcie.py",
+        "discussion_id": "1822139962",
+        "commented_code": "@@ -1293,6 +1306,57 @@ def create_guideline(\n             Interface._write_error(f\"Error: {type(e).__name__}: {e}\")\n             set_exit_status(1)\n \n+    @staticmethod",
+        "comment_created_at": "2024-10-30T08:48:02+00:00",
+        "comment_author": "kichanyurd",
+        "comment_body": "1. Why do we have 2 separate method in the interface which look almost exactly identical, whereas under Actions we have 1 with a parameter?\n2. Why does the \"update_guideline\" interface keep talking about an \"added guideline\": \"Failed to add\", \"To force-add, ...\" ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1822916973",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 120,
+        "pr_file": "sdk/src/emcie/sdk/bin/emcie.py",
+        "discussion_id": "1822139962",
+        "commented_code": "@@ -1293,6 +1306,57 @@ def create_guideline(\n             Interface._write_error(f\"Error: {type(e).__name__}: {e}\")\n             set_exit_status(1)\n \n+    @staticmethod",
+        "comment_created_at": "2024-10-30T15:51:40+00:00",
+        "comment_author": "mc-dorzo",
+        "comment_body": "1. The contract between the interface function and the action is identical therefore I was thinking it will make sense I can use the same Action function \r\n2. Fixed it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1807805476",
+    "pr_number": 108,
+    "pr_file": "server/src/emcie/server/api/services.py",
+    "created_at": "2024-10-20T12:29:29+00:00",
+    "commented_code": "+from datetime import datetime\n+from typing import Union\n+from fastapi import APIRouter\n+from typing_extensions import Literal\n+\n+from emcie.server.core.common import DefaultBaseModel\n+from emcie.common.tools import Tool, ToolParameter, ToolId\n+from emcie.server.core.services.tools.openapi import OpenAPIClient\n+from emcie.server.core.services.tools.service_registry import ServiceRegistry, ToolServiceKind\n+from emcie.server.core.tools import ToolService\n+\n+\n+class CreateSDKServiceRequest(DefaultBaseModel):\n+    kind: Literal[\"sdk\"]\n+    url: str\n+\n+\n+class CreateOpenAPIServiceRequest(DefaultBaseModel):\n+    kind: Literal[\"openapi\"]\n+    url: str\n+    openapi_json: str\n+\n+\n+CreateServiceRequest = Union[CreateSDKServiceRequest, CreateOpenAPIServiceRequest]\n+\n+\n+class CreateSDKServiceResponse(DefaultBaseModel):\n+    name: str\n+    kind: Literal[\"sdk\"] = \"sdk\"\n+    url: str\n+\n+\n+class CreateOpenAPIServiceResponse(DefaultBaseModel):",
+    "repo_full_name": "emcie-co/parlant",
+    "discussion_comments": [
+      {
+        "comment_id": "1807805476",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 108,
+        "pr_file": "server/src/emcie/server/api/services.py",
+        "discussion_id": "1807805476",
+        "commented_code": "@@ -0,0 +1,126 @@\n+from datetime import datetime\n+from typing import Union\n+from fastapi import APIRouter\n+from typing_extensions import Literal\n+\n+from emcie.server.core.common import DefaultBaseModel\n+from emcie.common.tools import Tool, ToolParameter, ToolId\n+from emcie.server.core.services.tools.openapi import OpenAPIClient\n+from emcie.server.core.services.tools.service_registry import ServiceRegistry, ToolServiceKind\n+from emcie.server.core.tools import ToolService\n+\n+\n+class CreateSDKServiceRequest(DefaultBaseModel):\n+    kind: Literal[\"sdk\"]\n+    url: str\n+\n+\n+class CreateOpenAPIServiceRequest(DefaultBaseModel):\n+    kind: Literal[\"openapi\"]\n+    url: str\n+    openapi_json: str\n+\n+\n+CreateServiceRequest = Union[CreateSDKServiceRequest, CreateOpenAPIServiceRequest]\n+\n+\n+class CreateSDKServiceResponse(DefaultBaseModel):\n+    name: str\n+    kind: Literal[\"sdk\"] = \"sdk\"\n+    url: str\n+\n+\n+class CreateOpenAPIServiceResponse(DefaultBaseModel):",
+        "comment_created_at": "2024-10-20T12:29:29+00:00",
+        "comment_author": "kichanyurd",
+        "comment_body": "Why do we only have `CreateOpenAPIServiceResponse` and why do we return it also for the SDK case?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1780046848",
+    "pr_number": 96,
+    "pr_file": "server/src/emcie/server/api/terminology.py",
+    "created_at": "2024-09-29T13:33:30+00:00",
+    "commented_code": ") -> APIRouter:\n     router = APIRouter()\n \n-    @router.post(\"/\", status_code=status.HTTP_201_CREATED)\n-    async def create_term(request: CreateTermRequest) -> TermDTO:\n+    @router.post(\"/{agent_id}/terminology/\", status_code=status.HTTP_201_CREATED)",
+    "repo_full_name": "emcie-co/parlant",
+    "discussion_comments": [
+      {
+        "comment_id": "1780046848",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 96,
+        "pr_file": "server/src/emcie/server/api/terminology.py",
+        "discussion_id": "1780046848",
+        "commented_code": "@@ -39,10 +38,10 @@ def create_router(\n ) -> APIRouter:\n     router = APIRouter()\n \n-    @router.post(\"/\", status_code=status.HTTP_201_CREATED)\n-    async def create_term(request: CreateTermRequest) -> TermDTO:\n+    @router.post(\"/{agent_id}/terminology/\", status_code=status.HTTP_201_CREATED)",
+        "comment_created_at": "2024-09-29T13:33:30+00:00",
+        "comment_author": "kichanyurd",
+        "comment_body": "Please change the endpoint path `terminology` to `terms`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1730271091",
+    "pr_number": 59,
+    "pr_file": "server/src/emcie/server/api/index.py",
+    "created_at": "2024-08-25T07:11:23+00:00",
+    "commented_code": "+from datetime import datetime\n+from typing import Optional, Sequence\n+from fastapi import APIRouter, HTTPException, status\n+from openai import BaseModel\n+\n+from emcie.server.core.common import UniqueId\n+from emcie.server.evaluation_service import (\n+    EvaluationInvoiceData,\n+    EvaluationPayload,\n+    EvaluationService,\n+    EvaluationGuidelinePayload,\n+    EvaluationId,\n+    EvaluationStore,\n+)\n+from emcie.server.base_models import DefaultBaseModel\n+\n+\n+class CreateEvaluationRequest(DefaultBaseModel):\n+    payloads: Sequence[EvaluationGuidelinePayload]\n+\n+\n+class CreateEvaluationResponse(DefaultBaseModel):\n+    evaluation_id: EvaluationId\n+\n+\n+class InvoiceDTO(BaseModel):\n+    invoice_id: str\n+    checksum: str\n+    approved: bool\n+    data: EvaluationInvoiceData\n+\n+\n+class EvaluationItemDTO(BaseModel):\n+    item_id: UniqueId\n+    payload: EvaluationPayload\n+    invoice: Optional[InvoiceDTO]\n+    error: Optional[str]\n+\n+\n+class EvaluationDTO(BaseModel):\n+    evaluation_id: str\n+    status: str\n+    creation_utc: datetime\n+    error: Optional[str]\n+    items: list[EvaluationItemDTO]\n+\n+\n+def create_router(\n+    evaluation_service: EvaluationService,\n+    evaluation_store: EvaluationStore,\n+) -> APIRouter:\n+    router = APIRouter()\n+\n+    @router.post(\"/evaluations\", response_model=CreateEvaluationResponse)",
+    "repo_full_name": "emcie-co/parlant",
+    "discussion_comments": [
+      {
+        "comment_id": "1730271091",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 59,
+        "pr_file": "server/src/emcie/server/api/index.py",
+        "discussion_id": "1730271091",
+        "commented_code": "@@ -0,0 +1,94 @@\n+from datetime import datetime\n+from typing import Optional, Sequence\n+from fastapi import APIRouter, HTTPException, status\n+from openai import BaseModel\n+\n+from emcie.server.core.common import UniqueId\n+from emcie.server.evaluation_service import (\n+    EvaluationInvoiceData,\n+    EvaluationPayload,\n+    EvaluationService,\n+    EvaluationGuidelinePayload,\n+    EvaluationId,\n+    EvaluationStore,\n+)\n+from emcie.server.base_models import DefaultBaseModel\n+\n+\n+class CreateEvaluationRequest(DefaultBaseModel):\n+    payloads: Sequence[EvaluationGuidelinePayload]\n+\n+\n+class CreateEvaluationResponse(DefaultBaseModel):\n+    evaluation_id: EvaluationId\n+\n+\n+class InvoiceDTO(BaseModel):\n+    invoice_id: str\n+    checksum: str\n+    approved: bool\n+    data: EvaluationInvoiceData\n+\n+\n+class EvaluationItemDTO(BaseModel):\n+    item_id: UniqueId\n+    payload: EvaluationPayload\n+    invoice: Optional[InvoiceDTO]\n+    error: Optional[str]\n+\n+\n+class EvaluationDTO(BaseModel):\n+    evaluation_id: str\n+    status: str\n+    creation_utc: datetime\n+    error: Optional[str]\n+    items: list[EvaluationItemDTO]\n+\n+\n+def create_router(\n+    evaluation_service: EvaluationService,\n+    evaluation_store: EvaluationStore,\n+) -> APIRouter:\n+    router = APIRouter()\n+\n+    @router.post(\"/evaluations\", response_model=CreateEvaluationResponse)",
+        "comment_created_at": "2024-08-25T07:11:23+00:00",
+        "comment_author": "kichanyurd",
+        "comment_body": "Do we need to explicitly specify `response_model`? We don't do it in other places",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1730271222",
+    "pr_number": 59,
+    "pr_file": "server/src/emcie/server/api/index.py",
+    "created_at": "2024-08-25T07:12:24+00:00",
+    "commented_code": "+from datetime import datetime\n+from typing import Optional, Sequence\n+from fastapi import APIRouter, HTTPException, status\n+from openai import BaseModel\n+\n+from emcie.server.core.common import UniqueId\n+from emcie.server.evaluation_service import (\n+    EvaluationInvoiceData,\n+    EvaluationPayload,\n+    EvaluationService,\n+    EvaluationGuidelinePayload,\n+    EvaluationId,\n+    EvaluationStore,\n+)\n+from emcie.server.base_models import DefaultBaseModel\n+\n+\n+class CreateEvaluationRequest(DefaultBaseModel):\n+    payloads: Sequence[EvaluationGuidelinePayload]\n+\n+\n+class CreateEvaluationResponse(DefaultBaseModel):\n+    evaluation_id: EvaluationId\n+\n+\n+class InvoiceDTO(BaseModel):\n+    invoice_id: str\n+    checksum: str\n+    approved: bool\n+    data: EvaluationInvoiceData\n+\n+\n+class EvaluationItemDTO(BaseModel):\n+    item_id: UniqueId\n+    payload: EvaluationPayload\n+    invoice: Optional[InvoiceDTO]\n+    error: Optional[str]\n+\n+\n+class EvaluationDTO(BaseModel):\n+    evaluation_id: str\n+    status: str\n+    creation_utc: datetime\n+    error: Optional[str]\n+    items: list[EvaluationItemDTO]\n+\n+\n+def create_router(\n+    evaluation_service: EvaluationService,\n+    evaluation_store: EvaluationStore,\n+) -> APIRouter:\n+    router = APIRouter()\n+\n+    @router.post(\"/evaluations\", response_model=CreateEvaluationResponse)\n+    async def create_evaluation(request: CreateEvaluationRequest) -> CreateEvaluationResponse:\n+        if not request.payloads:\n+            raise HTTPException(\n+                status_code=status.HTTP_400_BAD_REQUEST,\n+                detail=\"No payloads provided for the evaluation task.\",\n+            )\n+\n+        evaluation_id = await evaluation_service.create_evaluation_task(\n+            payloads=request.payloads,\n+        )\n+        return CreateEvaluationResponse(evaluation_id=evaluation_id)\n+\n+    @router.get(\"/evaluations/{evaluation_id}\", response_model=EvaluationDTO)\n+    async def get_evaluation(evaluation_id: EvaluationId) -> EvaluationDTO:",
+    "repo_full_name": "emcie-co/parlant",
+    "discussion_comments": [
+      {
+        "comment_id": "1730271222",
+        "repo_full_name": "emcie-co/parlant",
+        "pr_number": 59,
+        "pr_file": "server/src/emcie/server/api/index.py",
+        "discussion_id": "1730271222",
+        "commented_code": "@@ -0,0 +1,94 @@\n+from datetime import datetime\n+from typing import Optional, Sequence\n+from fastapi import APIRouter, HTTPException, status\n+from openai import BaseModel\n+\n+from emcie.server.core.common import UniqueId\n+from emcie.server.evaluation_service import (\n+    EvaluationInvoiceData,\n+    EvaluationPayload,\n+    EvaluationService,\n+    EvaluationGuidelinePayload,\n+    EvaluationId,\n+    EvaluationStore,\n+)\n+from emcie.server.base_models import DefaultBaseModel\n+\n+\n+class CreateEvaluationRequest(DefaultBaseModel):\n+    payloads: Sequence[EvaluationGuidelinePayload]\n+\n+\n+class CreateEvaluationResponse(DefaultBaseModel):\n+    evaluation_id: EvaluationId\n+\n+\n+class InvoiceDTO(BaseModel):\n+    invoice_id: str\n+    checksum: str\n+    approved: bool\n+    data: EvaluationInvoiceData\n+\n+\n+class EvaluationItemDTO(BaseModel):\n+    item_id: UniqueId\n+    payload: EvaluationPayload\n+    invoice: Optional[InvoiceDTO]\n+    error: Optional[str]\n+\n+\n+class EvaluationDTO(BaseModel):\n+    evaluation_id: str\n+    status: str\n+    creation_utc: datetime\n+    error: Optional[str]\n+    items: list[EvaluationItemDTO]\n+\n+\n+def create_router(\n+    evaluation_service: EvaluationService,\n+    evaluation_store: EvaluationStore,\n+) -> APIRouter:\n+    router = APIRouter()\n+\n+    @router.post(\"/evaluations\", response_model=CreateEvaluationResponse)\n+    async def create_evaluation(request: CreateEvaluationRequest) -> CreateEvaluationResponse:\n+        if not request.payloads:\n+            raise HTTPException(\n+                status_code=status.HTTP_400_BAD_REQUEST,\n+                detail=\"No payloads provided for the evaluation task.\",\n+            )\n+\n+        evaluation_id = await evaluation_service.create_evaluation_task(\n+            payloads=request.payloads,\n+        )\n+        return CreateEvaluationResponse(evaluation_id=evaluation_id)\n+\n+    @router.get(\"/evaluations/{evaluation_id}\", response_model=EvaluationDTO)\n+    async def get_evaluation(evaluation_id: EvaluationId) -> EvaluationDTO:",
+        "comment_created_at": "2024-08-25T07:12:24+00:00",
+        "comment_author": "kichanyurd",
+        "comment_body": "Don't return the DTO directly here. Create a `ReadEvaluationResponse`, consistently with what we do in other places. Please mind the consistency in general.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

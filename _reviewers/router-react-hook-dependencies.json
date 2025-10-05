@@ -1,0 +1,188 @@
+[
+  {
+    "discussion_id": "2309233139",
+    "pr_number": 5037,
+    "pr_file": "packages/react-router/src/useNavigate.tsx",
+    "created_at": "2025-08-29T06:03:46+00:00",
+    "commented_code": "}): UseNavigateResult<TDefaultFrom> {\n   const router = useRouter()\n \n-  const { getFromPath, activeLocation } = useActiveLocation()\n+  const matchIndex = useMatch({\n+    strict: false,\n+    select: (match) => match.index,\n+  })\n \n   return React.useCallback(\n     (options: NavigateOptions) => {\n-      const from = getFromPath(options.from ?? _defaultOpts?.from)\n+      const activeLocationMatches = router.matchRoutes(router.latestLocation, {\n+        _buildLocation: false,\n+      })\n+\n+      const activeLocationMatch = last(activeLocationMatches)\n+\n+      const from =\n+        options.from ??\n+        _defaultOpts?.from ??\n+        activeLocationMatch?.fullPath ??\n+        router.state.matches[matchIndex]!.fullPath",
+    "repo_full_name": "TanStack/router",
+    "discussion_comments": [
+      {
+        "comment_id": "2309233139",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 5037,
+        "pr_file": "packages/react-router/src/useNavigate.tsx",
+        "discussion_id": "2309233139",
+        "commented_code": "@@ -17,19 +18,32 @@ export function useNavigate<\n }): UseNavigateResult<TDefaultFrom> {\n   const router = useRouter()\n \n-  const { getFromPath, activeLocation } = useActiveLocation()\n+  const matchIndex = useMatch({\n+    strict: false,\n+    select: (match) => match.index,\n+  })\n \n   return React.useCallback(\n     (options: NavigateOptions) => {\n-      const from = getFromPath(options.from ?? _defaultOpts?.from)\n+      const activeLocationMatches = router.matchRoutes(router.latestLocation, {\n+        _buildLocation: false,\n+      })\n+\n+      const activeLocationMatch = last(activeLocationMatches)\n+\n+      const from =\n+        options.from ??\n+        _defaultOpts?.from ??\n+        activeLocationMatch?.fullPath ??\n+        router.state.matches[matchIndex]!.fullPath",
+        "comment_created_at": "2025-08-29T06:03:46+00:00",
+        "comment_author": "Sheraff",
+        "comment_body": "This is tricky because `matchIndex` here might become stale because we're closing over the value the 1st time `useCallback` is called.\r\n- Either we need to add it to the dependency array, but that means `navigate` won't be stable (which was the original issue)\r\n- Or we need to obtain `matchIndex` from inside the `useCallback` based solely on `router` (which itself *is* stable).\r\n\r\nIf we want to obtain `matchIndex` from inside the `useCallback`, we need to replicate the logic from `packages/react-router/src/useMatch.tsx`:\r\n```ts\r\nconst nearestMatchId = React.useContext(matchContext)\r\nconst match = router.state.matches.find((d: any) => d.id === nearestMatchId)\r\n```\r\n\r\nBut now we need to unwrap the value from `matchContext`, so we have the same issue of a reactive value that needs to come from outside the `useCallback`. So we can loot at where this value comes from to see if we can obtain it another way. We find it in `packages/react-router/src/Match.tsx`:\r\n```tsx\r\n<matchContext.Provider value={matchId}>\r\n```\r\nBut based on how it's used in there, it looks like it just refers to an element in the `state.matches` array:\r\n```ts\r\n  const parentRouteId = useRouterState({\r\n    select: (s) => {\r\n      const index = s.matches.findIndex((d) => d.id === matchId)\r\n      return s.matches[index - 1]?.routeId as string\r\n    },\r\n  })\r\n```\r\n\r\nBased on your explanation of the issue:\r\n> rendered in a layout route, and should be applied on a child route which may or may not have path\r\n\r\nIt makes me think that we don't actually want the `matchId` (which could refer to the layout route) but instead simply the *last* match:\r\n```ts\r\nlast(router.state.matches)!.fullPath\r\n```\r\n\r\n--- \r\n\r\nIf you agree with the above, now I'm wondering what the difference is between\r\n```ts\r\nlast(router.matchRoutes(router.latestLocation)).fullPath\r\n```\r\nand \r\n```ts\r\nlast(router.state.matches)!.fullPath\r\n```\r\nDo you know? Because that would mean in the list of possibilities for `const from =`, we would have 2 alternatives that are the same thing, which could simplify things quite a bit.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2309309303",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 5037,
+        "pr_file": "packages/react-router/src/useNavigate.tsx",
+        "discussion_id": "2309233139",
+        "commented_code": "@@ -17,19 +18,32 @@ export function useNavigate<\n }): UseNavigateResult<TDefaultFrom> {\n   const router = useRouter()\n \n-  const { getFromPath, activeLocation } = useActiveLocation()\n+  const matchIndex = useMatch({\n+    strict: false,\n+    select: (match) => match.index,\n+  })\n \n   return React.useCallback(\n     (options: NavigateOptions) => {\n-      const from = getFromPath(options.from ?? _defaultOpts?.from)\n+      const activeLocationMatches = router.matchRoutes(router.latestLocation, {\n+        _buildLocation: false,\n+      })\n+\n+      const activeLocationMatch = last(activeLocationMatches)\n+\n+      const from =\n+        options.from ??\n+        _defaultOpts?.from ??\n+        activeLocationMatch?.fullPath ??\n+        router.state.matches[matchIndex]!.fullPath",
+        "comment_created_at": "2025-08-29T06:47:31+00:00",
+        "comment_author": "nlynzaad",
+        "comment_body": "These serve 2 different purposes in here.\n\nThe matchIndex is used here to return the rendered route, hence why we don't include it in the dependency array, we actually want it to be stale. router.latestLocation is used inside the callback to return the latest location.\n\nThe usage of matchIndex should theoretically never be hit as activeLocation should always exist.\n\nThis was the original implementation that is left over as an extreme case fallback. However, thinking about it now, the matchIndex fallback can probably be left out all together as buildLocation defaults to current location should from be null.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2309368387",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 5037,
+        "pr_file": "packages/react-router/src/useNavigate.tsx",
+        "discussion_id": "2309233139",
+        "commented_code": "@@ -17,19 +18,32 @@ export function useNavigate<\n }): UseNavigateResult<TDefaultFrom> {\n   const router = useRouter()\n \n-  const { getFromPath, activeLocation } = useActiveLocation()\n+  const matchIndex = useMatch({\n+    strict: false,\n+    select: (match) => match.index,\n+  })\n \n   return React.useCallback(\n     (options: NavigateOptions) => {\n-      const from = getFromPath(options.from ?? _defaultOpts?.from)\n+      const activeLocationMatches = router.matchRoutes(router.latestLocation, {\n+        _buildLocation: false,\n+      })\n+\n+      const activeLocationMatch = last(activeLocationMatches)\n+\n+      const from =\n+        options.from ??\n+        _defaultOpts?.from ??\n+        activeLocationMatch?.fullPath ??\n+        router.state.matches[matchIndex]!.fullPath",
+        "comment_created_at": "2025-08-29T07:14:39+00:00",
+        "comment_author": "Sheraff",
+        "comment_body": "Ok interesting. And do you know exactly when \n```ts\nlast(router.matchRoutes(router.latestLocation)).fullPath\n```\nwould be different from\n```ts\nlast(router.state.matches)!.fullPath\n```\n?\n\nBecause `matchRoutes` is quite expensive to run, whereas just getting the last match is basically free.\n\nJust testing quickly, I can only find 1 time when they are different: while navigating, when the URL has already changed, but the mounted route is still the previous one (pending state), we observe\n- `last(router.matchRoutes(router.latestLocation)).fullPath` => the next route\n- `last(router.state.matches)!.fullPath` => the previous route\n\nIs this the only difference? If it is, then I'd argue that `last(router.state.matches)!.fullPath` might be the better choice, as it's cheaper, and matches what's on screen.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2309484531",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 5037,
+        "pr_file": "packages/react-router/src/useNavigate.tsx",
+        "discussion_id": "2309233139",
+        "commented_code": "@@ -17,19 +18,32 @@ export function useNavigate<\n }): UseNavigateResult<TDefaultFrom> {\n   const router = useRouter()\n \n-  const { getFromPath, activeLocation } = useActiveLocation()\n+  const matchIndex = useMatch({\n+    strict: false,\n+    select: (match) => match.index,\n+  })\n \n   return React.useCallback(\n     (options: NavigateOptions) => {\n-      const from = getFromPath(options.from ?? _defaultOpts?.from)\n+      const activeLocationMatches = router.matchRoutes(router.latestLocation, {\n+        _buildLocation: false,\n+      })\n+\n+      const activeLocationMatch = last(activeLocationMatches)\n+\n+      const from =\n+        options.from ??\n+        _defaultOpts?.from ??\n+        activeLocationMatch?.fullPath ??\n+        router.state.matches[matchIndex]!.fullPath",
+        "comment_created_at": "2025-08-29T08:06:23+00:00",
+        "comment_author": "nlynzaad",
+        "comment_body": "actually don't think any of these are necessary. further down stream in router.buildLocation we already default to the current location if no from is passed. this is how router.navigate runs. I removed all that activeLocation, matchIndex logic now and all tests passed. \r\n\r\nJust pushed an update for this, kept the callback in useNavigate to ensure its stable but this is now much simpler.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2309534174",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 5037,
+        "pr_file": "packages/react-router/src/useNavigate.tsx",
+        "discussion_id": "2309233139",
+        "commented_code": "@@ -17,19 +18,32 @@ export function useNavigate<\n }): UseNavigateResult<TDefaultFrom> {\n   const router = useRouter()\n \n-  const { getFromPath, activeLocation } = useActiveLocation()\n+  const matchIndex = useMatch({\n+    strict: false,\n+    select: (match) => match.index,\n+  })\n \n   return React.useCallback(\n     (options: NavigateOptions) => {\n-      const from = getFromPath(options.from ?? _defaultOpts?.from)\n+      const activeLocationMatches = router.matchRoutes(router.latestLocation, {\n+        _buildLocation: false,\n+      })\n+\n+      const activeLocationMatch = last(activeLocationMatches)\n+\n+      const from =\n+        options.from ??\n+        _defaultOpts?.from ??\n+        activeLocationMatch?.fullPath ??\n+        router.state.matches[matchIndex]!.fullPath",
+        "comment_created_at": "2025-08-29T08:29:21+00:00",
+        "comment_author": "Sheraff",
+        "comment_body": "Oh I love that solution! The best performance is when you do nothing! ah ah",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2309589161",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 5037,
+        "pr_file": "packages/react-router/src/useNavigate.tsx",
+        "discussion_id": "2309233139",
+        "commented_code": "@@ -17,19 +18,32 @@ export function useNavigate<\n }): UseNavigateResult<TDefaultFrom> {\n   const router = useRouter()\n \n-  const { getFromPath, activeLocation } = useActiveLocation()\n+  const matchIndex = useMatch({\n+    strict: false,\n+    select: (match) => match.index,\n+  })\n \n   return React.useCallback(\n     (options: NavigateOptions) => {\n-      const from = getFromPath(options.from ?? _defaultOpts?.from)\n+      const activeLocationMatches = router.matchRoutes(router.latestLocation, {\n+        _buildLocation: false,\n+      })\n+\n+      const activeLocationMatch = last(activeLocationMatches)\n+\n+      const from =\n+        options.from ??\n+        _defaultOpts?.from ??\n+        activeLocationMatch?.fullPath ??\n+        router.state.matches[matchIndex]!.fullPath",
+        "comment_created_at": "2025-08-29T08:53:33+00:00",
+        "comment_author": "nlynzaad",
+        "comment_body": "Haha great.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1662860572",
+    "pr_number": 1876,
+    "pr_file": "packages/react-router/src/link.tsx",
+    "created_at": "2024-07-02T16:45:27+00:00",
+    "commented_code": "options: UseLinkPropsOptions<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>,\n ): React.AnchorHTMLAttributes<HTMLAnchorElement> {\n   const router = useRouter()\n+  const isClicking = React.useRef(false)",
+    "repo_full_name": "TanStack/router",
+    "discussion_comments": [
+      {
+        "comment_id": "1662860572",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 1876,
+        "pr_file": "packages/react-router/src/link.tsx",
+        "discussion_id": "1662860572",
+        "commented_code": "@@ -545,6 +545,7 @@ export function useLinkProps<\n   options: UseLinkPropsOptions<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>,\n ): React.AnchorHTMLAttributes<HTMLAnchorElement> {\n   const router = useRouter()\n+  const isClicking = React.useRef(false)",
+        "comment_created_at": "2024-07-02T16:45:27+00:00",
+        "comment_author": "schiller-manuel",
+        "comment_body": "why do we need to track if a link was clicked?\r\nwhat happens if we have two link instances pointing to the same target, this then won't work, right?\r\n\r\ni think the solution must be independent from click tracking etc, and also must work when programatically preloading / navigating without clicking on a link",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1662861303",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 1876,
+        "pr_file": "packages/react-router/src/link.tsx",
+        "discussion_id": "1662860572",
+        "commented_code": "@@ -545,6 +545,7 @@ export function useLinkProps<\n   options: UseLinkPropsOptions<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>,\n ): React.AnchorHTMLAttributes<HTMLAnchorElement> {\n   const router = useRouter()\n+  const isClicking = React.useRef(false)",
+        "comment_created_at": "2024-07-02T16:45:57+00:00",
+        "comment_author": "schiller-manuel",
+        "comment_body": "this most likely needs to be fixed inside of `router.ts`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1662930453",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 1876,
+        "pr_file": "packages/react-router/src/link.tsx",
+        "discussion_id": "1662860572",
+        "commented_code": "@@ -545,6 +545,7 @@ export function useLinkProps<\n   options: UseLinkPropsOptions<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>,\n ): React.AnchorHTMLAttributes<HTMLAnchorElement> {\n   const router = useRouter()\n+  const isClicking = React.useRef(false)",
+        "comment_created_at": "2024-07-02T17:42:06+00:00",
+        "comment_author": "freshgiammi",
+        "comment_body": "This is a different issue than the references (so we could have it in a separate PR), but essentially `onFocus` is also invoked when a button is clicked, which causes the route to get preloaded twice (`onMouseEnter` + `onFocus`).\r\n\r\nWhen focusing a link via keyboard navigation, we obviously skip `onMouseEnter` so it gets correctly preloaded once.\r\nGiven that there's no way to distinguish between mouse and keyboard origin for focus events, we can \"trap\" it by skipping the preload call when a focus event is detected between `onMouseDown` and `onMouseUp`: this makes preload only happen once and ensures that the behaviour is the same for both mouse and keyboard navigation.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1662974934",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 1876,
+        "pr_file": "packages/react-router/src/link.tsx",
+        "discussion_id": "1662860572",
+        "commented_code": "@@ -545,6 +545,7 @@ export function useLinkProps<\n   options: UseLinkPropsOptions<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>,\n ): React.AnchorHTMLAttributes<HTMLAnchorElement> {\n   const router = useRouter()\n+  const isClicking = React.useRef(false)",
+        "comment_created_at": "2024-07-02T18:19:36+00:00",
+        "comment_author": "schiller-manuel",
+        "comment_body": "ok please put this in a separate PR then",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1663736536",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 1876,
+        "pr_file": "packages/react-router/src/link.tsx",
+        "discussion_id": "1662860572",
+        "commented_code": "@@ -545,6 +545,7 @@ export function useLinkProps<\n   options: UseLinkPropsOptions<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>,\n ): React.AnchorHTMLAttributes<HTMLAnchorElement> {\n   const router = useRouter()\n+  const isClicking = React.useRef(false)",
+        "comment_created_at": "2024-07-03T08:09:31+00:00",
+        "comment_author": "freshgiammi",
+        "comment_body": "https://github.com/TanStack/router/pull/1885",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1614737330",
+    "pr_number": 1649,
+    "pr_file": "packages/react-router/src/useBlocker.tsx",
+    "created_at": "2024-05-25T15:34:54+00:00",
+    "commented_code": "import type { BlockerFn } from '@tanstack/history'\n import type { ReactNode } from './route'\n \n+type BlockerResolver = {\n+  status: 'idle' | 'blocked'\n+  proceed: () => void\n+  reset: () => void\n+}\n+\n+type BlockerOpts = {\n+  blockerFn?: BlockerFn\n+  condition?: boolean | any\n+}\n+\n+export function useBlocker(blockerFnOrOpts?: BlockerOpts): BlockerResolver\n+\n+/**\n+ * @deprecated Use the BlockerOpts object syntax instead\n+ */\n+export function useBlocker(\n+  blockerFn?: BlockerFn,\n+  condition?: boolean | any,\n+): BlockerResolver\n+\n export function useBlocker(\n-  blockerFn: BlockerFn,\n-  condition: boolean | any = true,\n-): void {\n+  blockerFnOrOpts?: BlockerFn | BlockerOpts,\n+  condition?: boolean | any,\n+): BlockerResolver {\n+  const { blockerFn, blockerCondition } = blockerFnOrOpts\n+    ? typeof blockerFnOrOpts === 'function'\n+      ? { blockerFn: blockerFnOrOpts, blockerCondition: condition ?? true }\n+      : {\n+          blockerFn: blockerFnOrOpts.blockerFn,\n+          blockerCondition: blockerFnOrOpts.condition ?? true,\n+        }\n+    : { blockerFn: undefined, blockerCondition: condition ?? true }\n   const { history } = useRouter()\n \n-  React.useEffect(() => {\n-    if (!condition) return\n-    return history.block(blockerFn)\n+  const [resolver, setResolver] = React.useState<BlockerResolver>({\n+    status: 'idle',\n+    proceed: () => {},\n+    reset: () => {},\n   })\n+\n+  const createPromise = () =>\n+    new Promise<boolean>((resolve) => {\n+      setResolver({\n+        status: 'idle',\n+        proceed: () => resolve(true),\n+        reset: () => resolve(false),\n+      })\n+    })\n+\n+  const [promise, setPromise] = React.useState(createPromise)\n+\n+  React.useEffect(() => {\n+    const blockerFnComposed = async () => {\n+      // If a function is provided, it takes precedence over the promise blocker\n+      if (blockerFn) {\n+        return await blockerFn()\n+      }\n+\n+      setResolver((prev) => ({\n+        ...prev,\n+        status: 'blocked',\n+      }))\n+      const canNavigateAsync = await promise\n+\n+      setPromise(createPromise)\n+\n+      return canNavigateAsync\n+    }\n+\n+    return !blockerCondition ? undefined : history.block(blockerFnComposed)\n+  }, [blockerFn, blockerCondition, history, promise])",
+    "repo_full_name": "TanStack/router",
+    "discussion_comments": [
+      {
+        "comment_id": "1614737330",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 1649,
+        "pr_file": "packages/react-router/src/useBlocker.tsx",
+        "discussion_id": "1614737330",
+        "commented_code": "@@ -3,25 +3,93 @@ import { useRouter } from './useRouter'\n import type { BlockerFn } from '@tanstack/history'\n import type { ReactNode } from './route'\n \n+type BlockerResolver = {\n+  status: 'idle' | 'blocked'\n+  proceed: () => void\n+  reset: () => void\n+}\n+\n+type BlockerOpts = {\n+  blockerFn?: BlockerFn\n+  condition?: boolean | any\n+}\n+\n+export function useBlocker(blockerFnOrOpts?: BlockerOpts): BlockerResolver\n+\n+/**\n+ * @deprecated Use the BlockerOpts object syntax instead\n+ */\n+export function useBlocker(\n+  blockerFn?: BlockerFn,\n+  condition?: boolean | any,\n+): BlockerResolver\n+\n export function useBlocker(\n-  blockerFn: BlockerFn,\n-  condition: boolean | any = true,\n-): void {\n+  blockerFnOrOpts?: BlockerFn | BlockerOpts,\n+  condition?: boolean | any,\n+): BlockerResolver {\n+  const { blockerFn, blockerCondition } = blockerFnOrOpts\n+    ? typeof blockerFnOrOpts === 'function'\n+      ? { blockerFn: blockerFnOrOpts, blockerCondition: condition ?? true }\n+      : {\n+          blockerFn: blockerFnOrOpts.blockerFn,\n+          blockerCondition: blockerFnOrOpts.condition ?? true,\n+        }\n+    : { blockerFn: undefined, blockerCondition: condition ?? true }\n   const { history } = useRouter()\n \n-  React.useEffect(() => {\n-    if (!condition) return\n-    return history.block(blockerFn)\n+  const [resolver, setResolver] = React.useState<BlockerResolver>({\n+    status: 'idle',\n+    proceed: () => {},\n+    reset: () => {},\n   })\n+\n+  const createPromise = () =>\n+    new Promise<boolean>((resolve) => {\n+      setResolver({\n+        status: 'idle',\n+        proceed: () => resolve(true),\n+        reset: () => resolve(false),\n+      })\n+    })\n+\n+  const [promise, setPromise] = React.useState(createPromise)\n+\n+  React.useEffect(() => {\n+    const blockerFnComposed = async () => {\n+      // If a function is provided, it takes precedence over the promise blocker\n+      if (blockerFn) {\n+        return await blockerFn()\n+      }\n+\n+      setResolver((prev) => ({\n+        ...prev,\n+        status: 'blocked',\n+      }))\n+      const canNavigateAsync = await promise\n+\n+      setPromise(createPromise)\n+\n+      return canNavigateAsync\n+    }\n+\n+    return !blockerCondition ? undefined : history.block(blockerFnComposed)\n+  }, [blockerFn, blockerCondition, history, promise])",
+        "comment_created_at": "2024-05-25T15:34:54+00:00",
+        "comment_author": "leoyli",
+        "comment_body": "@Balastrong, thank you for the great work!\r\n\r\nI noticed that at line 56 you used a `useState` to hold the promise, even there are nothing to be blocked. This can lead to an unexpected bug in the development mode, where React will run the some hooks twice to detect potential development issues, meaning there is a risk that a new promise is created while the previous promise never resolved. \r\n\r\nAnd in fact, there are indeed bugged because of the async `blockerFnComposed` function in the effect referencing the \"old\" promise (tested in React 19 beta).\r\n\r\nTherefore, I suggest to only create a promise when there are something really to be promised, here is the suggested changes:\r\n\r\n\r\n```ts\r\n  React.useEffect(() => {\r\n    async function blockerFnComposed() {\r\n      // If a function is provided, it takes precedence over the promise blocker\r\n      if (blockerFn) {\r\n        return await blockerFn();\r\n      }\r\n\r\n      const promise = new Promise((resolve) => {\r\n        setResolver({\r\n          status: \"blocked\",\r\n          proceed: () => resolve(true),\r\n          reset: () => resolve(false),\r\n        });\r\n      });\r\n\r\n      const canNavigateAsync = await promise;\r\n      setResolver({\r\n        status: \"idle\",\r\n        proceed: () => {},\r\n        reset: () => {},\r\n      });\r\n\r\n      return canNavigateAsync;\r\n    }\r\n\r\n    return !blockerCondition ? undefined : history.block(blockerFnComposed);\r\n  }, [blockerFn, blockerCondition, history]);\r\n  ```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1614755902",
+        "repo_full_name": "TanStack/router",
+        "pr_number": 1649,
+        "pr_file": "packages/react-router/src/useBlocker.tsx",
+        "discussion_id": "1614737330",
+        "commented_code": "@@ -3,25 +3,93 @@ import { useRouter } from './useRouter'\n import type { BlockerFn } from '@tanstack/history'\n import type { ReactNode } from './route'\n \n+type BlockerResolver = {\n+  status: 'idle' | 'blocked'\n+  proceed: () => void\n+  reset: () => void\n+}\n+\n+type BlockerOpts = {\n+  blockerFn?: BlockerFn\n+  condition?: boolean | any\n+}\n+\n+export function useBlocker(blockerFnOrOpts?: BlockerOpts): BlockerResolver\n+\n+/**\n+ * @deprecated Use the BlockerOpts object syntax instead\n+ */\n+export function useBlocker(\n+  blockerFn?: BlockerFn,\n+  condition?: boolean | any,\n+): BlockerResolver\n+\n export function useBlocker(\n-  blockerFn: BlockerFn,\n-  condition: boolean | any = true,\n-): void {\n+  blockerFnOrOpts?: BlockerFn | BlockerOpts,\n+  condition?: boolean | any,\n+): BlockerResolver {\n+  const { blockerFn, blockerCondition } = blockerFnOrOpts\n+    ? typeof blockerFnOrOpts === 'function'\n+      ? { blockerFn: blockerFnOrOpts, blockerCondition: condition ?? true }\n+      : {\n+          blockerFn: blockerFnOrOpts.blockerFn,\n+          blockerCondition: blockerFnOrOpts.condition ?? true,\n+        }\n+    : { blockerFn: undefined, blockerCondition: condition ?? true }\n   const { history } = useRouter()\n \n-  React.useEffect(() => {\n-    if (!condition) return\n-    return history.block(blockerFn)\n+  const [resolver, setResolver] = React.useState<BlockerResolver>({\n+    status: 'idle',\n+    proceed: () => {},\n+    reset: () => {},\n   })\n+\n+  const createPromise = () =>\n+    new Promise<boolean>((resolve) => {\n+      setResolver({\n+        status: 'idle',\n+        proceed: () => resolve(true),\n+        reset: () => resolve(false),\n+      })\n+    })\n+\n+  const [promise, setPromise] = React.useState(createPromise)\n+\n+  React.useEffect(() => {\n+    const blockerFnComposed = async () => {\n+      // If a function is provided, it takes precedence over the promise blocker\n+      if (blockerFn) {\n+        return await blockerFn()\n+      }\n+\n+      setResolver((prev) => ({\n+        ...prev,\n+        status: 'blocked',\n+      }))\n+      const canNavigateAsync = await promise\n+\n+      setPromise(createPromise)\n+\n+      return canNavigateAsync\n+    }\n+\n+    return !blockerCondition ? undefined : history.block(blockerFnComposed)\n+  }, [blockerFn, blockerCondition, history, promise])",
+        "comment_created_at": "2024-05-25T16:07:33+00:00",
+        "comment_author": "schiller-manuel",
+        "comment_body": "@leoyli\ncan you please create a PR to fix this issue?\nideally with a test \ud83d\ude01",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

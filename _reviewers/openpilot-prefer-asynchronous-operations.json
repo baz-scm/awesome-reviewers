@@ -1,0 +1,162 @@
+[
+  {
+    "discussion_id": "1733645488",
+    "pr_number": 33389,
+    "pr_file": "selfdrive/ui/ui.cc",
+    "created_at": "2024-08-27T23:43:58+00:00",
+    "commented_code": "}\n \n   if (brightness != last_brightness) {\n-    if (!brightness_future.isRunning()) {\n-      brightness_future = QtConcurrent::run(Hardware::set_brightness, brightness);\n+    if (!brightness_future.valid() ||",
+    "repo_full_name": "commaai/openpilot",
+    "discussion_comments": [
+      {
+        "comment_id": "1733645488",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 33389,
+        "pr_file": "selfdrive/ui/ui.cc",
+        "discussion_id": "1733645488",
+        "commented_code": "@@ -339,8 +337,9 @@ void Device::updateBrightness(const UIState &s) {\n   }\n \n   if (brightness != last_brightness) {\n-    if (!brightness_future.isRunning()) {\n-      brightness_future = QtConcurrent::run(Hardware::set_brightness, brightness);\n+    if (!brightness_future.valid() ||",
+        "comment_created_at": "2024-08-27T23:43:58+00:00",
+        "comment_author": "adeebshihadeh",
+        "comment_body": "how about we just make this a normal thread? I think that's even simpler than a `std::future`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1734011416",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 33389,
+        "pr_file": "selfdrive/ui/ui.cc",
+        "discussion_id": "1733645488",
+        "commented_code": "@@ -339,8 +337,9 @@ void Device::updateBrightness(const UIState &s) {\n   }\n \n   if (brightness != last_brightness) {\n-    if (!brightness_future.isRunning()) {\n-      brightness_future = QtConcurrent::run(Hardware::set_brightness, brightness);\n+    if (!brightness_future.valid() ||",
+        "comment_created_at": "2024-08-28T05:26:40+00:00",
+        "comment_author": "deanlee",
+        "comment_body": "Overall, std::async is simpler to use compared to std::thread for handling this type of asynchronous process because it manages threads and synchronization automatically, making the code easier to write and maintain.  It also makes exception handling easier, as any exceptions thrown by set_brightness are captured and can be handled through the future.\r\n\r\n\r\nPrototypical Code Using std::thread, need more code:\r\n\r\n```\r\nclass Device {\r\n    std::unique_ptr<std::thread> brightness_thread;\r\n }\r\n \r\n void Device::updateBrightness(const UIState &s) {\r\n   if (brightness != last_brightness) {\r\n    if (!brightness_thread || !brightness_thread->joinable()) {\r\n        brightness_thread = std::make_unique<std::thread>(Hardware::set_brightness, brightness);\r\n        last_brightness = brightness; \r\n    }\r\n }\r\n \r\n Device::~Device() {\r\n   if (brightness_thread && brightness_thread->joinable()){\r\n    brightness_thread->join();\r\n  }\r\n}\r\n```\r\n\r\nsince we have not handle possible exception in set_brightness in this Prototypical Code. the ui may crash if set_brightness throw exception.\r\nTo handle exceptions gracefully, we must add a wrapper function that will catch any exceptions thrown during the execution of hardware::set_brightness(). Here\u2019s how the wrapper function can be defined:\r\n```\r\n\r\nvoid wrapper_thread(int brightness) {\r\n    try {\r\n        Hardware::set_brightness(brightness);\r\n    } catch (const std::exception& e) {\r\n      \r\n    } catch (...) {\r\n      \r\n    }\r\n}\r\n```\r\n\r\n I think using std::future here is both simpler and safer than std::thread.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1740171525",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 33389,
+        "pr_file": "selfdrive/ui/ui.cc",
+        "discussion_id": "1733645488",
+        "commented_code": "@@ -339,8 +337,9 @@ void Device::updateBrightness(const UIState &s) {\n   }\n \n   if (brightness != last_brightness) {\n-    if (!brightness_future.isRunning()) {\n-      brightness_future = QtConcurrent::run(Hardware::set_brightness, brightness);\n+    if (!brightness_future.valid() ||",
+        "comment_created_at": "2024-09-01T18:09:18+00:00",
+        "comment_author": "adeebshihadeh",
+        "comment_body": "we don't use cpp exceptions though. I was thinking a long-running thread that sticks around for the life of ui",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1915748394",
+    "pr_number": 34364,
+    "pr_file": "system/ui/raylib/wifi_manager/nmcli_backend.cc",
+    "created_at": "2025-01-14T23:30:51+00:00",
+    "commented_code": "+#include \"system/ui/raylib/wifi_manager/nmcli_backend.h\"\n+\n+#include \"common/util.h\"\n+\n+std::vector<std::string> split(std::string_view source, char delimiter) {\n+  std::vector<std::string> fields;\n+  size_t last = 0;\n+  for (size_t i = 0; i < source.length(); ++i) {\n+    if (source[i] == delimiter) {\n+      fields.emplace_back(source.substr(last, i - last));\n+      last = i + 1;\n+    }\n+  }\n+  fields.emplace_back(source.substr(last));\n+  return fields;\n+}\n+\n+SecurityType getSecurityType(const std::string& security) {\n+  if (security.empty() || security == \"--\") {\n+    return SecurityType::OPEN;\n+  } else if (security.find(\"WPA\") != std::string::npos || security.find(\"RSN\") != std::string::npos) {\n+    return SecurityType::WPA;\n+  }\n+  return SecurityType::UNSUPPORTED;\n+}\n+\n+namespace wifi {\n+\n+std::vector<Network> scan_networks() {\n+  std::vector<Network> networks;\n+  std::string output = util::check_output(\"nmcli -t -c no -f SSID,IN-USE,SIGNAL,SECURITY device wifi list\");\n+\n+  for (const auto& line : split(output, '\n')) {\n+    auto fields = split(line, ':');\n+    if (fields.size() == 4 && !fields[0].empty()) {\n+      networks.emplace_back(Network{fields[0], fields[1] == \"*\", std::stoi(fields[2]), getSecurityType(fields[3])});\n+    }\n+  }\n+\n+  std::sort(networks.begin(), networks.end());\n+  return networks;\n+}\n+\n+std::set<std::string> saved_networks() {\n+  // Get UUIDs of all saved wireless connections\n+  std::string uuids;\n+  std::string cmd = \"nmcli -t -f UUID,TYPE connection show | grep 802-11-wireless\";\n+  for (auto& line : split(util::check_output(cmd), '\n')) {\n+    auto connection_info = split(line, ':');\n+    if (connection_info.size() >= 2) {\n+      uuids += connection_info[0] + \" \";\n+    }\n+  }\n+\n+  // Get SSIDs for the saved connections\n+  std::set<std::string> network_ssids;\n+  std::string ssid_cmd = \"nmcli -t -f 802-11-wireless.ssid connection show \" + uuids;\n+  for (const auto& line : split(util::check_output(ssid_cmd), '\n')) {\n+    if (!line.empty()) {\n+      network_ssids.insert(split(line, ':')[1]);\n+    }\n+  }\n+  return network_ssids;\n+}\n+\n+bool connect(const std::string& ssid, const std::string& password) {\n+  std::string command = \"nmcli device wifi connect '\" + ssid + \"'\";\n+  if (!password.empty()) {\n+    command += \" password '\" + password + \"'\";\n+  }\n+  return system(command.c_str()) == 0;\n+}\n+\n+bool forget(const std::string& ssid) {\n+  std::string command = \"nmcli connection delete id '\" + ssid + \"'\";\n+  return system(command.c_str()) == 0;",
+    "repo_full_name": "commaai/openpilot",
+    "discussion_comments": [
+      {
+        "comment_id": "1915748394",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 34364,
+        "pr_file": "system/ui/raylib/wifi_manager/nmcli_backend.cc",
+        "discussion_id": "1915748394",
+        "commented_code": "@@ -0,0 +1,79 @@\n+#include \"system/ui/raylib/wifi_manager/nmcli_backend.h\"\n+\n+#include \"common/util.h\"\n+\n+std::vector<std::string> split(std::string_view source, char delimiter) {\n+  std::vector<std::string> fields;\n+  size_t last = 0;\n+  for (size_t i = 0; i < source.length(); ++i) {\n+    if (source[i] == delimiter) {\n+      fields.emplace_back(source.substr(last, i - last));\n+      last = i + 1;\n+    }\n+  }\n+  fields.emplace_back(source.substr(last));\n+  return fields;\n+}\n+\n+SecurityType getSecurityType(const std::string& security) {\n+  if (security.empty() || security == \"--\") {\n+    return SecurityType::OPEN;\n+  } else if (security.find(\"WPA\") != std::string::npos || security.find(\"RSN\") != std::string::npos) {\n+    return SecurityType::WPA;\n+  }\n+  return SecurityType::UNSUPPORTED;\n+}\n+\n+namespace wifi {\n+\n+std::vector<Network> scan_networks() {\n+  std::vector<Network> networks;\n+  std::string output = util::check_output(\"nmcli -t -c no -f SSID,IN-USE,SIGNAL,SECURITY device wifi list\");\n+\n+  for (const auto& line : split(output, '\\n')) {\n+    auto fields = split(line, ':');\n+    if (fields.size() == 4 && !fields[0].empty()) {\n+      networks.emplace_back(Network{fields[0], fields[1] == \"*\", std::stoi(fields[2]), getSecurityType(fields[3])});\n+    }\n+  }\n+\n+  std::sort(networks.begin(), networks.end());\n+  return networks;\n+}\n+\n+std::set<std::string> saved_networks() {\n+  // Get UUIDs of all saved wireless connections\n+  std::string uuids;\n+  std::string cmd = \"nmcli -t -f UUID,TYPE connection show | grep 802-11-wireless\";\n+  for (auto& line : split(util::check_output(cmd), '\\n')) {\n+    auto connection_info = split(line, ':');\n+    if (connection_info.size() >= 2) {\n+      uuids += connection_info[0] + \" \";\n+    }\n+  }\n+\n+  // Get SSIDs for the saved connections\n+  std::set<std::string> network_ssids;\n+  std::string ssid_cmd = \"nmcli -t -f 802-11-wireless.ssid connection show \" + uuids;\n+  for (const auto& line : split(util::check_output(ssid_cmd), '\\n')) {\n+    if (!line.empty()) {\n+      network_ssids.insert(split(line, ':')[1]);\n+    }\n+  }\n+  return network_ssids;\n+}\n+\n+bool connect(const std::string& ssid, const std::string& password) {\n+  std::string command = \"nmcli device wifi connect '\" + ssid + \"'\";\n+  if (!password.empty()) {\n+    command += \" password '\" + password + \"'\";\n+  }\n+  return system(command.c_str()) == 0;\n+}\n+\n+bool forget(const std::string& ssid) {\n+  std::string command = \"nmcli connection delete id '\" + ssid + \"'\";\n+  return system(command.c_str()) == 0;",
+        "comment_created_at": "2025-01-14T23:30:51+00:00",
+        "comment_author": "adeebshihadeh",
+        "comment_body": "how quick is this? I worry that it'll still block the UI thread for too long",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1916851059",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 34364,
+        "pr_file": "system/ui/raylib/wifi_manager/nmcli_backend.cc",
+        "discussion_id": "1915748394",
+        "commented_code": "@@ -0,0 +1,79 @@\n+#include \"system/ui/raylib/wifi_manager/nmcli_backend.h\"\n+\n+#include \"common/util.h\"\n+\n+std::vector<std::string> split(std::string_view source, char delimiter) {\n+  std::vector<std::string> fields;\n+  size_t last = 0;\n+  for (size_t i = 0; i < source.length(); ++i) {\n+    if (source[i] == delimiter) {\n+      fields.emplace_back(source.substr(last, i - last));\n+      last = i + 1;\n+    }\n+  }\n+  fields.emplace_back(source.substr(last));\n+  return fields;\n+}\n+\n+SecurityType getSecurityType(const std::string& security) {\n+  if (security.empty() || security == \"--\") {\n+    return SecurityType::OPEN;\n+  } else if (security.find(\"WPA\") != std::string::npos || security.find(\"RSN\") != std::string::npos) {\n+    return SecurityType::WPA;\n+  }\n+  return SecurityType::UNSUPPORTED;\n+}\n+\n+namespace wifi {\n+\n+std::vector<Network> scan_networks() {\n+  std::vector<Network> networks;\n+  std::string output = util::check_output(\"nmcli -t -c no -f SSID,IN-USE,SIGNAL,SECURITY device wifi list\");\n+\n+  for (const auto& line : split(output, '\\n')) {\n+    auto fields = split(line, ':');\n+    if (fields.size() == 4 && !fields[0].empty()) {\n+      networks.emplace_back(Network{fields[0], fields[1] == \"*\", std::stoi(fields[2]), getSecurityType(fields[3])});\n+    }\n+  }\n+\n+  std::sort(networks.begin(), networks.end());\n+  return networks;\n+}\n+\n+std::set<std::string> saved_networks() {\n+  // Get UUIDs of all saved wireless connections\n+  std::string uuids;\n+  std::string cmd = \"nmcli -t -f UUID,TYPE connection show | grep 802-11-wireless\";\n+  for (auto& line : split(util::check_output(cmd), '\\n')) {\n+    auto connection_info = split(line, ':');\n+    if (connection_info.size() >= 2) {\n+      uuids += connection_info[0] + \" \";\n+    }\n+  }\n+\n+  // Get SSIDs for the saved connections\n+  std::set<std::string> network_ssids;\n+  std::string ssid_cmd = \"nmcli -t -f 802-11-wireless.ssid connection show \" + uuids;\n+  for (const auto& line : split(util::check_output(ssid_cmd), '\\n')) {\n+    if (!line.empty()) {\n+      network_ssids.insert(split(line, ':')[1]);\n+    }\n+  }\n+  return network_ssids;\n+}\n+\n+bool connect(const std::string& ssid, const std::string& password) {\n+  std::string command = \"nmcli device wifi connect '\" + ssid + \"'\";\n+  if (!password.empty()) {\n+    command += \" password '\" + password + \"'\";\n+  }\n+  return system(command.c_str()) == 0;\n+}\n+\n+bool forget(const std::string& ssid) {\n+  std::string command = \"nmcli connection delete id '\" + ssid + \"'\";\n+  return system(command.c_str()) == 0;",
+        "comment_created_at": "2025-01-15T15:24:18+00:00",
+        "comment_author": "deanlee",
+        "comment_body": "It depends, may takes 3-5 seconds on 3X. However, since `forget` is called asynchronously in the `wifiManager` class, it won\u2019t block the UI.\r\n\r\nThe main issue occurs when using `nmcli device wifi connect`. If the password is incorrect, `nmcli` blocks and waits for `NetworkManager` to trigger a graphical password prompt from the default front-end (e.g., nm-applet) or another external application managing network connections:\r\n\r\n![G0xq0](https://github.com/user-attachments/assets/7eb29bb4-0be5-4b1e-b2cb-46c2c993df47)\r\n\r\nTo prevent this takeover, we may need to use dbus or sd_dbus to interact directly with NetworkManager, avoiding external applications being notified to prompt for the password. This would allow us to handle password authentication programmatically, ensuring our app retains full control.\r\n\r\nI'll close this PR until the issue is resolved.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1917374808",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 34364,
+        "pr_file": "system/ui/raylib/wifi_manager/nmcli_backend.cc",
+        "discussion_id": "1915748394",
+        "commented_code": "@@ -0,0 +1,79 @@\n+#include \"system/ui/raylib/wifi_manager/nmcli_backend.h\"\n+\n+#include \"common/util.h\"\n+\n+std::vector<std::string> split(std::string_view source, char delimiter) {\n+  std::vector<std::string> fields;\n+  size_t last = 0;\n+  for (size_t i = 0; i < source.length(); ++i) {\n+    if (source[i] == delimiter) {\n+      fields.emplace_back(source.substr(last, i - last));\n+      last = i + 1;\n+    }\n+  }\n+  fields.emplace_back(source.substr(last));\n+  return fields;\n+}\n+\n+SecurityType getSecurityType(const std::string& security) {\n+  if (security.empty() || security == \"--\") {\n+    return SecurityType::OPEN;\n+  } else if (security.find(\"WPA\") != std::string::npos || security.find(\"RSN\") != std::string::npos) {\n+    return SecurityType::WPA;\n+  }\n+  return SecurityType::UNSUPPORTED;\n+}\n+\n+namespace wifi {\n+\n+std::vector<Network> scan_networks() {\n+  std::vector<Network> networks;\n+  std::string output = util::check_output(\"nmcli -t -c no -f SSID,IN-USE,SIGNAL,SECURITY device wifi list\");\n+\n+  for (const auto& line : split(output, '\\n')) {\n+    auto fields = split(line, ':');\n+    if (fields.size() == 4 && !fields[0].empty()) {\n+      networks.emplace_back(Network{fields[0], fields[1] == \"*\", std::stoi(fields[2]), getSecurityType(fields[3])});\n+    }\n+  }\n+\n+  std::sort(networks.begin(), networks.end());\n+  return networks;\n+}\n+\n+std::set<std::string> saved_networks() {\n+  // Get UUIDs of all saved wireless connections\n+  std::string uuids;\n+  std::string cmd = \"nmcli -t -f UUID,TYPE connection show | grep 802-11-wireless\";\n+  for (auto& line : split(util::check_output(cmd), '\\n')) {\n+    auto connection_info = split(line, ':');\n+    if (connection_info.size() >= 2) {\n+      uuids += connection_info[0] + \" \";\n+    }\n+  }\n+\n+  // Get SSIDs for the saved connections\n+  std::set<std::string> network_ssids;\n+  std::string ssid_cmd = \"nmcli -t -f 802-11-wireless.ssid connection show \" + uuids;\n+  for (const auto& line : split(util::check_output(ssid_cmd), '\\n')) {\n+    if (!line.empty()) {\n+      network_ssids.insert(split(line, ':')[1]);\n+    }\n+  }\n+  return network_ssids;\n+}\n+\n+bool connect(const std::string& ssid, const std::string& password) {\n+  std::string command = \"nmcli device wifi connect '\" + ssid + \"'\";\n+  if (!password.empty()) {\n+    command += \" password '\" + password + \"'\";\n+  }\n+  return system(command.c_str()) == 0;\n+}\n+\n+bool forget(const std::string& ssid) {\n+  std::string command = \"nmcli connection delete id '\" + ssid + \"'\";\n+  return system(command.c_str()) == 0;",
+        "comment_created_at": "2025-01-15T21:44:05+00:00",
+        "comment_author": "adeebshihadeh",
+        "comment_body": "I think we want to make any CLI commands async... I worry it'll block even for durations like 0.1s. We want to make sure the new UI runs comfortably at 60+ fps",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1917596678",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 34364,
+        "pr_file": "system/ui/raylib/wifi_manager/nmcli_backend.cc",
+        "discussion_id": "1915748394",
+        "commented_code": "@@ -0,0 +1,79 @@\n+#include \"system/ui/raylib/wifi_manager/nmcli_backend.h\"\n+\n+#include \"common/util.h\"\n+\n+std::vector<std::string> split(std::string_view source, char delimiter) {\n+  std::vector<std::string> fields;\n+  size_t last = 0;\n+  for (size_t i = 0; i < source.length(); ++i) {\n+    if (source[i] == delimiter) {\n+      fields.emplace_back(source.substr(last, i - last));\n+      last = i + 1;\n+    }\n+  }\n+  fields.emplace_back(source.substr(last));\n+  return fields;\n+}\n+\n+SecurityType getSecurityType(const std::string& security) {\n+  if (security.empty() || security == \"--\") {\n+    return SecurityType::OPEN;\n+  } else if (security.find(\"WPA\") != std::string::npos || security.find(\"RSN\") != std::string::npos) {\n+    return SecurityType::WPA;\n+  }\n+  return SecurityType::UNSUPPORTED;\n+}\n+\n+namespace wifi {\n+\n+std::vector<Network> scan_networks() {\n+  std::vector<Network> networks;\n+  std::string output = util::check_output(\"nmcli -t -c no -f SSID,IN-USE,SIGNAL,SECURITY device wifi list\");\n+\n+  for (const auto& line : split(output, '\\n')) {\n+    auto fields = split(line, ':');\n+    if (fields.size() == 4 && !fields[0].empty()) {\n+      networks.emplace_back(Network{fields[0], fields[1] == \"*\", std::stoi(fields[2]), getSecurityType(fields[3])});\n+    }\n+  }\n+\n+  std::sort(networks.begin(), networks.end());\n+  return networks;\n+}\n+\n+std::set<std::string> saved_networks() {\n+  // Get UUIDs of all saved wireless connections\n+  std::string uuids;\n+  std::string cmd = \"nmcli -t -f UUID,TYPE connection show | grep 802-11-wireless\";\n+  for (auto& line : split(util::check_output(cmd), '\\n')) {\n+    auto connection_info = split(line, ':');\n+    if (connection_info.size() >= 2) {\n+      uuids += connection_info[0] + \" \";\n+    }\n+  }\n+\n+  // Get SSIDs for the saved connections\n+  std::set<std::string> network_ssids;\n+  std::string ssid_cmd = \"nmcli -t -f 802-11-wireless.ssid connection show \" + uuids;\n+  for (const auto& line : split(util::check_output(ssid_cmd), '\\n')) {\n+    if (!line.empty()) {\n+      network_ssids.insert(split(line, ':')[1]);\n+    }\n+  }\n+  return network_ssids;\n+}\n+\n+bool connect(const std::string& ssid, const std::string& password) {\n+  std::string command = \"nmcli device wifi connect '\" + ssid + \"'\";\n+  if (!password.empty()) {\n+    command += \" password '\" + password + \"'\";\n+  }\n+  return system(command.c_str()) == 0;\n+}\n+\n+bool forget(const std::string& ssid) {\n+  std::string command = \"nmcli connection delete id '\" + ssid + \"'\";\n+  return system(command.c_str()) == 0;",
+        "comment_created_at": "2025-01-16T03:00:17+00:00",
+        "comment_author": "deanlee",
+        "comment_body": "The UI already calls functions in the WiFi namespace asynchronously, so the CLI commands won\u2019t block the main thread. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1659012905",
+    "pr_number": 32862,
+    "pr_file": "cereal/messaging/msgq_to_zmq.cc",
+    "created_at": "2024-06-28T16:42:30+00:00",
+    "commented_code": "+#include \"cereal/messaging/msgq_to_zmq.h\"\n+\n+#include <cassert>\n+#include <future>\n+\n+#include \"common/util.h\"\n+\n+extern ExitHandler do_exit;\n+\n+static std::string recv_zmq_msg(void *sock) {\n+  zmq_msg_t msg;\n+  zmq_msg_init(&msg);\n+  std::string ret;\n+  if (zmq_msg_recv(&msg, sock, 0) > 0) {\n+    ret.assign((char *)zmq_msg_data(&msg), zmq_msg_size(&msg));\n+  }\n+  zmq_msg_close(&msg);\n+  return ret;\n+}\n+\n+void MsgqToZmq::run(const std::vector<std::string> &endpoints, const std::string &ip) {\n+  zmq_context = std::make_unique<ZMQContext>();\n+  msgq_context = std::make_unique<MSGQContext>();\n+\n+  // Create ZMQPubSockets for each endpoint\n+  for (auto endpoint : endpoints) {\n+    auto &socket_pair = socket_pairs.emplace_back();\n+    socket_pair.endpoint = endpoint;\n+    socket_pair.pub_sock = std::make_unique<ZMQPubSocket>();\n+    int ret = socket_pair.pub_sock->connect(zmq_context.get(), endpoint);\n+    if (ret != 0) {\n+      printf(\"Failed to create ZMQ publisher for [%s]: %s\n\", endpoint.c_str(), zmq_strerror(zmq_errno()));\n+      return;\n+    }\n+  }\n+\n+  // Start ZMQ monitoring thread to monitor socket events\n+  auto monitor_future = std::async(std::launch::async, &MsgqToZmq::zmqMonitorThread, this);\n+  int n = 0;\n+  while (!do_exit) {\n+    std::unique_lock lk(mutex);\n+    cv.wait(lk, [this]() { return do_exit || !sub2pub.empty(); });\n+    if (do_exit) break;\n+\n+    printf(\"begin push %d\n\", ++n);\n+    for (auto sub_sock : msgq_poller->poll(100)) {\n+      std::unique_ptr<Message> msg(sub_sock->receive(true));\n+      while (msg && sub2pub[sub_sock]->sendMessage(msg.get()) == -1) {\n+        if (errno != EINTR) break;\n+      }\n+    }\n+  }\n+}\n+\n+void MsgqToZmq::zmqMonitorThread() {\n+  std::vector<zmq_pollitem_t> pollitems;\n+\n+  // Set up ZMQ monitor for each pub socket\n+  for (int i = 0; i < socket_pairs.size(); ++i) {\n+    std::string addr = \"inproc://op-bridge-monitor-\" + std::to_string(i);\n+    zmq_socket_monitor(socket_pairs[i].pub_sock->sock, addr.c_str(), ZMQ_EVENT_ACCEPTED | ZMQ_EVENT_DISCONNECTED);\n+\n+    void *monitor_socket = zmq_socket(zmq_context->getRawContext(), ZMQ_PAIR);\n+    zmq_connect(monitor_socket, addr.c_str());\n+    pollitems.emplace_back(zmq_pollitem_t{.socket = monitor_socket, .events = ZMQ_POLLIN});\n+  }\n+\n+  int n = 0;\n+  while (!do_exit) {\n+    int ret = zmq_poll(pollitems.data(), pollitems.size(), 1000);\n+    if (ret < 0) {\n+      if (errno == EINTR) {\n+        // Due to frequent EINTR signals from msgq, introduce a brief delay (200 ms)\n+        // to reduce CPU usage during retry attempts.\n+        util::sleep_for(200);",
+    "repo_full_name": "commaai/openpilot",
+    "discussion_comments": [
+      {
+        "comment_id": "1659012905",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 32862,
+        "pr_file": "cereal/messaging/msgq_to_zmq.cc",
+        "discussion_id": "1659012905",
+        "commented_code": "@@ -0,0 +1,133 @@\n+#include \"cereal/messaging/msgq_to_zmq.h\"\n+\n+#include <cassert>\n+#include <future>\n+\n+#include \"common/util.h\"\n+\n+extern ExitHandler do_exit;\n+\n+static std::string recv_zmq_msg(void *sock) {\n+  zmq_msg_t msg;\n+  zmq_msg_init(&msg);\n+  std::string ret;\n+  if (zmq_msg_recv(&msg, sock, 0) > 0) {\n+    ret.assign((char *)zmq_msg_data(&msg), zmq_msg_size(&msg));\n+  }\n+  zmq_msg_close(&msg);\n+  return ret;\n+}\n+\n+void MsgqToZmq::run(const std::vector<std::string> &endpoints, const std::string &ip) {\n+  zmq_context = std::make_unique<ZMQContext>();\n+  msgq_context = std::make_unique<MSGQContext>();\n+\n+  // Create ZMQPubSockets for each endpoint\n+  for (auto endpoint : endpoints) {\n+    auto &socket_pair = socket_pairs.emplace_back();\n+    socket_pair.endpoint = endpoint;\n+    socket_pair.pub_sock = std::make_unique<ZMQPubSocket>();\n+    int ret = socket_pair.pub_sock->connect(zmq_context.get(), endpoint);\n+    if (ret != 0) {\n+      printf(\"Failed to create ZMQ publisher for [%s]: %s\\n\", endpoint.c_str(), zmq_strerror(zmq_errno()));\n+      return;\n+    }\n+  }\n+\n+  // Start ZMQ monitoring thread to monitor socket events\n+  auto monitor_future = std::async(std::launch::async, &MsgqToZmq::zmqMonitorThread, this);\n+  int n = 0;\n+  while (!do_exit) {\n+    std::unique_lock lk(mutex);\n+    cv.wait(lk, [this]() { return do_exit || !sub2pub.empty(); });\n+    if (do_exit) break;\n+\n+    printf(\"begin push %d\\n\", ++n);\n+    for (auto sub_sock : msgq_poller->poll(100)) {\n+      std::unique_ptr<Message> msg(sub_sock->receive(true));\n+      while (msg && sub2pub[sub_sock]->sendMessage(msg.get()) == -1) {\n+        if (errno != EINTR) break;\n+      }\n+    }\n+  }\n+}\n+\n+void MsgqToZmq::zmqMonitorThread() {\n+  std::vector<zmq_pollitem_t> pollitems;\n+\n+  // Set up ZMQ monitor for each pub socket\n+  for (int i = 0; i < socket_pairs.size(); ++i) {\n+    std::string addr = \"inproc://op-bridge-monitor-\" + std::to_string(i);\n+    zmq_socket_monitor(socket_pairs[i].pub_sock->sock, addr.c_str(), ZMQ_EVENT_ACCEPTED | ZMQ_EVENT_DISCONNECTED);\n+\n+    void *monitor_socket = zmq_socket(zmq_context->getRawContext(), ZMQ_PAIR);\n+    zmq_connect(monitor_socket, addr.c_str());\n+    pollitems.emplace_back(zmq_pollitem_t{.socket = monitor_socket, .events = ZMQ_POLLIN});\n+  }\n+\n+  int n = 0;\n+  while (!do_exit) {\n+    int ret = zmq_poll(pollitems.data(), pollitems.size(), 1000);\n+    if (ret < 0) {\n+      if (errno == EINTR) {\n+        // Due to frequent EINTR signals from msgq, introduce a brief delay (200 ms)\n+        // to reduce CPU usage during retry attempts.\n+        util::sleep_for(200);",
+        "comment_created_at": "2024-06-28T16:42:30+00:00",
+        "comment_author": "deanlee",
+        "comment_body": "We need to add a sleep here to reduce CPU usage while polling. \r\nthe MSGQ uses SIGUSR1 for notification between publishers and subscribers, resulting in extremely frequent EINTR signals. This interrupts the poll function frequently, leading to a busy retry loop. This can increase CPU usage from an expected 0% to around 4% during the polling period while waiting for subscribers to connect. Other interrupt-driven modules like camerad, sensorsd may face similar issues.\r\n\r\nThere's also a bug related to the SIGUSR1 signal: even after the subscriber disconnects, msgq's publisher keeps sending signals to the closed subscriber process.\r\n\r\n~https://github.com/commaai/msgq/pull/617 is a solution. However, it still needs more testing to confirm its reliability.~\r\nmsqg: use futex for IPC notifications https://github.com/commaai/msgq/pull/625  is a soluton\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1702225658",
+    "pr_number": 32680,
+    "pr_file": "selfdrive/pandad/pandad.cc",
+    "created_at": "2024-08-02T19:09:14+00:00",
+    "commented_code": "}\n }\n \n-void pandad_main_thread(std::vector<std::string> serials) {\n-  LOGW(\"launching pandad\");\n+void pandad_run(std::vector<Panda *> &pandas) {\n+  const bool no_fan_control = getenv(\"NO_FAN_CONTROL\") != nullptr;\n+  const bool spoofing_started = getenv(\"STARTED\") != nullptr;\n+  const bool fack_send = getenv(\"FAKESEND\") != nullptr;\n+\n+  PubMaster pm({\"can\", \"pandaStates\", \"peripheralState\"});\n+  RateKeeper rk(\"pandad\", 100);  // 100 hz\n+\n+  while (!do_exit && check_all_connected(pandas)) {\n+    can_recv(pandas, &pm);\n+    can_send(pandas, fack_send);",
+    "repo_full_name": "commaai/openpilot",
+    "discussion_comments": [
+      {
+        "comment_id": "1702225658",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 32680,
+        "pr_file": "selfdrive/pandad/pandad.cc",
+        "discussion_id": "1702225658",
+        "commented_code": "@@ -546,9 +516,38 @@ void peripheral_control_thread(Panda *panda, bool no_fan_control) {\n   }\n }\n \n-void pandad_main_thread(std::vector<std::string> serials) {\n-  LOGW(\"launching pandad\");\n+void pandad_run(std::vector<Panda *> &pandas) {\n+  const bool no_fan_control = getenv(\"NO_FAN_CONTROL\") != nullptr;\n+  const bool spoofing_started = getenv(\"STARTED\") != nullptr;\n+  const bool fack_send = getenv(\"FAKESEND\") != nullptr;\n+\n+  PubMaster pm({\"can\", \"pandaStates\", \"peripheralState\"});\n+  RateKeeper rk(\"pandad\", 100);  // 100 hz\n+\n+  while (!do_exit && check_all_connected(pandas)) {\n+    can_recv(pandas, &pm);\n+    can_send(pandas, fack_send);",
+        "comment_created_at": "2024-08-02T19:09:14+00:00",
+        "comment_author": "adeebshihadeh",
+        "comment_body": "can_send will need to remain in another thread for now, due to the following case:\r\n\r\nwhile the panda TX buffer is full, it will NACK the SPI messages that try to add more messages: https://github.com/commaai/openpilot/blob/8f3fc699d4e06811fd29fbf64fe89032cce563b9/selfdrive/pandad/spi.cc#L238. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1702226569",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 32680,
+        "pr_file": "selfdrive/pandad/pandad.cc",
+        "discussion_id": "1702225658",
+        "commented_code": "@@ -546,9 +516,38 @@ void peripheral_control_thread(Panda *panda, bool no_fan_control) {\n   }\n }\n \n-void pandad_main_thread(std::vector<std::string> serials) {\n-  LOGW(\"launching pandad\");\n+void pandad_run(std::vector<Panda *> &pandas) {\n+  const bool no_fan_control = getenv(\"NO_FAN_CONTROL\") != nullptr;\n+  const bool spoofing_started = getenv(\"STARTED\") != nullptr;\n+  const bool fack_send = getenv(\"FAKESEND\") != nullptr;\n+\n+  PubMaster pm({\"can\", \"pandaStates\", \"peripheralState\"});\n+  RateKeeper rk(\"pandad\", 100);  // 100 hz\n+\n+  while (!do_exit && check_all_connected(pandas)) {\n+    can_recv(pandas, &pm);\n+    can_send(pandas, fack_send);",
+        "comment_created_at": "2024-08-02T19:10:19+00:00",
+        "comment_author": "adeebshihadeh",
+        "comment_body": "FYI, you won't notice this case in normal use, but there are edge cases when it can happen (i.e. the cable is faulty and doesn't have a good connection to the CAN bus)",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

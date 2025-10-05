@@ -1,0 +1,148 @@
+[
+  {
+    "discussion_id": "1858969811",
+    "pr_number": 34105,
+    "pr_file": "tools/cabana/streams/routes.cc",
+    "created_at": "2024-11-26T17:31:27+00:00",
+    "commented_code": "RoutesDialog::RoutesDialog(QWidget *parent) : QDialog(parent) {\n   setWindowTitle(tr(\"Remote routes\"));\n \n+  auto all_routes_widget = new QWidget;\n+  auto all_routes_layout = new QVBoxLayout;\n+  all_routes_layout->addWidget(period_selector_ = new QComboBox(this));\n+  all_routes_layout->addWidget(route_list_ = new RouteListWidget(all_routes_widget));\n+  all_routes_widget->setLayout(all_routes_layout);\n+\n+  auto preserved_routes_widget = new QWidget;\n+  auto preserved_layout = new QVBoxLayout;\n+  preserved_layout->addWidget(preserved_route_list_ = new RouteListWidget(all_routes_widget));\n+  preserved_routes_widget->setLayout(preserved_layout);\n+\n+  routes_type_selector_ = new QTabWidget(this);\n+  routes_type_selector_->addTab(all_routes_widget, tr(\"&All\"));\n+  routes_type_selector_->addTab(preserved_routes_widget, tr(\"&Preserved\"));",
+    "repo_full_name": "commaai/openpilot",
+    "discussion_comments": [
+      {
+        "comment_id": "1858969811",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 34105,
+        "pr_file": "tools/cabana/streams/routes.cc",
+        "discussion_id": "1858969811",
+        "commented_code": "@@ -32,10 +32,25 @@ class RouteListWidget : public QListWidget {\n RoutesDialog::RoutesDialog(QWidget *parent) : QDialog(parent) {\n   setWindowTitle(tr(\"Remote routes\"));\n \n+  auto all_routes_widget = new QWidget;\n+  auto all_routes_layout = new QVBoxLayout;\n+  all_routes_layout->addWidget(period_selector_ = new QComboBox(this));\n+  all_routes_layout->addWidget(route_list_ = new RouteListWidget(all_routes_widget));\n+  all_routes_widget->setLayout(all_routes_layout);\n+\n+  auto preserved_routes_widget = new QWidget;\n+  auto preserved_layout = new QVBoxLayout;\n+  preserved_layout->addWidget(preserved_route_list_ = new RouteListWidget(all_routes_widget));\n+  preserved_routes_widget->setLayout(preserved_layout);\n+\n+  routes_type_selector_ = new QTabWidget(this);\n+  routes_type_selector_->addTab(all_routes_widget, tr(\"&All\"));\n+  routes_type_selector_->addTab(preserved_routes_widget, tr(\"&Preserved\"));",
+        "comment_created_at": "2024-11-26T17:31:27+00:00",
+        "comment_author": "deanlee",
+        "comment_body": "You don't need to create an extra `preserved_routes_widget` and a layout just to add `preserved_route_list_` to the tab, since `preserved_route_list_` is already a widget. You can directly add it to the tab with a single line:\r\n\r\n` routes_type_selector_->addTab(preserved_route_list_ = new RouteListWidget, tr(\"&Preserved\"));`\r\n\r\nThis approach will eliminate 5-6 lines of unnecessary code.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1858988082",
+    "pr_number": 34105,
+    "pr_file": "tools/cabana/streams/routes.cc",
+    "created_at": "2024-11-26T17:43:47+00:00",
+    "commented_code": "if (device_list_->currentIndex() == -1 || device_list_->currentData().isNull())\n     return;\n \n-  route_list_->clear();\n-  route_list_->setEmptyText(tr(\"Loading...\"));\n+  currentRoutesList()->clear();\n+  currentRoutesList()->setEmptyText(tr(\"Loading...\"));\n \n   HttpRequest *http = new HttpRequest(this, !Hardware::PC());\n   QObject::connect(http, &HttpRequest::requestDone, this, &RoutesDialog::parseRouteList);\n \n   // Construct URL with selected device and date range\n   auto dongle_id = device_list_->currentData().toString();\n-  QDateTime current = QDateTime::currentDateTime();\n-  QString url = QString(\"%1/v1/devices/%2/routes_segments?start=%3&end=%4\")\n-                    .arg(CommaApi::BASE_URL).arg(dongle_id)\n-                    .arg(current.addDays(-(period_selector_->currentData().toInt())).toMSecsSinceEpoch())\n-                    .arg(current.toMSecsSinceEpoch());\n-  http->sendRequest(url);\n+  if(isPreservedTabSelected()) {\n+    QString url = QString(\"%1/v1/devices/%2/routes/preserved\")\n+                      .arg(CommaApi::BASE_URL)\n+                      .arg(dongle_id);\n+    http->sendRequest(url);\n+  } else {\n+    QDateTime current = QDateTime::currentDateTime();\n+    QString url = QString(\"%1/v1/devices/%2/routes_segments?start=%3&end=%4\")\n+                      .arg(CommaApi::BASE_URL)\n+                      .arg(dongle_id)\n+                      .arg(current.addDays(-(period_selector_->currentData().toInt())).toMSecsSinceEpoch())\n+                      .arg(current.toMSecsSinceEpoch());\n+    http->sendRequest(url);\n+  }\n }\n \n void RoutesDialog::parseRouteList(const QString &json, bool success, QNetworkReply::NetworkError err) {\n   if (success) {\n     for (const QJsonValue &route : QJsonDocument::fromJson(json.toUtf8()).array()) {\n-      uint64_t start_time = route[\"start_time_utc_millis\"].toDouble();\n-      uint64_t end_time = route[\"end_time_utc_millis\"].toDouble();\n-      auto datetime = QDateTime::fromMSecsSinceEpoch(start_time);\n-      auto item = new QListWidgetItem(QString(\"%1    %2min\").arg(datetime.toString()).arg((end_time - start_time) / (1000 * 60)));\n+      uint64_t to;\n+      QDateTime from;\n+\n+      if(isPreservedTabSelected()) {\n+        QString start_time = route[\"start_time\"].toString();\n+        QString end_time = route[\"end_time\"].toString();\n+\n+        from = QDateTime::fromString(start_time, Qt::ISODateWithMs);\n+        to = QDateTime::fromString(end_time, Qt::ISODateWithMs).msecsTo(from);\n+      } else {\n+        uint64_t start_time = route[\"start_time_utc_millis\"].toDouble();\n+        uint64_t end_time = route[\"end_time_utc_millis\"].toDouble();\n+        from = QDateTime::fromMSecsSinceEpoch(start_time);\n+        to = (end_time - start_time);\n+      }\n+\n+      QListWidgetItem *item = new QListWidgetItem(QString(\"%1    %2min\").arg(from.toString()).arg(to / (1000 * 60)));\n       item->setData(Qt::UserRole, route[\"fullname\"].toString());\n-      route_list_->addItem(item);\n+      currentRoutesList()->addItem(item);\n     }\n     // Select first route if available\n-    if (route_list_->count() > 0) route_list_->setCurrentRow(0);\n+    if (currentRoutesList()->count() > 0) currentRoutesList()->setCurrentRow(0);\n   } else {\n     QMessageBox::warning(this, tr(\"Error\"), tr(\"Failed to fetch routes. Check your network connection.\"));\n     reject();\n   }\n-  route_list_->setEmptyText(tr(\"No items\"));\n+  currentRoutesList()->setEmptyText(tr(\"No items\"));\n   sender()->deleteLater();\n }\n \n void RoutesDialog::accept() {\n-  if (auto current_item = route_list_->currentItem()) {\n+  if (auto current_item = currentRoutesList()->currentItem()) {\n     route_ = current_item->data(Qt::UserRole).toString();\n   }\n   QDialog::accept();\n }\n+\n+RouteListWidget* RoutesDialog::currentRoutesList() {\n+  if(routes_type_selector_->currentIndex() == 1) {\n+    return preserved_route_list_;\n+  }\n+\n+  return route_list_;\n+}",
+    "repo_full_name": "commaai/openpilot",
+    "discussion_comments": [
+      {
+        "comment_id": "1858988082",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 34105,
+        "pr_file": "tools/cabana/streams/routes.cc",
+        "discussion_id": "1858988082",
+        "commented_code": "@@ -79,45 +96,78 @@ void RoutesDialog::fetchRoutes() {\n   if (device_list_->currentIndex() == -1 || device_list_->currentData().isNull())\n     return;\n \n-  route_list_->clear();\n-  route_list_->setEmptyText(tr(\"Loading...\"));\n+  currentRoutesList()->clear();\n+  currentRoutesList()->setEmptyText(tr(\"Loading...\"));\n \n   HttpRequest *http = new HttpRequest(this, !Hardware::PC());\n   QObject::connect(http, &HttpRequest::requestDone, this, &RoutesDialog::parseRouteList);\n \n   // Construct URL with selected device and date range\n   auto dongle_id = device_list_->currentData().toString();\n-  QDateTime current = QDateTime::currentDateTime();\n-  QString url = QString(\"%1/v1/devices/%2/routes_segments?start=%3&end=%4\")\n-                    .arg(CommaApi::BASE_URL).arg(dongle_id)\n-                    .arg(current.addDays(-(period_selector_->currentData().toInt())).toMSecsSinceEpoch())\n-                    .arg(current.toMSecsSinceEpoch());\n-  http->sendRequest(url);\n+  if(isPreservedTabSelected()) {\n+    QString url = QString(\"%1/v1/devices/%2/routes/preserved\")\n+                      .arg(CommaApi::BASE_URL)\n+                      .arg(dongle_id);\n+    http->sendRequest(url);\n+  } else {\n+    QDateTime current = QDateTime::currentDateTime();\n+    QString url = QString(\"%1/v1/devices/%2/routes_segments?start=%3&end=%4\")\n+                      .arg(CommaApi::BASE_URL)\n+                      .arg(dongle_id)\n+                      .arg(current.addDays(-(period_selector_->currentData().toInt())).toMSecsSinceEpoch())\n+                      .arg(current.toMSecsSinceEpoch());\n+    http->sendRequest(url);\n+  }\n }\n \n void RoutesDialog::parseRouteList(const QString &json, bool success, QNetworkReply::NetworkError err) {\n   if (success) {\n     for (const QJsonValue &route : QJsonDocument::fromJson(json.toUtf8()).array()) {\n-      uint64_t start_time = route[\"start_time_utc_millis\"].toDouble();\n-      uint64_t end_time = route[\"end_time_utc_millis\"].toDouble();\n-      auto datetime = QDateTime::fromMSecsSinceEpoch(start_time);\n-      auto item = new QListWidgetItem(QString(\"%1    %2min\").arg(datetime.toString()).arg((end_time - start_time) / (1000 * 60)));\n+      uint64_t to;\n+      QDateTime from;\n+\n+      if(isPreservedTabSelected()) {\n+        QString start_time = route[\"start_time\"].toString();\n+        QString end_time = route[\"end_time\"].toString();\n+\n+        from = QDateTime::fromString(start_time, Qt::ISODateWithMs);\n+        to = QDateTime::fromString(end_time, Qt::ISODateWithMs).msecsTo(from);\n+      } else {\n+        uint64_t start_time = route[\"start_time_utc_millis\"].toDouble();\n+        uint64_t end_time = route[\"end_time_utc_millis\"].toDouble();\n+        from = QDateTime::fromMSecsSinceEpoch(start_time);\n+        to = (end_time - start_time);\n+      }\n+\n+      QListWidgetItem *item = new QListWidgetItem(QString(\"%1    %2min\").arg(from.toString()).arg(to / (1000 * 60)));\n       item->setData(Qt::UserRole, route[\"fullname\"].toString());\n-      route_list_->addItem(item);\n+      currentRoutesList()->addItem(item);\n     }\n     // Select first route if available\n-    if (route_list_->count() > 0) route_list_->setCurrentRow(0);\n+    if (currentRoutesList()->count() > 0) currentRoutesList()->setCurrentRow(0);\n   } else {\n     QMessageBox::warning(this, tr(\"Error\"), tr(\"Failed to fetch routes. Check your network connection.\"));\n     reject();\n   }\n-  route_list_->setEmptyText(tr(\"No items\"));\n+  currentRoutesList()->setEmptyText(tr(\"No items\"));\n   sender()->deleteLater();\n }\n \n void RoutesDialog::accept() {\n-  if (auto current_item = route_list_->currentItem()) {\n+  if (auto current_item = currentRoutesList()->currentItem()) {\n     route_ = current_item->data(Qt::UserRole).toString();\n   }\n   QDialog::accept();\n }\n+\n+RouteListWidget* RoutesDialog::currentRoutesList() {\n+  if(routes_type_selector_->currentIndex() == 1) {\n+    return preserved_route_list_;\n+  }\n+\n+  return route_list_;\n+}",
+        "comment_created_at": "2024-11-26T17:43:47+00:00",
+        "comment_author": "deanlee",
+        "comment_body": "Using a ternary operator here can make the code both more concise and readable.:\r\n`return routes_type_selector_->currentIndex() == 0 ? route_list_ : preserved_route_list_;`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1858997303",
+    "pr_number": 34105,
+    "pr_file": "tools/cabana/streams/routes.cc",
+    "created_at": "2024-11-26T17:50:07+00:00",
+    "commented_code": "if (device_list_->currentIndex() == -1 || device_list_->currentData().isNull())\n     return;\n \n-  route_list_->clear();\n-  route_list_->setEmptyText(tr(\"Loading...\"));\n+  currentRoutesList()->clear();\n+  currentRoutesList()->setEmptyText(tr(\"Loading...\"));\n \n   HttpRequest *http = new HttpRequest(this, !Hardware::PC());\n   QObject::connect(http, &HttpRequest::requestDone, this, &RoutesDialog::parseRouteList);\n \n   // Construct URL with selected device and date range\n   auto dongle_id = device_list_->currentData().toString();\n-  QDateTime current = QDateTime::currentDateTime();\n-  QString url = QString(\"%1/v1/devices/%2/routes_segments?start=%3&end=%4\")\n-                    .arg(CommaApi::BASE_URL).arg(dongle_id)\n-                    .arg(current.addDays(-(period_selector_->currentData().toInt())).toMSecsSinceEpoch())\n-                    .arg(current.toMSecsSinceEpoch());\n-  http->sendRequest(url);\n+  if(isPreservedTabSelected()) {\n+    QString url = QString(\"%1/v1/devices/%2/routes/preserved\")\n+                      .arg(CommaApi::BASE_URL)\n+                      .arg(dongle_id);\n+    http->sendRequest(url);\n+  } else {\n+    QDateTime current = QDateTime::currentDateTime();\n+    QString url = QString(\"%1/v1/devices/%2/routes_segments?start=%3&end=%4\")\n+                      .arg(CommaApi::BASE_URL)\n+                      .arg(dongle_id)\n+                      .arg(current.addDays(-(period_selector_->currentData().toInt())).toMSecsSinceEpoch())\n+                      .arg(current.toMSecsSinceEpoch());\n+    http->sendRequest(url);\n+  }\n }\n \n void RoutesDialog::parseRouteList(const QString &json, bool success, QNetworkReply::NetworkError err) {\n   if (success) {\n     for (const QJsonValue &route : QJsonDocument::fromJson(json.toUtf8()).array()) {\n-      uint64_t start_time = route[\"start_time_utc_millis\"].toDouble();\n-      uint64_t end_time = route[\"end_time_utc_millis\"].toDouble();\n-      auto datetime = QDateTime::fromMSecsSinceEpoch(start_time);\n-      auto item = new QListWidgetItem(QString(\"%1    %2min\").arg(datetime.toString()).arg((end_time - start_time) / (1000 * 60)));\n+      uint64_t to;\n+      QDateTime from;\n+\n+      if(isPreservedTabSelected()) {\n+        QString start_time = route[\"start_time\"].toString();\n+        QString end_time = route[\"end_time\"].toString();\n+\n+        from = QDateTime::fromString(start_time, Qt::ISODateWithMs);\n+        to = QDateTime::fromString(end_time, Qt::ISODateWithMs).msecsTo(from);\n+      } else {\n+        uint64_t start_time = route[\"start_time_utc_millis\"].toDouble();\n+        uint64_t end_time = route[\"end_time_utc_millis\"].toDouble();\n+        from = QDateTime::fromMSecsSinceEpoch(start_time);\n+        to = (end_time - start_time);\n+      }\n+\n+      QListWidgetItem *item = new QListWidgetItem(QString(\"%1    %2min\").arg(from.toString()).arg(to / (1000 * 60)));",
+    "repo_full_name": "commaai/openpilot",
+    "discussion_comments": [
+      {
+        "comment_id": "1858997303",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 34105,
+        "pr_file": "tools/cabana/streams/routes.cc",
+        "discussion_id": "1858997303",
+        "commented_code": "@@ -79,45 +96,78 @@ void RoutesDialog::fetchRoutes() {\n   if (device_list_->currentIndex() == -1 || device_list_->currentData().isNull())\n     return;\n \n-  route_list_->clear();\n-  route_list_->setEmptyText(tr(\"Loading...\"));\n+  currentRoutesList()->clear();\n+  currentRoutesList()->setEmptyText(tr(\"Loading...\"));\n \n   HttpRequest *http = new HttpRequest(this, !Hardware::PC());\n   QObject::connect(http, &HttpRequest::requestDone, this, &RoutesDialog::parseRouteList);\n \n   // Construct URL with selected device and date range\n   auto dongle_id = device_list_->currentData().toString();\n-  QDateTime current = QDateTime::currentDateTime();\n-  QString url = QString(\"%1/v1/devices/%2/routes_segments?start=%3&end=%4\")\n-                    .arg(CommaApi::BASE_URL).arg(dongle_id)\n-                    .arg(current.addDays(-(period_selector_->currentData().toInt())).toMSecsSinceEpoch())\n-                    .arg(current.toMSecsSinceEpoch());\n-  http->sendRequest(url);\n+  if(isPreservedTabSelected()) {\n+    QString url = QString(\"%1/v1/devices/%2/routes/preserved\")\n+                      .arg(CommaApi::BASE_URL)\n+                      .arg(dongle_id);\n+    http->sendRequest(url);\n+  } else {\n+    QDateTime current = QDateTime::currentDateTime();\n+    QString url = QString(\"%1/v1/devices/%2/routes_segments?start=%3&end=%4\")\n+                      .arg(CommaApi::BASE_URL)\n+                      .arg(dongle_id)\n+                      .arg(current.addDays(-(period_selector_->currentData().toInt())).toMSecsSinceEpoch())\n+                      .arg(current.toMSecsSinceEpoch());\n+    http->sendRequest(url);\n+  }\n }\n \n void RoutesDialog::parseRouteList(const QString &json, bool success, QNetworkReply::NetworkError err) {\n   if (success) {\n     for (const QJsonValue &route : QJsonDocument::fromJson(json.toUtf8()).array()) {\n-      uint64_t start_time = route[\"start_time_utc_millis\"].toDouble();\n-      uint64_t end_time = route[\"end_time_utc_millis\"].toDouble();\n-      auto datetime = QDateTime::fromMSecsSinceEpoch(start_time);\n-      auto item = new QListWidgetItem(QString(\"%1    %2min\").arg(datetime.toString()).arg((end_time - start_time) / (1000 * 60)));\n+      uint64_t to;\n+      QDateTime from;\n+\n+      if(isPreservedTabSelected()) {\n+        QString start_time = route[\"start_time\"].toString();\n+        QString end_time = route[\"end_time\"].toString();\n+\n+        from = QDateTime::fromString(start_time, Qt::ISODateWithMs);\n+        to = QDateTime::fromString(end_time, Qt::ISODateWithMs).msecsTo(from);\n+      } else {\n+        uint64_t start_time = route[\"start_time_utc_millis\"].toDouble();\n+        uint64_t end_time = route[\"end_time_utc_millis\"].toDouble();\n+        from = QDateTime::fromMSecsSinceEpoch(start_time);\n+        to = (end_time - start_time);\n+      }\n+\n+      QListWidgetItem *item = new QListWidgetItem(QString(\"%1    %2min\").arg(from.toString()).arg(to / (1000 * 60)));",
+        "comment_created_at": "2024-11-26T17:50:07+00:00",
+        "comment_author": "deanlee",
+        "comment_body": "how about:\r\n``` C++\r\nQDateTime from, to;\r\nif (isPreservedTabSelected()) {\r\n  from = QDateTime::fromMSecsSinceEpoch(route[\"start_time_utc_millis\"].toDouble());\r\n  to = QDateTime::fromMSecsSinceEpoch(route[\"end_time_utc_millis\"].toDouble());\r\n} else {\r\n  from = QDateTime::fromString(route[\"start_time\"].toString(), Qt::ISODateWithMs);\r\n  to = QDateTime::fromString(route[\"end_time\"].toString(), Qt::ISODateWithMs);\r\n}\r\nauto item = new QListWidgetItem(QString(\"%1    %2min\").arg(from.toString()).arg(from.secsTo(to) / 60));\r\n...\r\n}\r\n```\r\nit's more concise, readable, eliminates unnecessary variable assignments.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1859009102",
+    "pr_number": 34105,
+    "pr_file": "tools/cabana/streams/routes.cc",
+    "created_at": "2024-11-26T17:54:05+00:00",
+    "commented_code": "RoutesDialog::RoutesDialog(QWidget *parent) : QDialog(parent) {\n   setWindowTitle(tr(\"Remote routes\"));\n \n+  auto all_routes_widget = new QWidget;\n+  auto all_routes_layout = new QVBoxLayout;",
+    "repo_full_name": "commaai/openpilot",
+    "discussion_comments": [
+      {
+        "comment_id": "1859009102",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 34105,
+        "pr_file": "tools/cabana/streams/routes.cc",
+        "discussion_id": "1859009102",
+        "commented_code": "@@ -32,10 +32,25 @@ class RouteListWidget : public QListWidget {\n RoutesDialog::RoutesDialog(QWidget *parent) : QDialog(parent) {\n   setWindowTitle(tr(\"Remote routes\"));\n \n+  auto all_routes_widget = new QWidget;\n+  auto all_routes_layout = new QVBoxLayout;",
+        "comment_created_at": "2024-11-26T17:54:05+00:00",
+        "comment_author": "deanlee",
+        "comment_body": "You can directly attach a layout to the widget using:\r\n`auto all_routes_layout = new QVBoxLayout(all_routes_widget)`\r\n\r\nThis eliminates the need to call all_routes_widget->setLayout(all_routes_layout); separately, making the code cleaner",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1703913698",
+    "pr_number": 33183,
+    "pr_file": "selfdrive/ui/qt/onroad/annotated_camera.cc",
+    "created_at": "2024-08-05T10:36:56+00:00",
+    "commented_code": "const int arc_l = 133;\n   const float arc_t_default = 6.7;\n   const float arc_t_extend = 12.0;\n-  QColor arc_color = QColor::fromRgbF(0.545 - 0.445 * s->engaged(),\n-                                      0.545 + 0.4 * s->engaged(),\n-                                      0.545 - 0.285 * s->engaged(),\n+\n+  bool show_dm_engaged = s->engaged() || isDMAlwaysOn();\n+\n+  QColor arc_color = QColor::fromRgbF(0.545 - 0.445 * show_dm_engaged,\n+                                      0.545 + 0.4 * show_dm_engaged,\n+                                      0.545 - 0.285 * show_dm_engaged,",
+    "repo_full_name": "commaai/openpilot",
+    "discussion_comments": [
+      {
+        "comment_id": "1703913698",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 33183,
+        "pr_file": "selfdrive/ui/qt/onroad/annotated_camera.cc",
+        "discussion_id": "1703913698",
+        "commented_code": "@@ -236,9 +243,12 @@ void AnnotatedCameraWidget::drawDriverState(QPainter &painter, const UIState *s)\n   const int arc_l = 133;\n   const float arc_t_default = 6.7;\n   const float arc_t_extend = 12.0;\n-  QColor arc_color = QColor::fromRgbF(0.545 - 0.445 * s->engaged(),\n-                                      0.545 + 0.4 * s->engaged(),\n-                                      0.545 - 0.285 * s->engaged(),\n+\n+  bool show_dm_engaged = s->engaged() || isDMAlwaysOn();\n+\n+  QColor arc_color = QColor::fromRgbF(0.545 - 0.445 * show_dm_engaged,\n+                                      0.545 + 0.4 * show_dm_engaged,\n+                                      0.545 - 0.285 * show_dm_engaged,",
+        "comment_created_at": "2024-08-05T10:36:56+00:00",
+        "comment_author": "deanlee",
+        "comment_body": " The color calculation is complex and unclear. It can be simplified to:\r\n```\r\nconst QColor ENGAGED_COLOR = QColor::fromRgbF(0.1, 0.945, 0.26);\r\nconst QColor DISENGAGED_COLOR = QColor::fromRgbF(0.545, 0.545, 0.545);\r\nQColor arc_color = show_dm_engaged ? ENGAGED_COLOR : DISENGAGED_COLOR;\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1704076758",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 33183,
+        "pr_file": "selfdrive/ui/qt/onroad/annotated_camera.cc",
+        "discussion_id": "1703913698",
+        "commented_code": "@@ -236,9 +243,12 @@ void AnnotatedCameraWidget::drawDriverState(QPainter &painter, const UIState *s)\n   const int arc_l = 133;\n   const float arc_t_default = 6.7;\n   const float arc_t_extend = 12.0;\n-  QColor arc_color = QColor::fromRgbF(0.545 - 0.445 * s->engaged(),\n-                                      0.545 + 0.4 * s->engaged(),\n-                                      0.545 - 0.285 * s->engaged(),\n+\n+  bool show_dm_engaged = s->engaged() || isDMAlwaysOn();\n+\n+  QColor arc_color = QColor::fromRgbF(0.545 - 0.445 * show_dm_engaged,\n+                                      0.545 + 0.4 * show_dm_engaged,\n+                                      0.545 - 0.285 * show_dm_engaged,",
+        "comment_created_at": "2024-08-05T12:56:34+00:00",
+        "comment_author": "ugtthis",
+        "comment_body": "Seems like with the simplified version we lose the dynamic color changes/controls but it also doesn't make sense for the DM tracking arc lines to need that. Thanks!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1704114409",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 33183,
+        "pr_file": "selfdrive/ui/qt/onroad/annotated_camera.cc",
+        "discussion_id": "1703913698",
+        "commented_code": "@@ -236,9 +243,12 @@ void AnnotatedCameraWidget::drawDriverState(QPainter &painter, const UIState *s)\n   const int arc_l = 133;\n   const float arc_t_default = 6.7;\n   const float arc_t_extend = 12.0;\n-  QColor arc_color = QColor::fromRgbF(0.545 - 0.445 * s->engaged(),\n-                                      0.545 + 0.4 * s->engaged(),\n-                                      0.545 - 0.285 * s->engaged(),\n+\n+  bool show_dm_engaged = s->engaged() || isDMAlwaysOn();\n+\n+  QColor arc_color = QColor::fromRgbF(0.545 - 0.445 * show_dm_engaged,\n+                                      0.545 + 0.4 * show_dm_engaged,\n+                                      0.545 - 0.285 * show_dm_engaged,",
+        "comment_created_at": "2024-08-05T13:22:23+00:00",
+        "comment_author": "deanlee",
+        "comment_body": "> Seems like with the simplified version we lose the dynamic color changes/controls\r\n\r\nYes, I forgot to mention the alpha value. We can further improve the code by moving ENGAGE_COLOR, DISENGAGED_COLOR (rename to DM_ENGAGED_COLOR, DM_DISENGAGED_COLOR?) to the top of the file as a global variable (after #include), and use a [setAlphaF](https://doc.qt.io/qt-6/qcolor.html#setAlphaF)  to set the alpha value from dm_fade_state:\r\n```\r\n\r\nQColor arc_color = show_dm_engaged ? ENGAGED_COLOR : DISENGAGED_COLOR;\r\narc_color.setAlphaF(0.4 * (1.0 - dm_fade_state));\r\n```\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1704526793",
+        "repo_full_name": "commaai/openpilot",
+        "pr_number": 33183,
+        "pr_file": "selfdrive/ui/qt/onroad/annotated_camera.cc",
+        "discussion_id": "1703913698",
+        "commented_code": "@@ -236,9 +243,12 @@ void AnnotatedCameraWidget::drawDriverState(QPainter &painter, const UIState *s)\n   const int arc_l = 133;\n   const float arc_t_default = 6.7;\n   const float arc_t_extend = 12.0;\n-  QColor arc_color = QColor::fromRgbF(0.545 - 0.445 * s->engaged(),\n-                                      0.545 + 0.4 * s->engaged(),\n-                                      0.545 - 0.285 * s->engaged(),\n+\n+  bool show_dm_engaged = s->engaged() || isDMAlwaysOn();\n+\n+  QColor arc_color = QColor::fromRgbF(0.545 - 0.445 * show_dm_engaged,\n+                                      0.545 + 0.4 * show_dm_engaged,\n+                                      0.545 - 0.285 * show_dm_engaged,",
+        "comment_created_at": "2024-08-05T19:08:16+00:00",
+        "comment_author": "ugtthis",
+        "comment_body": "Sweet thanks for those suggestions I renamed them and added setAlpaF",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

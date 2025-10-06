@@ -370,6 +370,10 @@
     }
 
     let categoryFilter, repoFilter, languageFilter;
+    let sortSelect, timeRangeSelect;
+    let reviewerUpdatesLoaded = false;
+    const reviewerUpdateCache = new Map();
+    const reviewerUpdatesUrl = '{{ '/assets/data/reviewer-updates.json' | relative_url }}';
 
     function updateUrlParams() {
         const searchInput = document.getElementById('search');
@@ -377,9 +381,11 @@
         const selectedCategories = categoryFilter ? categoryFilter.getSelected() : [];
         const selectedRepos = repoFilter ? repoFilter.getSelected() : [];
         const selectedLanguages = languageFilter ? languageFilter.getSelected() : [];
+        const sortValue = sortSelect ? sortSelect.value : 'newest';
+        const timeRangeValue = timeRangeSelect ? timeRangeSelect.value : 'all';
 
         const params = new URLSearchParams();
-        
+
         if (searchTerm) {
             params.set('search', searchTerm);
         }
@@ -394,6 +400,14 @@
         
         if (selectedLanguages.length > 0) {
             params.set('languages', selectedLanguages.join(','));
+        }
+
+        if (sortValue && sortValue !== 'newest') {
+            params.set('sort', sortValue);
+        }
+
+        if (timeRangeValue && timeRangeValue !== 'all') {
+            params.set('updated', timeRangeValue);
         }
 
         const newUrl = params.toString() ? `${window.location.pathname}?${params.toString()}` : window.location.pathname;
@@ -429,24 +443,83 @@
             languageFilter.render();
             languageFilter.attachEvents();
         }
+
+        const sortParam = params.get('sort');
+        if (sortSelect && sortParam && ['newest', 'oldest'].includes(sortParam)) {
+            sortSelect.value = sortParam;
+        }
+
+        const updatedParam = params.get('updated');
+        if (timeRangeSelect && updatedParam) {
+            const optionExists = Array.from(timeRangeSelect.options).some(opt => opt.value === updatedParam);
+            if (optionExists) {
+                timeRangeSelect.value = updatedParam;
+            }
+        }
+    }
+
+    function getTimeRangeThreshold(range) {
+        const now = Date.now();
+        const durations = {
+            day: 24 * 60 * 60 * 1000,
+            week: 7 * 24 * 60 * 60 * 1000,
+            month: 30 * 24 * 60 * 60 * 1000,
+            year: 365 * 24 * 60 * 60 * 1000,
+        };
+
+        if (!durations[range]) {
+            return null;
+        }
+
+        return now - durations[range];
+    }
+
+    function sortReviewerCards(cards, sortValue) {
+        const desiredOrder = sortValue === 'oldest' ? 1 : -1;
+        return cards.slice().sort((a, b) => {
+            const aRaw = a.dataset.lastUpdatedMs;
+            const bRaw = b.dataset.lastUpdatedMs;
+            const aVal = aRaw ? parseInt(aRaw, 10) : NaN;
+            const bVal = bRaw ? parseInt(bRaw, 10) : NaN;
+            const aHas = !Number.isNaN(aVal);
+            const bHas = !Number.isNaN(bVal);
+
+            if (!aHas && !bHas) return 0;
+            if (!aHas) return 1;
+            if (!bHas) return -1;
+            if (aVal === bVal) return 0;
+            return desiredOrder * (aVal - bVal);
+        });
     }
 
     function filterReviewers() {
+        const grid = document.querySelector('.reviewer-grid');
+        if (!grid) return;
+
         const searchInput = document.getElementById('search');
         const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
         const selectedCategories = categoryFilter ? categoryFilter.getSelected() : [];
         const selectedRepos = repoFilter ? repoFilter.getSelected() : [];
         const selectedLanguages = languageFilter ? languageFilter.getSelected() : [];
+        const sortValue = sortSelect ? sortSelect.value : 'newest';
+        const timeRangeValue = timeRangeSelect ? timeRangeSelect.value : 'all';
+        const threshold = getTimeRangeThreshold(timeRangeValue);
+        const applyTimeFilter = reviewerUpdatesLoaded && threshold !== null;
 
-        const cards = document.querySelectorAll('.reviewer-card');
+        const cards = Array.from(grid.querySelectorAll('.reviewer-card'));
+        const sortedCards = sortReviewerCards(cards, sortValue);
+        sortedCards.forEach(card => grid.appendChild(card));
+
         let visibleCount = 0;
         const initialView =
             searchTerm === '' &&
             selectedCategories.length === 0 &&
             selectedRepos.length === 0 &&
-            selectedLanguages.length === 0;
+            selectedLanguages.length === 0 &&
+            sortValue === 'newest' &&
+            timeRangeValue === 'all';
 
-        cards.forEach(card => {
+        sortedCards.forEach(card => {
             const titleEl = card.querySelector('.reviewer-title');
             const descriptionEl = card.querySelector('.reviewer-description');
             const title = titleEl ? titleEl.textContent.toLowerCase() : '';
@@ -454,20 +527,23 @@
             const repo = card.dataset.repo;
             const category = card.dataset.category;
             const language = card.dataset.language;
+            const updatedMs = card.dataset.lastUpdatedMs ? parseInt(card.dataset.lastUpdatedMs, 10) : NaN;
 
             // Enhanced search: search across title, description, repo, category, and language
-            const matchesSearch = searchTerm === '' || 
-                title.includes(searchTerm) || 
+            const matchesSearch = searchTerm === '' ||
+                title.includes(searchTerm) ||
                 description.includes(searchTerm) ||
                 repo.toLowerCase().includes(searchTerm) ||
                 category.toLowerCase().includes(searchTerm) ||
                 language.toLowerCase().includes(searchTerm);
-                
+
             const matchesCategory = selectedCategories.length === 0 || selectedCategories.includes(category);
             const matchesRepo = selectedRepos.length === 0 || selectedRepos.includes(repo);
             const matchesLanguage = selectedLanguages.length === 0 || selectedLanguages.includes(language);
 
-            if (matchesSearch && matchesCategory && matchesRepo && matchesLanguage) {
+            const matchesUpdated = !applyTimeFilter || (!Number.isNaN(updatedMs) && updatedMs >= threshold);
+
+            if (matchesSearch && matchesCategory && matchesRepo && matchesLanguage && matchesUpdated) {
                 if (
                     initialView &&
                     card.classList.contains('extra-reviewer') &&
@@ -487,10 +563,10 @@
         updateReviewerCount(
             visibleCount,
             initialView && document.getElementById('load-more')
-                ? cards.length
+                ? sortedCards.length
                 : null
         );
-        
+
         // Update URL parameters
         updateUrlParams();
     }
@@ -513,11 +589,156 @@
         if (categoryFilter) categoryFilter.clear();
         if (repoFilter) repoFilter.clear();
         if (languageFilter) languageFilter.clear();
-        
+        if (sortSelect) sortSelect.value = 'newest';
+        if (timeRangeSelect) timeRangeSelect.value = 'all';
+
         // Clear URL parameters
         history.replaceState(null, '', window.location.pathname);
-        
+
         filterReviewers();
+    }
+
+    function formatFreshnessLabel(timestampMs) {
+        if (!timestampMs || Number.isNaN(timestampMs)) {
+            return 'Updated date unavailable';
+        }
+
+        const diffMs = Date.now() - timestampMs;
+        if (diffMs < 0) {
+            return 'Updated moments ago';
+        }
+
+        const diffSeconds = Math.max(1, Math.floor(diffMs / 1000));
+        const intervals = [
+            { limit: 60, divisor: 1, unit: 'second' },
+            { limit: 3600, divisor: 60, unit: 'minute' },
+            { limit: 86400, divisor: 3600, unit: 'hour' },
+            { limit: 604800, divisor: 86400, unit: 'day' },
+            { limit: 2592000, divisor: 604800, unit: 'week' },
+            { limit: 31536000, divisor: 2592000, unit: 'month' },
+        ];
+
+        for (const interval of intervals) {
+            if (diffSeconds < interval.limit) {
+                const value = Math.floor(diffSeconds / interval.divisor);
+                const unit = value === 1 ? interval.unit : `${interval.unit}s`;
+                return `Updated ${value} ${unit} ago`;
+            }
+        }
+
+        const years = Math.floor(diffSeconds / 31536000);
+        const unit = years === 1 ? 'year' : 'years';
+        return `Updated ${years} ${unit} ago`;
+    }
+
+    function getFreshnessClass(timestampMs) {
+        if (!timestampMs || Number.isNaN(timestampMs)) {
+            return 'freshness--stale';
+        }
+
+        const diffMs = Date.now() - timestampMs;
+        if (diffMs <= 7 * 24 * 60 * 60 * 1000) {
+            return 'freshness--fresh';
+        }
+        if (diffMs <= 30 * 24 * 60 * 60 * 1000) {
+            return 'freshness--recent';
+        }
+        return 'freshness--stale';
+    }
+
+    function mapFreshnessWrapperClass(freshnessClass) {
+        switch (freshnessClass) {
+            case 'freshness--fresh':
+                return 'freshness-state-fresh';
+            case 'freshness--recent':
+                return 'freshness-state-recent';
+            default:
+                return 'freshness-state-stale';
+        }
+    }
+
+    function updateCardFreshness(card, timestampMs, isoString) {
+        const indicator = card.querySelector('[data-freshness]');
+        const wrapper = card.querySelector('.reviewer-freshness');
+        const parsedTimestamp = typeof timestampMs === 'number' ? timestampMs : Number.NaN;
+
+        if (Number.isFinite(parsedTimestamp)) {
+            card.dataset.lastUpdatedMs = parsedTimestamp.toString();
+            if (isoString) {
+                card.dataset.lastUpdated = isoString;
+            }
+        } else {
+            delete card.dataset.lastUpdatedMs;
+            delete card.dataset.lastUpdated;
+        }
+
+        if (indicator) {
+            const label = formatFreshnessLabel(parsedTimestamp);
+            indicator.textContent = label;
+            indicator.classList.remove('freshness--fresh', 'freshness--recent', 'freshness--stale');
+            const freshnessClass = getFreshnessClass(parsedTimestamp);
+            indicator.classList.add(freshnessClass);
+            if (Number.isFinite(parsedTimestamp)) {
+                indicator.setAttribute('title', new Date(parsedTimestamp).toLocaleString());
+            } else {
+                indicator.removeAttribute('title');
+            }
+
+            if (wrapper) {
+                wrapper.classList.remove('freshness-state-fresh', 'freshness-state-recent', 'freshness-state-stale');
+                wrapper.classList.add(mapFreshnessWrapperClass(freshnessClass));
+                if (isoString) {
+                    wrapper.setAttribute('data-last-updated', isoString);
+                } else {
+                    wrapper.removeAttribute('data-last-updated');
+                }
+            }
+        }
+    }
+
+    async function loadReviewerUpdates() {
+        try {
+            const response = await fetch(reviewerUpdatesUrl, { cache: 'no-store' });
+            if (!response.ok) {
+                throw new Error(`Failed to load freshness metadata: ${response.status}`);
+            }
+
+            const payload = await response.json();
+            const records = payload && Array.isArray(payload.reviewers) ? payload.reviewers : [];
+
+            records.forEach(entry => {
+                if (!entry || typeof entry.slug !== 'string') return;
+                const slug = entry.slug;
+                const timestamp = typeof entry.last_comment_timestamp === 'number'
+                    ? entry.last_comment_timestamp
+                    : Number.NaN;
+                const iso = typeof entry.last_comment_at === 'string' ? entry.last_comment_at : null;
+
+                reviewerUpdateCache.set(slug, { timestamp, iso });
+                const card = document.querySelector(`.reviewer-card[data-slug="${slug}"]`);
+                if (card) {
+                    updateCardFreshness(card, timestamp, iso);
+                }
+            });
+
+            document.querySelectorAll('.reviewer-card').forEach(card => {
+                const slug = card.dataset.slug;
+                if (!slug) return;
+                if (!reviewerUpdateCache.has(slug)) {
+                    updateCardFreshness(card, Number.NaN, null);
+                }
+            });
+
+            reviewerUpdatesLoaded = true;
+            filterReviewers();
+        } catch (err) {
+            console.error(err);
+            document.querySelectorAll('.reviewer-card').forEach(card => {
+                if (!card.dataset.lastUpdatedMs) {
+                    updateCardFreshness(card, Number.NaN, null);
+                }
+            });
+        }
     }
 
     /**
@@ -557,8 +778,12 @@
     document.addEventListener('DOMContentLoaded', function () {
         if (document.getElementById('search')) {
             const searchInput = document.getElementById('search');
+            sortSelect = document.getElementById('sort-order');
+            timeRangeSelect = document.getElementById('time-range');
 
             if (searchInput) searchInput.addEventListener('input', filterReviewers);
+            if (sortSelect) sortSelect.addEventListener('change', filterReviewers);
+            if (timeRangeSelect) timeRangeSelect.addEventListener('change', filterReviewers);
 
             // Initialize multi-select filters if containers exist
             const categoryContainer = document.getElementById('category-filter');
@@ -605,6 +830,7 @@
                 document.getElementById('load-more') ? totalCount : null
             );
             filterReviewers();
+            loadReviewerUpdates();
 
             document.querySelectorAll('.reviewer-card').forEach(card => {
                 if (card.dataset.slug) {

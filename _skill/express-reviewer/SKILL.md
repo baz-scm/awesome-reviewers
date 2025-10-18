@@ -1,0 +1,13 @@
+---
+name: express-reviewer
+description: "Guidelines for reviewing Express.js code, focusing on security improvements and proper error-handling patterns within the framework."
+license: CC-BY-4.0
+---
+
+# Express.js Code Review Guidelines
+
+## Security Improvements
+Security is paramount in Express.js, a widely-used web framework. When reviewing contributions, ensure they incorporate current security best practices. For instance, when handling passwords or other hashed data, the code should use unique, randomly generated salts for each hash[79]. Using a constant or reuse of salts is insecure because it allows attackers to precompute hashes (rainbow table attacks) for common passwords[80][79]. Modern libraries like `bcrypt` will automatically generate salts if used correctly – check that contributors are leveraging this rather than, say, using a fixed salt or misunderstanding the salt parameter (as passing a number to `bcrypt` is actually a work factor, not a salt itself)[81]. The correct usage is to call `bcrypt.genSaltSync()` (or the async equivalent) and then hash the password with that salt[82]. Also ensure that any new features do not inadvertently expose sensitive data or open security holes (e.g., always sanitize user input, use HTTPS for cookies, etc.). Security-related code changes should be carefully audited for weaknesses.
+
+## Consistent Error Handling
+Express has a centralized error handling mechanism (the `next(err)` middleware pipeline), and code contributions should integrate with it rather than bypass it[83]. When reviewing error handling in routes or middleware, ensure that errors aren’t being caught and responded to in an ad-hoc way that skips the central error handlers[84]. The preferred pattern is: if an operation fails, call `next(err)` to delegate to Express’s error middleware[85]. For example, instead of catching an async error and directly sending a response within the try/catch, the code should `return next(err)` so that logging, user-friendly messages, and status codes can be managed consistently[86][87]. Non-critical errors (like an error in an optional background task) can be caught and logged to `console.error` (or another logging system) without calling `next`, but only when it truly doesn’t affect the request’s outcome[88]. Additionally, when dealing with streams or event emitters in Express, ensure errors are handled by removing listeners and then propagating the error to avoid infinite loops[89]. By following these patterns, Express apps remain robust: users get uniform error responses, developers see logged errors, and no errors disappear silently[90][91].

@@ -1,0 +1,13 @@
+---
+name: deno-reviewer
+description: "Guidelines for reviewing Deno code, focusing on clear naming conventions and performance optimizations in the runtime."
+license: CC-BY-4.0
+---
+
+# Deno Code Review Guidelines
+
+## Clear and Unambiguous Naming
+Deno’s codebase (a mix of Rust and TypeScript) should use names that clearly convey intent, avoiding any ambiguity[36]. When reviewing changes, flag any identifiers that are vague or could be misinterpreted. For example, if a function takes a boolean flag, prefer turning that into an enum or two separate functions to make the meaning explicit[37]. A guideline from practice is to replace boolean parameters with descriptive enums when the boolean’s purpose isn’t obvious at call site[37]. Similarly, ensure function and method names describe exactly what they do – e.g., instead of a generic name like `getUsage()` in a context where multiple resources exist, use a specific name like `getCpuUsage()`[38][39]. If a struct or class name is too generic (e.g., `Unconfigured`), refine it to something more specific (`UnconfiguredRuntime`) to communicate its role[40]. By enforcing descriptive naming and explicit constructs, the code avoids confusion and prevents misuse of APIs due to misunderstanding.
+
+## Performance-Critical Code Optimizations
+Deno, being a runtime, has many performance-sensitive areas. Reviewers should ensure that code in hot paths is optimized to minimize unnecessary memory allocations and computations[41]. For example, when working with collections, if the size is known or can be estimated, the code should pre-allocate to avoid repeated reallocations as it grows[42]. Common strings or constants should be reused or interned instead of reallocated frequently – for instance, using static string references for frequent values like HTTP method names (`GET`, `POST`, etc.) rather than constructing new strings on each use[43][44]. Avoid creating intermediate data structures if you can process data in a single pass; this might mean merging loops or using iterators/streams to handle data as it comes instead of collecting then processing[43]. Also, encourage caching of expensive operations: if a function or object initialization is costly and used often, the code should reuse a cached result when possible instead of recomputing or reinitializing every time[42]. These optimizations are especially important in Deno’s standard library and core runtime code, where inefficiencies can scale across many requests. Always measure the impact of such changes, but generally lean toward designs that eliminate wasteful allocations and computations in critical code paths[45].

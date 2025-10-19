@@ -20,12 +20,4 @@ Key security considerations:
 - Explicitly disable credential persistence to prevent vulnerabilities: `persist-credentials: false`
 - Use security scanning tools to identify configuration issues
 
-Example of secure checkout configuration:
-```yaml
-- uses: "actions/checkout@v4"
-  with:
-    persist-credentials: false
-    ref: "${{ (inputs.tag != null) && format('refs/tags/{0}', inputs.tag) || '' }}"
-```
-
 When implementing new authentication mechanisms, ensure team members understand the security model and document any special permissions required for maintainer approval.

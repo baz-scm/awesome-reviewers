@@ -13,6 +13,294 @@ layout: default
     </div>
 </section>
 
+<section class="skills-inbox-section" aria-labelledby="skills-inbox-heading">
+    <div class="container">
+        <div class="skills-inbox-header">
+            <span class="badge badge--new" aria-label="New Claude skill inbox">New</span>
+            <div class="skills-inbox-copy">
+                <h2 id="skills-inbox-heading">Claude skill inbox</h2>
+                <p>
+                    Scroll the SKILL.md folders like messages and copy edits into your Claude workspace in seconds.
+                </p>
+            </div>
+        </div>
+        <div class="skills-inbox-grid">
+            <div class="skills-thread" aria-labelledby="skills-thread-heading">
+                <div class="skills-thread-bar">
+                    <h3 id="skills-thread-heading">Skill threads</h3>
+                    <span class="tooltip" tabindex="0" role="note"
+                          aria-label="Every Claude Skill ships as a folder with a SKILL.md front matter header and markdown body."
+                          data-tooltip="Each Claude Skill lives in its own folder with a SKILL.md that bundles YAML front matter plus runnable instructions—perfect for importing as a ready-made skillpack.">?</span>
+                </div>
+                <div class="skills-thread-list" role="listbox" aria-label="Claude skill folders">
+                    <div class="skills-thread-status" role="status" aria-live="polite"></div>
+                    <ul class="skills-thread-items"></ul>
+                </div>
+            </div>
+            <div class="skills-editor" aria-labelledby="skills-editor-heading">
+                <div class="skills-editor-bar">
+                    <div class="skills-editor-titles">
+                        <h3 id="skills-editor-heading" data-skill-title>SKILL.md preview</h3>
+                        <p class="skills-editor-description" data-skill-description>
+                            Choose a Claude Skill to preview its markdown recipe before copying or sharing.
+                        </p>
+                    </div>
+                    <span class="tooltip" tabindex="0" role="note"
+                          aria-label="SKILL.md uses Claude's YAML header plus markdown body so it plays nicely with orchestrated playbooks."
+                          data-tooltip="SKILL.md blends Claude's YAML header with markdown tasks, so you can remix the prompt in branching workflows and keep tool-calls aligned across complex projects.">?</span>
+                </div>
+                <textarea id="skill-editor" class="skills-editor-textarea" spellcheck="false" aria-label="Editable Claude skill markdown"></textarea>
+                <div class="skills-editor-actions">
+                    <button type="button" class="btn btn--secondary" id="copy-skill">Copy markdown</button>
+                    <button type="button" class="btn btn--primary" id="share-skill">Share skill link</button>
+                    <div class="skill-action-feedback" role="status" aria-live="polite"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+{% assign skill_files = site.static_files | where_exp: 'file', "file.path contains '/_skills/'" | where: 'name', 'SKILL.md' %}
+<script>
+    window.__skillFiles = [
+        {% for file in skill_files %}'{{ file.path | relative_url }}'{% unless forloop.last %},{% endunless %}{% endfor %}
+    ];
+</script>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const skillPaths = Array.isArray(window.__skillFiles) ? window.__skillFiles.filter(Boolean) : [];
+        const listContainer = document.querySelector('.skills-thread-items');
+        const statusElement = document.querySelector('.skills-thread-status');
+        const editor = document.getElementById('skill-editor');
+        const titleElement = document.querySelector('[data-skill-title]');
+        const descriptionElement = document.querySelector('[data-skill-description]');
+        const copyButton = document.getElementById('copy-skill');
+        const shareButton = document.getElementById('share-skill');
+        const feedbackElement = document.querySelector('.skill-action-feedback');
+
+        if (!listContainer || !statusElement || !editor || !copyButton || !shareButton || !feedbackElement) {
+            return;
+        }
+
+        const skills = [];
+        let activeIndex = -1;
+
+        function clearFeedback() {
+            feedbackElement.textContent = '';
+        }
+
+        function setButtonsEnabled(enabled) {
+            copyButton.disabled = !enabled;
+            shareButton.disabled = !enabled;
+        }
+
+        function humanizeSlug(value) {
+            if (!value) return '';
+            return value
+                .replace(/[-_]+/g, ' ')
+                .replace(/\b\w/g, (char) => char.toUpperCase())
+                .trim();
+        }
+
+        function parseFrontMatter(raw) {
+            const lines = raw.split('\n');
+            const metadata = {};
+            let bodyStart = 0;
+
+            if (lines[0] && lines[0].trim() === '---') {
+                let currentKey = null;
+                for (let i = 1; i < lines.length; i += 1) {
+                    const line = lines[i];
+                    if (line.trim() === '---') {
+                        bodyStart = i + 1;
+                        break;
+                    }
+
+                    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+                    if (match) {
+                        currentKey = match[1];
+                        let value = match[2] || '';
+                        if (value.startsWith("'") && value.endsWith("'")) {
+                            value = value.slice(1, -1);
+                        } else if (value.startsWith('"') && value.endsWith('"')) {
+                            value = value.slice(1, -1);
+                        }
+                        metadata[currentKey] = value.trim();
+                    } else if (currentKey && /^\s{2,}/.test(line)) {
+                        metadata[currentKey] = `${metadata[currentKey]} ${line.trim()}`.trim();
+                    }
+                }
+            }
+
+            const body = lines.slice(bodyStart).join('\n');
+            return { metadata, body };
+        }
+
+        function renderList() {
+            listContainer.innerHTML = '';
+
+            skills.forEach((skill, index) => {
+                const listItem = document.createElement('li');
+                listItem.className = 'skills-thread-item-wrapper';
+
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'skills-thread-item';
+                button.setAttribute('role', 'option');
+                button.setAttribute('aria-selected', index === activeIndex ? 'true' : 'false');
+                button.dataset.index = String(index);
+                button.innerHTML = `
+                    <span class="skills-thread-name">${skill.displayName}</span>
+                    <span class="skills-thread-meta">${skill.description || 'Ready-to-import Claude skill'}</span>
+                `;
+
+                if (index === activeIndex) {
+                    button.classList.add('is-active');
+                }
+
+                button.addEventListener('click', () => {
+                    selectSkill(index);
+                });
+
+                listItem.appendChild(button);
+                listContainer.appendChild(listItem);
+            });
+        }
+
+        function selectSkill(index) {
+            if (index < 0 || index >= skills.length) {
+                return;
+            }
+
+            activeIndex = index;
+            const skill = skills[index];
+
+            editor.value = skill.content;
+            editor.focus();
+            titleElement.textContent = `${skill.displayName} · SKILL.md`;
+            descriptionElement.textContent = skill.description || 'Ready-to-import Claude skill markdown.';
+            setButtonsEnabled(true);
+            clearFeedback();
+
+            Array.from(listContainer.querySelectorAll('.skills-thread-item')).forEach((button, idx) => {
+                if (idx === index) {
+                    button.classList.add('is-active');
+                    button.setAttribute('aria-selected', 'true');
+                } else {
+                    button.classList.remove('is-active');
+                    button.setAttribute('aria-selected', 'false');
+                }
+            });
+        }
+
+        function showFeedback(message) {
+            feedbackElement.textContent = message;
+            if (message) {
+                window.setTimeout(clearFeedback, 4000);
+            }
+        }
+
+        async function loadSkills() {
+            if (!skillPaths.length) {
+                statusElement.textContent = 'No Claude Skills found yet. Pull the latest prompts to get started.';
+                setButtonsEnabled(false);
+                return;
+            }
+
+            statusElement.textContent = 'Loading Claude Skills…';
+
+            for (const path of skillPaths) {
+                try {
+                    const response = await fetch(path);
+                    if (!response.ok) {
+                        throw new Error(`Failed to load ${path}`);
+                    }
+                    const content = await response.text();
+                    const { metadata } = parseFrontMatter(content);
+                    const slugFromPath = path.split('/').filter(Boolean).slice(-2, -1)[0] || metadata.name || '';
+                    const displayName = humanizeSlug(metadata.name || slugFromPath || 'Claude skill');
+                    const description = metadata.description || '';
+
+                    skills.push({
+                        path,
+                        content,
+                        displayName,
+                        description
+                    });
+                } catch (error) {
+                    console.error(error);
+                }
+            }
+
+            if (skills.length === 0) {
+                statusElement.textContent = 'We could not load the Claude Skills right now. Refresh to try again.';
+                setButtonsEnabled(false);
+                return;
+            }
+
+            skills.sort((a, b) => a.displayName.localeCompare(b.displayName));
+            statusElement.textContent = '';
+            renderList();
+            selectSkill(0);
+        }
+
+        copyButton.addEventListener('click', async () => {
+            clearFeedback();
+            if (activeIndex < 0 || !skills[activeIndex]) {
+                return;
+            }
+
+            try {
+                await navigator.clipboard.writeText(editor.value);
+                showFeedback('Markdown copied to your clipboard.');
+            } catch (error) {
+                console.error(error);
+                showFeedback('Clipboard is unavailable in this browser.');
+            }
+        });
+
+        shareButton.addEventListener('click', async () => {
+            clearFeedback();
+            if (activeIndex < 0 || !skills[activeIndex]) {
+                return;
+            }
+
+            const skill = skills[activeIndex];
+            const shareUrl = new URL(skill.path, window.location.origin).href;
+
+            if (navigator.share) {
+                try {
+                    await navigator.share({
+                        title: `${skill.displayName} · Claude Skill`,
+                        text: 'Drop this Claude Skill into your workspace to extend your agent playbook.',
+                        url: shareUrl
+                    });
+                    showFeedback('Shared the Claude Skill link.');
+                    return;
+                } catch (error) {
+                    if (error && error.name === 'AbortError') {
+                        return;
+                    }
+                    console.error(error);
+                }
+            }
+
+            try {
+                await navigator.clipboard.writeText(shareUrl);
+                showFeedback('Skill link copied to clipboard.');
+            } catch (error) {
+                console.error(error);
+                showFeedback('Unable to share this skill link automatically.');
+            }
+        });
+
+        editor.addEventListener('input', clearFeedback);
+
+        setButtonsEnabled(false);
+        loadSkills();
+    });
+</script>
+
 <section class="home-overview">
     <div class="container">
         <div class="overview-card">

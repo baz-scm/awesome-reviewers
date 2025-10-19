@@ -3,6 +3,15 @@ name: Build and Deploy
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - '_reviewers/**'
+      - 'generate_leaderboard.py'
+      - 'generate_orgs_data.py'
+      - 'generate_crawler_files.py'
+      - 'github_utils.py'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 permissions:
@@ -15,11 +24,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  validate:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,6 +35,14 @@ jobs:
           python-version: '3.x'
       - name: Install Python dependencies
         run: pip install pyyaml
+      - name: Validate reviewer migrations
+        run: |
+          python migrate_json.py
+          if [[ -n "$(git status --porcelain)" ]]; then
+            echo "::error::Reviewer markdown files need JSON migration. Run 'python migrate_json.py' locally and commit the results."
+            git status --short
+            exit 1
+          fi
       - name: Generate leaderboard
         run: python generate_leaderboard.py
       - name: Generate orgs data
@@ -36,6 +50,7 @@ jobs:
       - name: Generate crawler files
         run: python generate_crawler_files.py
       - name: Commit generated data
+        if: github.event_name == 'push'
         run: |
           if [[ `git status --porcelain` ]]; then
             git config user.name "github-actions[bot]"
@@ -63,8 +78,18 @@ jobs:
       - name: Add .nojekyll file
         run: touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name == 'push'
         with:
           path: ./_site
+
+  deploy:
+    if: github.event_name == 'push'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url || '' }}
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

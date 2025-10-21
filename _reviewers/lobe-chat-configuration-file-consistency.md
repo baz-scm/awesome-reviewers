@@ -20,16 +20,19 @@ Key practices:
 - Test configuration changes locally to catch startup issues early
 
 Example from discussions:
+{% raw %}
 ```yaml
 # Bad: Port conflict
 ports:
   - '8000:8000'  # Conflicts with CASDOOR_PORT=8000 in .env
 
-# Good: Use environment variable consistently  
+# Good: Use environment variable consistently
 ports:
   - '${CASDOOR_PORT}:${CASDOOR_PORT}'
 ```
+{% endraw %}
 
+{% raw %}
 ```yaml
 # Bad: No fallback
 target_repo_token: ${{ secrets.PAT_FOR_SYNC }}
@@ -37,3 +40,4 @@ target_repo_token: ${{ secrets.PAT_FOR_SYNC }}
 # Good: Provide fallback
 target_repo_token: ${{ secrets.PAT_FOR_SYNC || secrets.GITHUB_TOKEN }}
 ```
+{% endraw %}

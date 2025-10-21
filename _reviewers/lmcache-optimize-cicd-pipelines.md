@@ -19,6 +19,7 @@ CI/CD pipelines should be optimized for both performance and maintainability thr
 3. **Optimize compilation performance**: Implement compilation caching (like ccache) for projects with significant build times to improve pipeline speed.
 
 Example cache configuration:
+{% raw %}
 ```yaml
 plugins:
   - cache#v1.5.2:
@@ -27,5 +28,6 @@ plugins:
       save: "pipeline"
       force: true
 ```
+{% endraw %}
 
 These optimizations ensure CI/CD pipelines remain fast, reliable, and maintainable as projects scale.

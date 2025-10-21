@@ -83,8 +83,25 @@ Key options:
 * `--single <filename>` – convert only a specific prompt (useful for testing).
 * `--limit N` – process only the first *N* prompts (after sorting), handy for generating a sample set.
 * `--dry-run` – preview the conversion without writing files.
+* `--project-dir <path>` – scan a local project for package manager manifests and emit a combined skill that stitches together every Awesome Reviewer matching a detected dependency.
+* `--combined-skill-slug`, `--combined-skill-title`, `--combined-skill-description` – customize the directory name, title, and description used for the generated combined skill.
 
 Run `python tools/awesome2claude.py --help` for the full list of options.
+
+### Generate a project-specific combined skill
+
+When you supply `--project-dir`, the CLI will walk the directory tree looking for popular package manager lockfiles (npm, pnpm, Yarn, Poetry, Pipenv, RubyGems, Cargo, Go modules, Composer, Pub, NuGet, etc.). Every discovered dependency name is normalized and compared with the Awesome Reviewers catalog. Matching reviewers are merged into a **single Claude skill** whose body concatenates the underlying prompts, making it easy to give an AI assistant holistic review guidance tailored to your stack.
+
+Example:
+
+```bash
+python tools/awesome2claude.py \
+  --output-dir ./claude_skills \
+  --overwrite \
+  --project-dir ~/code/my-service
+```
+
+After the run, check `./claude_skills/project-dependencies/SKILL.md` (or whatever slug you configured) for the generated combined skill alongside the per-reviewer exports.
 
 ## Acknowledgments
 

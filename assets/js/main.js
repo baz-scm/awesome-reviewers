@@ -102,17 +102,3 @@ form && form.addEventListener('submit', async e => {
   }
 });
 
-// Mobile header menu toggle
-const menuToggle = document.querySelector('.menu-toggle');
-const headerEl = document.querySelector('.header');
-if (menuToggle && headerEl) {
-  menuToggle.addEventListener('click', () => {
-    headerEl.classList.toggle('open');
-    const open = headerEl.classList.contains('open');
-    const hamburgerIcon = menuToggle.querySelector('.hamburger-icon');
-    const closeIcon = menuToggle.querySelector('.close-icon');
-    if (hamburgerIcon) hamburgerIcon.style.display = open ? 'none' : 'block';
-    if (closeIcon) closeIcon.style.display = open ? 'block' : 'none';
-  });
-}
-

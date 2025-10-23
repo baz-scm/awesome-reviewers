@@ -37,7 +37,9 @@ addRepoForms.forEach(form => {
   form.addEventListener('submit', async e => {
     e.preventDefault();
 
-    const feedbackEl = form.querySelector('[data-repo-feedback]');
+    const feedbackEl =
+      form.querySelector('[data-repo-feedback]') ||
+      form.parentElement?.querySelector('[data-repo-feedback]');
     const submitBtn = form.querySelector('button[type="submit"]');
     const urlInput = form.querySelector('input[type="url"]');
     if (!submitBtn || !urlInput) return;

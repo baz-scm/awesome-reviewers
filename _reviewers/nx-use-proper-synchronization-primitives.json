@@ -1,0 +1,92 @@
+[
+  {
+    "discussion_id": "2288361280",
+    "pr_number": 32417,
+    "pr_file": "packages/nx/src/daemon/client/client.ts",
+    "created_at": "2025-08-20T14:26:00+00:00",
+    "commented_code": "});\n   }\n \n+  private retryMessageAfterNewDaemonStarts() {\n+    const [msg, res, rej] = [\n+      this.currentMessage,\n+      this.currentResolve,\n+      this.currentReject,\n+    ];\n+    if (msg) {\n+      setTimeout(() => {\n+        // We wait a bit to allow the server to finish shutting down before\n+        // retrying the message, which will start a new daemon. Part of\n+        // the process of starting up the daemon clears this.currentMessage etc\n+        // so we need to store them before waiting.\n+        this.sendToDaemonViaQueue(msg).then(res, rej);\n+      });",
+    "repo_full_name": "nrwl/nx",
+    "discussion_comments": [
+      {
+        "comment_id": "2288361280",
+        "repo_full_name": "nrwl/nx",
+        "pr_number": 32417,
+        "pr_file": "packages/nx/src/daemon/client/client.ts",
+        "discussion_id": "2288361280",
+        "commented_code": "@@ -607,6 +610,27 @@ export class DaemonClient {\n     });\n   }\n \n+  private retryMessageAfterNewDaemonStarts() {\n+    const [msg, res, rej] = [\n+      this.currentMessage,\n+      this.currentResolve,\n+      this.currentReject,\n+    ];\n+    if (msg) {\n+      setTimeout(() => {\n+        // We wait a bit to allow the server to finish shutting down before\n+        // retrying the message, which will start a new daemon. Part of\n+        // the process of starting up the daemon clears this.currentMessage etc\n+        // so we need to store them before waiting.\n+        this.sendToDaemonViaQueue(msg).then(res, rej);\n+      });",
+        "comment_created_at": "2025-08-20T14:26:00+00:00",
+        "comment_author": "FrozenPandaz",
+        "comment_body": "Why do we need this setTimeout?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2288382264",
+        "repo_full_name": "nrwl/nx",
+        "pr_number": 32417,
+        "pr_file": "packages/nx/src/daemon/client/client.ts",
+        "discussion_id": "2288361280",
+        "commented_code": "@@ -607,6 +610,27 @@ export class DaemonClient {\n     });\n   }\n \n+  private retryMessageAfterNewDaemonStarts() {\n+    const [msg, res, rej] = [\n+      this.currentMessage,\n+      this.currentResolve,\n+      this.currentReject,\n+    ];\n+    if (msg) {\n+      setTimeout(() => {\n+        // We wait a bit to allow the server to finish shutting down before\n+        // retrying the message, which will start a new daemon. Part of\n+        // the process of starting up the daemon clears this.currentMessage etc\n+        // so we need to store them before waiting.\n+        this.sendToDaemonViaQueue(msg).then(res, rej);\n+      });",
+        "comment_created_at": "2025-08-20T14:33:37+00:00",
+        "comment_author": "AgentEnder",
+        "comment_body": "Ah, maybe we don't? The idea was to give time for the daemon to finish dying s.t. when we go to resend the message it sees no daemon + starts up a new one... but I forgot to add the actual delay? Will investigate.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2245269355",
+    "pr_number": 32162,
+    "pr_file": "packages/nx/src/project-graph/project-graph.ts",
+    "created_at": "2025-07-31T12:39:20+00:00",
+    "commented_code": "export function readCachedProjectGraph(\n   minimumComputedAt?: number\n ): ProjectGraph {\n-  const projectGraphCache = readProjectGraphCache(minimumComputedAt);\n+  let projectGraphCache = readProjectGraphCache(minimumComputedAt);\n+\n+  if (!projectGraphCache && !IS_WASM) {\n+    // Check if another process is currently building the graph\n+    const lockPath = join(workspaceDataDirectory, 'project-graph.lock');\n+\n+    // If a lock exists, wait synchronously for the other process to finish building\n+    if (fileExists(lockPath)) {\n+      const maxWaitTime = 120000; // 120 seconds max wait\n+      const pollInterval = 200; // 200ms between checks\n+      const startTime = Date.now();\n+\n+      logger.verbose(\n+        `[readCachedProjectGraph] Waiting for another process to build the project graph...`\n+      );\n+\n+      // Create a shared buffer for Atomics.wait()\n+      const sharedBuffer = new SharedArrayBuffer(4);\n+      const sharedArray = new Int32Array(sharedBuffer);\n+\n+      while (!projectGraphCache && Date.now() - startTime < maxWaitTime) {\n+        // Use Atomics.wait for efficient synchronous sleep\n+        // This blocks the thread without consuming CPU\n+        Atomics.wait(sharedArray, 0, 0, pollInterval);\n+\n+        // Log progress occasionally\n+        const elapsedMs = Date.now() - startTime;\n+        if (elapsedMs > 0 && elapsedMs % 5000 < pollInterval) {\n+          // Every 5 seconds\n+          const elapsedSeconds = Math.round(elapsedMs / 1000);\n+          logger.verbose(\n+            `[readCachedProjectGraph] Still waiting... (${elapsedSeconds}s elapsed)`\n+          );\n+        }\n+\n+        // Check if graph is now available\n+        projectGraphCache = readProjectGraphCache(minimumComputedAt);\n+\n+        // Check if lock still exists\n+        if (!fileExists(lockPath)) {",
+    "repo_full_name": "nrwl/nx",
+    "discussion_comments": [
+      {
+        "comment_id": "2245269355",
+        "repo_full_name": "nrwl/nx",
+        "pr_number": 32162,
+        "pr_file": "packages/nx/src/project-graph/project-graph.ts",
+        "discussion_id": "2245269355",
+        "commented_code": "@@ -50,7 +50,72 @@ import { DelayedSpinner } from '../utils/delayed-spinner';\n export function readCachedProjectGraph(\n   minimumComputedAt?: number\n ): ProjectGraph {\n-  const projectGraphCache = readProjectGraphCache(minimumComputedAt);\n+  let projectGraphCache = readProjectGraphCache(minimumComputedAt);\n+\n+  if (!projectGraphCache && !IS_WASM) {\n+    // Check if another process is currently building the graph\n+    const lockPath = join(workspaceDataDirectory, 'project-graph.lock');\n+\n+    // If a lock exists, wait synchronously for the other process to finish building\n+    if (fileExists(lockPath)) {\n+      const maxWaitTime = 120000; // 120 seconds max wait\n+      const pollInterval = 200; // 200ms between checks\n+      const startTime = Date.now();\n+\n+      logger.verbose(\n+        `[readCachedProjectGraph] Waiting for another process to build the project graph...`\n+      );\n+\n+      // Create a shared buffer for Atomics.wait()\n+      const sharedBuffer = new SharedArrayBuffer(4);\n+      const sharedArray = new Int32Array(sharedBuffer);\n+\n+      while (!projectGraphCache && Date.now() - startTime < maxWaitTime) {\n+        // Use Atomics.wait for efficient synchronous sleep\n+        // This blocks the thread without consuming CPU\n+        Atomics.wait(sharedArray, 0, 0, pollInterval);\n+\n+        // Log progress occasionally\n+        const elapsedMs = Date.now() - startTime;\n+        if (elapsedMs > 0 && elapsedMs % 5000 < pollInterval) {\n+          // Every 5 seconds\n+          const elapsedSeconds = Math.round(elapsedMs / 1000);\n+          logger.verbose(\n+            `[readCachedProjectGraph] Still waiting... (${elapsedSeconds}s elapsed)`\n+          );\n+        }\n+\n+        // Check if graph is now available\n+        projectGraphCache = readProjectGraphCache(minimumComputedAt);\n+\n+        // Check if lock still exists\n+        if (!fileExists(lockPath)) {",
+        "comment_created_at": "2025-07-31T12:39:20+00:00",
+        "comment_author": "AgentEnder",
+        "comment_body": "The presence of the lock file doesn't actually indicate the graph building. After the first graph is created, the file will always remain on disk. We place an OS read write  lock on the file which is the actual indicator",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2245365506",
+        "repo_full_name": "nrwl/nx",
+        "pr_number": 32162,
+        "pr_file": "packages/nx/src/project-graph/project-graph.ts",
+        "discussion_id": "2245269355",
+        "commented_code": "@@ -50,7 +50,72 @@ import { DelayedSpinner } from '../utils/delayed-spinner';\n export function readCachedProjectGraph(\n   minimumComputedAt?: number\n ): ProjectGraph {\n-  const projectGraphCache = readProjectGraphCache(minimumComputedAt);\n+  let projectGraphCache = readProjectGraphCache(minimumComputedAt);\n+\n+  if (!projectGraphCache && !IS_WASM) {\n+    // Check if another process is currently building the graph\n+    const lockPath = join(workspaceDataDirectory, 'project-graph.lock');\n+\n+    // If a lock exists, wait synchronously for the other process to finish building\n+    if (fileExists(lockPath)) {\n+      const maxWaitTime = 120000; // 120 seconds max wait\n+      const pollInterval = 200; // 200ms between checks\n+      const startTime = Date.now();\n+\n+      logger.verbose(\n+        `[readCachedProjectGraph] Waiting for another process to build the project graph...`\n+      );\n+\n+      // Create a shared buffer for Atomics.wait()\n+      const sharedBuffer = new SharedArrayBuffer(4);\n+      const sharedArray = new Int32Array(sharedBuffer);\n+\n+      while (!projectGraphCache && Date.now() - startTime < maxWaitTime) {\n+        // Use Atomics.wait for efficient synchronous sleep\n+        // This blocks the thread without consuming CPU\n+        Atomics.wait(sharedArray, 0, 0, pollInterval);\n+\n+        // Log progress occasionally\n+        const elapsedMs = Date.now() - startTime;\n+        if (elapsedMs > 0 && elapsedMs % 5000 < pollInterval) {\n+          // Every 5 seconds\n+          const elapsedSeconds = Math.round(elapsedMs / 1000);\n+          logger.verbose(\n+            `[readCachedProjectGraph] Still waiting... (${elapsedSeconds}s elapsed)`\n+          );\n+        }\n+\n+        // Check if graph is now available\n+        projectGraphCache = readProjectGraphCache(minimumComputedAt);\n+\n+        // Check if lock still exists\n+        if (!fileExists(lockPath)) {",
+        "comment_created_at": "2025-07-31T13:13:04+00:00",
+        "comment_author": "enki",
+        "comment_body": "@AgentEnder That's super helpful! So is the correct approach to add wait_sync to FileLock and update readCachedProjectGraph to use it? (this mirrors createProjectGraphAsync logic but sync)\r\n\r\nIf so I can supply a PR later today\r\n\r\n(we're still encountering https://github.com/nrwl/nx/issues/31648 in production so are in need of a fix)\r\n\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2144621930",
+    "pr_number": 31550,
+    "pr_file": "packages/nx/src/tasks-runner/pseudo-terminal.ts",
+    "created_at": "2025-06-13T09:37:06+00:00",
+    "commented_code": "constructor(\n     public rustPseudoTerminal: RustPseudoTerminal,\n-    private childProcess: ChildProcess\n+    private childProcess: ChildProcess,\n+    private readyWhenStatus?: NormalizedRunCommandsOptions['readyWhenStatus']\n   ) {\n-    childProcess.onOutput((output) => {\n-      this.terminalOutput += output;\n-      this.outputCallbacks.forEach((cb) => cb(output));\n-    });\n+    this.initChildProcessesPromise = this.handleChildProcesses();\n+  }\n \n-    childProcess.onExit((message) => {\n-      this.isAlive = false;\n+  async handleChildProcesses() {\n+    return new Promise((res) => {\n+      this.childProcess.onOutput((output) => {\n+        if (\n+          this.readyWhenStatus?.length &&\n+          isReady(this.readyWhenStatus, output)\n+        ) {\n+          this.isAlive = false;\n+          this.childProcess.cleanup();\n+          this.exitCallbacks.forEach((cb) => cb(0));\n+          res({ success: true, code: 0, terminalOutput: this.terminalOutput });\n+          return;\n+        }\n+        this.terminalOutput += output;\n+        this.outputCallbacks.forEach((cb) => cb(output));\n+      });\n+\n+      this.childProcess.onExit((message) => {\n+        this.isAlive = false;\n \n-      const code = messageToCode(message);\n-      childProcess.cleanup();\n+        const code = messageToCode(message);\n+        this.childProcess.cleanup();\n \n-      this.exitCallbacks.forEach((cb) => cb(code));\n+        this.exitCallbacks.forEach((cb) => cb(code));",
+    "repo_full_name": "nrwl/nx",
+    "discussion_comments": [
+      {
+        "comment_id": "2144621930",
+        "repo_full_name": "nrwl/nx",
+        "pr_number": 31550,
+        "pr_file": "packages/nx/src/tasks-runner/pseudo-terminal.ts",
+        "discussion_id": "2144621930",
+        "commented_code": "@@ -151,20 +156,37 @@ export class PseudoTtyProcess implements RunningTask {\n \n   constructor(\n     public rustPseudoTerminal: RustPseudoTerminal,\n-    private childProcess: ChildProcess\n+    private childProcess: ChildProcess,\n+    private readyWhenStatus?: NormalizedRunCommandsOptions['readyWhenStatus']\n   ) {\n-    childProcess.onOutput((output) => {\n-      this.terminalOutput += output;\n-      this.outputCallbacks.forEach((cb) => cb(output));\n-    });\n+    this.initChildProcessesPromise = this.handleChildProcesses();\n+  }\n \n-    childProcess.onExit((message) => {\n-      this.isAlive = false;\n+  async handleChildProcesses() {\n+    return new Promise((res) => {\n+      this.childProcess.onOutput((output) => {\n+        if (\n+          this.readyWhenStatus?.length &&\n+          isReady(this.readyWhenStatus, output)\n+        ) {\n+          this.isAlive = false;\n+          this.childProcess.cleanup();\n+          this.exitCallbacks.forEach((cb) => cb(0));\n+          res({ success: true, code: 0, terminalOutput: this.terminalOutput });\n+          return;\n+        }\n+        this.terminalOutput += output;\n+        this.outputCallbacks.forEach((cb) => cb(output));\n+      });\n+\n+      this.childProcess.onExit((message) => {\n+        this.isAlive = false;\n \n-      const code = messageToCode(message);\n-      childProcess.cleanup();\n+        const code = messageToCode(message);\n+        this.childProcess.cleanup();\n \n-      this.exitCallbacks.forEach((cb) => cb(code));\n+        this.exitCallbacks.forEach((cb) => cb(code));",
+        "comment_created_at": "2025-06-13T09:37:06+00:00",
+        "comment_author": "leosvelperez",
+        "comment_body": "We also need to resolve the promise here. This is needed in cases where the process exits before the readyWhen condition is met.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

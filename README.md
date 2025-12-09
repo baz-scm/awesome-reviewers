@@ -24,6 +24,9 @@
 
 ## Features
 
+[![Run in Smithery](https://smithery.ai/badge/skills/baz-scm)](https://smithery.ai/skills?ns=baz-scm&utm_source=github&utm_medium=badge)
+
+
 * **🎯 3K+ Curated Prompts:** Over 3,000 specialized review prompts across 100+ languages and frameworks, with recent additions for projects like PostHog, DuckDB, ClickHouse, Microsoft Playwright and Microsoft Terminal. Each prompt is distilled from actual pull request comments, ensuring practical, actionable advice grounded in real code review scenarios.
 
 * **📊 Real Open-Source Insights:** Every reviewer includes context from the open-source repository it came from, including a link to the source repo and stats like how many times that feedback appeared and the repo’s popularity. This transparency helps you trust the guidance – it’s based on patterns that occurred in high-quality projects (e.g. a prompt might note **9** prior comments advocating a rule in a project with **16k⭐** on GitHub). In short, these AI prompts encapsulate community-agreed best practices.

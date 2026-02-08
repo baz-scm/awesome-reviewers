@@ -14,10 +14,14 @@ import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, MutableSet, Optional, Sequence, Set, Tuple
 
 import click
-import yaml
+
+try:
+    import yaml  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover
+    yaml = None  # type: ignore[assignment]
 
 try:  # Python 3.11+
     import tomllib  # type: ignore[attr-defined]
@@ -91,14 +95,43 @@ class SkillArtifact:
             "description": self.description,
             "version": DEFAULT_VERSION,
         }
-        yaml_text = yaml.safe_dump(data, sort_keys=False).rstrip()
+        yaml_text = _yaml_dump_mapping(data).rstrip()
         return f"---\n{yaml_text}\n---\n"
 
     def build_body(self) -> str:
         body = self.prompt.body.strip()
+        scope = _derive_scope(self.prompt)
+        checklist = _derive_checklist(self.prompt)
+        wrapped_sections = [
+            f"# {self.prompt.title}",
+            "",
+            "## When to apply",
+            f"Use this skill when reviewing changes related to **{scope}**.",
+            "",
+            "## Review checklist",
+        ]
+
+        if checklist:
+            wrapped_sections.extend([f"- {item}" for item in checklist])
+        else:
+            wrapped_sections.append(f"- Follow the reviewer guidance for {scope} changes.")
+
+        wrapped_sections.extend(
+            [
+                "",
+                "## Expected output",
+                "- Call out concrete violations with file/line evidence.",
+                "- Suggest a specific fix or safer alternative for each violation.",
+                "- If no issues are found, explicitly state that this skill found no violations.",
+                "",
+                "## Source guidance",
+            ]
+        )
+
         if body:
-            return f"# {self.prompt.title}\n\n{body}\n"
-        return f"# {self.prompt.title}\n\n"
+            wrapped_sections.append(body)
+
+        return "\n".join(wrapped_sections).rstrip() + "\n"
 
     def render(self) -> str:
         return f"{self.build_frontmatter()}{self.build_body()}"
@@ -233,9 +266,11 @@ def convert_reviewers(
         if prompt:
             prompts.append(prompt)
 
+    used_skill_dirs: MutableSet[Path] = set()
     for prompt in prompts:
         description = prompt.description
         skill_dir = _determine_skill_dir(output_dir, prompt, group_by_category)
+        skill_dir = _uniquify_skill_dir(skill_dir, used_skill_dirs)
         skill_file = skill_dir / "SKILL.md"
         artifact = SkillArtifact(prompt, description, skill_dir, skill_file)
         _write_skill_artifact(artifact, overwrite=overwrite, dry_run=dry_run)
@@ -333,7 +368,7 @@ def _load_prompt(path: Path) -> Optional[Prompt]:
         return None
 
     try:
-        metadata = yaml.safe_load(frontmatter) or {}
+        metadata = _yaml_load_mapping(frontmatter) or {}
         if not isinstance(metadata, dict):
             raise TypeError("YAML front-matter must be a mapping")
     except Exception as exc:  # noqa: BLE001 - broad to report YAML issues
@@ -342,6 +377,60 @@ def _load_prompt(path: Path) -> Optional[Prompt]:
 
     return Prompt(path=path, metadata=metadata, body=body)
 
+
+
+
+def _yaml_load_mapping(frontmatter: str) -> dict:
+    """Load a simple YAML mapping, with a no-dependency fallback parser."""
+    if yaml is not None:
+        loaded = yaml.safe_load(frontmatter)
+        return loaded if loaded is not None else {}
+
+    data: Dict[str, str] = {}
+    current_key: Optional[str] = None
+    for raw_line in frontmatter.splitlines():
+        line = raw_line.rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+
+        if line.startswith(" ") or line.startswith("\t"):
+            if current_key is None:
+                continue
+            continuation = line.strip()
+            if continuation:
+                existing = data.get(current_key, "")
+                data[current_key] = f"{existing} {continuation}".strip()
+            continue
+
+        if ":" not in line:
+            continue
+
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+
+        current_key = key
+        if value.startswith(("'", '"')) and value.endswith(("'", '"')) and len(value) >= 2:
+            value = value[1:-1]
+        data[key] = value
+
+    return data
+
+
+def _yaml_dump_mapping(data: Dict[str, str]) -> str:
+    """Dump a simple YAML mapping, with a no-dependency fallback formatter."""
+    if yaml is not None:
+        return yaml.safe_dump(data, sort_keys=False)
+
+    lines = []
+    for key, value in data.items():
+        text = str(value).replace("\n", " ").strip()
+        if any(ch in text for ch in (":", "#", "[", "]", "{", "}")):
+            text = json.dumps(text, ensure_ascii=False)
+        lines.append(f"{key}: {text}")
+    return "\n".join(lines) + "\n"
 
 def _split_frontmatter(content: str) -> Tuple[Optional[str], str]:
     stripped = content.lstrip()
@@ -371,6 +460,21 @@ def _determine_skill_dir(output_dir: Path, prompt: Prompt, group_by_category: bo
     return output_dir / prompt.slug
 
 
+def _uniquify_skill_dir(skill_dir: Path, used_skill_dirs: MutableSet[Path]) -> Path:
+    """Ensure each prompt maps to a unique output directory in a single run."""
+    if skill_dir not in used_skill_dirs:
+        used_skill_dirs.add(skill_dir)
+        return skill_dir
+
+    index = 2
+    while True:
+        candidate = skill_dir.with_name(f"{skill_dir.name}-{index}")
+        if candidate not in used_skill_dirs:
+            used_skill_dirs.add(candidate)
+            return candidate
+        index += 1
+
+
 def _print_dry_run(artifact: SkillArtifact) -> None:
     click.echo(
         textwrap.dedent(
@@ -389,6 +493,51 @@ def _clean_description(value: str) -> str:
     without_links = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", value)
     without_newlines = re.sub(r"\s+", " ", without_links)
     return without_newlines.strip()
+
+
+def _derive_scope(prompt: Prompt) -> str:
+    pieces = []
+    category = prompt.category
+    language = prompt.metadata.get("language")
+    if category:
+        pieces.append(str(category).strip())
+    if language:
+        pieces.append(str(language).strip())
+    if pieces:
+        return " / ".join(pieces)
+    return prompt.title.lower()
+
+
+def _derive_checklist(prompt: Prompt) -> List[str]:
+    body = prompt.body.strip()
+    if not body:
+        return []
+
+    checklist: List[str] = []
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(("-", "*")):
+            cleaned = stripped.lstrip("-* ").strip()
+            if cleaned:
+                checklist.append(cleaned)
+        elif re.match(r"^\d+\.\s+", stripped):
+            checklist.append(re.sub(r"^\d+\.\s+", "", stripped))
+
+        if len(checklist) >= 6:
+            break
+
+    if checklist:
+        return checklist
+
+    first_para, _ = _split_first_paragraph(body)
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+", first_para)
+        if sentence.strip()
+    ]
+    return sentences[:3]
 
 
 def _slugify_text(value: str) -> str:

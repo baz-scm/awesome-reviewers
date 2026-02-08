@@ -9,11 +9,6 @@
    </p>
 </div>
 
-<div align="center">
-   <img align="center" width="600px" src="assets/images/ar-web.png" />
-</div>
-
-
 **Awesome Reviewers** is an open-source registry of ready-to-use **system prompts** for agentic code review. Each “reviewer” prompt is distilled from thousands of real code review comments in leading open source repositories. These prompts capture best practices and coding standards that developers can easily apply during pull request reviews. Simply **copy and paste** a prompt into your AI coding agents (e.g. VS Code, Cursor, Claude, or any AI agent) to instantly get code review suggestions aligned with proven standards.
 
 <div align="center">

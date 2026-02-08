@@ -83,6 +83,27 @@ Key options:
 
 Run `python tools/awesome2claude.py --help` for the full list of options.
 
+### Skill-oriented export behavior
+
+Generated `SKILL.md` files now include a standardized wrapper to improve agent execution consistency:
+
+- `When to apply`
+- `Review checklist` (derived from bullets/numbered steps in the source prompt when available)
+- `Expected output`
+- `Source guidance` (the original reviewer text)
+
+This keeps the source guidance intact while giving coding agents a predictable structure for trigger conditions and response formatting.
+
+### Audit reviewer readiness for skill use
+
+Use the audit helper to quantify how skill-ready the `_reviewers/` corpus is:
+
+```bash
+python tools/reviewer_skill_audit.py --write-report docs/reviewer-skill-readiness.md
+```
+
+The report summarizes prompt structure coverage (examples, checklist-like formatting, response contract language, length distribution) and includes practical recommendations for improving agent-skill usability.
+
 ### Generate a project-specific combined skill
 
 When you supply `--project-dir`, the CLI will walk the directory tree looking for popular package manager lockfiles (npm, pnpm, Yarn, Poetry, Pipenv, RubyGems, Cargo, Go modules, Composer, Pub, NuGet, etc.). Every discovered dependency name is normalized and compared with the Awesome Reviewers catalog. Matching reviewers are merged into a **single Claude skill** whose body concatenates the underlying prompts, making it easy to give an AI assistant holistic review guidance tailored to your stack.

@@ -1,0 +1,370 @@
+[
+  {
+    "discussion_id": "2659516518",
+    "pr_number": 52,
+    "pr_file": "src/heretic/model.py",
+    "created_at": "2026-01-04T09:00:47+00:00",
+    "commented_code": "quant_state = getattr(base_weight, \"quant_state\", None)\n \n                     if quant_state is None:\n-                        W = base_weight.to(torch.float32)\n+                        if self.settings.abliteration_preserve_magnitude:\n+                            if base_weight.dtype == torch.float32:\n+                                # We need a copy for in-place modification.",
+    "repo_full_name": "p-e-w/heretic",
+    "discussion_comments": [
+      {
+        "comment_id": "2659516518",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 52,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2659516518",
+        "commented_code": "@@ -437,7 +458,14 @@ def abliterate(\n                     quant_state = getattr(base_weight, \"quant_state\", None)\n \n                     if quant_state is None:\n-                        W = base_weight.to(torch.float32)\n+                        if self.settings.abliteration_preserve_magnitude:\n+                            if base_weight.dtype == torch.float32:\n+                                # We need a copy for in-place modification.",
+        "comment_created_at": "2026-01-04T09:00:47+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": "`Tensor.to()` has a `copy` parameter that can save you this extra logic:\r\n\r\n> When `copy` is set, a new Tensor is created even when the Tensor already matches the desired conversion.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2688392941",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 52,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2659516518",
+        "commented_code": "@@ -437,7 +458,14 @@ def abliterate(\n                     quant_state = getattr(base_weight, \"quant_state\", None)\n \n                     if quant_state is None:\n-                        W = base_weight.to(torch.float32)\n+                        if self.settings.abliteration_preserve_magnitude:\n+                            if base_weight.dtype == torch.float32:\n+                                # We need a copy for in-place modification.",
+        "comment_created_at": "2026-01-13T23:00:29+00:00",
+        "comment_author": "spikymoth",
+        "comment_body": "Switched to `Tensor.to()` with `copy=True`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2688433767",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 52,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2659516518",
+        "commented_code": "@@ -437,7 +458,14 @@ def abliterate(\n                     quant_state = getattr(base_weight, \"quant_state\", None)\n \n                     if quant_state is None:\n-                        W = base_weight.to(torch.float32)\n+                        if self.settings.abliteration_preserve_magnitude:\n+                            if base_weight.dtype == torch.float32:\n+                                # We need a copy for in-place modification.",
+        "comment_created_at": "2026-01-13T23:23:50+00:00",
+        "comment_author": "spikymoth",
+        "comment_body": "Ah, actually we don't need a copy anymore since there's no more in-place modification. Removed the copy.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2659522809",
+    "pr_number": 52,
+    "pr_file": "src/heretic/model.py",
+    "created_at": "2026-01-04T09:11:59+00:00",
+    "commented_code": ").to(torch.float32),\n                         )\n \n+                    # Flatten weight matrix to (out_features, in_features).\n+                    W = W.view(W.shape[0], -1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Get a copy of the weight matrix so we can subtract it later.\n+                        W_org = W.clone()\n+                        # Get the row norms.\n+                        W_norm_row = LA.vector_norm(W, dim=1, keepdim=True)\n+                        # Normalize the weight matrix along the rows.\n+                        W.div_(torch.clamp(W_norm_row, 1e-12))\n+\n                     # Calculate lora_A = v^T W\n                     # v is (d_out,), W is (d_out, d_in)\n                     # v @ W -> (d_in,)\n-                    lora_A = (v @ W).view(1, -1)\n+                    lora_A: Tensor = (v @ W).view(1, -1)\n \n                     # Calculate lora_B = -weight * v\n                     # v is (d_out,)\n-                    lora_B = (-weight * v).view(-1, 1)\n+                    lora_B: Tensor = (-weight * v).view(-1, 1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Apply the LoRA directly.\n+                        W.add_(lora_B @ lora_A)\n+                        # Normalize the adjusted weight matrix along the rows.\n+                        F.normalize(W, p=2, dim=1, out=W)",
+    "repo_full_name": "p-e-w/heretic",
+    "discussion_comments": [
+      {
+        "comment_id": "2659522809",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 52,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2659522809",
+        "commented_code": "@@ -450,14 +478,47 @@ def abliterate(\n                             ).to(torch.float32),\n                         )\n \n+                    # Flatten weight matrix to (out_features, in_features).\n+                    W = W.view(W.shape[0], -1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Get a copy of the weight matrix so we can subtract it later.\n+                        W_org = W.clone()\n+                        # Get the row norms.\n+                        W_norm_row = LA.vector_norm(W, dim=1, keepdim=True)\n+                        # Normalize the weight matrix along the rows.\n+                        W.div_(torch.clamp(W_norm_row, 1e-12))\n+\n                     # Calculate lora_A = v^T W\n                     # v is (d_out,), W is (d_out, d_in)\n                     # v @ W -> (d_in,)\n-                    lora_A = (v @ W).view(1, -1)\n+                    lora_A: Tensor = (v @ W).view(1, -1)\n \n                     # Calculate lora_B = -weight * v\n                     # v is (d_out,)\n-                    lora_B = (-weight * v).view(-1, 1)\n+                    lora_B: Tensor = (-weight * v).view(-1, 1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Apply the LoRA directly.\n+                        W.add_(lora_B @ lora_A)\n+                        # Normalize the adjusted weight matrix along the rows.\n+                        F.normalize(W, p=2, dim=1, out=W)",
+        "comment_created_at": "2026-01-04T09:11:59+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": "Why does this use `out` instead of assigning the result?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2659537832",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 52,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2659522809",
+        "commented_code": "@@ -450,14 +478,47 @@ def abliterate(\n                             ).to(torch.float32),\n                         )\n \n+                    # Flatten weight matrix to (out_features, in_features).\n+                    W = W.view(W.shape[0], -1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Get a copy of the weight matrix so we can subtract it later.\n+                        W_org = W.clone()\n+                        # Get the row norms.\n+                        W_norm_row = LA.vector_norm(W, dim=1, keepdim=True)\n+                        # Normalize the weight matrix along the rows.\n+                        W.div_(torch.clamp(W_norm_row, 1e-12))\n+\n                     # Calculate lora_A = v^T W\n                     # v is (d_out,), W is (d_out, d_in)\n                     # v @ W -> (d_in,)\n-                    lora_A = (v @ W).view(1, -1)\n+                    lora_A: Tensor = (v @ W).view(1, -1)\n \n                     # Calculate lora_B = -weight * v\n                     # v is (d_out,)\n-                    lora_B = (-weight * v).view(-1, 1)\n+                    lora_B: Tensor = (-weight * v).view(-1, 1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Apply the LoRA directly.\n+                        W.add_(lora_B @ lora_A)\n+                        # Normalize the adjusted weight matrix along the rows.\n+                        F.normalize(W, p=2, dim=1, out=W)",
+        "comment_created_at": "2026-01-04T09:38:52+00:00",
+        "comment_author": "spikymoth",
+        "comment_body": "This applies the normalization in-place, which should save a temporary allocation.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2659548181",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 52,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2659522809",
+        "commented_code": "@@ -450,14 +478,47 @@ def abliterate(\n                             ).to(torch.float32),\n                         )\n \n+                    # Flatten weight matrix to (out_features, in_features).\n+                    W = W.view(W.shape[0], -1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Get a copy of the weight matrix so we can subtract it later.\n+                        W_org = W.clone()\n+                        # Get the row norms.\n+                        W_norm_row = LA.vector_norm(W, dim=1, keepdim=True)\n+                        # Normalize the weight matrix along the rows.\n+                        W.div_(torch.clamp(W_norm_row, 1e-12))\n+\n                     # Calculate lora_A = v^T W\n                     # v is (d_out,), W is (d_out, d_in)\n                     # v @ W -> (d_in,)\n-                    lora_A = (v @ W).view(1, -1)\n+                    lora_A: Tensor = (v @ W).view(1, -1)\n \n                     # Calculate lora_B = -weight * v\n                     # v is (d_out,)\n-                    lora_B = (-weight * v).view(-1, 1)\n+                    lora_B: Tensor = (-weight * v).view(-1, 1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Apply the LoRA directly.\n+                        W.add_(lora_B @ lora_A)\n+                        # Normalize the adjusted weight matrix along the rows.\n+                        F.normalize(W, p=2, dim=1, out=W)",
+        "comment_created_at": "2026-01-04T09:57:12+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": "Can this also be used in lines 487-490, where you currently do the normalization manually?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2659553638",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 52,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2659522809",
+        "commented_code": "@@ -450,14 +478,47 @@ def abliterate(\n                             ).to(torch.float32),\n                         )\n \n+                    # Flatten weight matrix to (out_features, in_features).\n+                    W = W.view(W.shape[0], -1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Get a copy of the weight matrix so we can subtract it later.\n+                        W_org = W.clone()\n+                        # Get the row norms.\n+                        W_norm_row = LA.vector_norm(W, dim=1, keepdim=True)\n+                        # Normalize the weight matrix along the rows.\n+                        W.div_(torch.clamp(W_norm_row, 1e-12))\n+\n                     # Calculate lora_A = v^T W\n                     # v is (d_out,), W is (d_out, d_in)\n                     # v @ W -> (d_in,)\n-                    lora_A = (v @ W).view(1, -1)\n+                    lora_A: Tensor = (v @ W).view(1, -1)\n \n                     # Calculate lora_B = -weight * v\n                     # v is (d_out,)\n-                    lora_B = (-weight * v).view(-1, 1)\n+                    lora_B: Tensor = (-weight * v).view(-1, 1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Apply the LoRA directly.\n+                        W.add_(lora_B @ lora_A)\n+                        # Normalize the adjusted weight matrix along the rows.\n+                        F.normalize(W, p=2, dim=1, out=W)",
+        "comment_created_at": "2026-01-04T10:06:57+00:00",
+        "comment_author": "spikymoth",
+        "comment_body": "Well, `F.normalize` doesn't give us the magnitudes, and we need those to restore them later. We could go in the opposite direction and do the normalization manually here too, to avoid mixing F.normalize and LA.vector_norm.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2659563769",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 52,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2659522809",
+        "commented_code": "@@ -450,14 +478,47 @@ def abliterate(\n                             ).to(torch.float32),\n                         )\n \n+                    # Flatten weight matrix to (out_features, in_features).\n+                    W = W.view(W.shape[0], -1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Get a copy of the weight matrix so we can subtract it later.\n+                        W_org = W.clone()\n+                        # Get the row norms.\n+                        W_norm_row = LA.vector_norm(W, dim=1, keepdim=True)\n+                        # Normalize the weight matrix along the rows.\n+                        W.div_(torch.clamp(W_norm_row, 1e-12))\n+\n                     # Calculate lora_A = v^T W\n                     # v is (d_out,), W is (d_out, d_in)\n                     # v @ W -> (d_in,)\n-                    lora_A = (v @ W).view(1, -1)\n+                    lora_A: Tensor = (v @ W).view(1, -1)\n \n                     # Calculate lora_B = -weight * v\n                     # v is (d_out,)\n-                    lora_B = (-weight * v).view(-1, 1)\n+                    lora_B: Tensor = (-weight * v).view(-1, 1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Apply the LoRA directly.\n+                        W.add_(lora_B @ lora_A)\n+                        # Normalize the adjusted weight matrix along the rows.\n+                        F.normalize(W, p=2, dim=1, out=W)",
+        "comment_created_at": "2026-01-04T10:26:37+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": "Ah, ok.\r\n\r\nWe definitely want to use built-in functions as much as possible, so we don't have to do brittle stuff like clamping ourselves unless absolutely necessary.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2688397071",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 52,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2659522809",
+        "commented_code": "@@ -450,14 +478,47 @@ def abliterate(\n                             ).to(torch.float32),\n                         )\n \n+                    # Flatten weight matrix to (out_features, in_features).\n+                    W = W.view(W.shape[0], -1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Get a copy of the weight matrix so we can subtract it later.\n+                        W_org = W.clone()\n+                        # Get the row norms.\n+                        W_norm_row = LA.vector_norm(W, dim=1, keepdim=True)\n+                        # Normalize the weight matrix along the rows.\n+                        W.div_(torch.clamp(W_norm_row, 1e-12))\n+\n                     # Calculate lora_A = v^T W\n                     # v is (d_out,), W is (d_out, d_in)\n                     # v @ W -> (d_in,)\n-                    lora_A = (v @ W).view(1, -1)\n+                    lora_A: Tensor = (v @ W).view(1, -1)\n \n                     # Calculate lora_B = -weight * v\n                     # v is (d_out,)\n-                    lora_B = (-weight * v).view(-1, 1)\n+                    lora_B: Tensor = (-weight * v).view(-1, 1)\n+\n+                    if self.settings.abliteration_preserve_magnitude:\n+                        # Apply the LoRA directly.\n+                        W.add_(lora_B @ lora_A)\n+                        # Normalize the adjusted weight matrix along the rows.\n+                        F.normalize(W, p=2, dim=1, out=W)",
+        "comment_created_at": "2026-01-13T23:02:42+00:00",
+        "comment_author": "spikymoth",
+        "comment_body": "I changed the logic to not do any in-place changes, as it probably doesn't matter that much for performance and memory usage in the grand scheme of things. I also switched to normalizing instead of using the clamped norms (though it should be equivalent). So it should be easier to read now.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2739723028",
+    "pr_number": 52,
+    "pr_file": "src/heretic/model.py",
+    "created_at": "2026-01-29T03:25:39+00:00",
+    "commented_code": "# v is (d_out,)\n                     lora_B = (-weight * v).view(-1, 1)\n \n+                    if self.settings.row_normalization == RowNormalization.PRE:\n+                        # Make the LoRA adapter apply to the original weight matrix.\n+                        lora_B = W_row_norms * lora_B\n+                    elif self.settings.row_normalization == RowNormalization.FULL:\n+                        # Approximates https://huggingface.co/blog/grimjim/norm-preserving-biprojected-abliteration\n+                        W = W + lora_B @ lora_A\n+                        # Normalize the adjusted weight matrix along the rows.\n+                        W = F.normalize(W, p=2, dim=1)\n+                        # Restore the original row norms of the weight matrix.\n+                        W = W * W_row_norms\n+                        # Subtract the original matrix to turn W into a delta.\n+                        W = W - W_org\n+                        # Use a low-rank SVD to get an approximation of the matrix.\n+                        r = self.lora_rank\n+                        U, S, Vh = torch.svd_lowrank(W, q=2 * r + 4, niter=6)",
+    "repo_full_name": "p-e-w/heretic",
+    "discussion_comments": [
+      {
+        "comment_id": "2739723028",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 52,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2739723028",
+        "commented_code": "@@ -475,6 +499,31 @@ def abliterate(\n                     # v is (d_out,)\n                     lora_B = (-weight * v).view(-1, 1)\n \n+                    if self.settings.row_normalization == RowNormalization.PRE:\n+                        # Make the LoRA adapter apply to the original weight matrix.\n+                        lora_B = W_row_norms * lora_B\n+                    elif self.settings.row_normalization == RowNormalization.FULL:\n+                        # Approximates https://huggingface.co/blog/grimjim/norm-preserving-biprojected-abliteration\n+                        W = W + lora_B @ lora_A\n+                        # Normalize the adjusted weight matrix along the rows.\n+                        W = F.normalize(W, p=2, dim=1)\n+                        # Restore the original row norms of the weight matrix.\n+                        W = W * W_row_norms\n+                        # Subtract the original matrix to turn W into a delta.\n+                        W = W - W_org\n+                        # Use a low-rank SVD to get an approximation of the matrix.\n+                        r = self.lora_rank\n+                        U, S, Vh = torch.svd_lowrank(W, q=2 * r + 4, niter=6)",
+        "comment_created_at": "2026-01-29T03:25:39+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": "How long does this step take?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2741355372",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 52,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2739723028",
+        "commented_code": "@@ -475,6 +499,31 @@ def abliterate(\n                     # v is (d_out,)\n                     lora_B = (-weight * v).view(-1, 1)\n \n+                    if self.settings.row_normalization == RowNormalization.PRE:\n+                        # Make the LoRA adapter apply to the original weight matrix.\n+                        lora_B = W_row_norms * lora_B\n+                    elif self.settings.row_normalization == RowNormalization.FULL:\n+                        # Approximates https://huggingface.co/blog/grimjim/norm-preserving-biprojected-abliteration\n+                        W = W + lora_B @ lora_A\n+                        # Normalize the adjusted weight matrix along the rows.\n+                        W = F.normalize(W, p=2, dim=1)\n+                        # Restore the original row norms of the weight matrix.\n+                        W = W * W_row_norms\n+                        # Subtract the original matrix to turn W into a delta.\n+                        W = W - W_org\n+                        # Use a low-rank SVD to get an approximation of the matrix.\n+                        r = self.lora_rank\n+                        U, S, Vh = torch.svd_lowrank(W, q=2 * r + 4, niter=6)",
+        "comment_created_at": "2026-01-29T12:17:28+00:00",
+        "comment_author": "spikymoth",
+        "comment_body": "With the current settings, so `r=3` for `q=10` and `niter=6`, the sum of calls is about 1.33 seconds on my device for the 48-layer Gemma-3-12b-it (with a pretty variable range, between 0.4 and 2.3 seconds). So still fairly low compared to the time it takes to evaluate the resulting model (about a minute), but it does dominate the time spent in `abliterate`.\r\n\r\nThe settings can probably be lowered somewhat, e.g. `q=min(2 * r, r + 5)` and `niter=4` or so, but in my experiments this only marginally reduced the runtime (from 1.33 seconds to 1.25 seconds). I think there's a certain amount of irreducible overhead in there, possibly from the full SVD on a smaller matrix that `svd_lowrank` does internally.\r\n\r\nEdit: Updated the 1st sentence a bit to make it clear that it's 1.33 seconds on average for all the calls together, not 1.33 seconds per layer.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2745734980",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 52,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2739723028",
+        "commented_code": "@@ -475,6 +499,31 @@ def abliterate(\n                     # v is (d_out,)\n                     lora_B = (-weight * v).view(-1, 1)\n \n+                    if self.settings.row_normalization == RowNormalization.PRE:\n+                        # Make the LoRA adapter apply to the original weight matrix.\n+                        lora_B = W_row_norms * lora_B\n+                    elif self.settings.row_normalization == RowNormalization.FULL:\n+                        # Approximates https://huggingface.co/blog/grimjim/norm-preserving-biprojected-abliteration\n+                        W = W + lora_B @ lora_A\n+                        # Normalize the adjusted weight matrix along the rows.\n+                        W = F.normalize(W, p=2, dim=1)\n+                        # Restore the original row norms of the weight matrix.\n+                        W = W * W_row_norms\n+                        # Subtract the original matrix to turn W into a delta.\n+                        W = W - W_org\n+                        # Use a low-rank SVD to get an approximation of the matrix.\n+                        r = self.lora_rank\n+                        U, S, Vh = torch.svd_lowrank(W, q=2 * r + 4, niter=6)",
+        "comment_created_at": "2026-01-30T11:03:59+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": "Ok, no problem then. There's no need to change the parameters if the evaluation time dwarfs the time needed to compute this decomposition.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2613861440",
+    "pr_number": 60,
+    "pr_file": "src/heretic/main.py",
+    "created_at": "2025-12-12T11:18:36+00:00",
+    "commented_code": "continue\n \n                         print(\"Saving model...\")\n-                        model.model.save_pretrained(save_directory)\n+                        strategy = obtain_merge_strategy(settings)\n+                        if strategy is None:\n+                            print(\"[yellow]Action cancelled.[/]\")\n+                            continue\n+\n+                        if strategy == \"adapter\":\n+                            model.model.save_pretrained(save_directory)\n+                        else:\n+                            merged_model = model.get_merged_model()\n+                            merged_model.save_pretrained(save_directory)\n+                            del merged_model\n+                            gc.collect()",
+    "repo_full_name": "p-e-w/heretic",
+    "discussion_comments": [
+      {
+        "comment_id": "2613861440",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 60,
+        "pr_file": "src/heretic/main.py",
+        "discussion_id": "2613861440",
+        "commented_code": "@@ -461,7 +530,20 @@ def objective_wrapper(trial: Trial) -> tuple[float, float]:\n                             continue\n \n                         print(\"Saving model...\")\n-                        model.model.save_pretrained(save_directory)\n+                        strategy = obtain_merge_strategy(settings)\n+                        if strategy is None:\n+                            print(\"[yellow]Action cancelled.[/]\")\n+                            continue\n+\n+                        if strategy == \"adapter\":\n+                            model.model.save_pretrained(save_directory)\n+                        else:\n+                            merged_model = model.get_merged_model()\n+                            merged_model.save_pretrained(save_directory)\n+                            del merged_model\n+                            gc.collect()",
+        "comment_created_at": "2025-12-12T11:18:36+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": "What is this for? Normally, it's a good idea to just let the Python GC do its thing. Were you seeing OOMs without it?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2614694115",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 60,
+        "pr_file": "src/heretic/main.py",
+        "discussion_id": "2613861440",
+        "commented_code": "@@ -461,7 +530,20 @@ def objective_wrapper(trial: Trial) -> tuple[float, float]:\n                             continue\n \n                         print(\"Saving model...\")\n-                        model.model.save_pretrained(save_directory)\n+                        strategy = obtain_merge_strategy(settings)\n+                        if strategy is None:\n+                            print(\"[yellow]Action cancelled.[/]\")\n+                            continue\n+\n+                        if strategy == \"adapter\":\n+                            model.model.save_pretrained(save_directory)\n+                        else:\n+                            merged_model = model.get_merged_model()\n+                            merged_model.save_pretrained(save_directory)\n+                            del merged_model\n+                            gc.collect()",
+        "comment_created_at": "2025-12-12T15:47:12+00:00",
+        "comment_author": "accemlcc",
+        "comment_body": "This is intentional for large models. Python's garbage collector uses thresholds optimized for many small objects. A single 100+ GB merged model tensor doesn't trigger immediate collection, which can cause temporary RAM spikes (old model + new model both in memory).\r\n\r\nExplicit gc.collect() here ensures the large merged model is freed immediately after save/upload, preventing OOMs on systems with limited RAM headroom.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2534846816",
+    "pr_number": 17,
+    "pr_file": "src/heretic/model.py",
+    "created_at": "2025-11-17T16:56:07+00:00",
+    "commented_code": ")\n \n     def reload_model(self):\n+        import gc\n+        \n         dtype = self.model.dtype\n \n         # Purge existing model object from memory to make space.\n         self.model = None\n+        gc.collect()",
+    "repo_full_name": "p-e-w/heretic",
+    "discussion_comments": [
+      {
+        "comment_id": "2534846816",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 17,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2534846816",
+        "commented_code": "@@ -83,10 +83,13 @@ def __init__(self, settings: Settings):\n             )\n \n     def reload_model(self):\n+        import gc\n+        \n         dtype = self.model.dtype\n \n         # Purge existing model object from memory to make space.\n         self.model = None\n+        gc.collect()",
+        "comment_created_at": "2025-11-17T16:56:07+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": "See other comment.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2535487715",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 17,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2534846816",
+        "commented_code": "@@ -83,10 +83,13 @@ def __init__(self, settings: Settings):\n             )\n \n     def reload_model(self):\n+        import gc\n+        \n         dtype = self.model.dtype\n \n         # Purge existing model object from memory to make space.\n         self.model = None\n+        gc.collect()",
+        "comment_created_at": "2025-11-17T20:55:51+00:00",
+        "comment_author": "kldzj",
+        "comment_body": "Turns out this one is required. I tested multiple times with and without this `gc.collect` and I find it to be essential to not get OOMs.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2536119136",
+    "pr_number": 17,
+    "pr_file": "src/heretic/model.py",
+    "created_at": "2025-11-18T02:44:22+00:00",
+    "commented_code": "dtype = self.model.dtype\n \n         # Purge existing model object from memory to make space.\n+        del self.model\n         self.model = None\n+        \n+        # Force garbage collection and clear cache\n+        # to ensure all references are released\n+        gc.collect()",
+    "repo_full_name": "p-e-w/heretic",
+    "discussion_comments": [
+      {
+        "comment_id": "2536119136",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 17,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2536119136",
+        "commented_code": "@@ -86,7 +87,12 @@ def reload_model(self):\n         dtype = self.model.dtype\n \n         # Purge existing model object from memory to make space.\n+        del self.model\n         self.model = None\n+        \n+        # Force garbage collection and clear cache\n+        # to ensure all references are released\n+        gc.collect()",
+        "comment_created_at": "2025-11-18T02:44:22+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": "As mentioned earlier, `empty_cache()` (next line) already calls `gc.collect()`, so this is redundant unless I'm missing something.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2536991307",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 17,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2536119136",
+        "commented_code": "@@ -86,7 +87,12 @@ def reload_model(self):\n         dtype = self.model.dtype\n \n         # Purge existing model object from memory to make space.\n+        del self.model\n         self.model = None\n+        \n+        # Force garbage collection and clear cache\n+        # to ensure all references are released\n+        gc.collect()",
+        "comment_created_at": "2025-11-18T09:06:26+00:00",
+        "comment_author": "kldzj",
+        "comment_body": "It's definitely doing something. Why it's necessary to call it before calling the pytorch purge methods I can't say for certain, but without garbage collection beforehand I'm getting OOM errors.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2537985388",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 17,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2536119136",
+        "commented_code": "@@ -86,7 +87,12 @@ def reload_model(self):\n         dtype = self.model.dtype\n \n         # Purge existing model object from memory to make space.\n+        del self.model\n         self.model = None\n+        \n+        # Force garbage collection and clear cache\n+        # to ensure all references are released\n+        gc.collect()",
+        "comment_created_at": "2025-11-18T12:30:09+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": ":confused: ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2536142415",
+    "pr_number": 17,
+    "pr_file": "src/heretic/model.py",
+    "created_at": "2025-11-18T02:58:38+00:00",
+    "commented_code": "layer_refusal_direction,\n                     layer_refusal_direction,\n                 ).to(self.model.dtype)\n-\n+                \n                 for matrix in matrices:\n                     # In-place subtraction is safe as we're not using Autograd.\n-                    matrix.sub_(weight * (projector @ matrix))\n-\n+                    # Ensure projector is on the same device as the matrix for multi-GPU support.\n+                    device_projector = projector.to(matrix.device)\n+                    matrix.sub_(weight * (device_projector @ matrix))\n+                    # Delete device-specific projector immediately to free memory\n+                    del device_projector",
+    "repo_full_name": "p-e-w/heretic",
+    "discussion_comments": [
+      {
+        "comment_id": "2536142415",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 17,
+        "pr_file": "src/heretic/model.py",
+        "discussion_id": "2536142415",
+        "commented_code": "@@ -202,11 +208,14 @@ def abliterate(\n                     layer_refusal_direction,\n                     layer_refusal_direction,\n                 ).to(self.model.dtype)\n-\n+                \n                 for matrix in matrices:\n                     # In-place subtraction is safe as we're not using Autograd.\n-                    matrix.sub_(weight * (projector @ matrix))\n-\n+                    # Ensure projector is on the same device as the matrix for multi-GPU support.\n+                    device_projector = projector.to(matrix.device)\n+                    matrix.sub_(weight * (device_projector @ matrix))\n+                    # Delete device-specific projector immediately to free memory\n+                    del device_projector",
+        "comment_created_at": "2025-11-18T02:58:38+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": "This also shouldn't be necessary, because either we loop and immediately overwrite `device_projector`, releasing the previous reference just like `del` does, or the method returns and `device_projector` goes out of scope, also releasing the reference.\r\n\r\nNote that in Python, `del x` does **not** call `x.__del__()`. The `__del__` method (which libraries like PyTorch use to clean up resources) is only called on object destruction, and the GC doesn't care whether a reference is released with `del` or by overwriting it with another value. If you want to make sure memory is released immediately, you have to follow up `del` with `gc.collect()`. But since you got this working without it and `gc.collect()` is already called on each trial anyway, there's probably no need for this line at all.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2534516594",
+    "pr_number": 15,
+    "pr_file": "src/heretic/main.py",
+    "created_at": "2025-11-17T15:23:52+00:00",
+    "commented_code": "model.abliterate(refusal_directions, direction_index, parameters)\n         print(\"* Evaluating...\")\n         score, kl_divergence, refusals = evaluator.get_score()\n-\n+        # free memory between trials\n+        empty_cache()",
+    "repo_full_name": "p-e-w/heretic",
+    "discussion_comments": [
+      {
+        "comment_id": "2534516594",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 15,
+        "pr_file": "src/heretic/main.py",
+        "discussion_id": "2534516594",
+        "commented_code": "@@ -279,7 +283,8 @@ def objective(trial: Trial) -> tuple[float, float]:\n         model.abliterate(refusal_directions, direction_index, parameters)\n         print(\"* Evaluating...\")\n         score, kl_divergence, refusals = evaluator.get_score()\n-\n+        # free memory between trials\n+        empty_cache()",
+        "comment_created_at": "2025-11-17T15:23:52+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": "This is done by `reload_model()` already, which happens at the start of each trial. I'd be very surprised if that line makes a difference because we're literally milliseconds away from calling that function anyway.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2534523960",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 15,
+        "pr_file": "src/heretic/main.py",
+        "discussion_id": "2534516594",
+        "commented_code": "@@ -279,7 +283,8 @@ def objective(trial: Trial) -> tuple[float, float]:\n         model.abliterate(refusal_directions, direction_index, parameters)\n         print(\"* Evaluating...\")\n         score, kl_divergence, refusals = evaluator.get_score()\n-\n+        # free memory between trials\n+        empty_cache()",
+        "comment_created_at": "2025-11-17T15:25:46+00:00",
+        "comment_author": "red40maxxer",
+        "comment_body": "oops you're right, i'll remove that line",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2534543201",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 15,
+        "pr_file": "src/heretic/main.py",
+        "discussion_id": "2534516594",
+        "commented_code": "@@ -279,7 +283,8 @@ def objective(trial: Trial) -> tuple[float, float]:\n         model.abliterate(refusal_directions, direction_index, parameters)\n         print(\"* Evaluating...\")\n         score, kl_divergence, refusals = evaluator.get_score()\n-\n+        # free memory between trials\n+        empty_cache()",
+        "comment_created_at": "2025-11-17T15:31:27+00:00",
+        "comment_author": "p-e-w",
+        "comment_body": "Can you retest and check if the performance gain is still there with just the residuals garbage collected?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2534664617",
+        "repo_full_name": "p-e-w/heretic",
+        "pr_number": 15,
+        "pr_file": "src/heretic/main.py",
+        "discussion_id": "2534516594",
+        "commented_code": "@@ -279,7 +283,8 @@ def objective(trial: Trial) -> tuple[float, float]:\n         model.abliterate(refusal_directions, direction_index, parameters)\n         print(\"* Evaluating...\")\n         score, kl_divergence, refusals = evaluator.get_score()\n-\n+        # free memory between trials\n+        empty_cache()",
+        "comment_created_at": "2025-11-17T16:03:40+00:00",
+        "comment_author": "red40maxxer",
+        "comment_body": "Memory usage without residual gc:\r\n```\r\n\u2588\u2591\u2588\u2591\u2588\u2580\u2580\u2591\u2588\u2580\u2584\u2591\u2588\u2580\u2580\u2591\u2580\u2588\u2580\u2591\u2588\u2591\u2588\u2580\u2580  v1.0.1\r\n\u2588\u2580\u2588\u2591\u2588\u2580\u2580\u2591\u2588\u2580\u2584\u2591\u2588\u2580\u2580\u2591\u2591\u2588\u2591\u2591\u2588\u2591\u2588\u2591\u2591\r\n\u2580\u2591\u2580\u2591\u2580\u2580\u2580\u2591\u2580\u2591\u2580\u2591\u2580\u2580\u2580\u2591\u2591\u2580\u2591\u2591\u2580\u2591\u2580\u2580\u2580  https://github.com/p-e-w/heretic\r\n\r\nGPU type: NVIDIA GeForce RTX 4060 Laptop GPU\r\n\r\nLoading model Qwen/Qwen3-0.6B...\r\n* Trying dtype auto... Ok\r\n* Transformer model with 28 layers\r\n* Abliterable components:\r\n  * attn.o_proj: 1 matrices per layer\r\n  * mlp.down_proj: 1 matrices per layer\r\n\r\nLoading good prompts from mlabonne/harmless_alpaca...\r\n* 400 prompts loaded\r\n\r\nLoading bad prompts from mlabonne/harmful_behaviors...\r\n* 400 prompts loaded\r\n\r\nLoading good evaluation prompts from mlabonne/harmless_alpaca...\r\n* 100 prompts loaded\r\n* Obtaining first-token probability distributions...\r\n\r\nLoading bad evaluation prompts from mlabonne/harmful_behaviors...\r\n* 100 prompts loaded\r\n* Counting model refusals...\r\n* Initial refusals: 52/100\r\n\r\nCalculating per-layer refusal directions...\r\nGPU memory before residuals: 1261976064 (peak so far: 3135785472)\r\n* Obtaining residuals for good prompts...\r\n* Obtaining residuals for bad prompts...\r\nGPU memory after residuals: 1358445056 (peak so far: 3135785472)\r\nGPU memory after clearing residuals: 1358563840 (peak so far: 3135785472)\r\n```\r\nWith GC:\r\n```\r\n\u2588\u2591\u2588\u2591\u2588\u2580\u2580\u2591\u2588\u2580\u2584\u2591\u2588\u2580\u2580\u2591\u2580\u2588\u2580\u2591\u2588\u2591\u2588\u2580\u2580  v1.0.1\r\n\u2588\u2580\u2588\u2591\u2588\u2580\u2580\u2591\u2588\u2580\u2584\u2591\u2588\u2580\u2580\u2591\u2591\u2588\u2591\u2591\u2588\u2591\u2588\u2591\u2591\r\n\u2580\u2591\u2580\u2591\u2580\u2580\u2580\u2591\u2580\u2591\u2580\u2591\u2580\u2580\u2580\u2591\u2591\u2580\u2591\u2591\u2580\u2591\u2580\u2580\u2580  https://github.com/p-e-w/heretic\r\n\r\nGPU type: NVIDIA GeForce RTX 4060 Laptop GPU\r\n\r\nLoading model Qwen/Qwen3-0.6B...\r\n* Trying dtype auto... Ok\r\n* Transformer model with 28 layers\r\n* Abliterable components:\r\n  * attn.o_proj: 1 matrices per layer\r\n  * mlp.down_proj: 1 matrices per layer\r\n\r\nLoading good prompts from mlabonne/harmless_alpaca...\r\n* 400 prompts loaded\r\n\r\nLoading bad prompts from mlabonne/harmful_behaviors...\r\n* 400 prompts loaded\r\n\r\nLoading good evaluation prompts from mlabonne/harmless_alpaca...\r\n* 100 prompts loaded\r\n* Obtaining first-token probability distributions...\r\n\r\nLoading bad evaluation prompts from mlabonne/harmful_behaviors...\r\n* 100 prompts loaded\r\n* Counting model refusals...\r\n* Initial refusals: 52/100\r\n\r\nCalculating per-layer refusal directions...\r\nGPU memory before residuals: 1261976064 (peak so far: 3135785472)\r\n* Obtaining residuals for good prompts...\r\n* Obtaining residuals for bad prompts...\r\nGPU memory after residuals: 1358445056 (peak so far: 3135785472)\r\nGPU memory after clearing residuals: 1262094848 (peak so far: 3135785472)\r\n```\r\nSo we save ~100MB by clearing the residuals but it doesn't reduce the peak usage, it would scale with number of prompts I think? ",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

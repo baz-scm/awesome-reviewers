@@ -1,0 +1,58 @@
+[
+  {
+    "discussion_id": "1568130126",
+    "pr_number": 578,
+    "pr_file": "wavesrv/pkg/blockstore/blockstore.go",
+    "created_at": "2024-04-17T02:28:09+00:00",
+    "commented_code": "+package blockstore\n+\n+import (\n+\t\"context\"\n+\t\"encoding/json\"\n+\t\"fmt\"\n+\t\"math\"\n+\t\"sync\"\n+\t\"time\"\n+\n+\t\"github.com/alecthomas/units\"\n+)\n+\n+type FileOptsType struct {\n+\tMaxSize  int64\n+\tCircular bool\n+\tIJson    bool\n+}\n+\n+type FileMeta = map[string]any\n+\n+type FileInfo struct {\n+\tBlockId   string\n+\tName      string\n+\tSize      int64\n+\tCreatedTs int64\n+\tModTs     int64\n+\tOpts      FileOptsType\n+\tMeta      FileMeta\n+}\n+\n+const MaxBlockSize = int64(128 * units.Kilobyte)\n+\n+type CacheEntry struct {\n+\tLock       *sync.Mutex\n+\tCacheTs    int64\n+\tInfo       FileInfo\n+\tDataBlocks []*CacheBlock\n+}\n+\n+type CacheBlock struct {\n+\tdata []byte\n+\tsize int\n+}\n+\n+func MakeCacheEntry(info FileInfo) *CacheEntry {\n+\trtn := &CacheEntry{Lock: &sync.Mutex{}, CacheTs: int64(time.Now().UnixMilli()), Info: info, DataBlocks: []*CacheBlock{}}\n+\treturn rtn\n+}\n+\n+// add ctx context.Context to all these methods\n+type BlockStore interface {\n+\tMakeFile(ctx context.Context, blockId string, name string, meta FileMeta, opts FileOptsType) error\n+\tWriteFile(ctx context.Context, blockId string, name string, meta FileMeta, data []byte) error\n+\tAppendData(ctx context.Context, blockId string, name string, p []byte) error\n+\tWriteAt(ctx context.Context, blockId string, name string, p []byte, off int64) (int, error)\n+\tReadAt(ctx context.Context, blockId string, name string, p *[]byte, off int64) (int, error)\n+\tStat(ctx context.Context, blockId string, name string) (FileInfo, error)\n+\tCollapseIJson(ctx context.Context, blockId string, name string) error\n+\tWriteMeta(ctx context.Context, blockId string, name string, meta FileMeta) error\n+\tDeleteFile(ctx context.Context, blockId string, name string) error\n+\tDeleteBlock(ctx context.Context, blockId string) error\n+\tListFiles(ctx context.Context, blockId string) []FileInfo\n+\tFlushCache(ctx context.Context) error\n+\tGetAllBlockIds(ctx context.Context) []string\n+}\n+\n+var cache map[string]*CacheEntry = make(map[string]*CacheEntry)\n+\n+func InsertFileIntoDB(ctx context.Context, fileInfo FileInfo) error {\n+\tmetaJson, err := json.Marshal(fileInfo.Meta)\n+\tif err != nil {\n+\t\treturn fmt.Errorf(\"Error writing file %s to db: %v\", fileInfo.Name, err)\n+\t}\n+\ttxErr := WithTx(ctx, func(tx *TxWrap) error {\n+\t\tquery := `INSERT INTO block_file VALUES (?, ?, ?, ?, ?, ?, ?, ?)`\n+\t\ttx.Exec(query, fileInfo.BlockId, fileInfo.Name, fileInfo.Opts.MaxSize, fileInfo.Opts.Circular, fileInfo.Size, fileInfo.CreatedTs, fileInfo.ModTs, metaJson)\n+\t\treturn nil\n+\t})\n+\tif txErr != nil {\n+\t\treturn fmt.Errorf(\"Error writing file %s to db: %v\", fileInfo.Name, txErr)\n+\t}\n+\treturn nil\n+}\n+\n+func WriteFileToDB(ctx context.Context, fileInfo FileInfo) error {",
+    "repo_full_name": "wavetermdev/waveterm",
+    "discussion_comments": [
+      {
+        "comment_id": "1568130126",
+        "repo_full_name": "wavetermdev/waveterm",
+        "pr_number": 578,
+        "pr_file": "wavesrv/pkg/blockstore/blockstore.go",
+        "discussion_id": "1568130126",
+        "commented_code": "@@ -0,0 +1,389 @@\n+package blockstore\n+\n+import (\n+\t\"context\"\n+\t\"encoding/json\"\n+\t\"fmt\"\n+\t\"math\"\n+\t\"sync\"\n+\t\"time\"\n+\n+\t\"github.com/alecthomas/units\"\n+)\n+\n+type FileOptsType struct {\n+\tMaxSize  int64\n+\tCircular bool\n+\tIJson    bool\n+}\n+\n+type FileMeta = map[string]any\n+\n+type FileInfo struct {\n+\tBlockId   string\n+\tName      string\n+\tSize      int64\n+\tCreatedTs int64\n+\tModTs     int64\n+\tOpts      FileOptsType\n+\tMeta      FileMeta\n+}\n+\n+const MaxBlockSize = int64(128 * units.Kilobyte)\n+\n+type CacheEntry struct {\n+\tLock       *sync.Mutex\n+\tCacheTs    int64\n+\tInfo       FileInfo\n+\tDataBlocks []*CacheBlock\n+}\n+\n+type CacheBlock struct {\n+\tdata []byte\n+\tsize int\n+}\n+\n+func MakeCacheEntry(info FileInfo) *CacheEntry {\n+\trtn := &CacheEntry{Lock: &sync.Mutex{}, CacheTs: int64(time.Now().UnixMilli()), Info: info, DataBlocks: []*CacheBlock{}}\n+\treturn rtn\n+}\n+\n+// add ctx context.Context to all these methods\n+type BlockStore interface {\n+\tMakeFile(ctx context.Context, blockId string, name string, meta FileMeta, opts FileOptsType) error\n+\tWriteFile(ctx context.Context, blockId string, name string, meta FileMeta, data []byte) error\n+\tAppendData(ctx context.Context, blockId string, name string, p []byte) error\n+\tWriteAt(ctx context.Context, blockId string, name string, p []byte, off int64) (int, error)\n+\tReadAt(ctx context.Context, blockId string, name string, p *[]byte, off int64) (int, error)\n+\tStat(ctx context.Context, blockId string, name string) (FileInfo, error)\n+\tCollapseIJson(ctx context.Context, blockId string, name string) error\n+\tWriteMeta(ctx context.Context, blockId string, name string, meta FileMeta) error\n+\tDeleteFile(ctx context.Context, blockId string, name string) error\n+\tDeleteBlock(ctx context.Context, blockId string) error\n+\tListFiles(ctx context.Context, blockId string) []FileInfo\n+\tFlushCache(ctx context.Context) error\n+\tGetAllBlockIds(ctx context.Context) []string\n+}\n+\n+var cache map[string]*CacheEntry = make(map[string]*CacheEntry)\n+\n+func InsertFileIntoDB(ctx context.Context, fileInfo FileInfo) error {\n+\tmetaJson, err := json.Marshal(fileInfo.Meta)\n+\tif err != nil {\n+\t\treturn fmt.Errorf(\"Error writing file %s to db: %v\", fileInfo.Name, err)\n+\t}\n+\ttxErr := WithTx(ctx, func(tx *TxWrap) error {\n+\t\tquery := `INSERT INTO block_file VALUES (?, ?, ?, ?, ?, ?, ?, ?)`\n+\t\ttx.Exec(query, fileInfo.BlockId, fileInfo.Name, fileInfo.Opts.MaxSize, fileInfo.Opts.Circular, fileInfo.Size, fileInfo.CreatedTs, fileInfo.ModTs, metaJson)\n+\t\treturn nil\n+\t})\n+\tif txErr != nil {\n+\t\treturn fmt.Errorf(\"Error writing file %s to db: %v\", fileInfo.Name, txErr)\n+\t}\n+\treturn nil\n+}\n+\n+func WriteFileToDB(ctx context.Context, fileInfo FileInfo) error {",
+        "comment_created_at": "2024-04-17T02:28:09+00:00",
+        "comment_author": "MrStashley",
+        "comment_body": "Should prob move these to the dbops file",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1568130321",
+        "repo_full_name": "wavetermdev/waveterm",
+        "pr_number": 578,
+        "pr_file": "wavesrv/pkg/blockstore/blockstore.go",
+        "discussion_id": "1568130126",
+        "commented_code": "@@ -0,0 +1,389 @@\n+package blockstore\n+\n+import (\n+\t\"context\"\n+\t\"encoding/json\"\n+\t\"fmt\"\n+\t\"math\"\n+\t\"sync\"\n+\t\"time\"\n+\n+\t\"github.com/alecthomas/units\"\n+)\n+\n+type FileOptsType struct {\n+\tMaxSize  int64\n+\tCircular bool\n+\tIJson    bool\n+}\n+\n+type FileMeta = map[string]any\n+\n+type FileInfo struct {\n+\tBlockId   string\n+\tName      string\n+\tSize      int64\n+\tCreatedTs int64\n+\tModTs     int64\n+\tOpts      FileOptsType\n+\tMeta      FileMeta\n+}\n+\n+const MaxBlockSize = int64(128 * units.Kilobyte)\n+\n+type CacheEntry struct {\n+\tLock       *sync.Mutex\n+\tCacheTs    int64\n+\tInfo       FileInfo\n+\tDataBlocks []*CacheBlock\n+}\n+\n+type CacheBlock struct {\n+\tdata []byte\n+\tsize int\n+}\n+\n+func MakeCacheEntry(info FileInfo) *CacheEntry {\n+\trtn := &CacheEntry{Lock: &sync.Mutex{}, CacheTs: int64(time.Now().UnixMilli()), Info: info, DataBlocks: []*CacheBlock{}}\n+\treturn rtn\n+}\n+\n+// add ctx context.Context to all these methods\n+type BlockStore interface {\n+\tMakeFile(ctx context.Context, blockId string, name string, meta FileMeta, opts FileOptsType) error\n+\tWriteFile(ctx context.Context, blockId string, name string, meta FileMeta, data []byte) error\n+\tAppendData(ctx context.Context, blockId string, name string, p []byte) error\n+\tWriteAt(ctx context.Context, blockId string, name string, p []byte, off int64) (int, error)\n+\tReadAt(ctx context.Context, blockId string, name string, p *[]byte, off int64) (int, error)\n+\tStat(ctx context.Context, blockId string, name string) (FileInfo, error)\n+\tCollapseIJson(ctx context.Context, blockId string, name string) error\n+\tWriteMeta(ctx context.Context, blockId string, name string, meta FileMeta) error\n+\tDeleteFile(ctx context.Context, blockId string, name string) error\n+\tDeleteBlock(ctx context.Context, blockId string) error\n+\tListFiles(ctx context.Context, blockId string) []FileInfo\n+\tFlushCache(ctx context.Context) error\n+\tGetAllBlockIds(ctx context.Context) []string\n+}\n+\n+var cache map[string]*CacheEntry = make(map[string]*CacheEntry)\n+\n+func InsertFileIntoDB(ctx context.Context, fileInfo FileInfo) error {\n+\tmetaJson, err := json.Marshal(fileInfo.Meta)\n+\tif err != nil {\n+\t\treturn fmt.Errorf(\"Error writing file %s to db: %v\", fileInfo.Name, err)\n+\t}\n+\ttxErr := WithTx(ctx, func(tx *TxWrap) error {\n+\t\tquery := `INSERT INTO block_file VALUES (?, ?, ?, ?, ?, ?, ?, ?)`\n+\t\ttx.Exec(query, fileInfo.BlockId, fileInfo.Name, fileInfo.Opts.MaxSize, fileInfo.Opts.Circular, fileInfo.Size, fileInfo.CreatedTs, fileInfo.ModTs, metaJson)\n+\t\treturn nil\n+\t})\n+\tif txErr != nil {\n+\t\treturn fmt.Errorf(\"Error writing file %s to db: %v\", fileInfo.Name, txErr)\n+\t}\n+\treturn nil\n+}\n+\n+func WriteFileToDB(ctx context.Context, fileInfo FileInfo) error {",
+        "comment_created_at": "2024-04-17T02:28:34+00:00",
+        "comment_author": "MrStashley",
+        "comment_body": "also can combine this function and the above using REPLACE syntax",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1427607971",
+    "pr_number": 147,
+    "pr_file": "wavesrv/pkg/sstore/sstore.go",
+    "created_at": "2023-12-15T06:40:47+00:00",
+    "commented_code": "})\n \treturn txErr\n }\n+\n+func SetReleaseInfo(ctx context.Context, releaseInfo ReleaseInfoType) error {\n+\ttxErr := WithTx(ctx, func(tx *TxWrap) error {\n+\t\tquery := `UPDATE client SET releaseinfo = ?`",
+    "repo_full_name": "wavetermdev/waveterm",
+    "discussion_comments": [
+      {
+        "comment_id": "1427607971",
+        "repo_full_name": "wavetermdev/waveterm",
+        "pr_number": 147,
+        "pr_file": "wavesrv/pkg/sstore/sstore.go",
+        "discussion_id": "1427607971",
+        "commented_code": "@@ -1310,3 +1319,12 @@ func SetClientOpts(ctx context.Context, clientOpts ClientOptsType) error {\n \t})\n \treturn txErr\n }\n+\n+func SetReleaseInfo(ctx context.Context, releaseInfo ReleaseInfoType) error {\n+\ttxErr := WithTx(ctx, func(tx *TxWrap) error {\n+\t\tquery := `UPDATE client SET releaseinfo = ?`",
+        "comment_created_at": "2023-12-15T06:40:47+00:00",
+        "comment_author": "sawka",
+        "comment_body": "you're going to need to use quickJson() here to convert releaseinfo to a string for sqlite",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

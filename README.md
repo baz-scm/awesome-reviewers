@@ -59,6 +59,7 @@ No installation or CLI is required to use Awesome Reviewers – the content is r
 
 This repository ships with a Python CLI (`tools/awesome2claude.py`) that converts the prompts in `_reviewers/` into [Anthropic Claude Skills](https://github.com/anthropics/claude-skills) folders. The tool will clone or update the AwesomeReviewers repository, parse each prompt’s YAML front matter, and generate a Claude-compatible `SKILL.md` file for every reviewer.
 
+- [guardian-agent-prompts](https://github.com/milkomida77/guardian-agent-prompts) - 49 production-tested AI agent system prompts including code review, security audit, and quality testing agents for Claude Code. MIT licensed.
 ### Installation
 
 ```bash

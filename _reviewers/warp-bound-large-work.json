@@ -1,0 +1,238 @@
+[
+  {
+    "discussion_id": "3202755157",
+    "pr_number": 9834,
+    "pr_file": "app/src/terminal/view.rs",
+    "created_at": "2026-05-07T15:42:41+00:00",
+    "commented_code": "fn handle_theme_change(&mut self, ctx: &mut ViewContext<Self>) {\n         let appearance = Appearance::as_ref(ctx);\n         let colors = color::List::from(&appearance.theme().clone().into());\n-        let mut model = self.model.lock();\n-        model.update_colors(colors);\n+        // LightOnDark = light foreground on dark background = dark mode.\n+        let is_dark = appearance.theme().inferred_color_scheme() == ColorScheme::LightOnDark;\n+        let should_notify = {\n+            let mut model = self.model.lock();\n+            let classification_changed = model.is_dark_mode() != is_dark;\n+            model.update_colors(colors);\n+            model.set_color_scheme(is_dark);\n+            // Only notify if the dark/light classification changed. Switching between\n+            // two themes that are both dark (or both light) does not warrant a\n+            // notification.\n+            classification_changed && model.is_term_mode_set(TermMode::DARK_LIGHT_NOTIFICATIONS)\n+        };\n         self.colors = colors;\n+        if should_notify {\n+            // CSI ? 997 ; 1 n = dark mode, CSI ? 997 ; 2 n = light mode\n+            let code: u8 = if is_dark { 1 } else { 2 };\n+            let notification = format!(\"\\x1b[?997;{code}n\");\n+            self.write_to_pty(notification.into_bytes(), ctx);",
+    "repo_full_name": "warpdotdev/warp",
+    "discussion_comments": [
+      {
+        "comment_id": "3202755157",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 9834,
+        "pr_file": "app/src/terminal/view.rs",
+        "discussion_id": "3202755157",
+        "commented_code": "@@ -21273,9 +21274,25 @@ impl TerminalView {\n     fn handle_theme_change(&mut self, ctx: &mut ViewContext<Self>) {\n         let appearance = Appearance::as_ref(ctx);\n         let colors = color::List::from(&appearance.theme().clone().into());\n-        let mut model = self.model.lock();\n-        model.update_colors(colors);\n+        // LightOnDark = light foreground on dark background = dark mode.\n+        let is_dark = appearance.theme().inferred_color_scheme() == ColorScheme::LightOnDark;\n+        let should_notify = {\n+            let mut model = self.model.lock();\n+            let classification_changed = model.is_dark_mode() != is_dark;\n+            model.update_colors(colors);\n+            model.set_color_scheme(is_dark);\n+            // Only notify if the dark/light classification changed. Switching between\n+            // two themes that are both dark (or both light) does not warrant a\n+            // notification.\n+            classification_changed && model.is_term_mode_set(TermMode::DARK_LIGHT_NOTIFICATIONS)\n+        };\n         self.colors = colors;\n+        if should_notify {\n+            // CSI ? 997 ; 1 n = dark mode, CSI ? 997 ; 2 n = light mode\n+            let code: u8 = if is_dark { 1 } else { 2 };\n+            let notification = format!(\"\\x1b[?997;{code}n\");\n+            self.write_to_pty(notification.into_bytes(), ctx);",
+        "comment_created_at": "2026-05-07T15:42:41+00:00",
+        "comment_author": "alokedesai",
+        "comment_body": "we should only write to the PTY here if there's an actual long running command ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3179548105",
+    "pr_number": 9831,
+    "pr_file": "app/src/terminal/writeable_pty/pty_controller.rs",
+    "created_at": "2026-05-04T05:31:45+00:00",
+    "commented_code": "self.write_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);\n                 self.write_terminating_bootstrap_bytes(ctx);\n             }\n+        } else if bootstrap::is_container_subshell(pending_session_info) {\n+            // Write in 4KB chunks with 50ms delays to avoid overwhelming\n+            // PTY buffers in container exec sessions (podman/docker exec -it),\n+            // where the double-PTY proxy drops data for large writes.\n+            const CHUNK_SIZE: usize = 4096;\n+            let bytes: Vec<u8> = bootstrap.into_owned();\n+            let chunks: Vec<Vec<u8>> = bytes.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();\n+            for (i, chunk) in chunks.into_iter().enumerate() {\n+                ctx.spawn(\n+                    warpui::r#async::Timer::after(std::time::Duration::from_millis(i as u64 * 50)),",
+    "repo_full_name": "warpdotdev/warp",
+    "discussion_comments": [
+      {
+        "comment_id": "3179548105",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 9831,
+        "pr_file": "app/src/terminal/writeable_pty/pty_controller.rs",
+        "discussion_id": "3179548105",
+        "commented_code": "@@ -468,6 +468,19 @@ impl<T: EventLoopSender> PtyController<T> {\n                 self.write_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);\n                 self.write_terminating_bootstrap_bytes(ctx);\n             }\n+        } else if bootstrap::is_container_subshell(pending_session_info) {\n+            // Write in 4KB chunks with 50ms delays to avoid overwhelming\n+            // PTY buffers in container exec sessions (podman/docker exec -it),\n+            // where the double-PTY proxy drops data for large writes.\n+            const CHUNK_SIZE: usize = 4096;\n+            let bytes: Vec<u8> = bootstrap.into_owned();\n+            let chunks: Vec<Vec<u8>> = bytes.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();\n+            for (i, chunk) in chunks.into_iter().enumerate() {\n+                ctx.spawn(\n+                    warpui::r#async::Timer::after(std::time::Duration::from_millis(i as u64 * 50)),",
+        "comment_created_at": "2026-05-04T05:31:45+00:00",
+        "comment_author": "zachbai",
+        "comment_body": "how much testing did u do on the interval/chunk size here? Its not a huge deal but given our bootstrap script is ~70kb this probably means it takes about a second to feed everything in? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3182312541",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 9831,
+        "pr_file": "app/src/terminal/writeable_pty/pty_controller.rs",
+        "discussion_id": "3179548105",
+        "commented_code": "@@ -468,6 +468,19 @@ impl<T: EventLoopSender> PtyController<T> {\n                 self.write_bytes(escape_sequences::BRACKETED_PASTE_END, ctx);\n                 self.write_terminating_bootstrap_bytes(ctx);\n             }\n+        } else if bootstrap::is_container_subshell(pending_session_info) {\n+            // Write in 4KB chunks with 50ms delays to avoid overwhelming\n+            // PTY buffers in container exec sessions (podman/docker exec -it),\n+            // where the double-PTY proxy drops data for large writes.\n+            const CHUNK_SIZE: usize = 4096;\n+            let bytes: Vec<u8> = bootstrap.into_owned();\n+            let chunks: Vec<Vec<u8>> = bytes.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();\n+            for (i, chunk) in chunks.into_iter().enumerate() {\n+                ctx.spawn(\n+                    warpui::r#async::Timer::after(std::time::Duration::from_millis(i as u64 * 50)),",
+        "comment_created_at": "2026-05-04T14:37:49+00:00",
+        "comment_author": "djdanielsson",
+        "comment_body": "We tested progressively larger single writes through `podman exec -it` (1KB, 2KB, 4KB, 8KB, 16KB, 32KB) and found the PTY buffer threshold is between 8\u201316KB \u2014 everything up to 8KB succeeded, 16KB+ failed. The minified bootstrap is ~32KB (comments are stripped), so 4KB chunks give solid margin below the threshold. The 50ms delay was a conservative choice \u2014 we didn't sweep different delay values, so it could likely be reduced if the ~400ms total overhead (8 chunks \u00d7 50ms) is a concern. Either way it only applies to docker/podman subshells, so normal sessions are unaffected.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3179790574",
+    "pr_number": 9653,
+    "pr_file": "app/src/ai/blocklist/block.rs",
+    "created_at": "2026-05-04T06:47:57+00:00",
+    "commented_code": "ctx.subscribe_to_model(&agent_view_controller, |_, _, _, ctx| ctx.notify());\n         }\n \n+        // Re-render when the cloud agent transitions through setup phases so the response\n+        // footer toggles correctly with `is_cloud_agent_pre_first_exchange`. Each event below\n+        // toggles that helper's output.\n+        if let Some(ambient_agent_view_model) = ambient_agent_view_model.as_ref() {\n+            ctx.subscribe_to_model(ambient_agent_view_model, |_, _, event, ctx| {\n+                if matches!(\n+                    event,\n+                    AmbientAgentViewModelEvent::DispatchedAgent\n+                        | AmbientAgentViewModelEvent::FollowupDispatched\n+                        | AmbientAgentViewModelEvent::SessionReady { .. }\n+                        | AmbientAgentViewModelEvent::FollowupSessionReady { .. }\n+                        | AmbientAgentViewModelEvent::Failed { .. }\n+                        | AmbientAgentViewModelEvent::Cancelled\n+                        | AmbientAgentViewModelEvent::NeedsGithubAuth\n+                        | AmbientAgentViewModelEvent::HarnessCommandStarted\n+                ) {\n+                    ctx.notify();",
+    "repo_full_name": "warpdotdev/warp",
+    "discussion_comments": [
+      {
+        "comment_id": "3179790574",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 9653,
+        "pr_file": "app/src/ai/blocklist/block.rs",
+        "discussion_id": "3179790574",
+        "commented_code": "@@ -1205,6 +1205,27 @@ impl AIBlock {\n             ctx.subscribe_to_model(&agent_view_controller, |_, _, _, ctx| ctx.notify());\n         }\n \n+        // Re-render when the cloud agent transitions through setup phases so the response\n+        // footer toggles correctly with `is_cloud_agent_pre_first_exchange`. Each event below\n+        // toggles that helper's output.\n+        if let Some(ambient_agent_view_model) = ambient_agent_view_model.as_ref() {\n+            ctx.subscribe_to_model(ambient_agent_view_model, |_, _, event, ctx| {\n+                if matches!(\n+                    event,\n+                    AmbientAgentViewModelEvent::DispatchedAgent\n+                        | AmbientAgentViewModelEvent::FollowupDispatched\n+                        | AmbientAgentViewModelEvent::SessionReady { .. }\n+                        | AmbientAgentViewModelEvent::FollowupSessionReady { .. }\n+                        | AmbientAgentViewModelEvent::Failed { .. }\n+                        | AmbientAgentViewModelEvent::Cancelled\n+                        | AmbientAgentViewModelEvent::NeedsGithubAuth\n+                        | AmbientAgentViewModelEvent::HarnessCommandStarted\n+                ) {\n+                    ctx.notify();",
+        "comment_created_at": "2026-05-04T06:47:57+00:00",
+        "comment_author": "zachbai",
+        "comment_body": "This seems pretty inefficient-  it doesn't seem right to trigger render for every AI block based on status updates at the task level. Can we either unsubscribe after a certain point or listen to a more granular event",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3183166195",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 9653,
+        "pr_file": "app/src/ai/blocklist/block.rs",
+        "discussion_id": "3179790574",
+        "commented_code": "@@ -1205,6 +1205,27 @@ impl AIBlock {\n             ctx.subscribe_to_model(&agent_view_controller, |_, _, _, ctx| ctx.notify());\n         }\n \n+        // Re-render when the cloud agent transitions through setup phases so the response\n+        // footer toggles correctly with `is_cloud_agent_pre_first_exchange`. Each event below\n+        // toggles that helper's output.\n+        if let Some(ambient_agent_view_model) = ambient_agent_view_model.as_ref() {\n+            ctx.subscribe_to_model(ambient_agent_view_model, |_, _, event, ctx| {\n+                if matches!(\n+                    event,\n+                    AmbientAgentViewModelEvent::DispatchedAgent\n+                        | AmbientAgentViewModelEvent::FollowupDispatched\n+                        | AmbientAgentViewModelEvent::SessionReady { .. }\n+                        | AmbientAgentViewModelEvent::FollowupSessionReady { .. }\n+                        | AmbientAgentViewModelEvent::Failed { .. }\n+                        | AmbientAgentViewModelEvent::Cancelled\n+                        | AmbientAgentViewModelEvent::NeedsGithubAuth\n+                        | AmbientAgentViewModelEvent::HarnessCommandStarted\n+                ) {\n+                    ctx.notify();",
+        "comment_created_at": "2026-05-04T17:07:15+00:00",
+        "comment_author": "harryalbert",
+        "comment_body": "yeah good point \u2014 I think unsubscribing makes sense",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3179733614",
+    "pr_number": 9553,
+    "pr_file": "app/src/terminal/view/use_agent_footer/mod.rs",
+    "created_at": "2026-05-04T06:33:39+00:00",
+    "commented_code": ");\n     }\n \n+    /// Mirrors the CLI-agent Cmd+V image-paste path in `TerminalView::paste`\n+    /// for dropped image files: reads each file, writes its bytes to the\n+    /// system clipboard as image data, and sends the agent's paste keystroke\n+    /// to the PTY so the agent reads the image directly. This produces the\n+    /// same outcome as if the user had copied the image to their clipboard\n+    /// and pressed Cmd+V over the agent's TUI.\n+    pub(in crate::terminal) fn paste_dropped_images_to_cli_agent(\n+        &mut self,\n+        image_filepaths: Vec<String>,\n+        ctx: &mut ViewContext<Self>,\n+    ) {\n+        if image_filepaths.is_empty() {\n+            return;\n+        }\n+        let spawner = ctx.spawner();\n+        ctx.spawn(\n+            async move {\n+                for path_str in image_filepaths {\n+                    let bytes = match async_fs::read(&path_str).await {",
+    "repo_full_name": "warpdotdev/warp",
+    "discussion_comments": [
+      {
+        "comment_id": "3179733614",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 9553,
+        "pr_file": "app/src/terminal/view/use_agent_footer/mod.rs",
+        "discussion_id": "3179733614",
+        "commented_code": "@@ -817,6 +833,92 @@ impl TerminalView {\n         );\n     }\n \n+    /// Mirrors the CLI-agent Cmd+V image-paste path in `TerminalView::paste`\n+    /// for dropped image files: reads each file, writes its bytes to the\n+    /// system clipboard as image data, and sends the agent's paste keystroke\n+    /// to the PTY so the agent reads the image directly. This produces the\n+    /// same outcome as if the user had copied the image to their clipboard\n+    /// and pressed Cmd+V over the agent's TUI.\n+    pub(in crate::terminal) fn paste_dropped_images_to_cli_agent(\n+        &mut self,\n+        image_filepaths: Vec<String>,\n+        ctx: &mut ViewContext<Self>,\n+    ) {\n+        if image_filepaths.is_empty() {\n+            return;\n+        }\n+        let spawner = ctx.spawner();\n+        ctx.spawn(\n+            async move {\n+                for path_str in image_filepaths {\n+                    let bytes = match async_fs::read(&path_str).await {",
+        "comment_created_at": "2026-05-04T06:33:39+00:00",
+        "comment_author": "advait-m",
+        "comment_body": "There's a slight risk here of allocating a massive image, since there's no inherent limits (system clipboard has pretty high limits of images). Can we add in a check and inform user via a toast if we have an error? Would appreciate if you could test this path manually too with a massive image!\n\n`MAX_IMAGE_SIZE_BYTES` is too low probably since CLI agents can handle the compression for us here, so maybe we can introduce a new `MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT` constant that is like 500 MB for a reasonable very high limit?\n\nlittle snippet (won't exactly look like this but directionally):\n```\nOk(meta) if meta.len() as usize > MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT => {\n    let msg = format!(\n        \"{} is too large to send to the agent (limit {}MB).\",\n        Path::new(&path_str).file_name().unwrap_or_default().to_string_lossy(),\n        MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT / 1_000_000\n    );\n    let _ = spawner\n        .spawn(move |me, ctx| me.show_error_toast(msg, ctx))\n        .await;\n    continue;\n}\n```\n\nOz should be able to address this pretty well",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3180312045",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 9553,
+        "pr_file": "app/src/terminal/view/use_agent_footer/mod.rs",
+        "discussion_id": "3179733614",
+        "commented_code": "@@ -817,6 +833,92 @@ impl TerminalView {\n         );\n     }\n \n+    /// Mirrors the CLI-agent Cmd+V image-paste path in `TerminalView::paste`\n+    /// for dropped image files: reads each file, writes its bytes to the\n+    /// system clipboard as image data, and sends the agent's paste keystroke\n+    /// to the PTY so the agent reads the image directly. This produces the\n+    /// same outcome as if the user had copied the image to their clipboard\n+    /// and pressed Cmd+V over the agent's TUI.\n+    pub(in crate::terminal) fn paste_dropped_images_to_cli_agent(\n+        &mut self,\n+        image_filepaths: Vec<String>,\n+        ctx: &mut ViewContext<Self>,\n+    ) {\n+        if image_filepaths.is_empty() {\n+            return;\n+        }\n+        let spawner = ctx.spawner();\n+        ctx.spawn(\n+            async move {\n+                for path_str in image_filepaths {\n+                    let bytes = match async_fs::read(&path_str).await {",
+        "comment_created_at": "2026-05-04T08:39:40+00:00",
+        "comment_author": "SagarSDagdu",
+        "comment_body": "`MAX_IMAGE_SIZE_BYTES_FOR_CLI_AGENT = 500MB` in `util/image.rs` and stat-first to reject without loading; ephemeral error toast names the file.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3182873466",
+    "pr_number": 9553,
+    "pr_file": "app/src/terminal/view/use_agent_footer/mod.rs",
+    "created_at": "2026-05-04T16:13:43+00:00",
+    "commented_code": "let filename = path\n                         .file_name()\n                         .map(|n| n.to_string_lossy().into_owned());\n-                    let mime_type = mime_type_for_image_path(path);\n+                    let mime_type = infer_mime_type(path, &bytes);",
+    "repo_full_name": "warpdotdev/warp",
+    "discussion_comments": [
+      {
+        "comment_id": "3182873466",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 9553,
+        "pr_file": "app/src/terminal/view/use_agent_footer/mod.rs",
+        "discussion_id": "3182873466",
+        "commented_code": "@@ -862,7 +887,7 @@ impl TerminalView {\n                     let filename = path\n                         .file_name()\n                         .map(|n| n.to_string_lossy().into_owned());\n-                    let mime_type = mime_type_for_image_path(path);\n+                    let mime_type = infer_mime_type(path, &bytes);",
+        "comment_created_at": "2026-05-04T16:13:43+00:00",
+        "comment_author": "advait-m",
+        "comment_body": "We should use only a small subset of bytes here rather than entire file - see example below\r\n\r\nShould be able to reuse this kind of logic with `MIME_SNIFF_BYTES`\r\n\r\n```\r\n        let (file_size, mime_sniff_bytes) = file_size_and_prefix_for_path(&path, MIME_SNIFF_BYTES)?;\r\n\r\n        Ok(Self {\r\n            filepath: normalize_artifact_filepath(&path),\r\n            mime_type: infer_mime_type(&path, &mime_sniff_bytes),\r\n            file_size,\r\n            path,\r\n        })\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3182954739",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 9553,
+        "pr_file": "app/src/terminal/view/use_agent_footer/mod.rs",
+        "discussion_id": "3182873466",
+        "commented_code": "@@ -862,7 +887,7 @@ impl TerminalView {\n                     let filename = path\n                         .file_name()\n                         .map(|n| n.to_string_lossy().into_owned());\n-                    let mime_type = mime_type_for_image_path(path);\n+                    let mime_type = infer_mime_type(path, &bytes);",
+        "comment_created_at": "2026-05-04T16:29:31+00:00",
+        "comment_author": "SagarSDagdu",
+        "comment_body": "Addressed in `9d9be00`. Now slicing to `MIME_SNIFF_BYTES` before calling `infer_mime_type`, and moved the constant from `artifact_upload.rs` to `util/image.rs` so both call sites share it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3176851011",
+    "pr_number": 9917,
+    "pr_file": "app/src/code_review/diff_state.rs",
+    "created_at": "2026-05-02T16:43:17+00:00",
+    "commented_code": "total_additions += file_diff.additions();\n             total_deletions += file_diff.deletions();\n \n+            // Compute entity-level (semantic) diff when feature is enabled.\n+            let entity_diff = if FeatureFlag::SemanticDiff.is_enabled()",
+    "repo_full_name": "warpdotdev/warp",
+    "discussion_comments": [
+      {
+        "comment_id": "3176920842",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 9917,
+        "pr_file": "app/src/code_review/diff_state.rs",
+        "discussion_id": "3176851011",
+        "commented_code": "@@ -1698,9 +1700,26 @@ impl DiffStateModel {\n             total_additions += file_diff.additions();\n             total_deletions += file_diff.deletions();\n \n+            // Compute entity-level (semantic) diff when feature is enabled.\n+            let entity_diff = if FeatureFlag::SemanticDiff.is_enabled()",
+        "comment_created_at": "2026-05-02T16:43:17+00:00",
+        "comment_author": "monotykamary",
+        "comment_body": "Fixed in b1f7e7e. Added two guards: (1) skip entity diff computation for files already classified as `DiffSize::Large` or `DiffSize::Unrenderable`, and (2) cap the current file content at 4.375 MB (same threshold as the existing `MAX_DIFF_SIZE` in `diff_size_limits.rs`) before passing to `compute_entity_diff` \u2014 if exceeded, return `None`. This mirrors the existing safety boundary for line-based diffs.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3173676315",
+    "pr_number": 9738,
+    "pr_file": "app/src/terminal/model/blocks.rs",
+    "created_at": "2026-05-01T19:58:05+00:00",
+    "commented_code": "None => Lines::zero(),\n         };\n         let block_height = if let Some(block) = self.block_at(block_index) {\n-            block.height(&self.agent_view_state).into()\n+            let height: Lines = block.height(&self.agent_view_state).into();\n+\n+            // When the CapActiveBlockHeight feature flag is enabled and the block\n+            // is still executing (active), cap its reported height to the viewport\n+            // rows. This prevents expensive SumTree/BiMap rebuilds on every frame\n+            // when long-running commands produce large amounts of output (e.g.\n+            // git clone with progress bars).\n+            //\n+            // The full output is still stored in FlatStorage for scrollback; only\n+            // the block_heights SumTree entry is capped. When the block finishes,\n+            // the final height is computed from the full grid contents.\n+            if FeatureFlag::CapActiveBlockHeight.is_enabled()\n+                && !block.finished()\n+                && block.is_executing()\n+            {\n+                let viewport_rows = self.size.rows().into_lines();\n+                height.min(viewport_rows)",
+    "repo_full_name": "warpdotdev/warp",
+    "discussion_comments": [
+      {
+        "comment_id": "3174936359",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 9738,
+        "pr_file": "app/src/terminal/model/blocks.rs",
+        "discussion_id": "3173676315",
+        "commented_code": "@@ -1725,19 +1733,58 @@ impl BlockList {\n             None => Lines::zero(),\n         };\n         let block_height = if let Some(block) = self.block_at(block_index) {\n-            block.height(&self.agent_view_state).into()\n+            let height: Lines = block.height(&self.agent_view_state).into();\n+\n+            // When the CapActiveBlockHeight feature flag is enabled and the block\n+            // is still executing (active), cap its reported height to the viewport\n+            // rows. This prevents expensive SumTree/BiMap rebuilds on every frame\n+            // when long-running commands produce large amounts of output (e.g.\n+            // git clone with progress bars).\n+            //\n+            // The full output is still stored in FlatStorage for scrollback; only\n+            // the block_heights SumTree entry is capped. When the block finishes,\n+            // the final height is computed from the full grid contents.\n+            if FeatureFlag::CapActiveBlockHeight.is_enabled()\n+                && !block.finished()\n+                && block.is_executing()\n+            {\n+                let viewport_rows = self.size.rows().into_lines();\n+                height.min(viewport_rows)",
+        "comment_created_at": "2026-05-01T19:58:05+00:00",
+        "comment_author": "monotykamary",
+        "comment_body": "Fixed in d6d3832: removed the `CapActiveBlockHeight` cap from `update_live_block_height()` entirely. The `CompactProgressLines` cache (which skips the SumTree rebuild when the height hasn't changed between frames) is sufficient to solve the performance problem without breaking scroll math. Kept the flag as a placeholder for future work that could apply the cap at the rendering/viewport layer instead of the stored height.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3198078698",
+    "pr_number": 10314,
+    "pr_file": "app/src/code_review/file_invalidation_queue.rs",
+    "created_at": "2026-05-06T23:17:28+00:00",
+    "commented_code": "impl SyncQueueTaskTrait for FileInvalidationTask {\n     type Error = FileInvalidationError;\n-    type Result = (PathBuf, Option<FileDiffAndContent>);\n+    type Result = (PathBuf, Option<Arc<FileDiffAndContent>>);",
+    "repo_full_name": "warpdotdev/warp",
+    "discussion_comments": [
+      {
+        "comment_id": "3198078698",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 10314,
+        "pr_file": "app/src/code_review/file_invalidation_queue.rs",
+        "discussion_id": "3198078698",
+        "commented_code": "@@ -25,7 +26,7 @@ pub struct FileInvalidationTask {\n \n impl SyncQueueTaskTrait for FileInvalidationTask {\n     type Error = FileInvalidationError;\n-    type Result = (PathBuf, Option<FileDiffAndContent>);\n+    type Result = (PathBuf, Option<Arc<FileDiffAndContent>>);",
+        "comment_created_at": "2026-05-06T23:17:28+00:00",
+        "comment_author": "kevinyang372",
+        "comment_body": "Why do we need to wrap this in Arc now?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3202505688",
+        "repo_full_name": "warpdotdev/warp",
+        "pr_number": 10314,
+        "pr_file": "app/src/code_review/file_invalidation_queue.rs",
+        "discussion_id": "3198078698",
+        "commented_code": "@@ -25,7 +26,7 @@ pub struct FileInvalidationTask {\n \n impl SyncQueueTaskTrait for FileInvalidationTask {\n     type Error = FileInvalidationError;\n-    type Result = (PathBuf, Option<FileDiffAndContent>);\n+    type Result = (PathBuf, Option<Arc<FileDiffAndContent>>);",
+        "comment_created_at": "2026-05-07T15:09:16+00:00",
+        "comment_author": "MaggieShan",
+        "comment_body": "The main change is in https://github.com/warpdotdev/warp/pull/10314/changes#diff-2fcff7c4f4f049e80ea75516a1e9b2a59974bc492260ebf01661419d372eb022R493-R503\r\n\r\nOn master, the `Arc::try_unwrap` failure triggered a full reload but I've changed it to instead borrow + clone the value and since `FileDiffAndContent` is an expensive clone, I wrapped it with an `Arc`",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

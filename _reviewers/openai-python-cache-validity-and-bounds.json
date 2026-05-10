@@ -1,0 +1,196 @@
+[
+  {
+    "discussion_id": "3154145182",
+    "pr_number": 3135,
+    "pr_file": "src/openai/auth/_workload.py",
+    "created_at": "2026-04-28T13:43:15+00:00",
+    "commented_code": "return {\"token_type\": \"id\", \"get_token\": get_token}\n \n \n+def aws_bedrock_token_provider(\n+    *,\n+    region: str | None = None,\n+    profile: str | None = None,\n+    token_duration: int = 43200,\n+) -> Callable[[], str]:\n+    \"\"\"\n+    Get a token provider for AWS Bedrock using IAM credentials.\n+\n+    Returns a callable that generates a bearer token from a SigV4 presigned URL.\n+    Pass it directly to ``api_key`` when creating an OpenAI client pointed at a\n+    Bedrock runtime endpoint. Credentials are resolved from the standard AWS credential chain:\n+    https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html\n+\n+    The token is cached and automatically refreshed before it expires.\n+\n+    Args:\n+        region: AWS region. Defaults to ``AWS_REGION`` or ``AWS_DEFAULT_REGION`` environment variable.\n+        profile: AWS profile name. If not set, botocore resolves credentials from the standard chain.\n+        token_duration: Token expiry in seconds. Defaults to 43200 (12 hours).\n+    \"\"\"\n+    _cached_token: list[str | None] = [None]\n+    _refresh_at: list[float] = [0.0]\n+\n+    def _generate_token() -> str:\n+        try:\n+            import botocore.session\n+            from botocore.auth import SigV4QueryAuth\n+            from botocore.awsrequest import AWSRequest\n+        except ImportError as e:\n+            raise ImportError(\n+                \"botocore is required for AWS Bedrock token generation. \"\n+                \"Install it with: pip install 'openai[bedrock]'\"\n+            ) from e\n+\n+        try:\n+            resolved_region = region or os.environ.get(\"AWS_REGION\") or os.environ.get(\"AWS_DEFAULT_REGION\")\n+            if not resolved_region:\n+                raise SubjectTokenProviderError(\n+                    \"AWS region must be provided via the 'region' parameter, \"\n+                    \"or the AWS_REGION / AWS_DEFAULT_REGION environment variable.\"\n+                )\n+\n+            session = botocore.session.Session(profile=profile)\n+            credentials = session.get_credentials()\n+            if credentials is None:\n+                raise SubjectTokenProviderError(\n+                    \"No AWS credentials found. \"\n+                    \"Ensure your AWS credentials are configured.\"\n+                )\n+            frozen_credentials = credentials.get_frozen_credentials()\n+\n+            request = AWSRequest(\n+                method=\"POST\",\n+                url=\"https://bedrock.amazonaws.com/\",\n+                headers={\"host\": \"bedrock.amazonaws.com\"},\n+                params={\"Action\": \"CallWithBearerToken\"},\n+            )\n+\n+            signer = SigV4QueryAuth(frozen_credentials, \"bedrock\", resolved_region, expires=token_duration)\n+            signer.add_auth(request)\n+\n+            signed_url = request.url\n+            # Strip the https:// prefix before encoding\n+            url_without_scheme = signed_url[len(\"https://\") :]\n+            encoded_token = base64.b64encode(f\"{url_without_scheme}&Version=1\".encode()).decode()\n+\n+            return f\"bedrock-api-key-{encoded_token}\"\n+        except (ImportError, SubjectTokenProviderError):\n+            raise\n+        except Exception as e:\n+            raise SubjectTokenProviderError(f\"Failed to generate AWS Bedrock token: {e}\") from e\n+\n+    def get_token() -> str:\n+        now = time.monotonic()\n+        if _cached_token[0] is None or now >= _refresh_at[0]:\n+            _cached_token[0] = _generate_token()\n+            _refresh_at[0] = now + max(token_duration - 60, token_duration * 0.9)",
+    "repo_full_name": "openai/openai-python",
+    "discussion_comments": [
+      {
+        "comment_id": "3154570635",
+        "repo_full_name": "openai/openai-python",
+        "pr_number": 3135,
+        "pr_file": "src/openai/auth/_workload.py",
+        "discussion_id": "3154145182",
+        "commented_code": "@@ -173,6 +175,89 @@ def get_token() -> str:\n     return {\"token_type\": \"id\", \"get_token\": get_token}\n \n \n+def aws_bedrock_token_provider(\n+    *,\n+    region: str | None = None,\n+    profile: str | None = None,\n+    token_duration: int = 43200,\n+) -> Callable[[], str]:\n+    \"\"\"\n+    Get a token provider for AWS Bedrock using IAM credentials.\n+\n+    Returns a callable that generates a bearer token from a SigV4 presigned URL.\n+    Pass it directly to ``api_key`` when creating an OpenAI client pointed at a\n+    Bedrock runtime endpoint. Credentials are resolved from the standard AWS credential chain:\n+    https://docs.aws.amazon.com/sdkref/latest/guide/standardized-credentials.html\n+\n+    The token is cached and automatically refreshed before it expires.\n+\n+    Args:\n+        region: AWS region. Defaults to ``AWS_REGION`` or ``AWS_DEFAULT_REGION`` environment variable.\n+        profile: AWS profile name. If not set, botocore resolves credentials from the standard chain.\n+        token_duration: Token expiry in seconds. Defaults to 43200 (12 hours).\n+    \"\"\"\n+    _cached_token: list[str | None] = [None]\n+    _refresh_at: list[float] = [0.0]\n+\n+    def _generate_token() -> str:\n+        try:\n+            import botocore.session\n+            from botocore.auth import SigV4QueryAuth\n+            from botocore.awsrequest import AWSRequest\n+        except ImportError as e:\n+            raise ImportError(\n+                \"botocore is required for AWS Bedrock token generation. \"\n+                \"Install it with: pip install 'openai[bedrock]'\"\n+            ) from e\n+\n+        try:\n+            resolved_region = region or os.environ.get(\"AWS_REGION\") or os.environ.get(\"AWS_DEFAULT_REGION\")\n+            if not resolved_region:\n+                raise SubjectTokenProviderError(\n+                    \"AWS region must be provided via the 'region' parameter, \"\n+                    \"or the AWS_REGION / AWS_DEFAULT_REGION environment variable.\"\n+                )\n+\n+            session = botocore.session.Session(profile=profile)\n+            credentials = session.get_credentials()\n+            if credentials is None:\n+                raise SubjectTokenProviderError(\n+                    \"No AWS credentials found. \"\n+                    \"Ensure your AWS credentials are configured.\"\n+                )\n+            frozen_credentials = credentials.get_frozen_credentials()\n+\n+            request = AWSRequest(\n+                method=\"POST\",\n+                url=\"https://bedrock.amazonaws.com/\",\n+                headers={\"host\": \"bedrock.amazonaws.com\"},\n+                params={\"Action\": \"CallWithBearerToken\"},\n+            )\n+\n+            signer = SigV4QueryAuth(frozen_credentials, \"bedrock\", resolved_region, expires=token_duration)\n+            signer.add_auth(request)\n+\n+            signed_url = request.url\n+            # Strip the https:// prefix before encoding\n+            url_without_scheme = signed_url[len(\"https://\") :]\n+            encoded_token = base64.b64encode(f\"{url_without_scheme}&Version=1\".encode()).decode()\n+\n+            return f\"bedrock-api-key-{encoded_token}\"\n+        except (ImportError, SubjectTokenProviderError):\n+            raise\n+        except Exception as e:\n+            raise SubjectTokenProviderError(f\"Failed to generate AWS Bedrock token: {e}\") from e\n+\n+    def get_token() -> str:\n+        now = time.monotonic()\n+        if _cached_token[0] is None or now >= _refresh_at[0]:\n+            _cached_token[0] = _generate_token()\n+            _refresh_at[0] = now + max(token_duration - 60, token_duration * 0.9)",
+        "comment_created_at": "2026-04-28T13:43:15+00:00",
+        "comment_author": "tbuatois",
+        "comment_body": "**Fix: default token_duration from 12h \u2192 1h** \r\n\r\nThe presigned URL embeds the X-Amz-Security-Token from the credentials used at signing time. When AWS receives the URL, it validates that the session token is still valid \u2014 regardless of X-Amz-Expires.\r\n\r\nWith temporary credentials (EC2 instance profile, EKS/IRSA, STS assume-role), session tokens typically expire in ~1 hour. With the previous 12h default, the cached token would keep being served for hours after the underlying session credentials had already expired, causing persistent auth failures.\r\n\r\nThe fix is: default token_duration to 3600 (1h) instead of 43200 (12h). Token generation is a local signing operation (no network call), so regenerating hourly is cheap. 1h aligns naturally with typical temporary credential lifetimes, and users with static credentials who want longer caching can still pass token_duration=43200 explicitly.\r\n\r\nWe considered reading credentials._expiry_time to compute exact TTL, but rejected it because it's a private botocore attribute, not part of the public API.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1983082175",
+    "pr_number": 2148,
+    "pr_file": "src/openai/lib/_parsing/_completions.py",
+    "created_at": "2025-03-06T10:16:44+00:00",
+    "commented_code": "from ...types.chat.completion_create_params import ResponseFormat as ResponseFormatParam\n from ...types.chat.chat_completion_message_tool_call import Function\n \n+# Cache to store weak references to schema objects\n+_schema_cache = weakref.WeakKeyDictionary()",
+    "repo_full_name": "openai/openai-python",
+    "discussion_comments": [
+      {
+        "comment_id": "1983082175",
+        "repo_full_name": "openai/openai-python",
+        "pr_number": 2148,
+        "pr_file": "src/openai/lib/_parsing/_completions.py",
+        "discussion_id": "1983082175",
+        "commented_code": "@@ -28,6 +29,9 @@\n from ...types.chat.completion_create_params import ResponseFormat as ResponseFormatParam\n from ...types.chat.chat_completion_message_tool_call import Function\n \n+# Cache to store weak references to schema objects\n+_schema_cache = weakref.WeakKeyDictionary()",
+        "comment_created_at": "2025-03-06T10:16:44+00:00",
+        "comment_author": "anteverse",
+        "comment_body": "Hi @mousberg ,\r\n\r\nThanks for digging into this. As I understand this cache could help in the optimization of `type_to_response_format_param` as it will not recompute an already existing schema. I guess it solves the issue [2146](https://github.com/openai/openai-python/issues/2146) for the given example. But I don't see how it could stop the memory from rising up when we submit models that are always different.\r\nCould we use some kind of size max size for this cache? Something like an LRU? \r\nYour first test case actually brings a very good insight: if we keep on generating new models, the cache size grows infinitely.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1983231811",
+        "repo_full_name": "openai/openai-python",
+        "pr_number": 2148,
+        "pr_file": "src/openai/lib/_parsing/_completions.py",
+        "discussion_id": "1983082175",
+        "commented_code": "@@ -28,6 +29,9 @@\n from ...types.chat.completion_create_params import ResponseFormat as ResponseFormatParam\n from ...types.chat.chat_completion_message_tool_call import Function\n \n+# Cache to store weak references to schema objects\n+_schema_cache = weakref.WeakKeyDictionary()",
+        "comment_created_at": "2025-03-06T12:02:30+00:00",
+        "comment_author": "mousberg",
+        "comment_body": "Thanks for the feedback, @anteverse \r\n\r\nThat's a good point about unbounded memory growth when continuously generating new models.\r\n\r\nI did look into an LRU cache, but ran into challenges with picking the right cache key strategy (model identity vs. schema-based hashing) while also making sure weak references were properly maintained.\r\n\r\nI see the problem as twofold:\r\n1. Ensuring proper garbage collection for unreferenced models\r\n2. Limiting cache size to avoid infinite growth with unique models\r\n\r\nYour insight on the test case really highlights where things get tricky. If anyone's up for digging into an LRU-based approach, I'd love to collaborate!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1985338995",
+        "repo_full_name": "openai/openai-python",
+        "pr_number": 2148,
+        "pr_file": "src/openai/lib/_parsing/_completions.py",
+        "discussion_id": "1983082175",
+        "commented_code": "@@ -28,6 +29,9 @@\n from ...types.chat.completion_create_params import ResponseFormat as ResponseFormatParam\n from ...types.chat.chat_completion_message_tool_call import Function\n \n+# Cache to store weak references to schema objects\n+_schema_cache = weakref.WeakKeyDictionary()",
+        "comment_created_at": "2025-03-07T16:13:05+00:00",
+        "comment_author": "anteverse",
+        "comment_body": "Hey,\r\nThanks for narrowing down the problems, I think you did most of the job.\r\n\r\n> digging into an LRU-based approach, I'd love to collaborate!\r\n\r\nI'd love to collaborate as well. \r\n\r\n> ran into challenges with picking the right cache key strategy (model identity vs. schema-based hashing)\r\n\r\nBy any chance, do you have any connections at Pydantic? The folks there could help come up with a common key.\r\n\r\nBy the way, if we end up with a cache that has a limited size, what would be a good measure for the limit? Should it be frozen? Accessible to the end user? Should we have an heuristic based on the machine's capacity?\r\n\r\nI'll run a few tests on my end as well!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2004333529",
+        "repo_full_name": "openai/openai-python",
+        "pr_number": 2148,
+        "pr_file": "src/openai/lib/_parsing/_completions.py",
+        "discussion_id": "1983082175",
+        "commented_code": "@@ -28,6 +29,9 @@\n from ...types.chat.completion_create_params import ResponseFormat as ResponseFormatParam\n from ...types.chat.chat_completion_message_tool_call import Function\n \n+# Cache to store weak references to schema objects\n+_schema_cache = weakref.WeakKeyDictionary()",
+        "comment_created_at": "2025-03-19T21:29:37+00:00",
+        "comment_author": "mousberg",
+        "comment_body": "@anteverse Yeah, reached out to Samuel (Pydantic's founder), and he suggested an approach for the cache key:\r\nBuild a string from the fields and types, optionally hash it, and use that as the cache key.\r\n\r\nHe also mentioned that if we need more input, it might be worth posting on Pydantic's GitHub to see if the community has additional insights.\r\n\r\nThoughts? I can prototype this approach and see if it addresses the issue!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2005515370",
+        "repo_full_name": "openai/openai-python",
+        "pr_number": 2148,
+        "pr_file": "src/openai/lib/_parsing/_completions.py",
+        "discussion_id": "1983082175",
+        "commented_code": "@@ -28,6 +29,9 @@\n from ...types.chat.completion_create_params import ResponseFormat as ResponseFormatParam\n from ...types.chat.chat_completion_message_tool_call import Function\n \n+# Cache to store weak references to schema objects\n+_schema_cache = weakref.WeakKeyDictionary()",
+        "comment_created_at": "2025-03-20T12:19:37+00:00",
+        "comment_author": "RobertCraigie",
+        "comment_body": "> But I don't see how it could stop the memory from rising up when we submit models that are always different.\r\nCould we use some kind of size max size for this cache?\r\n\r\nmaybe I'm missing something but I don't see how this is a concern? if you're continuously creating new models then they should be getting GC'd at some point and if they're not, then you're still holding a reference to the model type yourself? if that is the case can you share more about your use case?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2305331531",
+    "pr_number": 2588,
+    "pr_file": "src/openai/_client.py",
+    "created_at": "2025-08-27T21:26:34+00:00",
+    "commented_code": "def qs(self) -> Querystring:\n         return Querystring(array_format=\"brackets\")\n \n+    def refresh_auth_headers(self) -> None:\n+        if self.bearer_token_provider:\n+            secret = self.bearer_token_provider()",
+    "repo_full_name": "openai/openai-python",
+    "discussion_comments": [
+      {
+        "comment_id": "2305331531",
+        "repo_full_name": "openai/openai-python",
+        "pr_number": 2588,
+        "pr_file": "src/openai/_client.py",
+        "discussion_id": "2305331531",
+        "commented_code": "@@ -287,14 +296,28 @@ def with_streaming_response(self) -> OpenAIWithStreamedResponse:\n     def qs(self) -> Querystring:\n         return Querystring(array_format=\"brackets\")\n \n+    def refresh_auth_headers(self) -> None:\n+        if self.bearer_token_provider:\n+            secret = self.bearer_token_provider()",
+        "comment_created_at": "2025-08-27T21:26:34+00:00",
+        "comment_author": "RobertCraigie",
+        "comment_body": "do you have any fud around just setting `self.api_key` directly and keeping `def auth_headers()` mostly as-is?\n\nthis code feels prone to weird behaviour if a user ever mutates `client.api_key` as we *may* use the version that's cached from `self._auth_headers` instead. based on the current implementation that should basically be impossible to actually cause a bug as far as I can tell but I'd prefer to completely avoid that possibility.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2305979318",
+        "repo_full_name": "openai/openai-python",
+        "pr_number": 2588,
+        "pr_file": "src/openai/_client.py",
+        "discussion_id": "2305331531",
+        "commented_code": "@@ -287,14 +296,28 @@ def with_streaming_response(self) -> OpenAIWithStreamedResponse:\n     def qs(self) -> Querystring:\n         return Querystring(array_format=\"brackets\")\n \n+    def refresh_auth_headers(self) -> None:\n+        if self.bearer_token_provider:\n+            secret = self.bearer_token_provider()",
+        "comment_created_at": "2025-08-28T02:29:21+00:00",
+        "comment_author": "johanste",
+        "comment_body": "Made the change to set the api_key. It did expose a gap in my implementation for the module level client. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1474579745",
+    "pr_number": 1114,
+    "pr_file": "src/openai/_models.py",
+    "created_at": "2024-02-01T14:33:49+00:00",
+    "commented_code": "if PYDANTIC_V2:\n-    from pydantic import TypeAdapter\n+    from functools import lru_cache\n+    from pydantic import TypeAdapter as PyTypeAdapter\n+\n+    @lru_cache",
+    "repo_full_name": "openai/openai-python",
+    "discussion_comments": [
+      {
+        "comment_id": "1474579745",
+        "repo_full_name": "openai/openai-python",
+        "pr_number": 1114,
+        "pr_file": "src/openai/_models.py",
+        "discussion_id": "1474579745",
+        "commented_code": "@@ -363,7 +363,12 @@ class GenericModel(BaseGenericModel, BaseModel):\n \n \n if PYDANTIC_V2:\n-    from pydantic import TypeAdapter\n+    from functools import lru_cache\n+    from pydantic import TypeAdapter as PyTypeAdapter\n+\n+    @lru_cache",
+        "comment_created_at": "2024-02-01T14:33:49+00:00",
+        "comment_author": "RobertCraigie",
+        "comment_body": "The default `maxsize` is `128`, would that cause any issues? should it be higher?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1475452233",
+        "repo_full_name": "openai/openai-python",
+        "pr_number": 1114,
+        "pr_file": "src/openai/_models.py",
+        "discussion_id": "1474579745",
+        "commented_code": "@@ -363,7 +363,12 @@ class GenericModel(BaseGenericModel, BaseModel):\n \n \n if PYDANTIC_V2:\n-    from pydantic import TypeAdapter\n+    from functools import lru_cache\n+    from pydantic import TypeAdapter as PyTypeAdapter\n+\n+    @lru_cache",
+        "comment_created_at": "2024-02-02T02:47:58+00:00",
+        "comment_author": "vvanglro",
+        "comment_body": "I don't think it would be a problem, here it's just caching each unnecessary instantiation (as mentioned in the docs), thus improving performance. Excessively large values also take up more memory.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1528734719",
+    "pr_number": 1114,
+    "pr_file": "src/openai/_models.py",
+    "created_at": "2024-03-18T15:00:50+00:00",
+    "commented_code": "if PYDANTIC_V2:\n-    from pydantic import TypeAdapter\n+    from functools import lru_cache\n+\n+    from pydantic import TypeAdapter as PyTypeAdapter\n+\n+    def TypeAdapter(type_: type[_T]) -> PyTypeAdapter[_T]:\n+        return PyTypeAdapter(type_)\n+    \n+    if not TYPE_CHECKING:\n+        TypeAdapter = lru_cache(TypeAdapter)",
+    "repo_full_name": "openai/openai-python",
+    "discussion_comments": [
+      {
+        "comment_id": "1528734719",
+        "repo_full_name": "openai/openai-python",
+        "pr_number": 1114,
+        "pr_file": "src/openai/_models.py",
+        "discussion_id": "1528734719",
+        "commented_code": "@@ -363,7 +363,15 @@ class GenericModel(BaseGenericModel, BaseModel):\n \n \n if PYDANTIC_V2:\n-    from pydantic import TypeAdapter\n+    from functools import lru_cache\n+\n+    from pydantic import TypeAdapter as PyTypeAdapter\n+\n+    def TypeAdapter(type_: type[_T]) -> PyTypeAdapter[_T]:\n+        return PyTypeAdapter(type_)\n+    \n+    if not TYPE_CHECKING:\n+        TypeAdapter = lru_cache(TypeAdapter)",
+        "comment_created_at": "2024-03-18T15:00:50+00:00",
+        "comment_author": "RobertCraigie",
+        "comment_body": "nit: I think this conveys the intent of this code more clearly (and you can add the `lru_cache` import at the top of the file), thoughts?\r\n\r\n```suggestion\r\n    if TYPE_CHECKING:\r\n      from pydantic import TypeAdapter\r\n    else:\r\n      from pydantic import TypeAdapter as _TypeAdapter\r\n      \r\n      TypeAdapter = lru_cache(TypeAdapter)   \r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1528768554",
+        "repo_full_name": "openai/openai-python",
+        "pr_number": 1114,
+        "pr_file": "src/openai/_models.py",
+        "discussion_id": "1528734719",
+        "commented_code": "@@ -363,7 +363,15 @@ class GenericModel(BaseGenericModel, BaseModel):\n \n \n if PYDANTIC_V2:\n-    from pydantic import TypeAdapter\n+    from functools import lru_cache\n+\n+    from pydantic import TypeAdapter as PyTypeAdapter\n+\n+    def TypeAdapter(type_: type[_T]) -> PyTypeAdapter[_T]:\n+        return PyTypeAdapter(type_)\n+    \n+    if not TYPE_CHECKING:\n+        TypeAdapter = lru_cache(TypeAdapter)",
+        "comment_created_at": "2024-03-18T15:21:20+00:00",
+        "comment_author": "vvanglro",
+        "comment_body": "I agree, It has been modified.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

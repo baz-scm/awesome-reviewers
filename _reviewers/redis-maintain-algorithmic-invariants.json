@@ -1,0 +1,128 @@
+[
+  {
+    "discussion_id": "3136017031",
+    "pr_number": 15094,
+    "pr_file": "tests/unit/cluster/pubsubshard-slot.tcl",
+    "created_at": "2026-04-24T07:05:35+00:00",
+    "commented_code": "+# Regression for shard pubsub slot lookup during command execution.\n+# Without hashing the channel name while CLIENT_EXECUTING_COMMAND is set,\n+# pubsubUnsubscribeChannel() could use current_client->slot (from a prior\n+# command in the same EXEC) and crash. Fixed in commit 2fb406e18.\n+\n+start_cluster 1 0 {tags {external:skip cluster}} {\n+\n+    test {Shard pubsub: CLIENT KILL subscriber inside MULTI/EXEC (cross-slot)} {\n+        # SET fixes the transaction client's slot to keyk's slot; the subscriber\n+        # must be on a shard channel in a different slot so a wrong-slot lookup fails.\n+        set keyk k\n+        set channel ch0\n+        for {set i 0} {$i < 200} {incr i} {\n+            set channel \"ch$i\"\n+            if {[R 0 cluster keyslot $channel] != [R 0 cluster keyslot $keyk]} {\n+                break\n+            }\n+        }\n+        assert {[R 0 cluster keyslot $channel] != [R 0 cluster keyslot $keyk]}\n+\n+        set rd_sub [redis_deferring_client]\n+        $rd_sub client id\n+        set cid [$rd_sub read]\n+        $rd_sub ssubscribe $channel\n+        $rd_sub read\n+\n+        set r_tx [redis [srv 0 host] [srv 0 port] 0 $::tls]\n+        $r_tx multi\n+        $r_tx set $keyk v\n+        $r_tx client kill id $cid\n+        set got [$r_tx exec]",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3136017031",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15094,
+        "pr_file": "tests/unit/cluster/pubsubshard-slot.tcl",
+        "discussion_id": "3136017031",
+        "commented_code": "@@ -0,0 +1,40 @@\n+# Regression for shard pubsub slot lookup during command execution.\n+# Without hashing the channel name while CLIENT_EXECUTING_COMMAND is set,\n+# pubsubUnsubscribeChannel() could use current_client->slot (from a prior\n+# command in the same EXEC) and crash. Fixed in commit 2fb406e18.\n+\n+start_cluster 1 0 {tags {external:skip cluster}} {\n+\n+    test {Shard pubsub: CLIENT KILL subscriber inside MULTI/EXEC (cross-slot)} {\n+        # SET fixes the transaction client's slot to keyk's slot; the subscriber\n+        # must be on a shard channel in a different slot so a wrong-slot lookup fails.\n+        set keyk k\n+        set channel ch0\n+        for {set i 0} {$i < 200} {incr i} {\n+            set channel \"ch$i\"\n+            if {[R 0 cluster keyslot $channel] != [R 0 cluster keyslot $keyk]} {\n+                break\n+            }\n+        }\n+        assert {[R 0 cluster keyslot $channel] != [R 0 cluster keyslot $keyk]}\n+\n+        set rd_sub [redis_deferring_client]\n+        $rd_sub client id\n+        set cid [$rd_sub read]\n+        $rd_sub ssubscribe $channel\n+        $rd_sub read\n+\n+        set r_tx [redis [srv 0 host] [srv 0 port] 0 $::tls]\n+        $r_tx multi\n+        $r_tx set $keyk v\n+        $r_tx client kill id $cid\n+        set got [$r_tx exec]",
+        "comment_created_at": "2026-04-24T07:05:35+00:00",
+        "comment_author": "sundb",
+        "comment_body": "```suggestion\n        r multi\n        r set $keyk v\n        r client kill id $cid\n        set got [r exec]\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3138709392",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15094,
+        "pr_file": "tests/unit/cluster/pubsubshard-slot.tcl",
+        "discussion_id": "3136017031",
+        "commented_code": "@@ -0,0 +1,40 @@\n+# Regression for shard pubsub slot lookup during command execution.\n+# Without hashing the channel name while CLIENT_EXECUTING_COMMAND is set,\n+# pubsubUnsubscribeChannel() could use current_client->slot (from a prior\n+# command in the same EXEC) and crash. Fixed in commit 2fb406e18.\n+\n+start_cluster 1 0 {tags {external:skip cluster}} {\n+\n+    test {Shard pubsub: CLIENT KILL subscriber inside MULTI/EXEC (cross-slot)} {\n+        # SET fixes the transaction client's slot to keyk's slot; the subscriber\n+        # must be on a shard channel in a different slot so a wrong-slot lookup fails.\n+        set keyk k\n+        set channel ch0\n+        for {set i 0} {$i < 200} {incr i} {\n+            set channel \"ch$i\"\n+            if {[R 0 cluster keyslot $channel] != [R 0 cluster keyslot $keyk]} {\n+                break\n+            }\n+        }\n+        assert {[R 0 cluster keyslot $channel] != [R 0 cluster keyslot $keyk]}\n+\n+        set rd_sub [redis_deferring_client]\n+        $rd_sub client id\n+        set cid [$rd_sub read]\n+        $rd_sub ssubscribe $channel\n+        $rd_sub read\n+\n+        set r_tx [redis [srv 0 host] [srv 0 port] 0 $::tls]\n+        $r_tx multi\n+        $r_tx set $keyk v\n+        $r_tx client kill id $cid\n+        set got [$r_tx exec]",
+        "comment_created_at": "2026-04-24T15:31:10+00:00",
+        "comment_author": "ShubhamTaple",
+        "comment_body": "Done, now reusing the existing Redis test client",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3144577095",
+    "pr_number": 15094,
+    "pr_file": "tests/unit/cluster/sharded-pubsub.tcl",
+    "created_at": "2026-04-27T01:58:49+00:00",
+    "commented_code": "catch {[$replica EXEC]} err\n         assert_match {EXECABORT*} $err\n     }\n+\n+    # Regression: shard channel slot must not follow getKeySlot() current_client\n+    # cache when CLIENT KILL runs inside another client's EXEC (pubsubUnsubscribeChannel).\n+    test {Shard pubsub: CLIENT KILL subscriber inside MULTI/EXEC (cross-slot)} {\n+        # SET fixes the transaction client's slot to keyk's slot; the subscriber must\n+        # use a shard channel in a different slot so a wrong-slot lookup would fail.\n+        set keyk k\n+        set channel ch0\n+        for {set i 0} {$i < 200} {incr i} {\n+            set channel \"ch$i\"\n+            if {[R 0 cluster keyslot $channel] != [R 0 cluster keyslot $keyk]} {\n+                break\n+            }\n+        }",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3144577095",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15094,
+        "pr_file": "tests/unit/cluster/sharded-pubsub.tcl",
+        "discussion_id": "3144577095",
+        "commented_code": "@@ -64,4 +64,37 @@ start_cluster 1 1 {tags {external:skip cluster}} {\n         catch {[$replica EXEC]} err\n         assert_match {EXECABORT*} $err\n     }\n+\n+    # Regression: shard channel slot must not follow getKeySlot() current_client\n+    # cache when CLIENT KILL runs inside another client's EXEC (pubsubUnsubscribeChannel).\n+    test {Shard pubsub: CLIENT KILL subscriber inside MULTI/EXEC (cross-slot)} {\n+        # SET fixes the transaction client's slot to keyk's slot; the subscriber must\n+        # use a shard channel in a different slot so a wrong-slot lookup would fail.\n+        set keyk k\n+        set channel ch0\n+        for {set i 0} {$i < 200} {incr i} {\n+            set channel \"ch$i\"\n+            if {[R 0 cluster keyslot $channel] != [R 0 cluster keyslot $keyk]} {\n+                break\n+            }\n+        }",
+        "comment_created_at": "2026-04-27T01:58:49+00:00",
+        "comment_author": "sundb",
+        "comment_body": "We can select a key and a channel that must be in different slots.\r\n```suggestion\r\n        set keyk {06S}k\r\n        set channel {Qi}ch\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3148314546",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15094,
+        "pr_file": "tests/unit/cluster/sharded-pubsub.tcl",
+        "discussion_id": "3144577095",
+        "commented_code": "@@ -64,4 +64,37 @@ start_cluster 1 1 {tags {external:skip cluster}} {\n         catch {[$replica EXEC]} err\n         assert_match {EXECABORT*} $err\n     }\n+\n+    # Regression: shard channel slot must not follow getKeySlot() current_client\n+    # cache when CLIENT KILL runs inside another client's EXEC (pubsubUnsubscribeChannel).\n+    test {Shard pubsub: CLIENT KILL subscriber inside MULTI/EXEC (cross-slot)} {\n+        # SET fixes the transaction client's slot to keyk's slot; the subscriber must\n+        # use a shard channel in a different slot so a wrong-slot lookup would fail.\n+        set keyk k\n+        set channel ch0\n+        for {set i 0} {$i < 200} {incr i} {\n+            set channel \"ch$i\"\n+            if {[R 0 cluster keyslot $channel] != [R 0 cluster keyslot $keyk]} {\n+                break\n+            }\n+        }",
+        "comment_created_at": "2026-04-27T15:11:58+00:00",
+        "comment_author": "ShubhamTaple",
+        "comment_body": "Done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3076969440",
+    "pr_number": 15039,
+    "pr_file": "src/vector.h",
+    "created_at": "2026-04-14T03:25:23+00:00",
+    "commented_code": "+#ifndef REDIS_VECTOR_H\n+#define REDIS_VECTOR_H\n+\n+#include <stddef.h>\n+\n+/*\n+ * Simple append-only vector (dynamic array) of void * elements.\n+ *\n+ * Design:\n+ * --------\n+ * - Stores elements in a contiguous array (void **).\n+ * - Supports append (vec_push) and read access.\n+ * - Optionally uses caller-provided stack buffer to avoid heap allocations.\n+ * - See also comment in vector.c of vec_init() for more details.\n+ *\n+ * Memory:\n+ * -------\n+ * - vec_destroy() frees heap memory if used.\n+ * - Stack buffer is never freed.\n+ * - Stored elements are never freed.\n+ *\n+ * Modes:\n+ * ------- \n+ * 1. Start On Stack (grow to heap): vec v;\n+ *                                   void *vstack[8];\n+ *                                   ...\n+ *                                   vec_init(&v, vstack, 8);\n+ *\n+ *   Start Embedded (grow to heap):  typedef struct { \n+ *                                     vec v; \n+ *                                     void *vembedded[8]; \n+ *                                   } obj;\n+ *                                   ...\n+ *                                   vec_init(&obj->v, obj->vembedded, 8);\n+ *\n+ * 2. Heap only, init capacity 8:    vec v;\n+ *                                   ...\n+ *                                   vec_init(&v, NULL, 8);\n+ *\n+ *    Heap only, init capacity 0:    vec v;\n+ *                                   ...\n+ *                                   vec_init(&v, NULL, 0);\n+ *\n+ * 3. Depends on var size:           vec v;\n+ *                                   void *vstack[8];\n+ *                                   vec_init(&v, vstack, 8);\n+ *                                   vec_reserve(&v, varsize); // varsize <= 8 ? stack : heap\n+ *\n+ * Notes:\n+ * ------\n+ * - Not thread-safe.\n+ * - If stack == NULL and initcap > 0, initcap is treated as an initial\n+ *   heap-capacity hint.\n+ * - When used in Redis core, the implementation should use the Redis allocator\n+ *   wrappers (zmalloc / zrealloc / zfree) rather than libc allocation APIs.\n+ */\n+\n+typedef struct vec {\n+    size_t size;       /* Number of elements in the vector. */\n+    size_t cap;        /* Capacity of the vector. */\n+    void **data;       /* Heap-allocated storage or refers to stack. */\n+    void **stack;      /* Optional stack buffer. */",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3076969440",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15039,
+        "pr_file": "src/vector.h",
+        "discussion_id": "3076969440",
+        "commented_code": "@@ -0,0 +1,92 @@\n+#ifndef REDIS_VECTOR_H\n+#define REDIS_VECTOR_H\n+\n+#include <stddef.h>\n+\n+/*\n+ * Simple append-only vector (dynamic array) of void * elements.\n+ *\n+ * Design:\n+ * --------\n+ * - Stores elements in a contiguous array (void **).\n+ * - Supports append (vec_push) and read access.\n+ * - Optionally uses caller-provided stack buffer to avoid heap allocations.\n+ * - See also comment in vector.c of vec_init() for more details.\n+ *\n+ * Memory:\n+ * -------\n+ * - vec_destroy() frees heap memory if used.\n+ * - Stack buffer is never freed.\n+ * - Stored elements are never freed.\n+ *\n+ * Modes:\n+ * ------- \n+ * 1. Start On Stack (grow to heap): vec v;\n+ *                                   void *vstack[8];\n+ *                                   ...\n+ *                                   vec_init(&v, vstack, 8);\n+ *\n+ *   Start Embedded (grow to heap):  typedef struct { \n+ *                                     vec v; \n+ *                                     void *vembedded[8]; \n+ *                                   } obj;\n+ *                                   ...\n+ *                                   vec_init(&obj->v, obj->vembedded, 8);\n+ *\n+ * 2. Heap only, init capacity 8:    vec v;\n+ *                                   ...\n+ *                                   vec_init(&v, NULL, 8);\n+ *\n+ *    Heap only, init capacity 0:    vec v;\n+ *                                   ...\n+ *                                   vec_init(&v, NULL, 0);\n+ *\n+ * 3. Depends on var size:           vec v;\n+ *                                   void *vstack[8];\n+ *                                   vec_init(&v, vstack, 8);\n+ *                                   vec_reserve(&v, varsize); // varsize <= 8 ? stack : heap\n+ *\n+ * Notes:\n+ * ------\n+ * - Not thread-safe.\n+ * - If stack == NULL and initcap > 0, initcap is treated as an initial\n+ *   heap-capacity hint.\n+ * - When used in Redis core, the implementation should use the Redis allocator\n+ *   wrappers (zmalloc / zrealloc / zfree) rather than libc allocation APIs.\n+ */\n+\n+typedef struct vec {\n+    size_t size;       /* Number of elements in the vector. */\n+    size_t cap;        /* Capacity of the vector. */\n+    void **data;       /* Heap-allocated storage or refers to stack. */\n+    void **stack;      /* Optional stack buffer. */",
+        "comment_created_at": "2026-04-14T03:25:23+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "I think we can directly allocate stack memory here, to avoid declaring extra variables on stack\n```\ntypedef struct vec {\n    size_t size;       /* Number of elements in the vector. */\n    size_t cap;        /* Capacity of the vector. */\n    void **data;       /* Heap-allocated storage or refers to stack. */\n    void *stack[VEC_DEFAULT_INITCAP]; \n}\n```\n\nand pass a hint when init, if the hint is more than VEC_DEFAULT_INITCAP, we can zmalloc directly when `zmalloc+memcpy` later.\n```\n vecInit(vec *v, int hint) {\n    if (hint <= VEC_DEFAULT_INITCAP) {\n        v->data = v->stack;\n        v->cap = VEC_DEFAULT_INITCAP;\n    } else {\n        v->data = zmalloc(sizeof(void*) * hint);\n        v->cap = hint;\n    }\n    v->size = 0;\n}\n```\n\nother issue, we should use redis style (camel case). vecInit, vecData, vecDestroy\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3077273652",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15039,
+        "pr_file": "src/vector.h",
+        "discussion_id": "3076969440",
+        "commented_code": "@@ -0,0 +1,92 @@\n+#ifndef REDIS_VECTOR_H\n+#define REDIS_VECTOR_H\n+\n+#include <stddef.h>\n+\n+/*\n+ * Simple append-only vector (dynamic array) of void * elements.\n+ *\n+ * Design:\n+ * --------\n+ * - Stores elements in a contiguous array (void **).\n+ * - Supports append (vec_push) and read access.\n+ * - Optionally uses caller-provided stack buffer to avoid heap allocations.\n+ * - See also comment in vector.c of vec_init() for more details.\n+ *\n+ * Memory:\n+ * -------\n+ * - vec_destroy() frees heap memory if used.\n+ * - Stack buffer is never freed.\n+ * - Stored elements are never freed.\n+ *\n+ * Modes:\n+ * ------- \n+ * 1. Start On Stack (grow to heap): vec v;\n+ *                                   void *vstack[8];\n+ *                                   ...\n+ *                                   vec_init(&v, vstack, 8);\n+ *\n+ *   Start Embedded (grow to heap):  typedef struct { \n+ *                                     vec v; \n+ *                                     void *vembedded[8]; \n+ *                                   } obj;\n+ *                                   ...\n+ *                                   vec_init(&obj->v, obj->vembedded, 8);\n+ *\n+ * 2. Heap only, init capacity 8:    vec v;\n+ *                                   ...\n+ *                                   vec_init(&v, NULL, 8);\n+ *\n+ *    Heap only, init capacity 0:    vec v;\n+ *                                   ...\n+ *                                   vec_init(&v, NULL, 0);\n+ *\n+ * 3. Depends on var size:           vec v;\n+ *                                   void *vstack[8];\n+ *                                   vec_init(&v, vstack, 8);\n+ *                                   vec_reserve(&v, varsize); // varsize <= 8 ? stack : heap\n+ *\n+ * Notes:\n+ * ------\n+ * - Not thread-safe.\n+ * - If stack == NULL and initcap > 0, initcap is treated as an initial\n+ *   heap-capacity hint.\n+ * - When used in Redis core, the implementation should use the Redis allocator\n+ *   wrappers (zmalloc / zrealloc / zfree) rather than libc allocation APIs.\n+ */\n+\n+typedef struct vec {\n+    size_t size;       /* Number of elements in the vector. */\n+    size_t cap;        /* Capacity of the vector. */\n+    void **data;       /* Heap-allocated storage or refers to stack. */\n+    void **stack;      /* Optional stack buffer. */",
+        "comment_created_at": "2026-04-14T05:20:01+00:00",
+        "comment_author": "moticless",
+        "comment_body": "We are defining here a general purpose vector. Note that it might be embedded in structs, beyond stack. As long as t_hash is the only client of this use case maybe it should hold locally something like:\r\n```\r\n/* syntactic sugar for vec with stack of 8 elements */\r\ntypedef struct vec8 { vec v; void *stack[8]; } vec8;\r\nstatic inline vec *vec8Init(vec8 *x) {\r\n    vecInit(&x->v, x->buf, 8);\r\n    return &x->v;\r\n}\r\n```\r\nOnce we shall have another use case , we can pass this code to reside in vector.h",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3077701975",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15039,
+        "pr_file": "src/vector.h",
+        "discussion_id": "3076969440",
+        "commented_code": "@@ -0,0 +1,92 @@\n+#ifndef REDIS_VECTOR_H\n+#define REDIS_VECTOR_H\n+\n+#include <stddef.h>\n+\n+/*\n+ * Simple append-only vector (dynamic array) of void * elements.\n+ *\n+ * Design:\n+ * --------\n+ * - Stores elements in a contiguous array (void **).\n+ * - Supports append (vec_push) and read access.\n+ * - Optionally uses caller-provided stack buffer to avoid heap allocations.\n+ * - See also comment in vector.c of vec_init() for more details.\n+ *\n+ * Memory:\n+ * -------\n+ * - vec_destroy() frees heap memory if used.\n+ * - Stack buffer is never freed.\n+ * - Stored elements are never freed.\n+ *\n+ * Modes:\n+ * ------- \n+ * 1. Start On Stack (grow to heap): vec v;\n+ *                                   void *vstack[8];\n+ *                                   ...\n+ *                                   vec_init(&v, vstack, 8);\n+ *\n+ *   Start Embedded (grow to heap):  typedef struct { \n+ *                                     vec v; \n+ *                                     void *vembedded[8]; \n+ *                                   } obj;\n+ *                                   ...\n+ *                                   vec_init(&obj->v, obj->vembedded, 8);\n+ *\n+ * 2. Heap only, init capacity 8:    vec v;\n+ *                                   ...\n+ *                                   vec_init(&v, NULL, 8);\n+ *\n+ *    Heap only, init capacity 0:    vec v;\n+ *                                   ...\n+ *                                   vec_init(&v, NULL, 0);\n+ *\n+ * 3. Depends on var size:           vec v;\n+ *                                   void *vstack[8];\n+ *                                   vec_init(&v, vstack, 8);\n+ *                                   vec_reserve(&v, varsize); // varsize <= 8 ? stack : heap\n+ *\n+ * Notes:\n+ * ------\n+ * - Not thread-safe.\n+ * - If stack == NULL and initcap > 0, initcap is treated as an initial\n+ *   heap-capacity hint.\n+ * - When used in Redis core, the implementation should use the Redis allocator\n+ *   wrappers (zmalloc / zrealloc / zfree) rather than libc allocation APIs.\n+ */\n+\n+typedef struct vec {\n+    size_t size;       /* Number of elements in the vector. */\n+    size_t cap;        /* Capacity of the vector. */\n+    void **data;       /* Heap-allocated storage or refers to stack. */\n+    void **stack;      /* Optional stack buffer. */",
+        "comment_created_at": "2026-04-14T07:11:02+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "maybe our thoughts are different, i want to have a vector like smallVector in LLVM https://llvm.org/doxygen/classllvm_1_1SmallVector.html#details",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3077711185",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15039,
+        "pr_file": "src/vector.h",
+        "discussion_id": "3076969440",
+        "commented_code": "@@ -0,0 +1,92 @@\n+#ifndef REDIS_VECTOR_H\n+#define REDIS_VECTOR_H\n+\n+#include <stddef.h>\n+\n+/*\n+ * Simple append-only vector (dynamic array) of void * elements.\n+ *\n+ * Design:\n+ * --------\n+ * - Stores elements in a contiguous array (void **).\n+ * - Supports append (vec_push) and read access.\n+ * - Optionally uses caller-provided stack buffer to avoid heap allocations.\n+ * - See also comment in vector.c of vec_init() for more details.\n+ *\n+ * Memory:\n+ * -------\n+ * - vec_destroy() frees heap memory if used.\n+ * - Stack buffer is never freed.\n+ * - Stored elements are never freed.\n+ *\n+ * Modes:\n+ * ------- \n+ * 1. Start On Stack (grow to heap): vec v;\n+ *                                   void *vstack[8];\n+ *                                   ...\n+ *                                   vec_init(&v, vstack, 8);\n+ *\n+ *   Start Embedded (grow to heap):  typedef struct { \n+ *                                     vec v; \n+ *                                     void *vembedded[8]; \n+ *                                   } obj;\n+ *                                   ...\n+ *                                   vec_init(&obj->v, obj->vembedded, 8);\n+ *\n+ * 2. Heap only, init capacity 8:    vec v;\n+ *                                   ...\n+ *                                   vec_init(&v, NULL, 8);\n+ *\n+ *    Heap only, init capacity 0:    vec v;\n+ *                                   ...\n+ *                                   vec_init(&v, NULL, 0);\n+ *\n+ * 3. Depends on var size:           vec v;\n+ *                                   void *vstack[8];\n+ *                                   vec_init(&v, vstack, 8);\n+ *                                   vec_reserve(&v, varsize); // varsize <= 8 ? stack : heap\n+ *\n+ * Notes:\n+ * ------\n+ * - Not thread-safe.\n+ * - If stack == NULL and initcap > 0, initcap is treated as an initial\n+ *   heap-capacity hint.\n+ * - When used in Redis core, the implementation should use the Redis allocator\n+ *   wrappers (zmalloc / zrealloc / zfree) rather than libc allocation APIs.\n+ */\n+\n+typedef struct vec {\n+    size_t size;       /* Number of elements in the vector. */\n+    size_t cap;        /* Capacity of the vector. */\n+    void **data;       /* Heap-allocated storage or refers to stack. */\n+    void **stack;      /* Optional stack buffer. */",
+        "comment_created_at": "2026-04-14T07:12:47+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "to make subkey notification effective, I need to introduce a new DS and API, it seems not elegant",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

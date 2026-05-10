@@ -1,0 +1,392 @@
+[
+  {
+    "discussion_id": "3173841205",
+    "pr_number": 15133,
+    "pr_file": "src/t_string.c",
+    "created_at": "2026-05-01T15:38:19+00:00",
+    "commented_code": "}\n \n void mgetCommand(client *c) {\n-    int j;\n+    int numkeys = c->argc - 1;\n \n-    addReplyArrayLen(c,c->argc-1);\n-    for (j = 1; j < c->argc; j++) {\n-        kvobj *o = lookupKeyRead(c->db, c->argv[j]);\n-        if (o == NULL) {\n-            addReplyNull(c);\n-        } else {\n-            if (o->type != OBJ_STRING) {\n+    addReplyArrayLen(c, numkeys);\n+\n+    /* For a single key (or zero), just do the plain lookup. */\n+    if (numkeys <= 1) {\n+        if (numkeys == 1) {\n+            kvobj *o = lookupKeyRead(c->db, c->argv[1]);\n+            if (o == NULL || o->type != OBJ_STRING)\n                 addReplyNull(c);\n-            } else {\n-                addReplyBulk(c,o);\n+            else\n+                addReplyBulk(c, o);\n+        }\n+        return;\n+    }\n+\n+    /* MGET requires all keys in the same slot in cluster mode. */\n+    int slot = server.cluster_enabled ? getKeySlot(c->argv[1]->ptr) : 0;\n+\n+    /* Skip intra-command prefetching when the cross-command batch path\n+     * already prefetched our keys (fully or partially).  Two conditions:\n+     * 1. PENDING_CMD_KEYS_PREFETCHED: all keys fit in the batch \u2014 skip.\n+     * 2. Pipeline active (ready_len > 1) AND batch prefetching is enabled:\n+     *    batch ran with multiple commands, partially warming the hash table.\n+     *    Running both prefetch paths causes cache-bandwidth contention and\n+     *    -9.6% regression on x86 with pipeline-10.  The partial warmup is\n+     *    sufficient.\n+     * We must also verify that batch prefetching is enabled\n+     * (prefetch_batch_max_size > 0), otherwise no cross-command prefetching\n+     * occurred and the intra-command path is the only prefetch opportunity. */\n+    int already_prefetched = c->current_pending_cmd &&\n+        ((c->current_pending_cmd->flags & PENDING_CMD_KEYS_PREFETCHED) ||\n+         (c->pending_cmds.ready_len > 1 && server.prefetch_batch_max_size > 0));\n+\n+    if (already_prefetched) {\n+        /* Keys are already warm in cache \u2014 plain sequential lookups. */\n+        for (int j = 1; j < c->argc; j++) {\n+            kvobj *o = lookupKeyRead(c->db, c->argv[j]);\n+            if (o == NULL || o->type != OBJ_STRING)\n+                addReplyNull(c);\n+            else\n+                addReplyBulk(c, o);\n+        }\n+        return;\n+    }\n+\n+    /* Process keys in batches, prefetching dict buckets before lookups. */\n+    #define MGET_BATCH 16\n+    #define MGET_LIGHT_PREFETCH_MAX 10\n+    int j = 1;\n+    while (j < c->argc) {\n+        int batch_end = j + MGET_BATCH;\n+        if (batch_end > c->argc) batch_end = c->argc;\n+        int n = batch_end - j;\n+\n+        /* Re-fetch the slot dict per batch.  In cluster mode db->keys is\n+         * created with KVSTORE_FREE_EMPTY_DICTS, so the previous batch's\n+         * lookupKeyRead -> expireIfNeeded path can empty the slot and free\n+         * the dict.  A cached pointer would then dangle.  Cost: one extra\n+         * kvstoreGetDict call per 16 keys.  If the dict is empty (or NULL)\n+         * we just emit NULLs for this batch; lookupKeyRead is still called\n+         * to preserve touch / stats / notification side-effects. */\n+        dict *d = kvstoreGetDict(c->db->keys, slot);\n+\n+        if (!d || dictSize(d) == 0) {\n+            for (int k = 0; k < n; k++) {\n+                lookupKeyRead(c->db, c->argv[j + k]);\n+                addReplyNull(c);\n+            }\n+            j = batch_end;\n+            continue;\n+        }\n+\n+        /* For small batches, use a lightweight bucket-only prefetch instead\n+         * of the full state machine.  The state machine's per-key overhead\n+         * (ctxNextInfo scan, function dispatch, 4 states per key) exceeds\n+         * the prefetch benefit when keys are few and the working set fits\n+         * in L3.  A single-pass bucket prefetch gives the CPU enough lead\n+         * time to warm the hash chain heads without the iteration cost. */\n+        if (n <= MGET_LIGHT_PREFETCH_MAX) {\n+            int ht_idx = 0;\n+            for (int k = 0; k < n; k++) {\n+                uint64_t hash = dictGetHash(d, c->argv[j + k]->ptr);\n+                uint64_t idx = hash & DICTHT_SIZE_MASK(d->ht_size_exp[ht_idx]);\n+                redis_prefetch_read(&d->ht_table[ht_idx][idx]);\n+            }\n+        } else {\n+            void *keys[MGET_BATCH];\n+            dict  *dicts[MGET_BATCH];\n+            for (int k = 0; k < n; k++) {\n+                keys[k]  = c->argv[j + k]->ptr;\n+                dicts[k] = d;\n             }\n+            dictPrefetchKeys(dicts, keys, n);\n+        }\n+\n+        /* Sequential lookups + replies \u2014 hot in cache. */\n+        for (int k = 0; k < n; k++) {\n+            kvobj *o = lookupKeyRead(c->db, c->argv[j + k]);\n+            if (o == NULL || o->type != OBJ_STRING)\n+                addReplyNull(c);\n+            else\n+                addReplyBulk(c, o);\n+        }\n+        j = batch_end;\n+    }\n+    #undef MGET_BATCH\n+    #undef MGET_LIGHT_PREFETCH_MAX\n+}\n+\n+/* Prefetch dict buckets for a batch of MSET keys. Each key at argv[start],",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3173841205",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15133,
+        "pr_file": "src/t_string.c",
+        "discussion_id": "3173841205",
+        "commented_code": "@@ -684,23 +684,153 @@ void getrangeCommand(client *c) {\n }\n \n void mgetCommand(client *c) {\n-    int j;\n+    int numkeys = c->argc - 1;\n \n-    addReplyArrayLen(c,c->argc-1);\n-    for (j = 1; j < c->argc; j++) {\n-        kvobj *o = lookupKeyRead(c->db, c->argv[j]);\n-        if (o == NULL) {\n-            addReplyNull(c);\n-        } else {\n-            if (o->type != OBJ_STRING) {\n+    addReplyArrayLen(c, numkeys);\n+\n+    /* For a single key (or zero), just do the plain lookup. */\n+    if (numkeys <= 1) {\n+        if (numkeys == 1) {\n+            kvobj *o = lookupKeyRead(c->db, c->argv[1]);\n+            if (o == NULL || o->type != OBJ_STRING)\n                 addReplyNull(c);\n-            } else {\n-                addReplyBulk(c,o);\n+            else\n+                addReplyBulk(c, o);\n+        }\n+        return;\n+    }\n+\n+    /* MGET requires all keys in the same slot in cluster mode. */\n+    int slot = server.cluster_enabled ? getKeySlot(c->argv[1]->ptr) : 0;\n+\n+    /* Skip intra-command prefetching when the cross-command batch path\n+     * already prefetched our keys (fully or partially).  Two conditions:\n+     * 1. PENDING_CMD_KEYS_PREFETCHED: all keys fit in the batch \u2014 skip.\n+     * 2. Pipeline active (ready_len > 1) AND batch prefetching is enabled:\n+     *    batch ran with multiple commands, partially warming the hash table.\n+     *    Running both prefetch paths causes cache-bandwidth contention and\n+     *    -9.6% regression on x86 with pipeline-10.  The partial warmup is\n+     *    sufficient.\n+     * We must also verify that batch prefetching is enabled\n+     * (prefetch_batch_max_size > 0), otherwise no cross-command prefetching\n+     * occurred and the intra-command path is the only prefetch opportunity. */\n+    int already_prefetched = c->current_pending_cmd &&\n+        ((c->current_pending_cmd->flags & PENDING_CMD_KEYS_PREFETCHED) ||\n+         (c->pending_cmds.ready_len > 1 && server.prefetch_batch_max_size > 0));\n+\n+    if (already_prefetched) {\n+        /* Keys are already warm in cache \u2014 plain sequential lookups. */\n+        for (int j = 1; j < c->argc; j++) {\n+            kvobj *o = lookupKeyRead(c->db, c->argv[j]);\n+            if (o == NULL || o->type != OBJ_STRING)\n+                addReplyNull(c);\n+            else\n+                addReplyBulk(c, o);\n+        }\n+        return;\n+    }\n+\n+    /* Process keys in batches, prefetching dict buckets before lookups. */\n+    #define MGET_BATCH 16\n+    #define MGET_LIGHT_PREFETCH_MAX 10\n+    int j = 1;\n+    while (j < c->argc) {\n+        int batch_end = j + MGET_BATCH;\n+        if (batch_end > c->argc) batch_end = c->argc;\n+        int n = batch_end - j;\n+\n+        /* Re-fetch the slot dict per batch.  In cluster mode db->keys is\n+         * created with KVSTORE_FREE_EMPTY_DICTS, so the previous batch's\n+         * lookupKeyRead -> expireIfNeeded path can empty the slot and free\n+         * the dict.  A cached pointer would then dangle.  Cost: one extra\n+         * kvstoreGetDict call per 16 keys.  If the dict is empty (or NULL)\n+         * we just emit NULLs for this batch; lookupKeyRead is still called\n+         * to preserve touch / stats / notification side-effects. */\n+        dict *d = kvstoreGetDict(c->db->keys, slot);\n+\n+        if (!d || dictSize(d) == 0) {\n+            for (int k = 0; k < n; k++) {\n+                lookupKeyRead(c->db, c->argv[j + k]);\n+                addReplyNull(c);\n+            }\n+            j = batch_end;\n+            continue;\n+        }\n+\n+        /* For small batches, use a lightweight bucket-only prefetch instead\n+         * of the full state machine.  The state machine's per-key overhead\n+         * (ctxNextInfo scan, function dispatch, 4 states per key) exceeds\n+         * the prefetch benefit when keys are few and the working set fits\n+         * in L3.  A single-pass bucket prefetch gives the CPU enough lead\n+         * time to warm the hash chain heads without the iteration cost. */\n+        if (n <= MGET_LIGHT_PREFETCH_MAX) {\n+            int ht_idx = 0;\n+            for (int k = 0; k < n; k++) {\n+                uint64_t hash = dictGetHash(d, c->argv[j + k]->ptr);\n+                uint64_t idx = hash & DICTHT_SIZE_MASK(d->ht_size_exp[ht_idx]);\n+                redis_prefetch_read(&d->ht_table[ht_idx][idx]);\n+            }\n+        } else {\n+            void *keys[MGET_BATCH];\n+            dict  *dicts[MGET_BATCH];\n+            for (int k = 0; k < n; k++) {\n+                keys[k]  = c->argv[j + k]->ptr;\n+                dicts[k] = d;\n             }\n+            dictPrefetchKeys(dicts, keys, n);\n+        }\n+\n+        /* Sequential lookups + replies \u2014 hot in cache. */\n+        for (int k = 0; k < n; k++) {\n+            kvobj *o = lookupKeyRead(c->db, c->argv[j + k]);\n+            if (o == NULL || o->type != OBJ_STRING)\n+                addReplyNull(c);\n+            else\n+                addReplyBulk(c, o);\n+        }\n+        j = batch_end;\n+    }\n+    #undef MGET_BATCH\n+    #undef MGET_LIGHT_PREFETCH_MAX\n+}\n+\n+/* Prefetch dict buckets for a batch of MSET keys. Each key at argv[start],",
+        "comment_created_at": "2026-05-01T15:38:19+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "does it introduce a new mechanism, why not use `dictPrefetchKeys`?\neven for mset command, we may also need to access old value (key size histgram)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3187192645",
+    "pr_number": 15133,
+    "pr_file": "src/t_string.c",
+    "created_at": "2026-05-05T09:01:28+00:00",
+    "commented_code": "}\n \n void mgetCommand(client *c) {\n-    int j;\n+    int numkeys = c->argc - 1;\n+\n+    addReplyArrayLen(c, numkeys);\n+\n+    /* MGET requires all keys in the same slot in cluster mode. */\n+    int slot = server.cluster_enabled ? getKeySlot(c->argv[1]->ptr) : 0;\n+\n+    /* Skip intra-command prefetching when the cross-command batch path\n+     * already prefetched our keys (fully or partially).  Two conditions:\n+     * 1. PENDING_CMD_KEYS_PREFETCHED: all keys fit in the batch \u2014 skip.\n+     * 2. Pipeline active (ready_len > 1) AND batch prefetching is enabled:\n+     *    batch ran with multiple commands, partially warming the hash table.\n+     *    Running both prefetch paths causes cache-bandwidth contention and\n+     *    -9.6% regression on x86 with pipeline-10.  The partial warmup is\n+     *    sufficient.\n+     * We must also verify that batch prefetching is enabled\n+     * (prefetch_batch_max_size > 0), otherwise no cross-command prefetching\n+     * occurred and the intra-command path is the only prefetch opportunity. */\n+    int already_prefetched = c->current_pending_cmd &&\n+        ((c->current_pending_cmd->flags & PENDING_CMD_KEYS_PREFETCHED) ||\n+         (c->pending_cmds.ready_len > 1 && server.prefetch_batch_max_size > 0));\n+\n+    if (already_prefetched) {\n+        /* Keys are already warm in cache \u2014 plain sequential lookups. */\n+        for (int j = 1; j < c->argc; j++) {\n+            kvobj *o = lookupKeyRead(c->db, c->argv[j]);\n+            if (o == NULL || o->type != OBJ_STRING)\n+                addReplyNull(c);\n+            else\n+                addReplyBulk(c, o);\n+        }\n+        return;\n+    }\n \n-    addReplyArrayLen(c,c->argc-1);\n-    for (j = 1; j < c->argc; j++) {\n-        kvobj *o = lookupKeyRead(c->db, c->argv[j]);\n-        if (o == NULL) {\n-            addReplyNull(c);\n-        } else {\n-            if (o->type != OBJ_STRING) {\n+    /* Process keys in batches, prefetching dict buckets before lookups. */\n+    #define MGET_BATCH 16\n+    #define MGET_LIGHT_PREFETCH_MAX 10\n+    int j = 1;\n+    while (j < c->argc) {\n+        int batch_end = j + MGET_BATCH;\n+        if (batch_end > c->argc) batch_end = c->argc;\n+        int n = batch_end - j;\n+\n+        /* Re-fetch the slot dict per batch.  In cluster mode db->keys is\n+         * created with KVSTORE_FREE_EMPTY_DICTS, so the previous batch's\n+         * lookupKeyRead -> expireIfNeeded path can empty the slot and free\n+         * the dict.  A cached pointer would then dangle.  Cost: one extra\n+         * kvstoreGetDict call per 16 keys.  If the dict is empty (or NULL)\n+         * we just emit NULLs for this batch; lookupKeyRead is still called\n+         * to preserve touch / stats / notification side-effects. */\n+        dict *d = kvstoreGetDict(c->db->keys, slot);\n+\n+        if (!d || dictSize(d) == 0) {\n+            for (int k = 0; k < n; k++) {\n+                lookupKeyRead(c->db, c->argv[j + k]);\n                 addReplyNull(c);\n-            } else {\n-                addReplyBulk(c,o);\n             }\n+            j = batch_end;\n+            continue;\n+        }\n+\n+        /* For small batches, use a lightweight bucket-only prefetch instead\n+         * of the full state machine.  The state machine's per-key overhead\n+         * (ctxNextInfo scan, function dispatch, 4 states per key) exceeds\n+         * the prefetch benefit when keys are few and the working set fits\n+         * in L3.  A single-pass bucket prefetch gives the CPU enough lead\n+         * time to warm the hash chain heads without the iteration cost. */\n+        if (n <= MGET_LIGHT_PREFETCH_MAX) {",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3187192645",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15133,
+        "pr_file": "src/t_string.c",
+        "discussion_id": "3187192645",
+        "commented_code": "@@ -684,21 +684,129 @@ void getrangeCommand(client *c) {\n }\n \n void mgetCommand(client *c) {\n-    int j;\n+    int numkeys = c->argc - 1;\n+\n+    addReplyArrayLen(c, numkeys);\n+\n+    /* MGET requires all keys in the same slot in cluster mode. */\n+    int slot = server.cluster_enabled ? getKeySlot(c->argv[1]->ptr) : 0;\n+\n+    /* Skip intra-command prefetching when the cross-command batch path\n+     * already prefetched our keys (fully or partially).  Two conditions:\n+     * 1. PENDING_CMD_KEYS_PREFETCHED: all keys fit in the batch \u2014 skip.\n+     * 2. Pipeline active (ready_len > 1) AND batch prefetching is enabled:\n+     *    batch ran with multiple commands, partially warming the hash table.\n+     *    Running both prefetch paths causes cache-bandwidth contention and\n+     *    -9.6% regression on x86 with pipeline-10.  The partial warmup is\n+     *    sufficient.\n+     * We must also verify that batch prefetching is enabled\n+     * (prefetch_batch_max_size > 0), otherwise no cross-command prefetching\n+     * occurred and the intra-command path is the only prefetch opportunity. */\n+    int already_prefetched = c->current_pending_cmd &&\n+        ((c->current_pending_cmd->flags & PENDING_CMD_KEYS_PREFETCHED) ||\n+         (c->pending_cmds.ready_len > 1 && server.prefetch_batch_max_size > 0));\n+\n+    if (already_prefetched) {\n+        /* Keys are already warm in cache \u2014 plain sequential lookups. */\n+        for (int j = 1; j < c->argc; j++) {\n+            kvobj *o = lookupKeyRead(c->db, c->argv[j]);\n+            if (o == NULL || o->type != OBJ_STRING)\n+                addReplyNull(c);\n+            else\n+                addReplyBulk(c, o);\n+        }\n+        return;\n+    }\n \n-    addReplyArrayLen(c,c->argc-1);\n-    for (j = 1; j < c->argc; j++) {\n-        kvobj *o = lookupKeyRead(c->db, c->argv[j]);\n-        if (o == NULL) {\n-            addReplyNull(c);\n-        } else {\n-            if (o->type != OBJ_STRING) {\n+    /* Process keys in batches, prefetching dict buckets before lookups. */\n+    #define MGET_BATCH 16\n+    #define MGET_LIGHT_PREFETCH_MAX 10\n+    int j = 1;\n+    while (j < c->argc) {\n+        int batch_end = j + MGET_BATCH;\n+        if (batch_end > c->argc) batch_end = c->argc;\n+        int n = batch_end - j;\n+\n+        /* Re-fetch the slot dict per batch.  In cluster mode db->keys is\n+         * created with KVSTORE_FREE_EMPTY_DICTS, so the previous batch's\n+         * lookupKeyRead -> expireIfNeeded path can empty the slot and free\n+         * the dict.  A cached pointer would then dangle.  Cost: one extra\n+         * kvstoreGetDict call per 16 keys.  If the dict is empty (or NULL)\n+         * we just emit NULLs for this batch; lookupKeyRead is still called\n+         * to preserve touch / stats / notification side-effects. */\n+        dict *d = kvstoreGetDict(c->db->keys, slot);\n+\n+        if (!d || dictSize(d) == 0) {\n+            for (int k = 0; k < n; k++) {\n+                lookupKeyRead(c->db, c->argv[j + k]);\n                 addReplyNull(c);\n-            } else {\n-                addReplyBulk(c,o);\n             }\n+            j = batch_end;\n+            continue;\n+        }\n+\n+        /* For small batches, use a lightweight bucket-only prefetch instead\n+         * of the full state machine.  The state machine's per-key overhead\n+         * (ctxNextInfo scan, function dispatch, 4 states per key) exceeds\n+         * the prefetch benefit when keys are few and the working set fits\n+         * in L3.  A single-pass bucket prefetch gives the CPU enough lead\n+         * time to warm the hash chain heads without the iteration cost. */\n+        if (n <= MGET_LIGHT_PREFETCH_MAX) {",
+        "comment_created_at": "2026-05-05T09:01:28+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "If the remaining key number is less than 2*MGET_BATCH, we call prefetch them once, skip this ugly optimization:(, so we can only have a single code path. actually we have similar mechanism in memory_prefetch.c",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3187852650",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15133,
+        "pr_file": "src/t_string.c",
+        "discussion_id": "3187192645",
+        "commented_code": "@@ -684,21 +684,129 @@ void getrangeCommand(client *c) {\n }\n \n void mgetCommand(client *c) {\n-    int j;\n+    int numkeys = c->argc - 1;\n+\n+    addReplyArrayLen(c, numkeys);\n+\n+    /* MGET requires all keys in the same slot in cluster mode. */\n+    int slot = server.cluster_enabled ? getKeySlot(c->argv[1]->ptr) : 0;\n+\n+    /* Skip intra-command prefetching when the cross-command batch path\n+     * already prefetched our keys (fully or partially).  Two conditions:\n+     * 1. PENDING_CMD_KEYS_PREFETCHED: all keys fit in the batch \u2014 skip.\n+     * 2. Pipeline active (ready_len > 1) AND batch prefetching is enabled:\n+     *    batch ran with multiple commands, partially warming the hash table.\n+     *    Running both prefetch paths causes cache-bandwidth contention and\n+     *    -9.6% regression on x86 with pipeline-10.  The partial warmup is\n+     *    sufficient.\n+     * We must also verify that batch prefetching is enabled\n+     * (prefetch_batch_max_size > 0), otherwise no cross-command prefetching\n+     * occurred and the intra-command path is the only prefetch opportunity. */\n+    int already_prefetched = c->current_pending_cmd &&\n+        ((c->current_pending_cmd->flags & PENDING_CMD_KEYS_PREFETCHED) ||\n+         (c->pending_cmds.ready_len > 1 && server.prefetch_batch_max_size > 0));\n+\n+    if (already_prefetched) {\n+        /* Keys are already warm in cache \u2014 plain sequential lookups. */\n+        for (int j = 1; j < c->argc; j++) {\n+            kvobj *o = lookupKeyRead(c->db, c->argv[j]);\n+            if (o == NULL || o->type != OBJ_STRING)\n+                addReplyNull(c);\n+            else\n+                addReplyBulk(c, o);\n+        }\n+        return;\n+    }\n \n-    addReplyArrayLen(c,c->argc-1);\n-    for (j = 1; j < c->argc; j++) {\n-        kvobj *o = lookupKeyRead(c->db, c->argv[j]);\n-        if (o == NULL) {\n-            addReplyNull(c);\n-        } else {\n-            if (o->type != OBJ_STRING) {\n+    /* Process keys in batches, prefetching dict buckets before lookups. */\n+    #define MGET_BATCH 16\n+    #define MGET_LIGHT_PREFETCH_MAX 10\n+    int j = 1;\n+    while (j < c->argc) {\n+        int batch_end = j + MGET_BATCH;\n+        if (batch_end > c->argc) batch_end = c->argc;\n+        int n = batch_end - j;\n+\n+        /* Re-fetch the slot dict per batch.  In cluster mode db->keys is\n+         * created with KVSTORE_FREE_EMPTY_DICTS, so the previous batch's\n+         * lookupKeyRead -> expireIfNeeded path can empty the slot and free\n+         * the dict.  A cached pointer would then dangle.  Cost: one extra\n+         * kvstoreGetDict call per 16 keys.  If the dict is empty (or NULL)\n+         * we just emit NULLs for this batch; lookupKeyRead is still called\n+         * to preserve touch / stats / notification side-effects. */\n+        dict *d = kvstoreGetDict(c->db->keys, slot);\n+\n+        if (!d || dictSize(d) == 0) {\n+            for (int k = 0; k < n; k++) {\n+                lookupKeyRead(c->db, c->argv[j + k]);\n                 addReplyNull(c);\n-            } else {\n-                addReplyBulk(c,o);\n             }\n+            j = batch_end;\n+            continue;\n+        }\n+\n+        /* For small batches, use a lightweight bucket-only prefetch instead\n+         * of the full state machine.  The state machine's per-key overhead\n+         * (ctxNextInfo scan, function dispatch, 4 states per key) exceeds\n+         * the prefetch benefit when keys are few and the working set fits\n+         * in L3.  A single-pass bucket prefetch gives the CPU enough lead\n+         * time to warm the hash chain heads without the iteration cost. */\n+        if (n <= MGET_LIGHT_PREFETCH_MAX) {",
+        "comment_created_at": "2026-05-05T10:53:12+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "Addressed in [a46e18965](https://github.com/redis/redis/pull/15133/commits/a46e189655611453c92750f8583a0193a29c3bae)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3035527724",
+    "pr_number": 14988,
+    "pr_file": "src/t_hash.c",
+    "created_at": "2026-04-04T19:54:06+00:00",
+    "commented_code": "if (server.memory_tracking_enabled)\n         oldsize = kvobjAllocSize(o);\n-    hashTypeInitIterator(&hi, o);\n \n-    while (hashTypeNext(&hi, 1 /*skipExpiredFields*/) != C_ERR) {\n-        if (flags & OBJ_HASH_KEY) {\n-            addHashIteratorCursorToReply(c, &hi, OBJ_HASH_KEY);\n-            count++;\n+    /* Fast path: batched prefetch for hashtable-encoded HGETALL.\n+     * Collect a batch of dict entries, prefetch their Entry structs and\n+     * value SDS data, then emit replies while the data is cache-warm.\n+     * This hides the latency of pointer chasing through scattered\n+     * heap allocations (dictEntry \u2192 Entry \u2192 value SDS). */\n+    if (o->encoding == OBJ_ENCODING_HT &&\n+        (flags & OBJ_HASH_KEY) && (flags & OBJ_HASH_VALUE) &&\n+        server.prefetch_batch_max_size > 0)\n+    {\n+        #define HGETALL_BATCH 16\n+        dict *d = o->ptr;\n+        dictIterator di;\n+        dictInitSafeIterator(&di, d);\n+        dictEntry *batch_de[HGETALL_BATCH];\n+        Entry *batch_entry[HGETALL_BATCH];\n+\n+        int batch_count;\n+        while (1) {\n+            /* Phase 1: collect batch of entries from dict iterator,\n+             * skipping expired fields and prefetching Entry structs. */\n+            batch_count = 0;\n+            for (int i = 0; i < HGETALL_BATCH; i++) {\n+                dictEntry *de;\n+                Entry *e;\n+                /* Skip expired fields like hashTypeNext does. */\n+                while ((de = dictNext(&di)) != NULL) {\n+                    e = dictGetKey(de);\n+                    uint64_t expire_time = entryGetExpiry(e);\n+                    if (expire_time != EB_EXPIRE_TIME_INVALID &&\n+                        (mstime_t)expire_time < commandTimeSnapshot())\n+                        continue;\n+                    break;\n+                }\n+                if (!de) break;\n+                batch_de[batch_count] = de;\n+                batch_entry[batch_count] = e;\n+                redis_prefetch_read(e);\n+                batch_count++;\n+            }",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3035979145",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14988,
+        "pr_file": "src/t_hash.c",
+        "discussion_id": "3035527724",
+        "commented_code": "@@ -3049,20 +3049,86 @@ void genericHgetallCommand(client *c, int flags) {\n \n     if (server.memory_tracking_enabled)\n         oldsize = kvobjAllocSize(o);\n-    hashTypeInitIterator(&hi, o);\n \n-    while (hashTypeNext(&hi, 1 /*skipExpiredFields*/) != C_ERR) {\n-        if (flags & OBJ_HASH_KEY) {\n-            addHashIteratorCursorToReply(c, &hi, OBJ_HASH_KEY);\n-            count++;\n+    /* Fast path: batched prefetch for hashtable-encoded HGETALL.\n+     * Collect a batch of dict entries, prefetch their Entry structs and\n+     * value SDS data, then emit replies while the data is cache-warm.\n+     * This hides the latency of pointer chasing through scattered\n+     * heap allocations (dictEntry \u2192 Entry \u2192 value SDS). */\n+    if (o->encoding == OBJ_ENCODING_HT &&\n+        (flags & OBJ_HASH_KEY) && (flags & OBJ_HASH_VALUE) &&\n+        server.prefetch_batch_max_size > 0)\n+    {\n+        #define HGETALL_BATCH 16\n+        dict *d = o->ptr;\n+        dictIterator di;\n+        dictInitSafeIterator(&di, d);\n+        dictEntry *batch_de[HGETALL_BATCH];\n+        Entry *batch_entry[HGETALL_BATCH];\n+\n+        int batch_count;\n+        while (1) {\n+            /* Phase 1: collect batch of entries from dict iterator,\n+             * skipping expired fields and prefetching Entry structs. */\n+            batch_count = 0;\n+            for (int i = 0; i < HGETALL_BATCH; i++) {\n+                dictEntry *de;\n+                Entry *e;\n+                /* Skip expired fields like hashTypeNext does. */\n+                while ((de = dictNext(&di)) != NULL) {\n+                    e = dictGetKey(de);\n+                    uint64_t expire_time = entryGetExpiry(e);\n+                    if (expire_time != EB_EXPIRE_TIME_INVALID &&\n+                        (mstime_t)expire_time < commandTimeSnapshot())\n+                        continue;\n+                    break;\n+                }\n+                if (!de) break;\n+                batch_de[batch_count] = de;\n+                batch_entry[batch_count] = e;\n+                redis_prefetch_read(e);\n+                batch_count++;\n+            }",
+        "comment_created_at": "2026-04-04T19:54:06+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "Fixed in 718ae4c5c \u2014 the fast path now checks `server.allow_access_expired` before skipping expired fields, matching `hashTypeNext()` and `hashTypeLength()` behavior.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3035529696",
+    "pr_number": 14988,
+    "pr_file": "src/t_hash.c",
+    "created_at": "2026-04-04T19:54:09+00:00",
+    "commented_code": "if (server.memory_tracking_enabled)\n         oldsize = kvobjAllocSize(o);\n-    hashTypeInitIterator(&hi, o);\n \n-    while (hashTypeNext(&hi, 1 /*skipExpiredFields*/) != C_ERR) {\n-        if (flags & OBJ_HASH_KEY) {\n-            addHashIteratorCursorToReply(c, &hi, OBJ_HASH_KEY);\n-            count++;\n+    /* Fast path: batched prefetch for hashtable-encoded HGETALL.\n+     * Collect a batch of dict entries, prefetch their Entry structs and\n+     * value SDS data, then emit replies while the data is cache-warm.\n+     * This hides the latency of pointer chasing through scattered\n+     * heap allocations (dictEntry \u2192 Entry \u2192 value SDS). */\n+    if (o->encoding == OBJ_ENCODING_HT &&\n+        (flags & OBJ_HASH_KEY) && (flags & OBJ_HASH_VALUE) &&\n+        server.prefetch_batch_max_size > 0)\n+    {\n+        #define HGETALL_BATCH 16\n+        dict *d = o->ptr;\n+        dictIterator di;\n+        dictInitSafeIterator(&di, d);\n+        dictEntry *batch_de[HGETALL_BATCH];\n+        Entry *batch_entry[HGETALL_BATCH];\n+\n+        int batch_count;\n+        while (1) {\n+            /* Phase 1: collect batch of entries from dict iterator,\n+             * skipping expired fields and prefetching Entry structs. */\n+            batch_count = 0;\n+            for (int i = 0; i < HGETALL_BATCH; i++) {\n+                dictEntry *de;\n+                Entry *e;\n+                /* Skip expired fields like hashTypeNext does. */\n+                while ((de = dictNext(&di)) != NULL) {\n+                    e = dictGetKey(de);\n+                    uint64_t expire_time = entryGetExpiry(e);\n+                    if (expire_time != EB_EXPIRE_TIME_INVALID &&",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3035979180",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14988,
+        "pr_file": "src/t_hash.c",
+        "discussion_id": "3035529696",
+        "commented_code": "@@ -3049,20 +3049,86 @@ void genericHgetallCommand(client *c, int flags) {\n \n     if (server.memory_tracking_enabled)\n         oldsize = kvobjAllocSize(o);\n-    hashTypeInitIterator(&hi, o);\n \n-    while (hashTypeNext(&hi, 1 /*skipExpiredFields*/) != C_ERR) {\n-        if (flags & OBJ_HASH_KEY) {\n-            addHashIteratorCursorToReply(c, &hi, OBJ_HASH_KEY);\n-            count++;\n+    /* Fast path: batched prefetch for hashtable-encoded HGETALL.\n+     * Collect a batch of dict entries, prefetch their Entry structs and\n+     * value SDS data, then emit replies while the data is cache-warm.\n+     * This hides the latency of pointer chasing through scattered\n+     * heap allocations (dictEntry \u2192 Entry \u2192 value SDS). */\n+    if (o->encoding == OBJ_ENCODING_HT &&\n+        (flags & OBJ_HASH_KEY) && (flags & OBJ_HASH_VALUE) &&\n+        server.prefetch_batch_max_size > 0)\n+    {\n+        #define HGETALL_BATCH 16\n+        dict *d = o->ptr;\n+        dictIterator di;\n+        dictInitSafeIterator(&di, d);\n+        dictEntry *batch_de[HGETALL_BATCH];\n+        Entry *batch_entry[HGETALL_BATCH];\n+\n+        int batch_count;\n+        while (1) {\n+            /* Phase 1: collect batch of entries from dict iterator,\n+             * skipping expired fields and prefetching Entry structs. */\n+            batch_count = 0;\n+            for (int i = 0; i < HGETALL_BATCH; i++) {\n+                dictEntry *de;\n+                Entry *e;\n+                /* Skip expired fields like hashTypeNext does. */\n+                while ((de = dictNext(&di)) != NULL) {\n+                    e = dictGetKey(de);\n+                    uint64_t expire_time = entryGetExpiry(e);\n+                    if (expire_time != EB_EXPIRE_TIME_INVALID &&",
+        "comment_created_at": "2026-04-04T19:54:09+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "Fixed in 718ae4c5c \u2014 added `skip_expired = !server.allow_access_expired` flag so the expiration filter mirrors `hashTypeNext()` behavior. Also removed the dead `batch_de` array.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3100875683",
+    "pr_number": 15065,
+    "pr_file": "src/db.c",
+    "created_at": "2026-04-17T14:04:21+00:00",
+    "commented_code": "ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3100875683",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-17T14:04:21+00:00",
+        "comment_author": "moticless",
+        "comment_body": "I assume it is optimized. Yet, maybe it worth to try benchmark, say, keys_stack[64]. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3101575000",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-17T15:52:01+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "Good call. Running a benchmark sweep on dedicated experimental branches with keys_stack[64], [128], and [256] across the scan-* benchmarks on both x86 and ARM. Will post results before picking the final size.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3102125671",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-17T17:29:36+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "Ran the sweep on 3 branches (`keys_stack[64]`, `[128]`, `[256]`) targeting `memtier_benchmark-1Mkeys-generic-scan-.*` (11 tests) on `x86-aws-m7i.metal-24xl` and `arm-aws-m8g.metal-24xl`, n=1 each.\n\nPairwise vs the 256 baseline:\n\n| Arch | Comparison | Regressions >3% |\n|------|-----------|-----------------|\n| x86 | 64 vs 256 | count-500-pipeline-10 **-6.5%**, count-10-incremental -3.1% |\n| x86 | 128 vs 256 | scan-pipeline-10 **-5.3%**, count-500-pipeline-10 -4.5% |\n| ARM | 64 vs 256 | scan-pipeline-10 -3.6%, count-500-pipeline-10 -3.5% |\n| ARM | 128 vs 256 | scan-pipeline-10 **-11.2%**, type-pipeline-10 -7.1%, cursor-count-500-pipeline-10 -3.2% |\n\nPattern is consistent across both archs: the heavy-throughput tests (`*-pipeline-10`, `count-500-*`) regress when the stack shrinks \u2014 smaller stack spills to heap earlier and forces extra `vecPush` doublings on the hot path. 256 (~2 KiB on the stack) never loses on any test.\n\nKeeping `keys_stack[256]`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3105190002",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-18T13:06:50+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "i also 256 is a bit big, since we already know `count` number, so we can allocate the specific size, avoiding reallocate+memcpy during running.\n```\nvecReserve(&keys, count);\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3106707400",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-19T10:53:41+00:00",
+        "comment_author": "moticless",
+        "comment_body": "@ShooterIT, I don\u2019t think this is a good idea. A user could set it to a very large value (e.g., UINT_MAX) to retrieve all items, which could lead to disproportionately large memory allocation. The value 256 optimize the common case.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3106773107",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-19T11:52:30+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "> a very large value (e.g., UINT_MAX)\r\n\r\nI was thinking we can avoid necessary `reallocate+memcpy` during running. It is easy to avoid the bad case, like `vecReserve(&keys, min(count, 1024));`\r\n\r\nand didn't you ask test 64 size?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3106798778",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-19T12:12:52+00:00",
+        "comment_author": "moticless",
+        "comment_body": "I suggested testing 64 because I wanted to validate whether 256 was large enough to start hurting locality/cache behavior in the common case, which I expect is usually only tens of elements. The benchmark sweep answered that: shrinking the stack buffer regressed the hot throughput cases, while 256 didn\u2019t lose.\r\n\r\nRegarding `vecReserve(&keys, min(count, 1024));` , it complicates the logic more than it should (unless some benchmark will clearly shows otherwise).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3107021028",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-19T15:01:20+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "Partially applied in bc8c714a4: when `count > 256` (stack buffer), the keys vec is pre-reserved to `count` \u2014 single allocation, skipping the 256\u2192512\u2192\u2026\u2192count doubling path. Kept on the stack for the common small-COUNT case. @moticless raised a UINT_MAX concern on the ungated form (see sibling comment); the 256 gate sidesteps the common case but does not cap the upper bound \u2014 open to wrapping with `min(count, <cap>)` if we want a hard ceiling.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3107021110",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-19T15:01:23+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "Agreed \u2014 the ungated `vecReserve(&keys, count)` exposes a cheap DoS vector (user passes a huge COUNT \u2192 disproportionate allocation). In bc8c714a4 the pre-reserve only fires when `count > 256` (the stack buffer size), which keeps the common case on the stack. I have not added an explicit upper cap yet. If you think we should add one, `min(count, 1M)` or similar would bound the worst case at ~8 MiB of pointer storage \u2014 happy to add if you prefer.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3107021152",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-19T15:01:25+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "Noted. Current state (bc8c714a4) already reserves only when `count > 256`, so the grow-by-doubling you wanted to avoid is skipped in the large-COUNT case. @moticless called the explicit `min(count, 1024)` wrapper \"complicates logic more than it should\" \u2014 I agree unless a benchmark shows otherwise. Leaving as-is.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3107021201",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-19T15:01:27+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "Thanks for the sanity check \u2014 aligned with keeping `keys_stack[256]`. I updated the approach notes with the sweep data and the rationale.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3108040408",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-20T03:01:22+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "i am getting confusing. current code still exposes DoS, right?\r\n```\r\n    if ((size_t)count > sizeof(keys_stack) / sizeof(keys_stack[0]))\r\n        vecReserve(&keys, count);\r\n```\r\nif we use a huge count, the allocation will be huge too.\r\n```\r\nHSCAN hash 0 count 10000000000000\r\n1) \"0\"\r\n2) 1) \"a\"\r\n   2) \"b\"\r\n   3) \"c\"\r\n   4) \"d\"\r\ninfo memory\r\n# Memory\r\nused_memory:1509648\r\nused_memory_human:1.44M\r\nused_memory_rss:5472256\r\nused_memory_rss_human:5.22M\r\nused_memory_peak:80000001484512\r\nused_memory_peak_human:72.76T\r\n```\r\nif we want to avoid the attack, we should set a limit, like `vecReserve(&keys, min(count, 1k/1m));`\r\n\r\nbesides, this check `if ((size_t)count > sizeof(keys_stack) / sizeof(keys_stack[0]))` is not necessary, since vecReserve has similar check inside. \r\n\r\nif we don't worry about `reallocate+memcpy` during scanning, we should remove them.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3108630114",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-20T06:19:41+00:00",
+        "comment_author": "moticless",
+        "comment_body": "I really think we should avoid vecReserve() in here. We took care to the common case. If count is very large the bottleneck probably won't be the growth of the vector.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3114681545",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15065,
+        "pr_file": "src/db.c",
+        "discussion_id": "3100875683",
+        "commented_code": "@@ -1893,18 +1893,17 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n         ht = zs->dict;\n     }\n \n-    list *keys = listCreate();\n-    /* Set a free callback for the contents of the collected keys list.\n-     * For the main keyspace dict, and when we scan a key that's dict encoded\n-     * (we have 'ht'), we don't need to define free method because the strings\n-     * in the list are just a shallow copy from the pointer in the dictEntry.\n-     * When scanning a key with other encodings (e.g. listpack), we need to\n-     * free the temporary strings we add to that list.\n-     * The exception to the above is ZSET, where we do allocate temporary\n-     * strings even when scanning a dict. */\n-    if (o && (!ht || o->type == OBJ_ZSET)) {\n-        listSetFreeMethod(keys, sdsfreegeneric);\n-    }\n+    /* Use a stack-backed vec instead of a heap-allocated list to collect keys.\n+     * This avoids per-key listNode allocations (~48 bytes each) in the\n+     * scan hot path. The stack buffer handles small COUNT values; larger\n+     * scans grow to a single heap allocation via vecPush. */\n+    vec keys;\n+    void *keys_stack[256];\n+    vecInit(&keys, keys_stack, 256);",
+        "comment_created_at": "2026-04-21T02:24:31+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "both are okay to me.\r\n@filipecosta90  if you want to avoid dynamic growth, keep `vecReserve` with a limit, if not, please delete this code block directly. maybe you can run benchmark for them",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3117293666",
+    "pr_number": 15043,
+    "pr_file": "src/t_string.c",
+    "created_at": "2026-04-21T12:10:09+00:00",
+    "commented_code": "return;\n     }\n \n+    int numkeys = (c->argc - 1) / 2;\n+\n+    /* Use batched prefetch when there are multiple keys and the dict has\n+     * entries to look up. Single-key MSET or empty dict (all inserts) skip\n+     * prefetch since there's no lookup to warm. */\n+    int slot = server.cluster_enabled ? getKeySlot(c->argv[1]->ptr) : 0;\n+    dict *d = kvstoreGetDict(c->db->keys, slot);\n+    int use_prefetch = (numkeys > 1 && d != NULL && dictSize(d) > 0);\n+\n     /* Handle the NX flag. The MSETNX semantic is to return zero and don't\n      * set anything if at least one key already exists. */\n     if (nx) {\n-        for (j = 1; j < c->argc; j += 2) {\n-            if (lookupKeyWrite(c->db,c->argv[j]) != NULL) {\n-                addReply(c, shared.czero);\n-                return;\n+        if (use_prefetch) {\n+            for (j = 1; j < c->argc; j += 2 * MSET_BATCH_SIZE) {\n+                int remaining = (c->argc - j + 1) / 2;\n+                int batch = remaining < MSET_BATCH_SIZE ? remaining : MSET_BATCH_SIZE;\n+                msetPrefetchBatch(d, c, j, batch);\n+                for (int k = 0; k < batch; k++) {\n+                    if (lookupKeyWrite(c->db, c->argv[j + k * 2]) != NULL) {\n+                        addReply(c, shared.czero);\n+                        return;\n+                    }\n+                }\n+            }\n+        } else {\n+            for (j = 1; j < c->argc; j += 2) {\n+                if (lookupKeyWrite(c->db, c->argv[j]) != NULL) {\n+                    addReply(c, shared.czero);\n+                    return;\n+                }",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3117293666",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15043,
+        "pr_file": "src/t_string.c",
+        "discussion_id": "3117293666",
+        "commented_code": "@@ -714,28 +738,67 @@ void msetGenericCommand(client *c, int nx) {\n         return;\n     }\n \n+    int numkeys = (c->argc - 1) / 2;\n+\n+    /* Use batched prefetch when there are multiple keys and the dict has\n+     * entries to look up. Single-key MSET or empty dict (all inserts) skip\n+     * prefetch since there's no lookup to warm. */\n+    int slot = server.cluster_enabled ? getKeySlot(c->argv[1]->ptr) : 0;\n+    dict *d = kvstoreGetDict(c->db->keys, slot);\n+    int use_prefetch = (numkeys > 1 && d != NULL && dictSize(d) > 0);\n+\n     /* Handle the NX flag. The MSETNX semantic is to return zero and don't\n      * set anything if at least one key already exists. */\n     if (nx) {\n-        for (j = 1; j < c->argc; j += 2) {\n-            if (lookupKeyWrite(c->db,c->argv[j]) != NULL) {\n-                addReply(c, shared.czero);\n-                return;\n+        if (use_prefetch) {\n+            for (j = 1; j < c->argc; j += 2 * MSET_BATCH_SIZE) {\n+                int remaining = (c->argc - j + 1) / 2;\n+                int batch = remaining < MSET_BATCH_SIZE ? remaining : MSET_BATCH_SIZE;\n+                msetPrefetchBatch(d, c, j, batch);\n+                for (int k = 0; k < batch; k++) {\n+                    if (lookupKeyWrite(c->db, c->argv[j + k * 2]) != NULL) {\n+                        addReply(c, shared.czero);\n+                        return;\n+                    }\n+                }\n+            }\n+        } else {\n+            for (j = 1; j < c->argc; j += 2) {\n+                if (lookupKeyWrite(c->db, c->argv[j]) != NULL) {\n+                    addReply(c, shared.czero);\n+                    return;\n+                }",
+        "comment_created_at": "2026-04-21T12:10:09+00:00",
+        "comment_author": "sundb",
+        "comment_body": "Is there a way to make these two use the same code?\nthe same below.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3118275866",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15043,
+        "pr_file": "src/t_string.c",
+        "discussion_id": "3117293666",
+        "commented_code": "@@ -714,28 +738,67 @@ void msetGenericCommand(client *c, int nx) {\n         return;\n     }\n \n+    int numkeys = (c->argc - 1) / 2;\n+\n+    /* Use batched prefetch when there are multiple keys and the dict has\n+     * entries to look up. Single-key MSET or empty dict (all inserts) skip\n+     * prefetch since there's no lookup to warm. */\n+    int slot = server.cluster_enabled ? getKeySlot(c->argv[1]->ptr) : 0;\n+    dict *d = kvstoreGetDict(c->db->keys, slot);\n+    int use_prefetch = (numkeys > 1 && d != NULL && dictSize(d) > 0);\n+\n     /* Handle the NX flag. The MSETNX semantic is to return zero and don't\n      * set anything if at least one key already exists. */\n     if (nx) {\n-        for (j = 1; j < c->argc; j += 2) {\n-            if (lookupKeyWrite(c->db,c->argv[j]) != NULL) {\n-                addReply(c, shared.czero);\n-                return;\n+        if (use_prefetch) {\n+            for (j = 1; j < c->argc; j += 2 * MSET_BATCH_SIZE) {\n+                int remaining = (c->argc - j + 1) / 2;\n+                int batch = remaining < MSET_BATCH_SIZE ? remaining : MSET_BATCH_SIZE;\n+                msetPrefetchBatch(d, c, j, batch);\n+                for (int k = 0; k < batch; k++) {\n+                    if (lookupKeyWrite(c->db, c->argv[j + k * 2]) != NULL) {\n+                        addReply(c, shared.czero);\n+                        return;\n+                    }\n+                }\n+            }\n+        } else {\n+            for (j = 1; j < c->argc; j += 2) {\n+                if (lookupKeyWrite(c->db, c->argv[j]) != NULL) {\n+                    addReply(c, shared.czero);\n+                    return;\n+                }",
+        "comment_created_at": "2026-04-21T14:46:04+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "Collapsed in 1b8bcce6a. Both the MSETNX existence-check pass and the write pass now use a single batched-loop structure; `use_prefetch` only gates the prefetch call (not the loop shape), and the `else { simple loop }` branches are gone. The prefetch itself is routed through a new `msetMaybePrefetchBatch` helper that re-fetches the slot dict per batch (also addressing the augmentcode/cursor bugbot concern about stale `dict *`).",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3081148961",
+    "pr_number": 15043,
+    "pr_file": "src/t_string.c",
+    "created_at": "2026-04-21T14:46:10+00:00",
+    "commented_code": "return;\n     }\n \n+    int numkeys = (c->argc - 1) / 2;\n+\n+    /* Use batched prefetch when there are multiple keys and the dict has\n+     * entries to look up. Single-key MSET or empty dict (all inserts) skip\n+     * prefetch since there's no lookup to warm. */\n+    int slot = server.cluster_enabled ? getKeySlot(c->argv[1]->ptr) : 0;\n+    dict *d = kvstoreGetDict(c->db->keys, slot);",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3118276612",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15043,
+        "pr_file": "src/t_string.c",
+        "discussion_id": "3081148961",
+        "commented_code": "@@ -714,28 +738,67 @@ void msetGenericCommand(client *c, int nx) {\n         return;\n     }\n \n+    int numkeys = (c->argc - 1) / 2;\n+\n+    /* Use batched prefetch when there are multiple keys and the dict has\n+     * entries to look up. Single-key MSET or empty dict (all inserts) skip\n+     * prefetch since there's no lookup to warm. */\n+    int slot = server.cluster_enabled ? getKeySlot(c->argv[1]->ptr) : 0;\n+    dict *d = kvstoreGetDict(c->db->keys, slot);",
+        "comment_created_at": "2026-04-21T14:46:10+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "Fixed in 1b8bcce6a. The slot dict is now re-fetched per batch via the new `msetMaybePrefetchBatch` helper, so a prior batch's `setKey` \u2192 `expireIfNeeded` \u2192 `freeDictIfNeeded` \u2192 `dbAddByLink` sequence (cluster mode, `KVSTORE_FREE_EMPTY_DICTS`) can't leave us with a dangling pointer. Cost: one extra `kvstoreGetDict` call per 16 keys.\n\nAdded a regression test in `tests/unit/type/string.tcl` (\"MSET overwrites expired keys across batch boundary\") that exercises the expire-then-insert path across a 20-key MSET (two batches). ASAN + `test-sanitizer-address` and `test-external-cluster` are green on the follow-up.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2174169700",
+    "pr_number": 14148,
+    "pr_file": "src/db.c",
+    "created_at": "2025-06-30T04:01:20+00:00",
+    "commented_code": "addReplyArrayLen(c, 2);\n     addReplyBulkLongLong(c,cursor);\n \n-    unsigned long long idx = 0;\n-    addReplyArrayLen(c, listLength(keys));\n-    while ((node = listFirst(keys)) != NULL) {\n-        void *key = listNodeValue(node);\n-        /* For HSCAN, list will contain keys value pairs unless no_values arg\n-         * was given. We should call mstrlen for the keys only. */\n-        int hfieldkey = isKeysHfield && (no_values || (idx++ % 2 == 0));\n-        addReplyBulkCBuffer(c, key, hfieldkey ? mstrlen(key) : sdslen(key));\n-        listDelNode(keys, node);\n+    if (o == NULL) {\n+        /* SCAN command - use dynamic array */\n+        addReplyArrayLen(c, data.scan_keys_count);\n+        for (int i = 0; i < data.scan_keys_count; i++) {\n+            addReplyBulkCBuffer(c, data.scan_keys[i], sdslen(data.scan_keys[i]));\n+        }\n+\n+        /* Cleanup dynamic array if it grew beyond stack */\n+        if (data.scan_keys != keys_stack_buffer) {\n+            zfree(data.scan_keys);\n+        }\n+    } else {\n+        /* HSCAN/SSCAN/ZSCAN - use list */",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2174169700",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14148,
+        "pr_file": "src/db.c",
+        "discussion_id": "2174169700",
+        "commented_code": "@@ -1713,15 +1749,29 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n     addReplyArrayLen(c, 2);\n     addReplyBulkLongLong(c,cursor);\n \n-    unsigned long long idx = 0;\n-    addReplyArrayLen(c, listLength(keys));\n-    while ((node = listFirst(keys)) != NULL) {\n-        void *key = listNodeValue(node);\n-        /* For HSCAN, list will contain keys value pairs unless no_values arg\n-         * was given. We should call mstrlen for the keys only. */\n-        int hfieldkey = isKeysHfield && (no_values || (idx++ % 2 == 0));\n-        addReplyBulkCBuffer(c, key, hfieldkey ? mstrlen(key) : sdslen(key));\n-        listDelNode(keys, node);\n+    if (o == NULL) {\n+        /* SCAN command - use dynamic array */\n+        addReplyArrayLen(c, data.scan_keys_count);\n+        for (int i = 0; i < data.scan_keys_count; i++) {\n+            addReplyBulkCBuffer(c, data.scan_keys[i], sdslen(data.scan_keys[i]));\n+        }\n+\n+        /* Cleanup dynamic array if it grew beyond stack */\n+        if (data.scan_keys != keys_stack_buffer) {\n+            zfree(data.scan_keys);\n+        }\n+    } else {\n+        /* HSCAN/SSCAN/ZSCAN - use list */",
+        "comment_created_at": "2025-06-30T04:01:20+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "why not apply this optimization for HSCAN/SSCAN?\r\n\r\nfor the array, maybe it can be void* [] type, do i miss something?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2177130687",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14148,
+        "pr_file": "src/db.c",
+        "discussion_id": "2174169700",
+        "commented_code": "@@ -1713,15 +1749,29 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {\n     addReplyArrayLen(c, 2);\n     addReplyBulkLongLong(c,cursor);\n \n-    unsigned long long idx = 0;\n-    addReplyArrayLen(c, listLength(keys));\n-    while ((node = listFirst(keys)) != NULL) {\n-        void *key = listNodeValue(node);\n-        /* For HSCAN, list will contain keys value pairs unless no_values arg\n-         * was given. We should call mstrlen for the keys only. */\n-        int hfieldkey = isKeysHfield && (no_values || (idx++ % 2 == 0));\n-        addReplyBulkCBuffer(c, key, hfieldkey ? mstrlen(key) : sdslen(key));\n-        listDelNode(keys, node);\n+    if (o == NULL) {\n+        /* SCAN command - use dynamic array */\n+        addReplyArrayLen(c, data.scan_keys_count);\n+        for (int i = 0; i < data.scan_keys_count; i++) {\n+            addReplyBulkCBuffer(c, data.scan_keys[i], sdslen(data.scan_keys[i]));\n+        }\n+\n+        /* Cleanup dynamic array if it grew beyond stack */\n+        if (data.scan_keys != keys_stack_buffer) {\n+            zfree(data.scan_keys);\n+        }\n+    } else {\n+        /* HSCAN/SSCAN/ZSCAN - use list */",
+        "comment_created_at": "2025-07-01T10:20:08+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "addressed in https://github.com/redis/redis/pull/14148/commits/69d9296d6d84a30a2f416f08fe6662de5ff57351",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2214836947",
+    "pr_number": 14148,
+    "pr_file": "src/db.c",
+    "created_at": "2025-07-18T03:59:38+00:00",
+    "commented_code": "redisDb *db;  /* database reference for expiration checks */\n } scanData;\n \n+/* Helper function to add an item to the scan results (for all scan commands) */\n+static void scanItemsPush(scanData *data, void *item) {\n+    if (unlikely(data->array_count >= data->array_capacity)) {\n+        /* Need to grow the array */\n+        int new_capacity = data->array_capacity * 2;\n+\n+        if (data->array_items == data->array_stack_buffer) {\n+            /* First time growing from stack buffer - need to allocate and copy */\n+            void **new_items = zmalloc(new_capacity * sizeof(void*));\n+            memcpy(new_items, data->array_items, data->array_count * sizeof(void*));\n+            data->array_items = new_items;\n+        } else {\n+            /* Already heap allocated - use zrealloc */\n+            data->array_items = zrealloc(data->array_items, new_capacity * sizeof(void*));",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2214836947",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14148,
+        "pr_file": "src/db.c",
+        "discussion_id": "2214836947",
+        "commented_code": "@@ -1288,6 +1295,28 @@ typedef struct {\n     redisDb *db;  /* database reference for expiration checks */\n } scanData;\n \n+/* Helper function to add an item to the scan results (for all scan commands) */\n+static void scanItemsPush(scanData *data, void *item) {\n+    if (unlikely(data->array_count >= data->array_capacity)) {\n+        /* Need to grow the array */\n+        int new_capacity = data->array_capacity * 2;\n+\n+        if (data->array_items == data->array_stack_buffer) {\n+            /* First time growing from stack buffer - need to allocate and copy */\n+            void **new_items = zmalloc(new_capacity * sizeof(void*));\n+            memcpy(new_items, data->array_items, data->array_count * sizeof(void*));\n+            data->array_items = new_items;\n+        } else {\n+            /* Already heap allocated - use zrealloc */\n+            data->array_items = zrealloc(data->array_items, new_capacity * sizeof(void*));",
+        "comment_created_at": "2025-07-18T03:59:38+00:00",
+        "comment_author": "shahsb",
+        "comment_body": "For the doubling reallocation strategy - have you considered the memory impact when COUNT values are very large (e.g., 10,000+)? Would a more conservative growth strategy (like 1.5x) be worth exploring to reduce memory spikes?",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

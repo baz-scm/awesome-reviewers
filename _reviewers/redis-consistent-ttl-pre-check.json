@@ -1,0 +1,172 @@
+[
+  {
+    "discussion_id": "3098733046",
+    "pr_number": 15045,
+    "pr_file": "src/t_string.c",
+    "created_at": "2026-04-17T08:01:08+00:00",
+    "commented_code": "rewriteClientCommandArgument(c,3,shared.keepttl);\n }\n \n+/*\n+ * INCREX <key> [BYFLOAT increment | BYINT increment] [LBOUND lowerbound] [UBOUND upperbound]\n+ *   [EX seconds | PX milliseconds | EXAT seconds-timestamp | PXAT milliseconds-timestamp] [ENX]\n+ *\n+ * Increments the numeric value of a key and optionally sets its expiration time. \n+ *\n+ * Increment options:\n+ * If no increment options are provided, it behaves like `INCR key`, defaults to incrementing by one.\n+ * Only one of the below options can be used:\n+ * - BYINT: Behaves like INCRBY. If the result overflows, the value remains unchanged(unlike INCRBY).\n+ * - BYFLOAT: Behaves like INCRBYFLOAT. If the result is NaN or INF, an error is returned.\n+ *\n+ * Range options:\n+ * If LBOUND and/or UBOUND are specified, the result is validated against the provided range.\n+ * If the result is out of range, the value remains unchanged.\n+ * If omitted, the limits default to the minimum/maximum of 'long long' (for BYINT) or 'long double' (for BYFLOAT).\n+ *\n+ * Expiration options:\n+ * Only one of the below options can be used:\n+ * - EX: Set expiration in seconds.\n+ * - PX: Set expiration in milliseconds.\n+ * - EXAT: Set expiration to an absolute Unix timestamp (seconds).\n+ * - PXAT: Set expiration to an absolute Unix timestamp (milliseconds).\n+ *\n+ * If no expiration is given, the key's TTL will be removed if the key already has a TTL.\n+ * If ENX is specified, the expiration will only be set if the key does not have a TTL.\n+ *\n+ * Reply:\n+ * - (Simple Error) if any parameter is invalid or if the increment results in a NaN/INF (for BYFLOAT).\n+ * - (Array) of two Bulk Strings if the operation is successful:\n+ *   1. The new value of the key after the increment.\n+ *   2. The actual amount by which the value was increased.\n+ *\n+ * Note: If the increment is skipped due to a range violation (LBOUND/UBOUND),\n+ * the \"actual increment\" returned will be \"0\". And the expiration will be set normally.\n+ */\n+void increxCommand(client *c) {\n+    extendedStringArgs args;\n+    if (parseExtendedStringArgumentsOrReply(c, 2, &args, COMMAND_INCREX) != C_OK) {\n+        return;\n+    }\n+\n+    /* Validate the expiration time value first */\n+    long long milliseconds = 0;\n+    if (args.expire && getExpireMillisecondsOrReply(c, args.expire, args.flags, args.unit, &milliseconds) != C_OK) {\n+        return;\n+    }\n+\n+    dictEntryLink link;\n+    kvobj *o = lookupKeyWriteWithLink(c->db, c->argv[1], &link);\n+    if (checkType(c,o,OBJ_STRING)) return;\n+    int hasExpiry = o && (kvobjGetExpire(o) != -1);\n+\n+    robj *result = NULL, *actual_increment = NULL;\n+    if (args.flags & OBJ_INCREX_BYFLOAT) {\n+        long double value, oldvalue, incr, lb = -LDBL_MAX, ub = LDBL_MAX;\n+        if (getLongDoubleFromObjectOrReply(c,o,&value,NULL) != C_OK ||\n+            getLongDoubleFromObjectOrReply(c,args.increment,&incr,NULL) != C_OK ||\n+            ((args.flags & OBJ_INCREX_LBOUND) && getLongDoubleFromObjectOrReply(c,args.lower_bound,&lb,NULL) != C_OK) ||\n+            ((args.flags & OBJ_INCREX_UBOUND) && getLongDoubleFromObjectOrReply(c,args.upper_bound,&ub,NULL) != C_OK))\n+            return;\n+        if (lb > ub) {\n+            addReplyError(c,\"lbound is greater than ubound.\");\n+            return;\n+        }\n+        oldvalue = value;\n+        value += incr;\n+        if (isnan(value) || isinf(value)) {\n+            addReplyError(c,\"increment would produce NaN or Infinity\");\n+            return;\n+        }\n+        if (value < lb || value > ub) {\n+            value = oldvalue;  /* remains unchanged if the result out of range */\n+        }\n+        result = createStringObjectFromLongDouble(value,1);\n+        actual_increment = createStringObjectFromLongDouble(value - oldvalue, 1);\n+    } else {\n+        long long value, oldvalue, incr = 1, lb = LLONG_MIN, ub = LLONG_MAX;\n+        if (getLongLongFromObjectOrReply(c, o, &value, NULL) != C_OK ||\n+            ((args.flags & OBJ_INCREX_BYINT) && getLongLongFromObjectOrReply(c, args.increment, &incr, NULL) != C_OK) ||\n+            ((args.flags & OBJ_INCREX_LBOUND) && getLongLongFromObjectOrReply(c,args.lower_bound,&lb,NULL) != C_OK) ||\n+            ((args.flags & OBJ_INCREX_UBOUND) && getLongLongFromObjectOrReply(c,args.upper_bound,&ub,NULL) != C_OK))\n+            return;\n+        if (lb > ub) {\n+            addReplyError(c,\"lbound is greater than ubound.\");\n+            return;\n+        }\n+        oldvalue = value;\n+        if ((incr < 0 && oldvalue < 0 && incr < (LLONG_MIN-oldvalue)) ||\n+            (incr > 0 && oldvalue > 0 && incr > (LLONG_MAX-oldvalue))) {\n+            /* would overflow, no-op. */\n+        } else {\n+            value += incr;\n+            if (value < lb || value > ub) {\n+                value = oldvalue;  /* remains unchanged if the result out of range */\n+            }\n+        }\n+        result = createStringObjectFromLongLongForValue(value);\n+        actual_increment = createStringObjectFromLongLongForValue(value - oldvalue);\n+    }\n+\n+    addReplyArrayLen(c, 2);\n+    addReplyBulk(c, result);\n+    addReplyBulk(c, actual_increment);\n+    decrRefCount(actual_increment);\n+\n+    /* If the expire time is already elapsed, it is propagated as DEL/UNLINK */\n+    if (!((args.flags & OBJ_INCREX_ENX) && hasExpiry) && args.expire && checkAlreadyExpired(milliseconds)) {\n+        if (o) {\n+            int deleted = dbGenericDelete(c->db, c->argv[1], server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);\n+            serverAssert(deleted);\n+            robj *aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;\n+            rewriteClientCommandVector(c,2,aux,c->argv[1]);\n+            keyModified(c, c->db, c->argv[1], NULL, 1);\n+            notifyKeyspaceEvent(NOTIFY_GENERIC, \"del\", c->argv[1], c->db->id);\n+            server.dirty++;\n+        }\n+        decrRefCount(result);\n+        server.stat_expiredkeys++;\n+        return;\n+    }\n+\n+    if (o)\n+        dbReplaceValueWithLink(c->db, c->argv[1], &result, link);\n+    else\n+        dbAddByLink(c->db, c->argv[1], &result, &link);\n+    keyModified(c, c->db, c->argv[1], result, 1);\n+    notifyKeyspaceEvent(NOTIFY_STRING,\"incr\",c->argv[1],c->db->id);\n+    server.dirty++;\n+\n+    /*\n+     * Always replicate INCREX as a SET command with the final value\n+     * in order to make sure that differences in float precision or formatting\n+     * will not create differences in replicas or after an AOF restart.\n+     *\n+     * (a) If no expiration option is provided:\n+     *     The key's ttl is removed.\n+     *     Propagated as: SET <key> <result>\n+     *\n+     * (b) If an expiration option is provided:\n+     *     (b1) If ENX is specified AND the key already has an expiration:\n+     *          The key's ttl remains unchanged.\n+     *          Propagated as: SET <key> <result> KEEPTTL\n+     *\n+     *     (b2) If ENX is not specified, OR the key doesn't have a expiration:\n+     *          A new ttl will be set from expiration options.\n+     *          Propagated as: SET <key> <result> PXAT <timestamp>\n+     */\n+    rewriteClientCommandVector(c, 3, shared.set, c->argv[1], result);\n+    if ((args.flags & OBJ_INCREX_ENX) && hasExpiry) {\n+        rewriteClientCommandArgument(c,3,shared.keepttl);\n+    } else if (args.expire) {\n+        setExpire(c, c->db, c->argv[1], milliseconds);",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3098733046",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15045,
+        "pr_file": "src/t_string.c",
+        "discussion_id": "3098733046",
+        "commented_code": "@@ -923,6 +974,170 @@ void incrbyfloatCommand(client *c) {\n     rewriteClientCommandArgument(c,3,shared.keepttl);\n }\n \n+/*\n+ * INCREX <key> [BYFLOAT increment | BYINT increment] [LBOUND lowerbound] [UBOUND upperbound]\n+ *   [EX seconds | PX milliseconds | EXAT seconds-timestamp | PXAT milliseconds-timestamp] [ENX]\n+ *\n+ * Increments the numeric value of a key and optionally sets its expiration time. \n+ *\n+ * Increment options:\n+ * If no increment options are provided, it behaves like `INCR key`, defaults to incrementing by one.\n+ * Only one of the below options can be used:\n+ * - BYINT: Behaves like INCRBY. If the result overflows, the value remains unchanged(unlike INCRBY).\n+ * - BYFLOAT: Behaves like INCRBYFLOAT. If the result is NaN or INF, an error is returned.\n+ *\n+ * Range options:\n+ * If LBOUND and/or UBOUND are specified, the result is validated against the provided range.\n+ * If the result is out of range, the value remains unchanged.\n+ * If omitted, the limits default to the minimum/maximum of 'long long' (for BYINT) or 'long double' (for BYFLOAT).\n+ *\n+ * Expiration options:\n+ * Only one of the below options can be used:\n+ * - EX: Set expiration in seconds.\n+ * - PX: Set expiration in milliseconds.\n+ * - EXAT: Set expiration to an absolute Unix timestamp (seconds).\n+ * - PXAT: Set expiration to an absolute Unix timestamp (milliseconds).\n+ *\n+ * If no expiration is given, the key's TTL will be removed if the key already has a TTL.\n+ * If ENX is specified, the expiration will only be set if the key does not have a TTL.\n+ *\n+ * Reply:\n+ * - (Simple Error) if any parameter is invalid or if the increment results in a NaN/INF (for BYFLOAT).\n+ * - (Array) of two Bulk Strings if the operation is successful:\n+ *   1. The new value of the key after the increment.\n+ *   2. The actual amount by which the value was increased.\n+ *\n+ * Note: If the increment is skipped due to a range violation (LBOUND/UBOUND),\n+ * the \"actual increment\" returned will be \"0\". And the expiration will be set normally.\n+ */\n+void increxCommand(client *c) {\n+    extendedStringArgs args;\n+    if (parseExtendedStringArgumentsOrReply(c, 2, &args, COMMAND_INCREX) != C_OK) {\n+        return;\n+    }\n+\n+    /* Validate the expiration time value first */\n+    long long milliseconds = 0;\n+    if (args.expire && getExpireMillisecondsOrReply(c, args.expire, args.flags, args.unit, &milliseconds) != C_OK) {\n+        return;\n+    }\n+\n+    dictEntryLink link;\n+    kvobj *o = lookupKeyWriteWithLink(c->db, c->argv[1], &link);\n+    if (checkType(c,o,OBJ_STRING)) return;\n+    int hasExpiry = o && (kvobjGetExpire(o) != -1);\n+\n+    robj *result = NULL, *actual_increment = NULL;\n+    if (args.flags & OBJ_INCREX_BYFLOAT) {\n+        long double value, oldvalue, incr, lb = -LDBL_MAX, ub = LDBL_MAX;\n+        if (getLongDoubleFromObjectOrReply(c,o,&value,NULL) != C_OK ||\n+            getLongDoubleFromObjectOrReply(c,args.increment,&incr,NULL) != C_OK ||\n+            ((args.flags & OBJ_INCREX_LBOUND) && getLongDoubleFromObjectOrReply(c,args.lower_bound,&lb,NULL) != C_OK) ||\n+            ((args.flags & OBJ_INCREX_UBOUND) && getLongDoubleFromObjectOrReply(c,args.upper_bound,&ub,NULL) != C_OK))\n+            return;\n+        if (lb > ub) {\n+            addReplyError(c,\"lbound is greater than ubound.\");\n+            return;\n+        }\n+        oldvalue = value;\n+        value += incr;\n+        if (isnan(value) || isinf(value)) {\n+            addReplyError(c,\"increment would produce NaN or Infinity\");\n+            return;\n+        }\n+        if (value < lb || value > ub) {\n+            value = oldvalue;  /* remains unchanged if the result out of range */\n+        }\n+        result = createStringObjectFromLongDouble(value,1);\n+        actual_increment = createStringObjectFromLongDouble(value - oldvalue, 1);\n+    } else {\n+        long long value, oldvalue, incr = 1, lb = LLONG_MIN, ub = LLONG_MAX;\n+        if (getLongLongFromObjectOrReply(c, o, &value, NULL) != C_OK ||\n+            ((args.flags & OBJ_INCREX_BYINT) && getLongLongFromObjectOrReply(c, args.increment, &incr, NULL) != C_OK) ||\n+            ((args.flags & OBJ_INCREX_LBOUND) && getLongLongFromObjectOrReply(c,args.lower_bound,&lb,NULL) != C_OK) ||\n+            ((args.flags & OBJ_INCREX_UBOUND) && getLongLongFromObjectOrReply(c,args.upper_bound,&ub,NULL) != C_OK))\n+            return;\n+        if (lb > ub) {\n+            addReplyError(c,\"lbound is greater than ubound.\");\n+            return;\n+        }\n+        oldvalue = value;\n+        if ((incr < 0 && oldvalue < 0 && incr < (LLONG_MIN-oldvalue)) ||\n+            (incr > 0 && oldvalue > 0 && incr > (LLONG_MAX-oldvalue))) {\n+            /* would overflow, no-op. */\n+        } else {\n+            value += incr;\n+            if (value < lb || value > ub) {\n+                value = oldvalue;  /* remains unchanged if the result out of range */\n+            }\n+        }\n+        result = createStringObjectFromLongLongForValue(value);\n+        actual_increment = createStringObjectFromLongLongForValue(value - oldvalue);\n+    }\n+\n+    addReplyArrayLen(c, 2);\n+    addReplyBulk(c, result);\n+    addReplyBulk(c, actual_increment);\n+    decrRefCount(actual_increment);\n+\n+    /* If the expire time is already elapsed, it is propagated as DEL/UNLINK */\n+    if (!((args.flags & OBJ_INCREX_ENX) && hasExpiry) && args.expire && checkAlreadyExpired(milliseconds)) {\n+        if (o) {\n+            int deleted = dbGenericDelete(c->db, c->argv[1], server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);\n+            serverAssert(deleted);\n+            robj *aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;\n+            rewriteClientCommandVector(c,2,aux,c->argv[1]);\n+            keyModified(c, c->db, c->argv[1], NULL, 1);\n+            notifyKeyspaceEvent(NOTIFY_GENERIC, \"del\", c->argv[1], c->db->id);\n+            server.dirty++;\n+        }\n+        decrRefCount(result);\n+        server.stat_expiredkeys++;\n+        return;\n+    }\n+\n+    if (o)\n+        dbReplaceValueWithLink(c->db, c->argv[1], &result, link);\n+    else\n+        dbAddByLink(c->db, c->argv[1], &result, &link);\n+    keyModified(c, c->db, c->argv[1], result, 1);\n+    notifyKeyspaceEvent(NOTIFY_STRING,\"incr\",c->argv[1],c->db->id);\n+    server.dirty++;\n+\n+    /*\n+     * Always replicate INCREX as a SET command with the final value\n+     * in order to make sure that differences in float precision or formatting\n+     * will not create differences in replicas or after an AOF restart.\n+     *\n+     * (a) If no expiration option is provided:\n+     *     The key's ttl is removed.\n+     *     Propagated as: SET <key> <result>\n+     *\n+     * (b) If an expiration option is provided:\n+     *     (b1) If ENX is specified AND the key already has an expiration:\n+     *          The key's ttl remains unchanged.\n+     *          Propagated as: SET <key> <result> KEEPTTL\n+     *\n+     *     (b2) If ENX is not specified, OR the key doesn't have a expiration:\n+     *          A new ttl will be set from expiration options.\n+     *          Propagated as: SET <key> <result> PXAT <timestamp>\n+     */\n+    rewriteClientCommandVector(c, 3, shared.set, c->argv[1], result);\n+    if ((args.flags & OBJ_INCREX_ENX) && hasExpiry) {\n+        rewriteClientCommandArgument(c,3,shared.keepttl);\n+    } else if (args.expire) {\n+        setExpire(c, c->db, c->argv[1], milliseconds);",
+        "comment_created_at": "2026-04-17T08:01:08+00:00",
+        "comment_author": "sundb",
+        "comment_body": "we should do this before rewriting command.\nsimilar as the removeExpire() below.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3172629128",
+    "pr_number": 15155,
+    "pr_file": "src/t_hash.c",
+    "created_at": "2026-05-01T08:45:43+00:00",
+    "commented_code": "if (checkType(c, o, OBJ_HASH))\n         return;\n \n+    key_numeric_expire = flags & (HFE_EX | HFE_PX | HFE_EXAT | HFE_PXAT);\n+    if ((flags & HFE_KEY) && key_numeric_expire && checkAlreadyExpired(expire_time)) {\n+        if (o) {\n+            dbDelete(c->db, c->argv[1]);\n+            robj *aux = server.lazyfree_lazy_server_del ? shared.unlink : shared.del;\n+            rewriteClientCommandVector(c, 2, aux, c->argv[1]);\n+            keyModified(c, c->db, c->argv[1], NULL, 1);\n+            notifyKeyspaceEvent(NOTIFY_GENERIC, \"del\", c->argv[1], c->db->id);\n+            server.dirty++;\n+        }\n+        server.stat_expiredkeys++;\n+        addReplyLongLong(c, 1);\n+        return;\n+    }",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3172641347",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15155,
+        "pr_file": "src/t_hash.c",
+        "discussion_id": "3172629128",
+        "commented_code": "@@ -2415,6 +2435,21 @@ void hsetexCommand(client *c) {\n     if (checkType(c, o, OBJ_HASH))\n         return;\n \n+    key_numeric_expire = flags & (HFE_EX | HFE_PX | HFE_EXAT | HFE_PXAT);\n+    if ((flags & HFE_KEY) && key_numeric_expire && checkAlreadyExpired(expire_time)) {\n+        if (o) {\n+            dbDelete(c->db, c->argv[1]);\n+            robj *aux = server.lazyfree_lazy_server_del ? shared.unlink : shared.del;\n+            rewriteClientCommandVector(c, 2, aux, c->argv[1]);\n+            keyModified(c, c->db, c->argv[1], NULL, 1);\n+            notifyKeyspaceEvent(NOTIFY_GENERIC, \"del\", c->argv[1], c->db->id);\n+            server.dirty++;\n+        }\n+        server.stat_expiredkeys++;\n+        addReplyLongLong(c, 1);\n+        return;\n+    }",
+        "comment_created_at": "2026-05-01T08:45:43+00:00",
+        "comment_author": "ShubhamTaple",
+        "comment_body": "Handled past-expiry for an existing key now runs only after FNX/FXX passes; missing key + past expiry still short-circuits without creating a hash. Added TCL coverage for FXX and FNX.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3081162886",
+    "pr_number": 15043,
+    "pr_file": "src/t_string.c",
+    "created_at": "2026-04-21T14:46:13+00:00",
+    "commented_code": "return;\n     }\n \n+    int numkeys = (c->argc - 1) / 2;\n+\n+    /* Use batched prefetch when there are multiple keys and the dict has\n+     * entries to look up. Single-key MSET or empty dict (all inserts) skip\n+     * prefetch since there's no lookup to warm. */\n+    int slot = server.cluster_enabled ? getKeySlot(c->argv[1]->ptr) : 0;\n+    dict *d = kvstoreGetDict(c->db->keys, slot);\n+    int use_prefetch = (numkeys > 1 && d != NULL && dictSize(d) > 0);",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3118276993",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15043,
+        "pr_file": "src/t_string.c",
+        "discussion_id": "3081162886",
+        "commented_code": "@@ -714,28 +738,67 @@ void msetGenericCommand(client *c, int nx) {\n         return;\n     }\n \n+    int numkeys = (c->argc - 1) / 2;\n+\n+    /* Use batched prefetch when there are multiple keys and the dict has\n+     * entries to look up. Single-key MSET or empty dict (all inserts) skip\n+     * prefetch since there's no lookup to warm. */\n+    int slot = server.cluster_enabled ? getKeySlot(c->argv[1]->ptr) : 0;\n+    dict *d = kvstoreGetDict(c->db->keys, slot);\n+    int use_prefetch = (numkeys > 1 && d != NULL && dictSize(d) > 0);",
+        "comment_created_at": "2026-04-21T14:46:13+00:00",
+        "comment_author": "fcostaoliveira",
+        "comment_body": "Fixed in 1b8bcce6a. The new `msetMaybePrefetchBatch` helper re-fetches the slot dict per batch via `kvstoreGetDict(c->db->keys, slot)`, so the scenario you described \u2014 batch 1's `setKey` \u2192 `expireIfNeeded` deleting the last pre-existing key, `freeDictIfNeeded` freeing the slot dict, `dbAddByLink` creating a new one \u2014 no longer leaves a dangling `d` for the next batch. Cost: one extra `kvstoreGetDict` per 16 keys.\n\nA regression test (\"MSET overwrites expired keys across batch boundary\") exercises the expire-then-insert path across a 20-key MSET. `test-sanitizer-address` (ASAN) and `test-external-cluster` are green on the follow-up commit.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2797027360",
+    "pr_number": 14784,
+    "pr_file": "src/cluster.c",
+    "created_at": "2026-02-12T06:39:06+00:00",
+    "commented_code": "if (replace)\n         deleted = dbDelete(c->db,key);\n \n+    /* If the ttl is already expired, skip adding it to the DB. However,\n+     * we still emit corresponding events and increment the expiredkeys\n+     * counter as if it expired immediately after insertion. */\n     if (ttl && checkAlreadyExpired(ttl)) {\n         if (deleted) {\n+            /* Behave as if RESTORE was executed and the key expired immediately,\n+             * triggering deletion. */\n+            notifyKeyspaceEvent(NOTIFY_GENERIC,\"restore\", key, c->db->id);",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2797027360",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14784,
+        "pr_file": "src/cluster.c",
+        "discussion_id": "2797027360",
+        "commented_code": "@@ -275,17 +275,24 @@ void restoreCommand(client *c) {\n     if (replace)\n         deleted = dbDelete(c->db,key);\n \n+    /* If the ttl is already expired, skip adding it to the DB. However,\n+     * we still emit corresponding events and increment the expiredkeys\n+     * counter as if it expired immediately after insertion. */\n     if (ttl && checkAlreadyExpired(ttl)) {\n         if (deleted) {\n+            /* Behave as if RESTORE was executed and the key expired immediately,\n+             * triggering deletion. */\n+            notifyKeyspaceEvent(NOTIFY_GENERIC,\"restore\", key, c->db->id);",
+        "comment_created_at": "2026-02-12T06:39:06+00:00",
+        "comment_author": "oranagra",
+        "comment_body": "shouldn't the \"restore\" KSN be outside the `deleted` if?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2797124696",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14784,
+        "pr_file": "src/cluster.c",
+        "discussion_id": "2797027360",
+        "commented_code": "@@ -275,17 +275,24 @@ void restoreCommand(client *c) {\n     if (replace)\n         deleted = dbDelete(c->db,key);\n \n+    /* If the ttl is already expired, skip adding it to the DB. However,\n+     * we still emit corresponding events and increment the expiredkeys\n+     * counter as if it expired immediately after insertion. */\n     if (ttl && checkAlreadyExpired(ttl)) {\n         if (deleted) {\n+            /* Behave as if RESTORE was executed and the key expired immediately,\n+             * triggering deletion. */\n+            notifyKeyspaceEvent(NOTIFY_GENERIC,\"restore\", key, c->db->id);",
+        "comment_created_at": "2026-02-12T07:12:15+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "I was thinking that we shouldn't emit any event if the key is not added to the DB, as if nothing happened.\r\n\r\nif we emit a `restore` event outside the `if (deleted)`, we also need to emit a `del` event, right?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2797267550",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14784,
+        "pr_file": "src/cluster.c",
+        "discussion_id": "2797027360",
+        "commented_code": "@@ -275,17 +275,24 @@ void restoreCommand(client *c) {\n     if (replace)\n         deleted = dbDelete(c->db,key);\n \n+    /* If the ttl is already expired, skip adding it to the DB. However,\n+     * we still emit corresponding events and increment the expiredkeys\n+     * counter as if it expired immediately after insertion. */\n     if (ttl && checkAlreadyExpired(ttl)) {\n         if (deleted) {\n+            /* Behave as if RESTORE was executed and the key expired immediately,\n+             * triggering deletion. */\n+            notifyKeyspaceEvent(NOTIFY_GENERIC,\"restore\", key, c->db->id);",
+        "comment_created_at": "2026-02-12T07:55:50+00:00",
+        "comment_author": "oranagra",
+        "comment_body": "my reasoning is that this would behave exactly as if the key was imported and deleted right after.\r\nthat's why we emit type change..",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2797328747",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14784,
+        "pr_file": "src/cluster.c",
+        "discussion_id": "2797027360",
+        "commented_code": "@@ -275,17 +275,24 @@ void restoreCommand(client *c) {\n     if (replace)\n         deleted = dbDelete(c->db,key);\n \n+    /* If the ttl is already expired, skip adding it to the DB. However,\n+     * we still emit corresponding events and increment the expiredkeys\n+     * counter as if it expired immediately after insertion. */\n     if (ttl && checkAlreadyExpired(ttl)) {\n         if (deleted) {\n+            /* Behave as if RESTORE was executed and the key expired immediately,\n+             * triggering deletion. */\n+            notifyKeyspaceEvent(NOTIFY_GENERIC,\"restore\", key, c->db->id);",
+        "comment_created_at": "2026-02-12T08:11:44+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "okay, and for SET, we also need to emit `set` and `del` event if it has a past expiration time, right?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2798406349",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14784,
+        "pr_file": "src/cluster.c",
+        "discussion_id": "2797027360",
+        "commented_code": "@@ -275,17 +275,24 @@ void restoreCommand(client *c) {\n     if (replace)\n         deleted = dbDelete(c->db,key);\n \n+    /* If the ttl is already expired, skip adding it to the DB. However,\n+     * we still emit corresponding events and increment the expiredkeys\n+     * counter as if it expired immediately after insertion. */\n     if (ttl && checkAlreadyExpired(ttl)) {\n         if (deleted) {\n+            /* Behave as if RESTORE was executed and the key expired immediately,\n+             * triggering deletion. */\n+            notifyKeyspaceEvent(NOTIFY_GENERIC,\"restore\", key, c->db->id);",
+        "comment_created_at": "2026-02-12T11:42:17+00:00",
+        "comment_author": "oranagra",
+        "comment_body": "i thought we should. let's conclude the discussion about restore and modules first.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2849010446",
+    "pr_number": 14784,
+    "pr_file": "src/t_string.c",
+    "created_at": "2026-02-24T18:59:18+00:00",
+    "commented_code": "}\n     }\n \n+    /* If the expire time is already elapsed, we don't need to add the key,\n+     * but we still need to update the stats, and we also need to delete the\n+     * key if it exists.\n+     *\n+     * From stats perspective, we behave as if we inserted a new key (possibly\n+     * an overwrite) and later expired it, but from the per-key KSN observability,\n+     * we reflect what we've actually done in the db (deletion of old key, and\n+     * no insertion of new one), so we don't confuse modules. */\n+    if (expire && checkAlreadyExpired(milliseconds)) {\n+        if (found) {\n+            dbGenericDelete(c->db, key, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2849010446",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14784,
+        "pr_file": "src/t_string.c",
+        "discussion_id": "2849010446",
+        "commented_code": "@@ -147,6 +147,30 @@ void setGenericCommand(client *c, int flags, robj *key, robj **valref, robj *exp\n         }\n     }\n \n+    /* If the expire time is already elapsed, we don't need to add the key,\n+     * but we still need to update the stats, and we also need to delete the\n+     * key if it exists.\n+     *\n+     * From stats perspective, we behave as if we inserted a new key (possibly\n+     * an overwrite) and later expired it, but from the per-key KSN observability,\n+     * we reflect what we've actually done in the db (deletion of old key, and\n+     * no insertion of new one), so we don't confuse modules. */\n+    if (expire && checkAlreadyExpired(milliseconds)) {\n+        if (found) {\n+            dbGenericDelete(c->db, key, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);",
+        "comment_created_at": "2026-02-24T18:59:18+00:00",
+        "comment_author": "oranagra",
+        "comment_body": "shouldn't this be a plain `dbDelete`? this is the old key, it's not expired, it's overwritten? i.e. it should be `lazyfree_lazy_server_del` and DB_FLAG_KEY_DELETED.\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2850437257",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14784,
+        "pr_file": "src/t_string.c",
+        "discussion_id": "2849010446",
+        "commented_code": "@@ -147,6 +147,30 @@ void setGenericCommand(client *c, int flags, robj *key, robj **valref, robj *exp\n         }\n     }\n \n+    /* If the expire time is already elapsed, we don't need to add the key,\n+     * but we still need to update the stats, and we also need to delete the\n+     * key if it exists.\n+     *\n+     * From stats perspective, we behave as if we inserted a new key (possibly\n+     * an overwrite) and later expired it, but from the per-key KSN observability,\n+     * we reflect what we've actually done in the db (deletion of old key, and\n+     * no insertion of new one), so we don't confuse modules. */\n+    if (expire && checkAlreadyExpired(milliseconds)) {\n+        if (found) {\n+            dbGenericDelete(c->db, key, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);",
+        "comment_created_at": "2026-02-25T02:08:48+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "make sense, thanks.\r\ninitially, i found we use this method in the implementation of `expireat` that is updating the expire time of the key, but for `set`, it overwrites the old key, yes, we should use `lazyfree_lazy_server_del`",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,310 @@
+[
+  {
+    "discussion_id": "2903499874",
+    "pr_number": 14847,
+    "pr_file": "src/acl.c",
+    "created_at": "2026-03-09T06:44:04+00:00",
+    "commented_code": "/* If there is no associated user, the connection can run anything. */\n     if (u == NULL) return ACL_OK;\n \n+    /* Validate arity before key/channel extraction to avoid touching argv out of bounds. */\n+    if (!commandCheckArity(cmd, argc, NULL)) {\n+        if (idxptr) *idxptr = 0;\n+        return ACL_DENIED_CMD;",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2903499874",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14847,
+        "pr_file": "src/acl.c",
+        "discussion_id": "2903499874",
+        "commented_code": "@@ -1857,6 +1857,12 @@ int ACLCheckAllUserCommandPerm(user *u, struct redisCommand *cmd, robj **argv, i\n     /* If there is no associated user, the connection can run anything. */\n     if (u == NULL) return ACL_OK;\n \n+    /* Validate arity before key/channel extraction to avoid touching argv out of bounds. */\n+    if (!commandCheckArity(cmd, argc, NULL)) {\n+        if (idxptr) *idxptr = 0;\n+        return ACL_DENIED_CMD;",
+        "comment_created_at": "2026-03-09T06:44:04+00:00",
+        "comment_author": "sundb",
+        "comment_body": "do you mean there is also a similar issue here? but i don't see the crash whey i ran the scipting test.\r\n\r\n```\r\nmake SANITIZER=address\r\n./runtest --single unit/scripting\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2907480023",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14847,
+        "pr_file": "src/acl.c",
+        "discussion_id": "2903499874",
+        "commented_code": "@@ -1857,6 +1857,12 @@ int ACLCheckAllUserCommandPerm(user *u, struct redisCommand *cmd, robj **argv, i\n     /* If there is no associated user, the connection can run anything. */\n     if (u == NULL) return ACL_OK;\n \n+    /* Validate arity before key/channel extraction to avoid touching argv out of bounds. */\n+    if (!commandCheckArity(cmd, argc, NULL)) {\n+        if (idxptr) *idxptr = 0;\n+        return ACL_DENIED_CMD;",
+        "comment_created_at": "2026-03-09T19:25:43+00:00",
+        "comment_author": "zzjas",
+        "comment_body": "Ah yeah good catch! I think it's because the scripting path has a growing argv buffer so earlier test commands created a larger buffer masking ASan error. Updated the test to use a new server.\r\n\r\nThe fix in `db.c` alone is not enough because after the fix, `getKeysUsingKeySpecs` correctly returns `-1`, but then `getKeysFromCommandWithSpecs` will invoke `evalGetKeys` via `cmd->getkeys_proc`, causing oob read in `genericGetKeys`. So the `acl.c` check is actually preventing the crash. The `db.c` makes the argv check logic correct.\r\n\r\nWithout the fix in `db.c`:\r\n```\r\n==2279681==ERROR: AddressSanitizer: heap-use-after-free on address 0x503000026ef8 at pc 0x55db5d73d7c3 bp 0x7ffc6f5dc420 sp 0x7ffc6f5dc410\r\nREAD of size 8 at 0x503000026ef8 thread T0\r\n    #0 0x55db5d73d7c2 in getKeysUsingKeySpecs .../redis/src/db.c:3149\r\n    #1 0x55db5d73d7c2 in getKeysUsingKeySpecs .../redis/src/db.c:3091\r\n    #2 0x55db5d73dddc in getKeysFromCommandWithSpecs .../redis/src/db.c:3230\r\n    #3 0x55db5dabf1db in ACLSelectorCheckCmd .../redis/src/acl.c:1726\r\n    #4 0x55db5dac003a in ACLCheckAllUserCommandPerm .../redis/src/acl.c:1894\r\n    #5 0x55db5d9fdd1d in RM_ACLCheckCommandPermissions .../redis/src/module.c:10425\r\n```\r\n\r\nWith the fix in `db.c`:\r\n```\r\n==2273397==ERROR: AddressSanitizer: heap-use-after-free on address 0x503000026ef8 at pc 0x5598e4fb8c0f bp 0x7ffc94ab48e0 sp 0x7ffc94ab48d0\r\nREAD of size 8 at 0x503000026ef8 thread T0\r\n    #0 0x5598e4fb8c0e in genericGetKeys .../redis/src/db.c:3459\r\n    #1 0x5598e4fb8c0e in evalGetKeys .../redis/src/db.c:3501\r\n    #2 0x5598e4fbce64 in getKeysFromCommandWithSpecs .../redis/src/db.c:3244\r\n    #3 0x5598e533e12b in ACLSelectorCheckCmd .../redis/src/acl.c:1726\r\n    #4 0x5598e533ef8a in ACLCheckAllUserCommandPerm .../redis/src/acl.c:1894\r\n    #5 0x5598e527cc6d in RM_ACLCheckCommandPermissions .../redis/src/module.c:10425\r\n```\r\n\r\nThanks for checking!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2908843566",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14847,
+        "pr_file": "src/acl.c",
+        "discussion_id": "2903499874",
+        "commented_code": "@@ -1857,6 +1857,12 @@ int ACLCheckAllUserCommandPerm(user *u, struct redisCommand *cmd, robj **argv, i\n     /* If there is no associated user, the connection can run anything. */\n     if (u == NULL) return ACL_OK;\n \n+    /* Validate arity before key/channel extraction to avoid touching argv out of bounds. */\n+    if (!commandCheckArity(cmd, argc, NULL)) {\n+        if (idxptr) *idxptr = 0;\n+        return ACL_DENIED_CMD;",
+        "comment_created_at": "2026-03-10T01:55:18+00:00",
+        "comment_author": "sundb",
+        "comment_body": "not sure this is the right way, my concern is that whether ethere are other paths where an invalid command could be passed into genericGetKeys().\nanother alternative is to add `if (keyCountOfs >= argc) return 0;` to genericGetKeys() before touch the argv.\n@oranagra please share your thoughts.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2910317786",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14847,
+        "pr_file": "src/acl.c",
+        "discussion_id": "2903499874",
+        "commented_code": "@@ -1857,6 +1857,12 @@ int ACLCheckAllUserCommandPerm(user *u, struct redisCommand *cmd, robj **argv, i\n     /* If there is no associated user, the connection can run anything. */\n     if (u == NULL) return ACL_OK;\n \n+    /* Validate arity before key/channel extraction to avoid touching argv out of bounds. */\n+    if (!commandCheckArity(cmd, argc, NULL)) {\n+        if (idxptr) *idxptr = 0;\n+        return ACL_DENIED_CMD;",
+        "comment_created_at": "2026-03-10T09:03:37+00:00",
+        "comment_author": "oranagra",
+        "comment_body": "i think it's a good idea to have both.\r\ni.e. if a command arity is wrong, abort early (not sure if ACL_DENIED_CMD is the right return value).\r\nthis will reduce many risks due to missing range checks.\r\n\r\nbut also, it's a good idea to have boundary checks like we did in the other places (which is mostly needed in case some command spec or arity is wrongly defined)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2916359734",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14847,
+        "pr_file": "src/acl.c",
+        "discussion_id": "2903499874",
+        "commented_code": "@@ -1857,6 +1857,12 @@ int ACLCheckAllUserCommandPerm(user *u, struct redisCommand *cmd, robj **argv, i\n     /* If there is no associated user, the connection can run anything. */\n     if (u == NULL) return ACL_OK;\n \n+    /* Validate arity before key/channel extraction to avoid touching argv out of bounds. */\n+    if (!commandCheckArity(cmd, argc, NULL)) {\n+        if (idxptr) *idxptr = 0;\n+        return ACL_DENIED_CMD;",
+        "comment_created_at": "2026-03-11T07:15:05+00:00",
+        "comment_author": "sundb",
+        "comment_body": "seem that there isn't a return value better than ACL_DENIED_CMD.\n```\n/* Return values for ACLCheckAllPerm(). */\n#define ACL_OK 0\n#define ACL_DENIED_CMD 1\n#define ACL_DENIED_KEY 2\n#define ACL_DENIED_AUTH 3 /* Only used for ACL LOG entries. */\n#define ACL_DENIED_CHANNEL 4 /* Only used for pub/sub commands */\n#define ACL_INVALID_TLS_CERT_AUTH 5 /* Only used for TLS Auto-authentication */\n```\n\n@zzjas PTAL",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2920247961",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14847,
+        "pr_file": "src/acl.c",
+        "discussion_id": "2903499874",
+        "commented_code": "@@ -1857,6 +1857,12 @@ int ACLCheckAllUserCommandPerm(user *u, struct redisCommand *cmd, robj **argv, i\n     /* If there is no associated user, the connection can run anything. */\n     if (u == NULL) return ACL_OK;\n \n+    /* Validate arity before key/channel extraction to avoid touching argv out of bounds. */\n+    if (!commandCheckArity(cmd, argc, NULL)) {\n+        if (idxptr) *idxptr = 0;\n+        return ACL_DENIED_CMD;",
+        "comment_created_at": "2026-03-11T18:38:34+00:00",
+        "comment_author": "zzjas",
+        "comment_body": "Thanks for the suggestion! I added the check in `genericGetKeys()` as well. Now the tests won't crash due ASan even if the `acl.c` fix is removed -- but still kept it as suggested for defense in depth.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2885262527",
+    "pr_number": 14847,
+    "pr_file": "src/acl.c",
+    "created_at": "2026-03-13T02:31:42+00:00",
+    "commented_code": "/* If there is no associated user, the connection can run anything. */\n     if (u == NULL) return ACL_OK;\n \n+    /* Validate arity before key/channel extraction to avoid touching argv out of bounds. */\n+    if (!commandCheckArity(cmd, argc, NULL)) {\n+        if (idxptr) *idxptr = 0;\n+        return ACL_DENIED_CMD;\n+    }",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2928638848",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14847,
+        "pr_file": "src/acl.c",
+        "discussion_id": "2885262527",
+        "commented_code": "@@ -1857,6 +1857,12 @@ int ACLCheckAllUserCommandPerm(user *u, struct redisCommand *cmd, robj **argv, i\n     /* If there is no associated user, the connection can run anything. */\n     if (u == NULL) return ACL_OK;\n \n+    /* Validate arity before key/channel extraction to avoid touching argv out of bounds. */\n+    if (!commandCheckArity(cmd, argc, NULL)) {\n+        if (idxptr) *idxptr = 0;\n+        return ACL_DENIED_CMD;\n+    }",
+        "comment_created_at": "2026-03-13T02:31:42+00:00",
+        "comment_author": "sundb",
+        "comment_body": "@zzjas what about moving commandCheckArity() after \n```\n    /* Quick check if the user has all permissions, return early if so. */\n    if (likely(listFirst(u->selectors) != NULL)) {\n        aclSelector *s = listNodeValue(listFirst(u->selectors));\n        const uint32_t all_perms = SELECTOR_FLAG_ALLCOMMANDS |\n                                   SELECTOR_FLAG_ALLKEYS |\n                                   SELECTOR_FLAG_ALLCHANNELS;\n        if ((s->flags & all_perms) == all_perms) return ACL_OK;\n    }\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2928670481",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14847,
+        "pr_file": "src/acl.c",
+        "discussion_id": "2885262527",
+        "commented_code": "@@ -1857,6 +1857,12 @@ int ACLCheckAllUserCommandPerm(user *u, struct redisCommand *cmd, robj **argv, i\n     /* If there is no associated user, the connection can run anything. */\n     if (u == NULL) return ACL_OK;\n \n+    /* Validate arity before key/channel extraction to avoid touching argv out of bounds. */\n+    if (!commandCheckArity(cmd, argc, NULL)) {\n+        if (idxptr) *idxptr = 0;\n+        return ACL_DENIED_CMD;\n+    }",
+        "comment_created_at": "2026-03-13T02:41:45+00:00",
+        "comment_author": "zzjas",
+        "comment_body": "Sure, I moved the check to after the quick path.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3143369131",
+    "pr_number": 14970,
+    "pr_file": "src/sentinel.c",
+    "created_at": "2026-04-26T10:55:32+00:00",
+    "commented_code": "\"announce-hostnames\"\n };\n \n+/* Returns 1 if the string contains control characters (0x00-0x1F or 0x7F),\n+ * which must be rejected to prevent config injection via newlines/etc. */\n+int sentinelStringContainsControlChars(const char *s, size_t len) {",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3143369131",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14970,
+        "pr_file": "src/sentinel.c",
+        "discussion_id": "3143369131",
+        "commented_code": "@@ -458,6 +458,25 @@ const char *preMonitorCfgName[] = {\n     \"announce-hostnames\"\n };\n \n+/* Returns 1 if the string contains control characters (0x00-0x1F or 0x7F),\n+ * which must be rejected to prevent config injection via newlines/etc. */\n+int sentinelStringContainsControlChars(const char *s, size_t len) {",
+        "comment_created_at": "2026-04-26T10:55:32+00:00",
+        "comment_author": "moticless",
+        "comment_body": "Can pass sds instead. Has len embedded: `int sentinelStringContainsControlChars(sds s) { ....}`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3180069260",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14970,
+        "pr_file": "src/sentinel.c",
+        "discussion_id": "3143369131",
+        "commented_code": "@@ -458,6 +458,25 @@ const char *preMonitorCfgName[] = {\n     \"announce-hostnames\"\n };\n \n+/* Returns 1 if the string contains control characters (0x00-0x1F or 0x7F),\n+ * which must be rejected to prevent config injection via newlines/etc. */\n+int sentinelStringContainsControlChars(const char *s, size_t len) {",
+        "comment_created_at": "2026-05-04T07:50:02+00:00",
+        "comment_author": "hristostaykov-del",
+        "comment_body": "Resolved in [d6a9bac](https://github.com/redis/redis/pull/14970/commits/d6a9bac0ebb55c8ff449383e806c32232ae6591d)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3143375904",
+    "pr_number": 14970,
+    "pr_file": "src/sentinel.c",
+    "created_at": "2026-04-26T11:01:45+00:00",
+    "commented_code": "if (!(!strcasecmp(val->ptr, \"debug\") || !strcasecmp(val->ptr, \"verbose\") ||\n                 !strcasecmp(val->ptr, \"notice\") || !strcasecmp(val->ptr, \"warning\") ||\n                 !strcasecmp(val->ptr, \"nothing\"))) goto badfmt;\n+        } else if (!strcasecmp(option, \"sentinel-user\") ||\n+                   !strcasecmp(option, \"sentinel-pass\") ||\n+                   !strcasecmp(option, \"announce-ip\")) {\n+            if (sentinelStringContainsControlChars(val->ptr,sdslen(val->ptr))) {",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3143375904",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14970,
+        "pr_file": "src/sentinel.c",
+        "discussion_id": "3143375904",
+        "commented_code": "@@ -3238,6 +3263,13 @@ void sentinelConfigSetCommand(client *c) {\n             if (!(!strcasecmp(val->ptr, \"debug\") || !strcasecmp(val->ptr, \"verbose\") ||\n                 !strcasecmp(val->ptr, \"notice\") || !strcasecmp(val->ptr, \"warning\") ||\n                 !strcasecmp(val->ptr, \"nothing\"))) goto badfmt;\n+        } else if (!strcasecmp(option, \"sentinel-user\") ||\n+                   !strcasecmp(option, \"sentinel-pass\") ||\n+                   !strcasecmp(option, \"announce-ip\")) {\n+            if (sentinelStringContainsControlChars(val->ptr,sdslen(val->ptr))) {",
+        "comment_created_at": "2026-04-26T11:01:45+00:00",
+        "comment_author": "moticless",
+        "comment_body": "Kept this validation only for announce-ip: it\u2019s an address-like value, so control chars are invalid by definition. For sentinel-user / sentinel-pass, config rewrite already escapes the value with sentinelSdscatConfigArg(), so rejecting control chars here is not needed for config-injection safety.\n\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3180071521",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14970,
+        "pr_file": "src/sentinel.c",
+        "discussion_id": "3143375904",
+        "commented_code": "@@ -3238,6 +3263,13 @@ void sentinelConfigSetCommand(client *c) {\n             if (!(!strcasecmp(val->ptr, \"debug\") || !strcasecmp(val->ptr, \"verbose\") ||\n                 !strcasecmp(val->ptr, \"notice\") || !strcasecmp(val->ptr, \"warning\") ||\n                 !strcasecmp(val->ptr, \"nothing\"))) goto badfmt;\n+        } else if (!strcasecmp(option, \"sentinel-user\") ||\n+                   !strcasecmp(option, \"sentinel-pass\") ||\n+                   !strcasecmp(option, \"announce-ip\")) {\n+            if (sentinelStringContainsControlChars(val->ptr,sdslen(val->ptr))) {",
+        "comment_created_at": "2026-05-04T07:50:33+00:00",
+        "comment_author": "hristostaykov-del",
+        "comment_body": "Resolved in [d6a9bac](https://github.com/redis/redis/pull/14970/commits/d6a9bac0ebb55c8ff449383e806c32232ae6591d)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3143384580",
+    "pr_number": 14970,
+    "pr_file": "src/sentinel.c",
+    "created_at": "2026-04-26T11:10:08+00:00",
+    "commented_code": "} else if (!strcasecmp(option,\"auth-pass\") && moreargs > 0) {\n             /* auth-pass <password> */\n             char *value = c->argv[++j]->ptr;\n+            if (sentinelStringContainsControlChars(value,sdslen(value))) {\n+                addReplyError(c,\n+                    \"auth-pass must not contain control characters\");\n+                goto seterr;\n+            }",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3143384580",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14970,
+        "pr_file": "src/sentinel.c",
+        "discussion_id": "3143384580",
+        "commented_code": "@@ -4419,6 +4468,11 @@ void sentinelSetCommand(client *c) {\n         } else if (!strcasecmp(option,\"auth-pass\") && moreargs > 0) {\n             /* auth-pass <password> */\n             char *value = c->argv[++j]->ptr;\n+            if (sentinelStringContainsControlChars(value,sdslen(value))) {\n+                addReplyError(c,\n+                    \"auth-pass must not contain control characters\");\n+                goto seterr;\n+            }",
+        "comment_created_at": "2026-04-26T11:10:08+00:00",
+        "comment_author": "moticless",
+        "comment_body": "```suggestion\n```\nMaybe we should remove this validation for auth-pass, since config-injection safety is now handled at the persistence layer: Sentinel rewrites auth-pass using sentinelSdscatConfigArg(), which escapes embedded control characters instead of writing raw config lines. This covers any existing auth-pass values that may contain control characters. The same argument goes with auth-user below.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3180073012",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14970,
+        "pr_file": "src/sentinel.c",
+        "discussion_id": "3143384580",
+        "commented_code": "@@ -4419,6 +4468,11 @@ void sentinelSetCommand(client *c) {\n         } else if (!strcasecmp(option,\"auth-pass\") && moreargs > 0) {\n             /* auth-pass <password> */\n             char *value = c->argv[++j]->ptr;\n+            if (sentinelStringContainsControlChars(value,sdslen(value))) {\n+                addReplyError(c,\n+                    \"auth-pass must not contain control characters\");\n+                goto seterr;\n+            }",
+        "comment_created_at": "2026-05-04T07:50:54+00:00",
+        "comment_author": "hristostaykov-del",
+        "comment_body": "Resolved in [d6a9bac](https://github.com/redis/redis/pull/14970/commits/d6a9bac0ebb55c8ff449383e806c32232ae6591d)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2558632043",
+    "pr_number": 14564,
+    "pr_file": "src/acl.c",
+    "created_at": "2025-11-25T05:52:39+00:00",
+    "commented_code": "addReplyBulkCString(c, \"timestamp-last-updated\");\n             addReplyLongLong(c, le->ctime);\n         }\n+    } else if (!strcasecmp(sub,\"setpass\") && c->argc == 3) {\n+        /* Redact the password to not leak any information. */\n+        redactClientCommandArgument(c, 2);\n+\n+        /* Check if the user is authenticated. */\n+        if (c->user == NULL || !c->authenticated) {\n+            addReplyError(c, \"ACL SETPASS can only be executed by authenticated users\");\n+            return;\n+        }\n+\n+        /* Set the password for the current user. */\n+        sds password = c->argv[2]->ptr;",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2558632043",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14564,
+        "pr_file": "src/acl.c",
+        "discussion_id": "2558632043",
+        "commented_code": "@@ -3122,6 +3122,29 @@ void aclCommand(client *c) {\n             addReplyBulkCString(c, \"timestamp-last-updated\");\n             addReplyLongLong(c, le->ctime);\n         }\n+    } else if (!strcasecmp(sub,\"setpass\") && c->argc == 3) {\n+        /* Redact the password to not leak any information. */\n+        redactClientCommandArgument(c, 2);\n+\n+        /* Check if the user is authenticated. */\n+        if (c->user == NULL || !c->authenticated) {\n+            addReplyError(c, \"ACL SETPASS can only be executed by authenticated users\");\n+            return;\n+        }\n+\n+        /* Set the password for the current user. */\n+        sds password = c->argv[2]->ptr;",
+        "comment_created_at": "2025-11-25T05:52:39+00:00",
+        "comment_author": "shahsb",
+        "comment_body": "Could you please add a length check for the password (configurable via a potential future acl-password-min-length config, but it could be hardcoded to 4 for now -- aligns with common Redis ACL practices).\r\n\r\nSomething like:\r\n\r\n```\r\n    /* Validate password length (min 4 chars for basic security). */\r\n    size_t pwlen = sdslen(c->argv[2]->ptr);\r\n    if (pwlen < 4) {\r\n        addReplyErrorFormat(c, \"Password must be at least %zu characters long\", (size_t)4);\r\n        return;\r\n    }\r\n\r\n    /* Set the password for the current user (hashed via ACLSetUser). */\r\n    sds password = c->argv[2]->ptr;\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2684993850",
+    "pr_number": 14445,
+    "pr_file": "src/object.c",
+    "created_at": "2026-01-13T06:18:32+00:00",
+    "commented_code": "#define strtold(a,b) ((long double)strtod((a),(b)))\n #endif\n \n+/* Map a metadata ID (bit index) to its compacted slot number among set bits,\n+ * then return a pointer to that slot. Caller must ensure the ID bit is set. */\n+uint64_t *kvobjMetaRef(kvobj *kv, int metaId) {\n+    uint32_t bits = kv->metabits;\n+\n+    /* Expiry is always the first metadata */\n+    if (likely(metaId == 0)) return ((uint64_t *)kv) - 1;\n+    \n+    serverAssert(metaId<KEY_META_ID_MAX);",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2684993850",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14445,
+        "pr_file": "src/object.c",
+        "discussion_id": "2684993850",
+        "commented_code": "@@ -22,67 +22,85 @@\n #define strtold(a,b) ((long double)strtod((a),(b)))\n #endif\n \n+/* Map a metadata ID (bit index) to its compacted slot number among set bits,\n+ * then return a pointer to that slot. Caller must ensure the ID bit is set. */\n+uint64_t *kvobjMetaRef(kvobj *kv, int metaId) {\n+    uint32_t bits = kv->metabits;\n+\n+    /* Expiry is always the first metadata */\n+    if (likely(metaId == 0)) return ((uint64_t *)kv) - 1;\n+    \n+    serverAssert(metaId<KEY_META_ID_MAX);",
+        "comment_created_at": "2026-01-13T06:18:32+00:00",
+        "comment_author": "sundb",
+        "comment_body": "what about making sure that this bit must be set?\n```suggestion\n    serverAssert(metaId<KEY_META_ID_MAX && (bits & (1u << metaId)));\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2686313251",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14445,
+        "pr_file": "src/object.c",
+        "discussion_id": "2684993850",
+        "commented_code": "@@ -22,67 +22,85 @@\n #define strtold(a,b) ((long double)strtod((a),(b)))\n #endif\n \n+/* Map a metadata ID (bit index) to its compacted slot number among set bits,\n+ * then return a pointer to that slot. Caller must ensure the ID bit is set. */\n+uint64_t *kvobjMetaRef(kvobj *kv, int metaId) {\n+    uint32_t bits = kv->metabits;\n+\n+    /* Expiry is always the first metadata */\n+    if (likely(metaId == 0)) return ((uint64_t *)kv) - 1;\n+    \n+    serverAssert(metaId<KEY_META_ID_MAX);",
+        "comment_created_at": "2026-01-13T12:58:58+00:00",
+        "comment_author": "moticless",
+        "comment_body": "we can keep then `serverAssert(bits & (1u << metaId));` This second condition is stronger and covers the original one as well.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3190226855",
+    "pr_number": 15162,
+    "pr_file": "src/rdb.c",
+    "created_at": "2026-05-05T17:06:29+00:00",
+    "commented_code": "return NULL;\n         }\n         o = createGCRAObject((long long)time);\n+    } else if (rdbtype == RDB_TYPE_ARRAY) {\n+        /* Load array value. We only persist elements and insert_idx - no\n+         * implementation details. Arrays use current ar_slice_size config. */\n+        uint64_t count;\n+        if ((count = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;\n+        if (count == 0) {\n+            rdbReportCorruptRDB(\"Empty array (count == 0) is invalid\");\n+            return NULL;\n+        }\n+\n+        /* Load insert_idx: 0 = none, 1 = has value followed by actual value */\n+        uint64_t insert_idx_flag;\n+        if ((insert_idx_flag = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;\n+        if (insert_idx_flag > 1) {\n+            rdbReportCorruptRDB(\"Invalid array insert_idx_flag %llu\",\n+                (unsigned long long)insert_idx_flag);\n+            return NULL;\n+        }\n+        uint64_t insert_idx;\n+        if (insert_idx_flag == 0) {\n+            insert_idx = AR_INSERT_IDX_NONE;\n+        } else {\n+            if ((insert_idx = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;\n+        }\n+\n+        o = createArrayObject();\n+        redisArray *ar = o->ptr;\n+        ar->insert_idx = insert_idx;\n+\n+        /* Load elements */\n+        for (uint64_t i = 0; i < count; i++) {\n+            uint64_t idx;\n+            int idx_isencoded;\n+            if (rdbLoadLenByRef(rdb, &idx_isencoded, &idx) == -1) {\n+                decrRefCount(o);\n+                return NULL;\n+            }\n+            if (idx_isencoded || idx == UINT64_MAX) {\n+                decrRefCount(o);\n+                rdbReportCorruptRDB(\"Invalid array index %llu\",\n+                    (unsigned long long)idx);\n+                return NULL;\n+            }\n+\n+            uint64_t type_tag;\n+            if ((type_tag = rdbLoadLen(rdb, NULL)) == RDB_LENERR) {\n+                decrRefCount(o);\n+                return NULL;\n+            }\n+\n+            void *v;\n+            if (type_tag == AR_RDB_TAG_INT) {\n+                int64_t ival = rdbLoadSignedInteger(rdb, RDB_VERSION);\n+                if (ival == INT64_MAX && rioGetReadError(rdb)) {\n+                    decrRefCount(o);\n+                    return NULL;\n+                }\n+                v = arValueFromRdbInt(ival);\n+            } else if (type_tag == AR_RDB_TAG_FLOAT) {\n+                double d;\n+                if (rdbLoadBinaryDoubleValue(rdb, &d) == -1) {\n+                    decrRefCount(o);\n+                    return NULL;\n+                }\n+                v = arValueFromRdbFloat(d);\n+            } else if (type_tag == AR_RDB_TAG_SMALLSTR) {\n+                sds str;\n+                if ((str = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {\n+                    decrRefCount(o);\n+                    return NULL;\n+                }\n+                if (sdslen(str) > AR_SMALLSTR_MAXLEN) {\n+                    sdsfree(str);\n+                    decrRefCount(o);\n+                    rdbReportCorruptRDB(\"Invalid small string length %zu in array\", sdslen(str));\n+                    return NULL;\n+                }",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "3190226855",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15162,
+        "pr_file": "src/rdb.c",
+        "discussion_id": "3190226855",
+        "commented_code": "@@ -3640,6 +3764,103 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)\n             return NULL;\n         }\n         o = createGCRAObject((long long)time);\n+    } else if (rdbtype == RDB_TYPE_ARRAY) {\n+        /* Load array value. We only persist elements and insert_idx - no\n+         * implementation details. Arrays use current ar_slice_size config. */\n+        uint64_t count;\n+        if ((count = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;\n+        if (count == 0) {\n+            rdbReportCorruptRDB(\"Empty array (count == 0) is invalid\");\n+            return NULL;\n+        }\n+\n+        /* Load insert_idx: 0 = none, 1 = has value followed by actual value */\n+        uint64_t insert_idx_flag;\n+        if ((insert_idx_flag = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;\n+        if (insert_idx_flag > 1) {\n+            rdbReportCorruptRDB(\"Invalid array insert_idx_flag %llu\",\n+                (unsigned long long)insert_idx_flag);\n+            return NULL;\n+        }\n+        uint64_t insert_idx;\n+        if (insert_idx_flag == 0) {\n+            insert_idx = AR_INSERT_IDX_NONE;\n+        } else {\n+            if ((insert_idx = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;\n+        }\n+\n+        o = createArrayObject();\n+        redisArray *ar = o->ptr;\n+        ar->insert_idx = insert_idx;\n+\n+        /* Load elements */\n+        for (uint64_t i = 0; i < count; i++) {\n+            uint64_t idx;\n+            int idx_isencoded;\n+            if (rdbLoadLenByRef(rdb, &idx_isencoded, &idx) == -1) {\n+                decrRefCount(o);\n+                return NULL;\n+            }\n+            if (idx_isencoded || idx == UINT64_MAX) {\n+                decrRefCount(o);\n+                rdbReportCorruptRDB(\"Invalid array index %llu\",\n+                    (unsigned long long)idx);\n+                return NULL;\n+            }\n+\n+            uint64_t type_tag;\n+            if ((type_tag = rdbLoadLen(rdb, NULL)) == RDB_LENERR) {\n+                decrRefCount(o);\n+                return NULL;\n+            }\n+\n+            void *v;\n+            if (type_tag == AR_RDB_TAG_INT) {\n+                int64_t ival = rdbLoadSignedInteger(rdb, RDB_VERSION);\n+                if (ival == INT64_MAX && rioGetReadError(rdb)) {\n+                    decrRefCount(o);\n+                    return NULL;\n+                }\n+                v = arValueFromRdbInt(ival);\n+            } else if (type_tag == AR_RDB_TAG_FLOAT) {\n+                double d;\n+                if (rdbLoadBinaryDoubleValue(rdb, &d) == -1) {\n+                    decrRefCount(o);\n+                    return NULL;\n+                }\n+                v = arValueFromRdbFloat(d);\n+            } else if (type_tag == AR_RDB_TAG_SMALLSTR) {\n+                sds str;\n+                if ((str = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {\n+                    decrRefCount(o);\n+                    return NULL;\n+                }\n+                if (sdslen(str) > AR_SMALLSTR_MAXLEN) {\n+                    sdsfree(str);\n+                    decrRefCount(o);\n+                    rdbReportCorruptRDB(\"Invalid small string length %zu in array\", sdslen(str));\n+                    return NULL;\n+                }",
+        "comment_created_at": "2026-05-05T17:06:29+00:00",
+        "comment_author": "ShubhamTaple",
+        "comment_body": "```suggestion\n                size_t len = sdslen(str);\n                if (len > AR_SMALLSTR_MAXLEN) {\n                    sdsfree(str);\n                    decrRefCount(o);\n                    rdbReportCorruptRDB(\"Invalid small string length %zu in array\", len);\n                    return NULL;\n                }\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3190230011",
+        "repo_full_name": "redis/redis",
+        "pr_number": 15162,
+        "pr_file": "src/rdb.c",
+        "discussion_id": "3190226855",
+        "commented_code": "@@ -3640,6 +3764,103 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error)\n             return NULL;\n         }\n         o = createGCRAObject((long long)time);\n+    } else if (rdbtype == RDB_TYPE_ARRAY) {\n+        /* Load array value. We only persist elements and insert_idx - no\n+         * implementation details. Arrays use current ar_slice_size config. */\n+        uint64_t count;\n+        if ((count = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;\n+        if (count == 0) {\n+            rdbReportCorruptRDB(\"Empty array (count == 0) is invalid\");\n+            return NULL;\n+        }\n+\n+        /* Load insert_idx: 0 = none, 1 = has value followed by actual value */\n+        uint64_t insert_idx_flag;\n+        if ((insert_idx_flag = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;\n+        if (insert_idx_flag > 1) {\n+            rdbReportCorruptRDB(\"Invalid array insert_idx_flag %llu\",\n+                (unsigned long long)insert_idx_flag);\n+            return NULL;\n+        }\n+        uint64_t insert_idx;\n+        if (insert_idx_flag == 0) {\n+            insert_idx = AR_INSERT_IDX_NONE;\n+        } else {\n+            if ((insert_idx = rdbLoadLen(rdb, NULL)) == RDB_LENERR) return NULL;\n+        }\n+\n+        o = createArrayObject();\n+        redisArray *ar = o->ptr;\n+        ar->insert_idx = insert_idx;\n+\n+        /* Load elements */\n+        for (uint64_t i = 0; i < count; i++) {\n+            uint64_t idx;\n+            int idx_isencoded;\n+            if (rdbLoadLenByRef(rdb, &idx_isencoded, &idx) == -1) {\n+                decrRefCount(o);\n+                return NULL;\n+            }\n+            if (idx_isencoded || idx == UINT64_MAX) {\n+                decrRefCount(o);\n+                rdbReportCorruptRDB(\"Invalid array index %llu\",\n+                    (unsigned long long)idx);\n+                return NULL;\n+            }\n+\n+            uint64_t type_tag;\n+            if ((type_tag = rdbLoadLen(rdb, NULL)) == RDB_LENERR) {\n+                decrRefCount(o);\n+                return NULL;\n+            }\n+\n+            void *v;\n+            if (type_tag == AR_RDB_TAG_INT) {\n+                int64_t ival = rdbLoadSignedInteger(rdb, RDB_VERSION);\n+                if (ival == INT64_MAX && rioGetReadError(rdb)) {\n+                    decrRefCount(o);\n+                    return NULL;\n+                }\n+                v = arValueFromRdbInt(ival);\n+            } else if (type_tag == AR_RDB_TAG_FLOAT) {\n+                double d;\n+                if (rdbLoadBinaryDoubleValue(rdb, &d) == -1) {\n+                    decrRefCount(o);\n+                    return NULL;\n+                }\n+                v = arValueFromRdbFloat(d);\n+            } else if (type_tag == AR_RDB_TAG_SMALLSTR) {\n+                sds str;\n+                if ((str = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) {\n+                    decrRefCount(o);\n+                    return NULL;\n+                }\n+                if (sdslen(str) > AR_SMALLSTR_MAXLEN) {\n+                    sdsfree(str);\n+                    decrRefCount(o);\n+                    rdbReportCorruptRDB(\"Invalid small string length %zu in array\", sdslen(str));\n+                    return NULL;\n+                }",
+        "comment_created_at": "2026-05-05T17:07:01+00:00",
+        "comment_author": "ShubhamTaple",
+        "comment_body": "sdslen() is being called on str, which was already freed on line 3839 sdsfree(str)",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

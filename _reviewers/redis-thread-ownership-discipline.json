@@ -1,0 +1,428 @@
+[
+  {
+    "discussion_id": "2621609546",
+    "pr_number": 14335,
+    "pr_file": "src/networking.c",
+    "created_at": "2025-12-16T03:22:25+00:00",
+    "commented_code": "client *c = connGetPrivateData(conn);\n     int nread, big_arg = 0;\n     size_t qblen, readlen;\n-    if (!(c->io_flags & CLIENT_IO_READ_ENABLED)) return;\n+\n+    if (!(c->io_flags & CLIENT_IO_READ_ENABLED)) {\n+        /* Replica client can only receive ACK messages. Make sure to notify\n+         * the main thread that it needs to return back to IO thread to read\n+         * the message.\n+         * Note this is not an active notification - main thread checks if the\n+         * flag is raised during beforeSleep - see sendReplicasToIOThread */\n+        if (c->flags & CLIENT_SLAVE && c->running_tid == IOTHREAD_MAIN_THREAD_ID)\n+            atomicSetWithSync(c->pending_ack, 1);\n+        return;\n+    }\n+",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2621609546",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14335,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2621609546",
+        "commented_code": "@@ -3178,7 +3286,18 @@ void readQueryFromClient(connection *conn) {\n     client *c = connGetPrivateData(conn);\n     int nread, big_arg = 0;\n     size_t qblen, readlen;\n-    if (!(c->io_flags & CLIENT_IO_READ_ENABLED)) return;\n+\n+    if (!(c->io_flags & CLIENT_IO_READ_ENABLED)) {\n+        /* Replica client can only receive ACK messages. Make sure to notify\n+         * the main thread that it needs to return back to IO thread to read\n+         * the message.\n+         * Note this is not an active notification - main thread checks if the\n+         * flag is raised during beforeSleep - see sendReplicasToIOThread */\n+        if (c->flags & CLIENT_SLAVE && c->running_tid == IOTHREAD_MAIN_THREAD_ID)\n+            atomicSetWithSync(c->pending_ack, 1);\n+        return;\n+    }\n+",
+        "comment_created_at": "2025-12-16T03:22:25+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "here we can not read c->flags, it is a data race. and i think `c->pending_ack` can be more generic, maybe `pending_read`.\r\n\r\n```suggestion\r\n    if (!(c->io_flags & CLIENT_IO_READ_ENABLED)) {\r\n        atomicSetWithSync(c->pending_ack, 1);\r\n        return;\r\n    } else {\r\n        atomicSetWithSync(c->pending_ack, 0);\r\n    }\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2626571884",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14335,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2621609546",
+        "commented_code": "@@ -3178,7 +3286,18 @@ void readQueryFromClient(connection *conn) {\n     client *c = connGetPrivateData(conn);\n     int nread, big_arg = 0;\n     size_t qblen, readlen;\n-    if (!(c->io_flags & CLIENT_IO_READ_ENABLED)) return;\n+\n+    if (!(c->io_flags & CLIENT_IO_READ_ENABLED)) {\n+        /* Replica client can only receive ACK messages. Make sure to notify\n+         * the main thread that it needs to return back to IO thread to read\n+         * the message.\n+         * Note this is not an active notification - main thread checks if the\n+         * flag is raised during beforeSleep - see sendReplicasToIOThread */\n+        if (c->flags & CLIENT_SLAVE && c->running_tid == IOTHREAD_MAIN_THREAD_ID)\n+            atomicSetWithSync(c->pending_ack, 1);\n+        return;\n+    }\n+",
+        "comment_created_at": "2025-12-17T10:51:30+00:00",
+        "comment_author": "minchopaskal",
+        "comment_body": "Ah yes, TSan did not report it but indeed it has data race. I agree on the `pending_read` change, but I think `atomicSetWithSync(c->pending_ack, 0);` is bad here as in the context of no IO threads this is unnecessary atomic operation. \r\n\r\nEDIT: Can't think of a better place to put it though. So I think best to check\r\n`else if (server.io_threads_num > 1) ...`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2629423431",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14335,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2621609546",
+        "commented_code": "@@ -3178,7 +3286,18 @@ void readQueryFromClient(connection *conn) {\n     client *c = connGetPrivateData(conn);\n     int nread, big_arg = 0;\n     size_t qblen, readlen;\n-    if (!(c->io_flags & CLIENT_IO_READ_ENABLED)) return;\n+\n+    if (!(c->io_flags & CLIENT_IO_READ_ENABLED)) {\n+        /* Replica client can only receive ACK messages. Make sure to notify\n+         * the main thread that it needs to return back to IO thread to read\n+         * the message.\n+         * Note this is not an active notification - main thread checks if the\n+         * flag is raised during beforeSleep - see sendReplicasToIOThread */\n+        if (c->flags & CLIENT_SLAVE && c->running_tid == IOTHREAD_MAIN_THREAD_ID)\n+            atomicSetWithSync(c->pending_ack, 1);\n+        return;\n+    }\n+",
+        "comment_created_at": "2025-12-18T03:40:08+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "> else if (server.io_threads_num > 1) ...\r\n\r\nlooks good to me",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2883103543",
+    "pr_number": 14841,
+    "pr_file": "src/networking.c",
+    "created_at": "2026-03-04T10:50:25+00:00",
+    "commented_code": "* pending query buffer, already representing a full command, to process.\n  * return C_ERR in case the client was freed during the processing */\n int processInputBuffer(client *c) {\n-    server.stat_total_client_process_input_buff_events++;\n+    atomicIncr(server.stat_total_client_process_input_buff_events, 1);\n+\n+    /* Keep active-client window updates in main thread only to avoid races\n+     * with serverCron() maintenance of the circular slots. */\n+    if (c->running_tid == IOTHREAD_MAIN_THREAD_ID)\n+        statsUpdateActiveClients(c);",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2883103543",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14841,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2883103543",
+        "commented_code": "@@ -3512,7 +3512,12 @@ int isClientReadErrorFatal(client *c) {\n  * pending query buffer, already representing a full command, to process.\n  * return C_ERR in case the client was freed during the processing */\n int processInputBuffer(client *c) {\n-    server.stat_total_client_process_input_buff_events++;\n+    atomicIncr(server.stat_total_client_process_input_buff_events, 1);\n+\n+    /* Keep active-client window updates in main thread only to avoid races\n+     * with serverCron() maintenance of the circular slots. */\n+    if (c->running_tid == IOTHREAD_MAIN_THREAD_ID)\n+        statsUpdateActiveClients(c);",
+        "comment_created_at": "2026-03-04T10:50:25+00:00",
+        "comment_author": "sundb",
+        "comment_body": "is it needed to call statsUpdateActiveClients() when this client returns to the main thread in processClientsFromIOThread()?\nEven to prevent the client from never having a complete command, it is possible to update whether it is active in IOThreadClientsCron()?\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2883854257",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14841,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2883103543",
+        "commented_code": "@@ -3512,7 +3512,12 @@ int isClientReadErrorFatal(client *c) {\n  * pending query buffer, already representing a full command, to process.\n  * return C_ERR in case the client was freed during the processing */\n int processInputBuffer(client *c) {\n-    server.stat_total_client_process_input_buff_events++;\n+    atomicIncr(server.stat_total_client_process_input_buff_events, 1);\n+\n+    /* Keep active-client window updates in main thread only to avoid races\n+     * with serverCron() maintenance of the circular slots. */\n+    if (c->running_tid == IOTHREAD_MAIN_THREAD_ID)\n+        statsUpdateActiveClients(c);",
+        "comment_created_at": "2026-03-04T13:38:42+00:00",
+        "comment_author": "udi-speedb",
+        "comment_body": "I have intentionally called `statsUpdateActiveClients(c)` from the main-thread (from `processInputBuffer()`) to avoid races on the shared sliding-window state (`active_clients_window[]` / `active_clients_window_ts`).\r\nA separate call in `processClientsFromIOThread()` is not needed for complete-command traffic, because IO threads mark CLIENT_IO_PENDING_COMMAND and transfer the client to main thread, which then executes `processPendingCommandAndInputBuffer()` and reaches the same `processInputBuffer()` call site.\r\n\r\nI think that using `IOThreadClientsCron()` for this metric would be incorrect, since cron marks clients by periodic scheduling (including idle clients), not by read activity, and would overcount `active_clients`.\r\n\r\nI am aware that clients that continuously send incomplete input and never form a complete command may be undercounted in `active_clients`, but such behaviour seems to me like a pathological pattern and I suggest leaving it as is.\r\n\r\nWDYT? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2884037594",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14841,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2883103543",
+        "commented_code": "@@ -3512,7 +3512,12 @@ int isClientReadErrorFatal(client *c) {\n  * pending query buffer, already representing a full command, to process.\n  * return C_ERR in case the client was freed during the processing */\n int processInputBuffer(client *c) {\n-    server.stat_total_client_process_input_buff_events++;\n+    atomicIncr(server.stat_total_client_process_input_buff_events, 1);\n+\n+    /* Keep active-client window updates in main thread only to avoid races\n+     * with serverCron() maintenance of the circular slots. */\n+    if (c->running_tid == IOTHREAD_MAIN_THREAD_ID)\n+        statsUpdateActiveClients(c);",
+        "comment_created_at": "2026-03-04T14:15:08+00:00",
+        "comment_author": "sundb",
+        "comment_body": "> A separate call in `processClientsFromIOThread()` is not needed for complete-command traffic, because IO threads mark CLIENT_IO_PENDING_COMMAND and transfer the client to main thread, which then executes `processPendingCommandAndInputBuffer()` and reaches the same `processInputBuffer()` call site.\r\n\r\nthe premise of processPendingCommandAndInputBuffer() is that querybuf still has data or there is still pending commands, if the client execute command one by one, this path will never enter.\r\n\r\ni added a log\r\n```diff\r\ndiff --git a/src/server.c b/src/server.c\r\nindex cf8975bf1..ecb6a1ba8 100644\r\n--- a/src/server.c\r\n+++ b/src/server.c\r\n@@ -6048,6 +6048,7 @@ void statsUpdateActiveClients(client *c) {\r\n     }\r\n \r\n     c->last_ts_when_counted_as_active = now;\r\n+    printf(\"c->last_ts_when_counted_as_active: %lld\\n\", c->last_ts_when_counted_as_active);\r\n }\r\n \r\n int getActiveClientsInWindow(void) {\r\n```\r\n\r\nstart server `./src/redis-server --io-threads 8` then the client execute `set a 1`, but i don't see that this log was printed.\r\nwhen i start server with `./src/redis-server`, i can see this log.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2885576094",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14841,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2883103543",
+        "commented_code": "@@ -3512,7 +3512,12 @@ int isClientReadErrorFatal(client *c) {\n  * pending query buffer, already representing a full command, to process.\n  * return C_ERR in case the client was freed during the processing */\n int processInputBuffer(client *c) {\n-    server.stat_total_client_process_input_buff_events++;\n+    atomicIncr(server.stat_total_client_process_input_buff_events, 1);\n+\n+    /* Keep active-client window updates in main thread only to avoid races\n+     * with serverCron() maintenance of the circular slots. */\n+    if (c->running_tid == IOTHREAD_MAIN_THREAD_ID)\n+        statsUpdateActiveClients(c);",
+        "comment_created_at": "2026-03-04T19:11:07+00:00",
+        "comment_author": "udi-speedb",
+        "comment_body": "You are correct.\r\nI have submitted a fix with a new test. Without the fix the test reproduces the bug.\r\nPlease review",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2542119569",
+    "pr_number": 14544,
+    "pr_file": "src/lazyfree.c",
+    "created_at": "2025-11-19T13:56:10+00:00",
+    "commented_code": "}\n }\n \n+/* Duplicate client reply objects to avoid race conditions with bio threads\n+ * during async flushdb.\n+ *\n+ * Since incrRefCount/decrRefCount are not thread-safe, and bio thread may\n+ * free database objects while main thread sends client replies, we need to\n+ * create independent copies of the string objects to avoid concurrent access. */\n+static void protectClientReplyObjects(void) {\n+    int allpaused = 0;\n+    if (server.io_threads_num > 1) {\n+        serverAssert(pthread_equal(server.main_thread_id, pthread_self()));\n+        allpaused = 1;\n+        pauseAllIOThreads();\n+    }\n+\n+    listNode *ln;\n+    listIter li;\n+    listRewind(server.clients, &li);\n+    while ((ln = listNext(&li)) != NULL) {\n+        client *c = listNodeValue(ln);\n+\n+        /* Process deferred reply blocks */\n+        processDeferredReplyBlocks(c);\n+\n+        /* Skip cs without reply list */\n+        if (!c->reply || listLength(c->reply) == 0) continue;\n+\n+        /* Iterate through client's reply list */\n+        listIter reply_li;\n+        listNode *reply_ln;\n+        listRewind(c->reply, &reply_li);\n+        while ((reply_ln = listNext(&reply_li))) {\n+            clientReplyBlock *block = listNodeValue(reply_ln);\n+\n+            /* If this is an ROBJ block, duplicate the string object to avoid race condition */",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2542119569",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14544,
+        "pr_file": "src/lazyfree.c",
+        "discussion_id": "2542119569",
+        "commented_code": "@@ -195,6 +195,54 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {\n     }\n }\n \n+/* Duplicate client reply objects to avoid race conditions with bio threads\n+ * during async flushdb.\n+ *\n+ * Since incrRefCount/decrRefCount are not thread-safe, and bio thread may\n+ * free database objects while main thread sends client replies, we need to\n+ * create independent copies of the string objects to avoid concurrent access. */\n+static void protectClientReplyObjects(void) {\n+    int allpaused = 0;\n+    if (server.io_threads_num > 1) {\n+        serverAssert(pthread_equal(server.main_thread_id, pthread_self()));\n+        allpaused = 1;\n+        pauseAllIOThreads();\n+    }\n+\n+    listNode *ln;\n+    listIter li;\n+    listRewind(server.clients, &li);\n+    while ((ln = listNext(&li)) != NULL) {\n+        client *c = listNodeValue(ln);\n+\n+        /* Process deferred reply blocks */\n+        processDeferredReplyBlocks(c);\n+\n+        /* Skip cs without reply list */\n+        if (!c->reply || listLength(c->reply) == 0) continue;\n+\n+        /* Iterate through client's reply list */\n+        listIter reply_li;\n+        listNode *reply_ln;\n+        listRewind(c->reply, &reply_li);\n+        while ((reply_ln = listNext(&reply_li))) {\n+            clientReplyBlock *block = listNodeValue(reply_ln);\n+\n+            /* If this is an ROBJ block, duplicate the string object to avoid race condition */",
+        "comment_created_at": "2025-11-19T13:56:10+00:00",
+        "comment_author": "oranagra",
+        "comment_body": "why duplicate the object rather than find it in the db and detach it so the db won't free it?\ni.e. we wanna decrement the refcount from the main thread, in theory for all objects, but it's (probably) easier to run through all clients and their replies rather than run through all objects in the db.\n\np.s. even running through all clients could be terrible (i've seen cases with some 30k clients), maybe we can keep a list of clients with pending replies?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2542152455",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14544,
+        "pr_file": "src/lazyfree.c",
+        "discussion_id": "2542119569",
+        "commented_code": "@@ -195,6 +195,54 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {\n     }\n }\n \n+/* Duplicate client reply objects to avoid race conditions with bio threads\n+ * during async flushdb.\n+ *\n+ * Since incrRefCount/decrRefCount are not thread-safe, and bio thread may\n+ * free database objects while main thread sends client replies, we need to\n+ * create independent copies of the string objects to avoid concurrent access. */\n+static void protectClientReplyObjects(void) {\n+    int allpaused = 0;\n+    if (server.io_threads_num > 1) {\n+        serverAssert(pthread_equal(server.main_thread_id, pthread_self()));\n+        allpaused = 1;\n+        pauseAllIOThreads();\n+    }\n+\n+    listNode *ln;\n+    listIter li;\n+    listRewind(server.clients, &li);\n+    while ((ln = listNext(&li)) != NULL) {\n+        client *c = listNodeValue(ln);\n+\n+        /* Process deferred reply blocks */\n+        processDeferredReplyBlocks(c);\n+\n+        /* Skip cs without reply list */\n+        if (!c->reply || listLength(c->reply) == 0) continue;\n+\n+        /* Iterate through client's reply list */\n+        listIter reply_li;\n+        listNode *reply_ln;\n+        listRewind(c->reply, &reply_li);\n+        while ((reply_ln = listNext(&reply_li))) {\n+            clientReplyBlock *block = listNodeValue(reply_ln);\n+\n+            /* If this is an ROBJ block, duplicate the string object to avoid race condition */",
+        "comment_created_at": "2025-11-19T14:04:39+00:00",
+        "comment_author": "oranagra",
+        "comment_body": "ohh, silly me, we can't lookup the object in the db (we don't have a key), but better yet, we don't need a lookup.\r\nif we have just two refs, we can easily nullify the `ptr` of the original robj, and let the reply object destroy it when it's done (i.e. dup the robj, let each have refcount of 1, and only one of them hold the string, the other will hold NULL).\r\nif we have more than two refs, then i'm not sure what to do.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2542234130",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14544,
+        "pr_file": "src/lazyfree.c",
+        "discussion_id": "2542119569",
+        "commented_code": "@@ -195,6 +195,54 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {\n     }\n }\n \n+/* Duplicate client reply objects to avoid race conditions with bio threads\n+ * during async flushdb.\n+ *\n+ * Since incrRefCount/decrRefCount are not thread-safe, and bio thread may\n+ * free database objects while main thread sends client replies, we need to\n+ * create independent copies of the string objects to avoid concurrent access. */\n+static void protectClientReplyObjects(void) {\n+    int allpaused = 0;\n+    if (server.io_threads_num > 1) {\n+        serverAssert(pthread_equal(server.main_thread_id, pthread_self()));\n+        allpaused = 1;\n+        pauseAllIOThreads();\n+    }\n+\n+    listNode *ln;\n+    listIter li;\n+    listRewind(server.clients, &li);\n+    while ((ln = listNext(&li)) != NULL) {\n+        client *c = listNodeValue(ln);\n+\n+        /* Process deferred reply blocks */\n+        processDeferredReplyBlocks(c);\n+\n+        /* Skip cs without reply list */\n+        if (!c->reply || listLength(c->reply) == 0) continue;\n+\n+        /* Iterate through client's reply list */\n+        listIter reply_li;\n+        listNode *reply_ln;\n+        listRewind(c->reply, &reply_li);\n+        while ((reply_ln = listNext(&reply_li))) {\n+            clientReplyBlock *block = listNodeValue(reply_ln);\n+\n+            /* If this is an ROBJ block, duplicate the string object to avoid race condition */",
+        "comment_created_at": "2025-11-19T14:23:50+00:00",
+        "comment_author": "oranagra",
+        "comment_body": "another idea is to remove the refcount from the robj, and add it using #14445 only for large keys. i.e. when the value is small, we copy it and we don't need the refcount, and when it's large, we don't care to spend 8 more bytes.\r\nthen the refcount can probably be a proper atomic integer.\r\ni'm not sure i like this idea, but putting it here as an alternative, maybe someone can further improve it.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2545951732",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14544,
+        "pr_file": "src/lazyfree.c",
+        "discussion_id": "2542119569",
+        "commented_code": "@@ -195,6 +195,54 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {\n     }\n }\n \n+/* Duplicate client reply objects to avoid race conditions with bio threads\n+ * during async flushdb.\n+ *\n+ * Since incrRefCount/decrRefCount are not thread-safe, and bio thread may\n+ * free database objects while main thread sends client replies, we need to\n+ * create independent copies of the string objects to avoid concurrent access. */\n+static void protectClientReplyObjects(void) {\n+    int allpaused = 0;\n+    if (server.io_threads_num > 1) {\n+        serverAssert(pthread_equal(server.main_thread_id, pthread_self()));\n+        allpaused = 1;\n+        pauseAllIOThreads();\n+    }\n+\n+    listNode *ln;\n+    listIter li;\n+    listRewind(server.clients, &li);\n+    while ((ln = listNext(&li)) != NULL) {\n+        client *c = listNodeValue(ln);\n+\n+        /* Process deferred reply blocks */\n+        processDeferredReplyBlocks(c);\n+\n+        /* Skip cs without reply list */\n+        if (!c->reply || listLength(c->reply) == 0) continue;\n+\n+        /* Iterate through client's reply list */\n+        listIter reply_li;\n+        listNode *reply_ln;\n+        listRewind(c->reply, &reply_li);\n+        while ((reply_ln = listNext(&reply_li))) {\n+            clientReplyBlock *block = listNodeValue(reply_ln);\n+\n+            /* If this is an ROBJ block, duplicate the string object to avoid race condition */",
+        "comment_created_at": "2025-11-20T12:48:59+00:00",
+        "comment_author": "sundb",
+        "comment_body": "> if we have just two refs, we can easily nullify the `ptr` of the original robj, and let the reply object destroy it when it's done (i.e. dup the robj, let each have refcount of 1, and only one of them hold the string, the other will hold NULL). if we have more than two refs, then i'm not sure what to do.\r\n\r\na robj might be referenced by multi clients, so this way won't work.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2546010004",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14544,
+        "pr_file": "src/lazyfree.c",
+        "discussion_id": "2542119569",
+        "commented_code": "@@ -195,6 +195,54 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {\n     }\n }\n \n+/* Duplicate client reply objects to avoid race conditions with bio threads\n+ * during async flushdb.\n+ *\n+ * Since incrRefCount/decrRefCount are not thread-safe, and bio thread may\n+ * free database objects while main thread sends client replies, we need to\n+ * create independent copies of the string objects to avoid concurrent access. */\n+static void protectClientReplyObjects(void) {\n+    int allpaused = 0;\n+    if (server.io_threads_num > 1) {\n+        serverAssert(pthread_equal(server.main_thread_id, pthread_self()));\n+        allpaused = 1;\n+        pauseAllIOThreads();\n+    }\n+\n+    listNode *ln;\n+    listIter li;\n+    listRewind(server.clients, &li);\n+    while ((ln = listNext(&li)) != NULL) {\n+        client *c = listNodeValue(ln);\n+\n+        /* Process deferred reply blocks */\n+        processDeferredReplyBlocks(c);\n+\n+        /* Skip cs without reply list */\n+        if (!c->reply || listLength(c->reply) == 0) continue;\n+\n+        /* Iterate through client's reply list */\n+        listIter reply_li;\n+        listNode *reply_ln;\n+        listRewind(c->reply, &reply_li);\n+        while ((reply_ln = listNext(&reply_li))) {\n+            clientReplyBlock *block = listNodeValue(reply_ln);\n+\n+            /* If this is an ROBJ block, duplicate the string object to avoid race condition */",
+        "comment_created_at": "2025-11-20T13:08:43+00:00",
+        "comment_author": "oranagra",
+        "comment_body": "yes, i realized that. so either we fall back to copying in that case, or if we wanna solve it better, we should add an atomic refcount like i mentioned in my previous post (only for large objects).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2546019610",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14544,
+        "pr_file": "src/lazyfree.c",
+        "discussion_id": "2542119569",
+        "commented_code": "@@ -195,6 +195,54 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {\n     }\n }\n \n+/* Duplicate client reply objects to avoid race conditions with bio threads\n+ * during async flushdb.\n+ *\n+ * Since incrRefCount/decrRefCount are not thread-safe, and bio thread may\n+ * free database objects while main thread sends client replies, we need to\n+ * create independent copies of the string objects to avoid concurrent access. */\n+static void protectClientReplyObjects(void) {\n+    int allpaused = 0;\n+    if (server.io_threads_num > 1) {\n+        serverAssert(pthread_equal(server.main_thread_id, pthread_self()));\n+        allpaused = 1;\n+        pauseAllIOThreads();\n+    }\n+\n+    listNode *ln;\n+    listIter li;\n+    listRewind(server.clients, &li);\n+    while ((ln = listNext(&li)) != NULL) {\n+        client *c = listNodeValue(ln);\n+\n+        /* Process deferred reply blocks */\n+        processDeferredReplyBlocks(c);\n+\n+        /* Skip cs without reply list */\n+        if (!c->reply || listLength(c->reply) == 0) continue;\n+\n+        /* Iterate through client's reply list */\n+        listIter reply_li;\n+        listNode *reply_ln;\n+        listRewind(c->reply, &reply_li);\n+        while ((reply_ln = listNext(&reply_li))) {\n+            clientReplyBlock *block = listNodeValue(reply_ln);\n+\n+            /* If this is an ROBJ block, duplicate the string object to avoid race condition */",
+        "comment_created_at": "2025-11-20T13:12:08+00:00",
+        "comment_author": "sundb",
+        "comment_body": "@oranagra yes, atomic is the simplest way, let's wait for #14445 and then continue this.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2546088342",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14544,
+        "pr_file": "src/lazyfree.c",
+        "discussion_id": "2542119569",
+        "commented_code": "@@ -195,6 +195,54 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {\n     }\n }\n \n+/* Duplicate client reply objects to avoid race conditions with bio threads\n+ * during async flushdb.\n+ *\n+ * Since incrRefCount/decrRefCount are not thread-safe, and bio thread may\n+ * free database objects while main thread sends client replies, we need to\n+ * create independent copies of the string objects to avoid concurrent access. */\n+static void protectClientReplyObjects(void) {\n+    int allpaused = 0;\n+    if (server.io_threads_num > 1) {\n+        serverAssert(pthread_equal(server.main_thread_id, pthread_self()));\n+        allpaused = 1;\n+        pauseAllIOThreads();\n+    }\n+\n+    listNode *ln;\n+    listIter li;\n+    listRewind(server.clients, &li);\n+    while ((ln = listNext(&li)) != NULL) {\n+        client *c = listNodeValue(ln);\n+\n+        /* Process deferred reply blocks */\n+        processDeferredReplyBlocks(c);\n+\n+        /* Skip cs without reply list */\n+        if (!c->reply || listLength(c->reply) == 0) continue;\n+\n+        /* Iterate through client's reply list */\n+        listIter reply_li;\n+        listNode *reply_ln;\n+        listRewind(c->reply, &reply_li);\n+        while ((reply_ln = listNext(&reply_li))) {\n+            clientReplyBlock *block = listNodeValue(reply_ln);\n+\n+            /* If this is an ROBJ block, duplicate the string object to avoid race condition */",
+        "comment_created_at": "2025-11-20T13:32:53+00:00",
+        "comment_author": "oranagra",
+        "comment_body": "if we want, we don't have to wait. just choose between copy and taking ownership, depending on the value of the refcount.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2643482851",
+    "pr_number": 14608,
+    "pr_file": "src/object.c",
+    "created_at": "2025-12-23T15:00:42+00:00",
+    "commented_code": "}\n \n void incrRefCount(robj *o) {\n-    if (o->refcount < OBJ_FIRST_SPECIAL_REFCOUNT) {\n-        o->refcount++;\n+    unsigned short refcount;\n+    atomicGet(o->refcount, refcount);\n+\n+    if (refcount < OBJ_FIRST_SPECIAL_REFCOUNT) {\n+        serverAssert(refcount != OBJ_FIRST_SPECIAL_REFCOUNT - 1);\n+        atomicIncr(o->refcount, 1);\n     } else {\n-        if (o->refcount == OBJ_SHARED_REFCOUNT) {\n+        if (refcount == OBJ_SHARED_REFCOUNT) {\n             /* Nothing to do: this refcount is immutable. */\n-        } else if (o->refcount == OBJ_STATIC_REFCOUNT) {\n+        } else if (refcount == OBJ_STATIC_REFCOUNT) {\n             serverPanic(\"You tried to retain an object allocated in the stack\");\n         }\n     }\n }\n \n void decrRefCount(robj *o) {\n-    if (o->refcount == OBJ_SHARED_REFCOUNT)\n+    unsigned short refcount;\n+    atomicGet(o->refcount, refcount);\n+\n+    if (refcount == OBJ_SHARED_REFCOUNT)\n         return; /* Nothing to do: this refcount is immutable. */\n \n-    if (unlikely(o->refcount <= 0)) {\n+    if (unlikely(refcount <= 0)) {\n         serverPanic(\"illegal decrRefCount for object with: type %u, encoding %u, refcount %d\",\n-            o->type, o->encoding, o->refcount);\n+            o->type, o->encoding, refcount);\n     }\n \n-    if (--(o->refcount) == 0) {\n+    atomicDecr(o->refcount, 1);",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2643482851",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14608,
+        "pr_file": "src/object.c",
+        "discussion_id": "2643482851",
+        "commented_code": "@@ -580,27 +580,35 @@ void freeStreamObject(robj *o) {\n }\n \n void incrRefCount(robj *o) {\n-    if (o->refcount < OBJ_FIRST_SPECIAL_REFCOUNT) {\n-        o->refcount++;\n+    unsigned short refcount;\n+    atomicGet(o->refcount, refcount);\n+\n+    if (refcount < OBJ_FIRST_SPECIAL_REFCOUNT) {\n+        serverAssert(refcount != OBJ_FIRST_SPECIAL_REFCOUNT - 1);\n+        atomicIncr(o->refcount, 1);\n     } else {\n-        if (o->refcount == OBJ_SHARED_REFCOUNT) {\n+        if (refcount == OBJ_SHARED_REFCOUNT) {\n             /* Nothing to do: this refcount is immutable. */\n-        } else if (o->refcount == OBJ_STATIC_REFCOUNT) {\n+        } else if (refcount == OBJ_STATIC_REFCOUNT) {\n             serverPanic(\"You tried to retain an object allocated in the stack\");\n         }\n     }\n }\n \n void decrRefCount(robj *o) {\n-    if (o->refcount == OBJ_SHARED_REFCOUNT)\n+    unsigned short refcount;\n+    atomicGet(o->refcount, refcount);\n+\n+    if (refcount == OBJ_SHARED_REFCOUNT)\n         return; /* Nothing to do: this refcount is immutable. */\n \n-    if (unlikely(o->refcount <= 0)) {\n+    if (unlikely(refcount <= 0)) {\n         serverPanic(\"illegal decrRefCount for object with: type %u, encoding %u, refcount %d\",\n-            o->type, o->encoding, o->refcount);\n+            o->type, o->encoding, refcount);\n     }\n \n-    if (--(o->refcount) == 0) {\n+    atomicDecr(o->refcount, 1);",
+        "comment_created_at": "2025-12-23T15:00:42+00:00",
+        "comment_author": "skaslev",
+        "comment_body": "I think we need to use the returned value here to avoid double free due to race.\nSay if `o->refcount == 1`, two threads enter `decrRefCount()` and `atomicGet()`  `refcount == 1`, would double free (though two `decrRefCount()`s with refcount of 1 is def a bug).\n\n```suggestion\n    refcount = atomicDecr(o->refcount, 1);\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2644466080",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14608,
+        "pr_file": "src/object.c",
+        "discussion_id": "2643482851",
+        "commented_code": "@@ -580,27 +580,35 @@ void freeStreamObject(robj *o) {\n }\n \n void incrRefCount(robj *o) {\n-    if (o->refcount < OBJ_FIRST_SPECIAL_REFCOUNT) {\n-        o->refcount++;\n+    unsigned short refcount;\n+    atomicGet(o->refcount, refcount);\n+\n+    if (refcount < OBJ_FIRST_SPECIAL_REFCOUNT) {\n+        serverAssert(refcount != OBJ_FIRST_SPECIAL_REFCOUNT - 1);\n+        atomicIncr(o->refcount, 1);\n     } else {\n-        if (o->refcount == OBJ_SHARED_REFCOUNT) {\n+        if (refcount == OBJ_SHARED_REFCOUNT) {\n             /* Nothing to do: this refcount is immutable. */\n-        } else if (o->refcount == OBJ_STATIC_REFCOUNT) {\n+        } else if (refcount == OBJ_STATIC_REFCOUNT) {\n             serverPanic(\"You tried to retain an object allocated in the stack\");\n         }\n     }\n }\n \n void decrRefCount(robj *o) {\n-    if (o->refcount == OBJ_SHARED_REFCOUNT)\n+    unsigned short refcount;\n+    atomicGet(o->refcount, refcount);\n+\n+    if (refcount == OBJ_SHARED_REFCOUNT)\n         return; /* Nothing to do: this refcount is immutable. */\n \n-    if (unlikely(o->refcount <= 0)) {\n+    if (unlikely(refcount <= 0)) {\n         serverPanic(\"illegal decrRefCount for object with: type %u, encoding %u, refcount %d\",\n-            o->type, o->encoding, o->refcount);\n+            o->type, o->encoding, refcount);\n     }\n \n-    if (--(o->refcount) == 0) {\n+    atomicDecr(o->refcount, 1);",
+        "comment_created_at": "2025-12-23T23:54:35+00:00",
+        "comment_author": "sundb",
+        "comment_body": "good catch.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2644513168",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14608,
+        "pr_file": "src/object.c",
+        "discussion_id": "2643482851",
+        "commented_code": "@@ -580,27 +580,35 @@ void freeStreamObject(robj *o) {\n }\n \n void incrRefCount(robj *o) {\n-    if (o->refcount < OBJ_FIRST_SPECIAL_REFCOUNT) {\n-        o->refcount++;\n+    unsigned short refcount;\n+    atomicGet(o->refcount, refcount);\n+\n+    if (refcount < OBJ_FIRST_SPECIAL_REFCOUNT) {\n+        serverAssert(refcount != OBJ_FIRST_SPECIAL_REFCOUNT - 1);\n+        atomicIncr(o->refcount, 1);\n     } else {\n-        if (o->refcount == OBJ_SHARED_REFCOUNT) {\n+        if (refcount == OBJ_SHARED_REFCOUNT) {\n             /* Nothing to do: this refcount is immutable. */\n-        } else if (o->refcount == OBJ_STATIC_REFCOUNT) {\n+        } else if (refcount == OBJ_STATIC_REFCOUNT) {\n             serverPanic(\"You tried to retain an object allocated in the stack\");\n         }\n     }\n }\n \n void decrRefCount(robj *o) {\n-    if (o->refcount == OBJ_SHARED_REFCOUNT)\n+    unsigned short refcount;\n+    atomicGet(o->refcount, refcount);\n+\n+    if (refcount == OBJ_SHARED_REFCOUNT)\n         return; /* Nothing to do: this refcount is immutable. */\n \n-    if (unlikely(o->refcount <= 0)) {\n+    if (unlikely(refcount <= 0)) {\n         serverPanic(\"illegal decrRefCount for object with: type %u, encoding %u, refcount %d\",\n-            o->type, o->encoding, o->refcount);\n+            o->type, o->encoding, refcount);\n     }\n \n-    if (--(o->refcount) == 0) {\n+    atomicDecr(o->refcount, 1);",
+        "comment_created_at": "2025-12-24T00:41:56+00:00",
+        "comment_author": "sundb",
+        "comment_body": "done with https://github.com/redis/redis/pull/14608/commits/517efcca90d8f1f4cc21580304534639297bcf5b",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2690246996",
+    "pr_number": 14608,
+    "pr_file": "src/networking.c",
+    "created_at": "2026-01-14T12:30:16+00:00",
+    "commented_code": "}\n }\n \n+/* Queue an robj to be freed by the main thread when client returns from IO thread.\n+ * This is used in IO thread write path to avoid refcount race conditions. */\n+#define IO_DEFERRED_OBJECTS_INIT_SIZE 8\n+void ioDeferFreeRobj(client *c, robj *obj) {\n+    if (c->io_deferred_objects_num >= c->io_deferred_objects_size) {\n+        int new_size = !c->io_deferred_objects_size ?\n+            IO_DEFERRED_OBJECTS_INIT_SIZE : c->io_deferred_objects_size * 2;\n+        c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+        c->io_deferred_objects_size = new_size;\n+    }\n+    c->io_deferred_objects[c->io_deferred_objects_num++] = obj;\n+}\n+\n+/* Free all objects queued by IO thread for deferred freeing.\n+ * Called by main thread when client returns from IO thread.\n+ * If free_array is true then free the array itself as well. */\n+void freeClientIODeferredObjects(client *c, int free_array) {\n+    for (int i = 0; i < c->io_deferred_objects_num; i++) {\n+        robj *obj = c->io_deferred_objects[i];\n+        decrRefCount(obj);\n+    }\n+\n+    if (!free_array) {\n+        /* If the utilization rate is less than 1/4, reduce the size to 1/2 to avoid thrashing */\n+        if (c->io_deferred_objects_size > IO_DEFERRED_OBJECTS_INIT_SIZE &&\n+            c->io_deferred_objects_num * 4 < c->io_deferred_objects_size)\n+        {\n+            int new_size = c->io_deferred_objects_size / 2;\n+            c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+            c->io_deferred_objects_size = new_size;\n+        }\n+        c->io_deferred_objects_num = 0;\n+    } else {\n+        zfree(c->io_deferred_objects);\n+        c->io_deferred_objects = NULL;",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2690246996",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14608,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2690246996",
+        "commented_code": "@@ -1546,6 +1678,44 @@ void freeClientDeferredObjects(client *c, int free_array) {\n     }\n }\n \n+/* Queue an robj to be freed by the main thread when client returns from IO thread.\n+ * This is used in IO thread write path to avoid refcount race conditions. */\n+#define IO_DEFERRED_OBJECTS_INIT_SIZE 8\n+void ioDeferFreeRobj(client *c, robj *obj) {\n+    if (c->io_deferred_objects_num >= c->io_deferred_objects_size) {\n+        int new_size = !c->io_deferred_objects_size ?\n+            IO_DEFERRED_OBJECTS_INIT_SIZE : c->io_deferred_objects_size * 2;\n+        c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+        c->io_deferred_objects_size = new_size;\n+    }\n+    c->io_deferred_objects[c->io_deferred_objects_num++] = obj;\n+}\n+\n+/* Free all objects queued by IO thread for deferred freeing.\n+ * Called by main thread when client returns from IO thread.\n+ * If free_array is true then free the array itself as well. */\n+void freeClientIODeferredObjects(client *c, int free_array) {\n+    for (int i = 0; i < c->io_deferred_objects_num; i++) {\n+        robj *obj = c->io_deferred_objects[i];\n+        decrRefCount(obj);\n+    }\n+\n+    if (!free_array) {\n+        /* If the utilization rate is less than 1/4, reduce the size to 1/2 to avoid thrashing */\n+        if (c->io_deferred_objects_size > IO_DEFERRED_OBJECTS_INIT_SIZE &&\n+            c->io_deferred_objects_num * 4 < c->io_deferred_objects_size)\n+        {\n+            int new_size = c->io_deferred_objects_size / 2;\n+            c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+            c->io_deferred_objects_size = new_size;\n+        }\n+        c->io_deferred_objects_num = 0;\n+    } else {\n+        zfree(c->io_deferred_objects);\n+        c->io_deferred_objects = NULL; ",
+        "comment_created_at": "2026-01-14T12:30:16+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "don't we reset `io_deferred_objects_num` and `io_deferred_objects_size`?\r\ni think we may call `freeClientIODeferredObjects` multiple times",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2690259620",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14608,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2690246996",
+        "commented_code": "@@ -1546,6 +1678,44 @@ void freeClientDeferredObjects(client *c, int free_array) {\n     }\n }\n \n+/* Queue an robj to be freed by the main thread when client returns from IO thread.\n+ * This is used in IO thread write path to avoid refcount race conditions. */\n+#define IO_DEFERRED_OBJECTS_INIT_SIZE 8\n+void ioDeferFreeRobj(client *c, robj *obj) {\n+    if (c->io_deferred_objects_num >= c->io_deferred_objects_size) {\n+        int new_size = !c->io_deferred_objects_size ?\n+            IO_DEFERRED_OBJECTS_INIT_SIZE : c->io_deferred_objects_size * 2;\n+        c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+        c->io_deferred_objects_size = new_size;\n+    }\n+    c->io_deferred_objects[c->io_deferred_objects_num++] = obj;\n+}\n+\n+/* Free all objects queued by IO thread for deferred freeing.\n+ * Called by main thread when client returns from IO thread.\n+ * If free_array is true then free the array itself as well. */\n+void freeClientIODeferredObjects(client *c, int free_array) {\n+    for (int i = 0; i < c->io_deferred_objects_num; i++) {\n+        robj *obj = c->io_deferred_objects[i];\n+        decrRefCount(obj);\n+    }\n+\n+    if (!free_array) {\n+        /* If the utilization rate is less than 1/4, reduce the size to 1/2 to avoid thrashing */\n+        if (c->io_deferred_objects_size > IO_DEFERRED_OBJECTS_INIT_SIZE &&\n+            c->io_deferred_objects_num * 4 < c->io_deferred_objects_size)\n+        {\n+            int new_size = c->io_deferred_objects_size / 2;\n+            c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+            c->io_deferred_objects_size = new_size;\n+        }\n+        c->io_deferred_objects_num = 0;\n+    } else {\n+        zfree(c->io_deferred_objects);\n+        c->io_deferred_objects = NULL; ",
+        "comment_created_at": "2026-01-14T12:34:33+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "besides, we maybe we can call it in `keepClientInMainThread` to avoid necessary memory cost",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2690353620",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14608,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2690246996",
+        "commented_code": "@@ -1546,6 +1678,44 @@ void freeClientDeferredObjects(client *c, int free_array) {\n     }\n }\n \n+/* Queue an robj to be freed by the main thread when client returns from IO thread.\n+ * This is used in IO thread write path to avoid refcount race conditions. */\n+#define IO_DEFERRED_OBJECTS_INIT_SIZE 8\n+void ioDeferFreeRobj(client *c, robj *obj) {\n+    if (c->io_deferred_objects_num >= c->io_deferred_objects_size) {\n+        int new_size = !c->io_deferred_objects_size ?\n+            IO_DEFERRED_OBJECTS_INIT_SIZE : c->io_deferred_objects_size * 2;\n+        c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+        c->io_deferred_objects_size = new_size;\n+    }\n+    c->io_deferred_objects[c->io_deferred_objects_num++] = obj;\n+}\n+\n+/* Free all objects queued by IO thread for deferred freeing.\n+ * Called by main thread when client returns from IO thread.\n+ * If free_array is true then free the array itself as well. */\n+void freeClientIODeferredObjects(client *c, int free_array) {\n+    for (int i = 0; i < c->io_deferred_objects_num; i++) {\n+        robj *obj = c->io_deferred_objects[i];\n+        decrRefCount(obj);\n+    }\n+\n+    if (!free_array) {\n+        /* If the utilization rate is less than 1/4, reduce the size to 1/2 to avoid thrashing */\n+        if (c->io_deferred_objects_size > IO_DEFERRED_OBJECTS_INIT_SIZE &&\n+            c->io_deferred_objects_num * 4 < c->io_deferred_objects_size)\n+        {\n+            int new_size = c->io_deferred_objects_size / 2;\n+            c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+            c->io_deferred_objects_size = new_size;\n+        }\n+        c->io_deferred_objects_num = 0;\n+    } else {\n+        zfree(c->io_deferred_objects);\n+        c->io_deferred_objects = NULL; ",
+        "comment_created_at": "2026-01-14T13:05:21+00:00",
+        "comment_author": "sundb",
+        "comment_body": "> don't we reset `io_deferred_objects_num` and `io_deferred_objects_size`? i think we may call `freeClientIODeferredObjects` multiple times\r\n\r\nI originally assumed that it wouldn't be called repeatedly, but let's add it anyway.\r\n\r\n> besides, we maybe we can call it in `keepClientInMainThread` to avoid necessary memory cost\r\n\r\nmake sense.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2690358508",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14608,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2690246996",
+        "commented_code": "@@ -1546,6 +1678,44 @@ void freeClientDeferredObjects(client *c, int free_array) {\n     }\n }\n \n+/* Queue an robj to be freed by the main thread when client returns from IO thread.\n+ * This is used in IO thread write path to avoid refcount race conditions. */\n+#define IO_DEFERRED_OBJECTS_INIT_SIZE 8\n+void ioDeferFreeRobj(client *c, robj *obj) {\n+    if (c->io_deferred_objects_num >= c->io_deferred_objects_size) {\n+        int new_size = !c->io_deferred_objects_size ?\n+            IO_DEFERRED_OBJECTS_INIT_SIZE : c->io_deferred_objects_size * 2;\n+        c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+        c->io_deferred_objects_size = new_size;\n+    }\n+    c->io_deferred_objects[c->io_deferred_objects_num++] = obj;\n+}\n+\n+/* Free all objects queued by IO thread for deferred freeing.\n+ * Called by main thread when client returns from IO thread.\n+ * If free_array is true then free the array itself as well. */\n+void freeClientIODeferredObjects(client *c, int free_array) {\n+    for (int i = 0; i < c->io_deferred_objects_num; i++) {\n+        robj *obj = c->io_deferred_objects[i];\n+        decrRefCount(obj);\n+    }\n+\n+    if (!free_array) {\n+        /* If the utilization rate is less than 1/4, reduce the size to 1/2 to avoid thrashing */\n+        if (c->io_deferred_objects_size > IO_DEFERRED_OBJECTS_INIT_SIZE &&\n+            c->io_deferred_objects_num * 4 < c->io_deferred_objects_size)\n+        {\n+            int new_size = c->io_deferred_objects_size / 2;\n+            c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+            c->io_deferred_objects_size = new_size;\n+        }\n+        c->io_deferred_objects_num = 0;\n+    } else {\n+        zfree(c->io_deferred_objects);\n+        c->io_deferred_objects = NULL; ",
+        "comment_created_at": "2026-01-14T13:06:41+00:00",
+        "comment_author": "sundb",
+        "comment_body": "done with https://github.com/redis/redis/pull/14608/commits/7fd2b547e0366de9dd428bc6dff852c0d9129bb1",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2702403849",
+    "pr_number": 14608,
+    "pr_file": "src/networking.c",
+    "created_at": "2026-01-18T13:13:26+00:00",
+    "commented_code": "}\n }\n \n+/* Queue an robj to be freed by the main thread when client returns from IO thread.\n+ * This is used in IO thread write path to avoid refcount race conditions. */\n+#define IO_DEFERRED_OBJECTS_INIT_SIZE 8\n+void ioDeferFreeRobj(client *c, robj *obj) {\n+    if (c->io_deferred_objects_num >= c->io_deferred_objects_size) {\n+        int new_size = !c->io_deferred_objects_size ?\n+            IO_DEFERRED_OBJECTS_INIT_SIZE : c->io_deferred_objects_size * 2;\n+        c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+        c->io_deferred_objects_size = new_size;\n+    }\n+    c->io_deferred_objects[c->io_deferred_objects_num++] = obj;\n+}\n+\n+/* Free all objects queued by IO thread for deferred freeing.\n+ * Called by main thread when client returns from IO thread.\n+ * If free_array is true then free the array itself as well.\n+ * If force_remove_ref is true, unconditionally remove the client\n+ * from clients_with_pending_ref_reply list (used by protectClientReplyObjects\n+ * after all bulk string refs have been duplicated). */\n+void freeClientIODeferredAndRemoveRef(client *c, int free_array, int force_remove_ref) {\n+    if (!c->conn) return;\n+\n+    /* Free all objects queued by IO thread for deferred freeing. */\n+    if (c->io_deferred_objects) {\n+        for (int i = 0; i < c->io_deferred_objects_num; i++) {\n+            robj *obj = c->io_deferred_objects[i];\n+            decrRefCount(obj);\n+        }\n+\n+        if (!free_array) {\n+            /* If the utilization rate is less than 1/4, reduce the size to 1/2 to avoid thrashing */\n+            if (c->io_deferred_objects_size > IO_DEFERRED_OBJECTS_INIT_SIZE &&\n+                c->io_deferred_objects_num * 4 < c->io_deferred_objects_size)\n+            {\n+                int new_size = c->io_deferred_objects_size / 2;\n+                c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+                c->io_deferred_objects_size = new_size;\n+            }\n+            c->io_deferred_objects_num = 0;\n+        } else {\n+            zfree(c->io_deferred_objects);\n+            c->io_deferred_objects = NULL;\n+            c->io_deferred_objects_num = 0;\n+            c->io_deferred_objects_size = 0;\n+        }\n+    }\n+\n+    /* Remove client from pending referenced reply clients list. */",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2702403849",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14608,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2702403849",
+        "commented_code": "@@ -1546,6 +1688,60 @@ void freeClientDeferredObjects(client *c, int free_array) {\n     }\n }\n \n+/* Queue an robj to be freed by the main thread when client returns from IO thread.\n+ * This is used in IO thread write path to avoid refcount race conditions. */\n+#define IO_DEFERRED_OBJECTS_INIT_SIZE 8\n+void ioDeferFreeRobj(client *c, robj *obj) {\n+    if (c->io_deferred_objects_num >= c->io_deferred_objects_size) {\n+        int new_size = !c->io_deferred_objects_size ?\n+            IO_DEFERRED_OBJECTS_INIT_SIZE : c->io_deferred_objects_size * 2;\n+        c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+        c->io_deferred_objects_size = new_size;\n+    }\n+    c->io_deferred_objects[c->io_deferred_objects_num++] = obj;\n+}\n+\n+/* Free all objects queued by IO thread for deferred freeing.\n+ * Called by main thread when client returns from IO thread.\n+ * If free_array is true then free the array itself as well.\n+ * If force_remove_ref is true, unconditionally remove the client\n+ * from clients_with_pending_ref_reply list (used by protectClientReplyObjects\n+ * after all bulk string refs have been duplicated). */\n+void freeClientIODeferredAndRemoveRef(client *c, int free_array, int force_remove_ref) {\n+    if (!c->conn) return;\n+\n+    /* Free all objects queued by IO thread for deferred freeing. */\n+    if (c->io_deferred_objects) {\n+        for (int i = 0; i < c->io_deferred_objects_num; i++) {\n+            robj *obj = c->io_deferred_objects[i];\n+            decrRefCount(obj);\n+        }\n+\n+        if (!free_array) {\n+            /* If the utilization rate is less than 1/4, reduce the size to 1/2 to avoid thrashing */\n+            if (c->io_deferred_objects_size > IO_DEFERRED_OBJECTS_INIT_SIZE &&\n+                c->io_deferred_objects_num * 4 < c->io_deferred_objects_size)\n+            {\n+                int new_size = c->io_deferred_objects_size / 2;\n+                c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+                c->io_deferred_objects_size = new_size;\n+            }\n+            c->io_deferred_objects_num = 0;\n+        } else {\n+            zfree(c->io_deferred_objects);\n+            c->io_deferred_objects = NULL;\n+            c->io_deferred_objects_num = 0;\n+            c->io_deferred_objects_size = 0;\n+        }\n+    }\n+\n+    /* Remove client from pending referenced reply clients list. */",
+        "comment_created_at": "2026-01-18T13:13:26+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "Maybe I am being a bit nitpicky, but I still feel this should be split into two functions, a new function to remove client from pending referenced reply clients list if needed. Even though they are often called at similar times, that\u2019s not relevant, the client still has referenced reply even when we should free io deferred objects. And we can call this function separately in `writeToClient` and `protectClientReplyObjects`. WDYT @oranagra",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2702471326",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14608,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2702403849",
+        "commented_code": "@@ -1546,6 +1688,60 @@ void freeClientDeferredObjects(client *c, int free_array) {\n     }\n }\n \n+/* Queue an robj to be freed by the main thread when client returns from IO thread.\n+ * This is used in IO thread write path to avoid refcount race conditions. */\n+#define IO_DEFERRED_OBJECTS_INIT_SIZE 8\n+void ioDeferFreeRobj(client *c, robj *obj) {\n+    if (c->io_deferred_objects_num >= c->io_deferred_objects_size) {\n+        int new_size = !c->io_deferred_objects_size ?\n+            IO_DEFERRED_OBJECTS_INIT_SIZE : c->io_deferred_objects_size * 2;\n+        c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+        c->io_deferred_objects_size = new_size;\n+    }\n+    c->io_deferred_objects[c->io_deferred_objects_num++] = obj;\n+}\n+\n+/* Free all objects queued by IO thread for deferred freeing.\n+ * Called by main thread when client returns from IO thread.\n+ * If free_array is true then free the array itself as well.\n+ * If force_remove_ref is true, unconditionally remove the client\n+ * from clients_with_pending_ref_reply list (used by protectClientReplyObjects\n+ * after all bulk string refs have been duplicated). */\n+void freeClientIODeferredAndRemoveRef(client *c, int free_array, int force_remove_ref) {\n+    if (!c->conn) return;\n+\n+    /* Free all objects queued by IO thread for deferred freeing. */\n+    if (c->io_deferred_objects) {\n+        for (int i = 0; i < c->io_deferred_objects_num; i++) {\n+            robj *obj = c->io_deferred_objects[i];\n+            decrRefCount(obj);\n+        }\n+\n+        if (!free_array) {\n+            /* If the utilization rate is less than 1/4, reduce the size to 1/2 to avoid thrashing */\n+            if (c->io_deferred_objects_size > IO_DEFERRED_OBJECTS_INIT_SIZE &&\n+                c->io_deferred_objects_num * 4 < c->io_deferred_objects_size)\n+            {\n+                int new_size = c->io_deferred_objects_size / 2;\n+                c->io_deferred_objects = zrealloc(c->io_deferred_objects, new_size * sizeof(robj *));\n+                c->io_deferred_objects_size = new_size;\n+            }\n+            c->io_deferred_objects_num = 0;\n+        } else {\n+            zfree(c->io_deferred_objects);\n+            c->io_deferred_objects = NULL;\n+            c->io_deferred_objects_num = 0;\n+            c->io_deferred_objects_size = 0;\n+        }\n+    }\n+\n+    /* Remove client from pending referenced reply clients list. */",
+        "comment_created_at": "2026-01-18T14:40:00+00:00",
+        "comment_author": "sundb",
+        "comment_body": "done with https://github.com/redis/redis/pull/14608/commits/440dc42f936116b530e086bec8b538f6281e2b8b, but only tryUnlinkClientFromPendingRefReply () is to reuse",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2609917989",
+    "pr_number": 14445,
+    "pr_file": "src/object.c",
+    "created_at": "2025-12-11T09:50:59+00:00",
+    "commented_code": "}\n \n     if (--(o->refcount) == 0) {\n+        void *alloc = o;\n+        \n+         if (o->iskvobj) {\n+            /* eval real allocation pointer */\n+            alloc = kvobjGetAllocPtr(o);\n+            /* if kvobj has metadata attached. */\n+            if (getModuleMetaBits(o->metabits))\n+                keyMetaOnFree((kvobj *)o);\n+        }",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2609917989",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14445,
+        "pr_file": "src/object.c",
+        "discussion_id": "2609917989",
+        "commented_code": "@@ -597,6 +600,16 @@ void decrRefCount(robj *o) {\n     }\n \n     if (--(o->refcount) == 0) {\n+        void *alloc = o;\n+        \n+         if (o->iskvobj) {\n+            /* eval real allocation pointer */\n+            alloc = kvobjGetAllocPtr(o);\n+            /* if kvobj has metadata attached. */\n+            if (getModuleMetaBits(o->metabits))\n+                keyMetaOnFree((kvobj *)o);\n+        }",
+        "comment_created_at": "2025-12-11T09:50:59+00:00",
+        "comment_author": "sundb",
+        "comment_body": "In https://github.com/redis/redis/pull/14608, decrRefCount may come from io threads, so this callback must ensure it's thread safe.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2616896994",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14445,
+        "pr_file": "src/object.c",
+        "discussion_id": "2609917989",
+        "commented_code": "@@ -597,6 +600,16 @@ void decrRefCount(robj *o) {\n     }\n \n     if (--(o->refcount) == 0) {\n+        void *alloc = o;\n+        \n+         if (o->iskvobj) {\n+            /* eval real allocation pointer */\n+            alloc = kvobjGetAllocPtr(o);\n+            /* if kvobj has metadata attached. */\n+            if (getModuleMetaBits(o->metabits))\n+                keyMetaOnFree((kvobj *)o);\n+        }",
+        "comment_created_at": "2025-12-14T10:15:10+00:00",
+        "comment_author": "moticless",
+        "comment_body": "yes. The KeyMeta code itself is only rely on kvobj bits and `keyMetaClass[keyMetaId].conf.free`. I added const on `keyMetaClass[keyMetaId].conf` to be on the safe side. and also updated module doc of `free` to include the comment `This callback may run in a background thread and is not protected by GIL.` (nothing in mentioned when i look on free of  module data type. maybe we should comment there as well?!)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2710811266",
+    "pr_number": 14335,
+    "pr_file": "src/iothread.c",
+    "created_at": "2026-01-21T03:18:21+00:00",
+    "commented_code": "/* Unbind connection of client from io thread event loop. */\n     connUnbindEventLoop(c->conn);\n     /* Now main thread can process it. */\n-    c->running_tid = IOTHREAD_MAIN_THREAD_ID;\n     resumeIOThread(c->tid);\n-    freeClientDeferredObjects(c, 1); /* Free deferred objects. */\n-    freeClientIODeferredObjects(c, 1); /* Free IO deferred objects. */\n-    tryUnlinkClientFromPendingRefReply(c, 0);\n+\n+    /* Keep the client in main thread. */\n+    c->running_tid = IOTHREAD_MAIN_THREAD_ID;\n+    keepClientInMainThread(c);",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2710811266",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14335,
+        "pr_file": "src/iothread.c",
+        "discussion_id": "2710811266",
+        "commented_code": "@@ -132,29 +222,61 @@ void fetchClientFromIOThread(client *c) {\n     /* Unbind connection of client from io thread event loop. */\n     connUnbindEventLoop(c->conn);\n     /* Now main thread can process it. */\n-    c->running_tid = IOTHREAD_MAIN_THREAD_ID;\n     resumeIOThread(c->tid);\n-    freeClientDeferredObjects(c, 1); /* Free deferred objects. */\n-    freeClientIODeferredObjects(c, 1); /* Free IO deferred objects. */\n-    tryUnlinkClientFromPendingRefReply(c, 0);\n+\n+    /* Keep the client in main thread. */\n+    c->running_tid = IOTHREAD_MAIN_THREAD_ID;\n+    keepClientInMainThread(c);",
+        "comment_created_at": "2026-01-21T03:18:21+00:00",
+        "comment_author": "ShooterIT",
+        "comment_body": "cool, now we don't need call same functions that are called in `keepClientInMainThread`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2971624410",
+    "pr_number": 14335,
+    "pr_file": "src/networking.c",
+    "created_at": "2026-03-22T14:55:12+00:00",
+    "commented_code": "c->cur_script = NULL;\n     c->slot = -1;\n     c->cluster_compatibility_check_slot = -2;\n-    c->flags &= ~CLIENT_EXECUTING_COMMAND;\n+    if (c->flags & CLIENT_EXECUTING_COMMAND)\n+        c->flags &= ~CLIENT_EXECUTING_COMMAND;",
+    "repo_full_name": "redis/redis",
+    "discussion_comments": [
+      {
+        "comment_id": "2971624410",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14335,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2971624410",
+        "commented_code": "@@ -2793,7 +2843,8 @@ static inline void resetClientInternal(client *c, int num_pcmds_to_free) {\n     c->cur_script = NULL;\n     c->slot = -1;\n     c->cluster_compatibility_check_slot = -2;\n-    c->flags &= ~CLIENT_EXECUTING_COMMAND;\n+    if (c->flags & CLIENT_EXECUTING_COMMAND)\n+        c->flags &= ~CLIENT_EXECUTING_COMMAND;",
+        "comment_created_at": "2026-03-22T14:55:12+00:00",
+        "comment_author": "oranagra",
+        "comment_body": "i wonder why did you add the condition?\nsame for CLIENT_ASKING and CLIENT_REPLY_SKIP below.\n\nfrom my perspective this looks like blame log damage and unnecessary possible conflict.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2971709708",
+        "repo_full_name": "redis/redis",
+        "pr_number": 14335,
+        "pr_file": "src/networking.c",
+        "discussion_id": "2971624410",
+        "commented_code": "@@ -2793,7 +2843,8 @@ static inline void resetClientInternal(client *c, int num_pcmds_to_free) {\n     c->cur_script = NULL;\n     c->slot = -1;\n     c->cluster_compatibility_check_slot = -2;\n-    c->flags &= ~CLIENT_EXECUTING_COMMAND;\n+    if (c->flags & CLIENT_EXECUTING_COMMAND)\n+        c->flags &= ~CLIENT_EXECUTING_COMMAND;",
+        "comment_created_at": "2026-03-22T16:07:24+00:00",
+        "comment_author": "minchopaskal",
+        "comment_body": "It was because of TSan - it catches a data race on flags between main and IO thread(even though there isnt one). These checks put TSan\u2019s mind at rest",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,170 @@
+[
+  {
+    "discussion_id": "2980774047",
+    "pr_number": 13710,
+    "pr_file": "rag/svr/task_executor.py",
+    "created_at": "2026-03-24T16:21:08+00:00",
+    "commented_code": "BATCH_SIZE = 64\n \n+\n+def merge_table_parser_config_from_kb(task: dict) -> dict:\n+    \"\"\"Merge dataset-level table parser keys into document parser_config (see build_chunks).\"\"\"\n+    pc = task.get(\"parser_config\") or {}\n+    if task.get(\"parser_id\", \"\").lower() != \"table\" or not task.get(\"kb_parser_config\"):\n+        return pc\n+    out = dict(pc)\n+    kb_pc = task[\"kb_parser_config\"]\n+    for _k in (\"table_column_mode\", \"table_column_roles\", \"table_column_names\"):\n+        if _k in kb_pc:\n+            out[_k] = kb_pc[_k]\n+    return out\n+\n+\n+def _field_map_typed_key_for_column(field_map: dict, col: str) -> str | None:\n+    \"\"\"Map CSV column name to ES typed field key (field_map: typed_key -> display name).\"\"\"\n+    if not field_map or not col:\n+        return None\n+    col_s = str(col).strip()\n+    col_norm = col_s.replace(\"_\", \" \").strip().lower()\n+    for tk, disp in field_map.items():\n+        disp_s = str(disp).strip()\n+        if disp_s.lower() == col_norm or disp_s.lower() == col_s.lower():\n+            return tk\n+    return None\n+\n+\n+def _probe_es_typed_key_for_column(col: str, sample_chunk: dict) -> str | None:\n+    \"\"\"\n+    When field_map is missing/stale, find ES field key on chunk by table-parser suffix convention\n+    (see rag/app/table.py fields_map: _tks, _dt, _long, _flt, _kwd).\n+    \"\"\"\n+    if not col or not isinstance(sample_chunk, dict):\n+        return None\n+    base = str(col).strip()\n+    candidates = [\n+        f\"{base}_tks\",\n+        f\"{base}_dt\",\n+        f\"{base}_long\",\n+        f\"{base}_flt\",\n+        f\"{base}_kwd\",\n+        base,\n+    ]\n+    for k in candidates:\n+        if k in sample_chunk:\n+            return k\n+    return None\n+\n+\n+def _resolve_es_chunk_field_key(\n+    col: str, field_map: dict, sample_chunk: dict | None\n+) -> tuple[str | None, str]:\n+    \"\"\"Prefer field_map when key exists on chunk; else probe by suffix (matches table.py naming).\"\"\"\n+    tk_fm = _field_map_typed_key_for_column(field_map, col) if field_map else None\n+    if sample_chunk:\n+        if tk_fm and tk_fm in sample_chunk:\n+            return tk_fm, \"field_map\"\n+        probed = _probe_es_typed_key_for_column(col, sample_chunk)\n+        if probed:\n+            return probed, \"probe\" if not tk_fm else \"probe_field_map_mismatch\"\n+        if tk_fm:\n+            return tk_fm, \"field_map_absent_on_chunk\"\n+    if tk_fm:\n+        return tk_fm, \"field_map\"\n+    return None, \"none\"\n+\n+\n+def _value_to_meta_string(val) -> str | None:\n+    \"\"\"Normalize chunk field values for DocMetadataService (strings / list of strings only).\"\"\"\n+    if val is None:\n+        return None\n+    if isinstance(val, bool):\n+        return str(val).lower()\n+    if isinstance(val, (int, float)):\n+        return str(val)\n+    if isinstance(val, str):\n+        s = val.strip()\n+        return s if s else None\n+    return str(val)\n+\n+\n+def aggregate_table_manual_doc_metadata(chunks: list, task: dict) -> dict:\n+    \"\"\"\n+    Collect unique values per metadata/both column across chunks for document-level metadata.\n+    Used when table_column_mode == manual (parallel to LLM gen_metadata, no schema required).\n+    \"\"\"\n+    logging.info(\n+        f\"[TABLE_META_DEBUG] aggregate_table_manual_doc_metadata called with {len(chunks)} chunks\"\n+    )\n+    eff = merge_table_parser_config_from_kb(task)\n+    if eff.get(\"table_column_mode\") != \"manual\":\n+        logging.info(\n+            f\"[TABLE_META_DEBUG] skip aggregate: table_column_mode={eff.get('table_column_mode')!r}\"\n+        )\n+        return {}\n+    roles = eff.get(\"table_column_roles\") or {}\n+    meta_cols = [c for c, r in roles.items() if r in (\"metadata\", \"both\")]\n+    if not meta_cols:\n+        logging.info(\"[TABLE_META_DEBUG] skip aggregate: no metadata/both columns in roles\")",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2982793692",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 13710,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2980774047",
+        "commented_code": "@@ -82,6 +82,180 @@\n \n BATCH_SIZE = 64\n \n+\n+def merge_table_parser_config_from_kb(task: dict) -> dict:\n+    \"\"\"Merge dataset-level table parser keys into document parser_config (see build_chunks).\"\"\"\n+    pc = task.get(\"parser_config\") or {}\n+    if task.get(\"parser_id\", \"\").lower() != \"table\" or not task.get(\"kb_parser_config\"):\n+        return pc\n+    out = dict(pc)\n+    kb_pc = task[\"kb_parser_config\"]\n+    for _k in (\"table_column_mode\", \"table_column_roles\", \"table_column_names\"):\n+        if _k in kb_pc:\n+            out[_k] = kb_pc[_k]\n+    return out\n+\n+\n+def _field_map_typed_key_for_column(field_map: dict, col: str) -> str | None:\n+    \"\"\"Map CSV column name to ES typed field key (field_map: typed_key -> display name).\"\"\"\n+    if not field_map or not col:\n+        return None\n+    col_s = str(col).strip()\n+    col_norm = col_s.replace(\"_\", \" \").strip().lower()\n+    for tk, disp in field_map.items():\n+        disp_s = str(disp).strip()\n+        if disp_s.lower() == col_norm or disp_s.lower() == col_s.lower():\n+            return tk\n+    return None\n+\n+\n+def _probe_es_typed_key_for_column(col: str, sample_chunk: dict) -> str | None:\n+    \"\"\"\n+    When field_map is missing/stale, find ES field key on chunk by table-parser suffix convention\n+    (see rag/app/table.py fields_map: _tks, _dt, _long, _flt, _kwd).\n+    \"\"\"\n+    if not col or not isinstance(sample_chunk, dict):\n+        return None\n+    base = str(col).strip()\n+    candidates = [\n+        f\"{base}_tks\",\n+        f\"{base}_dt\",\n+        f\"{base}_long\",\n+        f\"{base}_flt\",\n+        f\"{base}_kwd\",\n+        base,\n+    ]\n+    for k in candidates:\n+        if k in sample_chunk:\n+            return k\n+    return None\n+\n+\n+def _resolve_es_chunk_field_key(\n+    col: str, field_map: dict, sample_chunk: dict | None\n+) -> tuple[str | None, str]:\n+    \"\"\"Prefer field_map when key exists on chunk; else probe by suffix (matches table.py naming).\"\"\"\n+    tk_fm = _field_map_typed_key_for_column(field_map, col) if field_map else None\n+    if sample_chunk:\n+        if tk_fm and tk_fm in sample_chunk:\n+            return tk_fm, \"field_map\"\n+        probed = _probe_es_typed_key_for_column(col, sample_chunk)\n+        if probed:\n+            return probed, \"probe\" if not tk_fm else \"probe_field_map_mismatch\"\n+        if tk_fm:\n+            return tk_fm, \"field_map_absent_on_chunk\"\n+    if tk_fm:\n+        return tk_fm, \"field_map\"\n+    return None, \"none\"\n+\n+\n+def _value_to_meta_string(val) -> str | None:\n+    \"\"\"Normalize chunk field values for DocMetadataService (strings / list of strings only).\"\"\"\n+    if val is None:\n+        return None\n+    if isinstance(val, bool):\n+        return str(val).lower()\n+    if isinstance(val, (int, float)):\n+        return str(val)\n+    if isinstance(val, str):\n+        s = val.strip()\n+        return s if s else None\n+    return str(val)\n+\n+\n+def aggregate_table_manual_doc_metadata(chunks: list, task: dict) -> dict:\n+    \"\"\"\n+    Collect unique values per metadata/both column across chunks for document-level metadata.\n+    Used when table_column_mode == manual (parallel to LLM gen_metadata, no schema required).\n+    \"\"\"\n+    logging.info(\n+        f\"[TABLE_META_DEBUG] aggregate_table_manual_doc_metadata called with {len(chunks)} chunks\"\n+    )\n+    eff = merge_table_parser_config_from_kb(task)\n+    if eff.get(\"table_column_mode\") != \"manual\":\n+        logging.info(\n+            f\"[TABLE_META_DEBUG] skip aggregate: table_column_mode={eff.get('table_column_mode')!r}\"\n+        )\n+        return {}\n+    roles = eff.get(\"table_column_roles\") or {}\n+    meta_cols = [c for c, r in roles.items() if r in (\"metadata\", \"both\")]\n+    if not meta_cols:\n+        logging.info(\"[TABLE_META_DEBUG] skip aggregate: no metadata/both columns in roles\")",
+        "comment_created_at": "2026-03-24T16:21:08+00:00",
+        "comment_author": "ahmadintisar",
+        "comment_body": "Good catch \u2014 the default-to-both behavior should be consistent between the parser and the aggregation. Will apply the suggested fix using `table_column_names` with `roles.get(col, 'both')` fallback.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3145031534",
+    "pr_number": 14385,
+    "pr_file": "deepdoc/parser/pdf_parser.py",
+    "created_at": "2026-04-27T05:27:09+00:00",
+    "commented_code": "return self.__filterout_scraps(deepcopy(self.boxes), zoomin), tbls\n \n     def parse_into_bboxes(self, fnm, callback=None, zoomin=3):\n-        start = timer()\n         self.outlines = extract_pdf_outlines(fnm)\n-        self.__images__(fnm, zoomin, callback=callback)\n-        if callback:\n-            callback(0.40, \"OCR finished ({:.2f}s)\".format(timer() - start))\n+        batch_size = max(1, int(os.getenv(\"PDF_PARSER_PAGE_BATCH_SIZE\", \"50\")))\n+        if isinstance(fnm, str):\n+            total_pages = self.total_page_number(fnm)\n+        else:\n+            total_pages = self.total_page_number(fnm, binary=fnm)\n+\n+        if total_pages <= batch_size:\n+            self.__images__(fnm, zoomin, callback=callback)\n+            return self._parse_loaded_window_into_bboxes(zoomin, callback=callback)",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3145041332",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14385,
+        "pr_file": "deepdoc/parser/pdf_parser.py",
+        "discussion_id": "3145031534",
+        "commented_code": "@@ -1695,18 +1697,41 @@ def __call__(self, fnm, need_image=True, zoomin=3, return_html=False, auto_rotat\n         return self.__filterout_scraps(deepcopy(self.boxes), zoomin), tbls\n \n     def parse_into_bboxes(self, fnm, callback=None, zoomin=3):\n-        start = timer()\n         self.outlines = extract_pdf_outlines(fnm)\n-        self.__images__(fnm, zoomin, callback=callback)\n-        if callback:\n-            callback(0.40, \"OCR finished ({:.2f}s)\".format(timer() - start))\n+        batch_size = max(1, int(os.getenv(\"PDF_PARSER_PAGE_BATCH_SIZE\", \"50\")))\n+        if isinstance(fnm, str):\n+            total_pages = self.total_page_number(fnm)\n+        else:\n+            total_pages = self.total_page_number(fnm, binary=fnm)\n+\n+        if total_pages <= batch_size:\n+            self.__images__(fnm, zoomin, callback=callback)\n+            return self._parse_loaded_window_into_bboxes(zoomin, callback=callback)",
+        "comment_created_at": "2026-04-27T05:27:09+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "Fixed in commit 9d5222f \u2014 added `total_pages is None or` guard before the `<=` comparison, falling back to single-pass path when `total_pages` is None.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3115236333",
+    "pr_number": 14245,
+    "pr_file": "rag/flow/chunker/title_chunker/common.py",
+    "created_at": "2026-04-21T05:47:52+00:00",
+    "commented_code": "await self.set_chunks(chunks)\n         self.process.callback(1, \"Done.\")\n \n-\n     def extract_line_records(self):\n         # Normalize all upstream payloads into an ordered record stream.\n         # Level resolution and chunk construction operate on this stream only,\n         # so strategy code does not depend on source-specific output layouts.\n+        # RAG Optimization: Unified text extraction + thorough blank line filtering\n+        payload = \"\"\n         if self.from_upstream.output_format == \"markdown\":\n             payload = self.from_upstream.markdown_result or \"\"\n-            return [{\"text\": line, \"doc_type_kwd\": \"text\", \"img_id\": None, \"layout\": \"\", PDF_POSITIONS_KEY: []} for line in payload.split(\"\n\") if line]\n-\n-        if self.from_upstream.output_format == \"text\":\n+        elif self.from_upstream.output_format == \"text\":\n             payload = self.from_upstream.text_result or \"\"\n-            return [{\"text\": line, \"doc_type_kwd\": \"text\", \"img_id\": None, \"layout\": \"\", PDF_POSITIONS_KEY: []} for line in payload.split(\"\n\") if line]\n-\n-        if self.from_upstream.output_format == \"html\":\n+        elif self.from_upstream.output_format == \"html\":\n             payload = self.from_upstream.html_result or \"\"\n-            return [{\"text\": line, \"doc_type_kwd\": \"text\", \"img_id\": None, \"layout\": \"\", PDF_POSITIONS_KEY: []} for line in payload.split(\"\n\") if line]\n+        \n+        if payload:\n+            # RAG Core Fix: Strip whitespace + filter empty lines completely\n+            return [{\"text\": line.strip(), \"doc_type_kwd\": \"text\", \"img_id\": None, \"layout\": \"\", PDF_POSITIONS_KEY: []} \n+                    for line in payload.split(\"\n\") if line.strip()]\n \n         items = self.from_upstream.chunks if self.from_upstream.output_format == \"chunks\" else self.from_upstream.json_result\n         return [\n             {\n-                \"text\": str(item.get(\"text\") or \"\"),\n+                \"text\": str(item.get(\"text\", \"\")).strip(),",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3115314419",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14245,
+        "pr_file": "rag/flow/chunker/title_chunker/common.py",
+        "discussion_id": "3115236333",
+        "commented_code": "@@ -70,27 +69,28 @@ async def invoke(self):\n         await self.set_chunks(chunks)\n         self.process.callback(1, \"Done.\")\n \n-\n     def extract_line_records(self):\n         # Normalize all upstream payloads into an ordered record stream.\n         # Level resolution and chunk construction operate on this stream only,\n         # so strategy code does not depend on source-specific output layouts.\n+        # RAG Optimization: Unified text extraction + thorough blank line filtering\n+        payload = \"\"\n         if self.from_upstream.output_format == \"markdown\":\n             payload = self.from_upstream.markdown_result or \"\"\n-            return [{\"text\": line, \"doc_type_kwd\": \"text\", \"img_id\": None, \"layout\": \"\", PDF_POSITIONS_KEY: []} for line in payload.split(\"\\n\") if line]\n-\n-        if self.from_upstream.output_format == \"text\":\n+        elif self.from_upstream.output_format == \"text\":\n             payload = self.from_upstream.text_result or \"\"\n-            return [{\"text\": line, \"doc_type_kwd\": \"text\", \"img_id\": None, \"layout\": \"\", PDF_POSITIONS_KEY: []} for line in payload.split(\"\\n\") if line]\n-\n-        if self.from_upstream.output_format == \"html\":\n+        elif self.from_upstream.output_format == \"html\":\n             payload = self.from_upstream.html_result or \"\"\n-            return [{\"text\": line, \"doc_type_kwd\": \"text\", \"img_id\": None, \"layout\": \"\", PDF_POSITIONS_KEY: []} for line in payload.split(\"\\n\") if line]\n+        \n+        if payload:\n+            # RAG Core Fix: Strip whitespace + filter empty lines completely\n+            return [{\"text\": line.strip(), \"doc_type_kwd\": \"text\", \"img_id\": None, \"layout\": \"\", PDF_POSITIONS_KEY: []} \n+                    for line in payload.split(\"\\n\") if line.strip()]\n \n         items = self.from_upstream.chunks if self.from_upstream.output_format == \"chunks\" else self.from_upstream.json_result\n         return [\n             {\n-                \"text\": str(item.get(\"text\") or \"\"),\n+                \"text\": str(item.get(\"text\", \"\")).strip(),",
+        "comment_created_at": "2026-04-21T05:47:52+00:00",
+        "comment_author": "07heco",
+        "comment_body": "Fixed! Changed str(item.get(\"text\", \"\")) to item.get(\"text\") or \"\" to avoid serializing None into literal \"None\" string.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2020822674",
+    "pr_number": 6691,
+    "pr_file": "graphrag/general/extractor.py",
+    "created_at": "2025-03-31T10:54:14+00:00",
+    "commented_code": "# Merge two nodes, keep \"entity_name\", \"entity_type\", \"page_rank\" unchanged.\n             node1_attrs = graph.nodes[node1]\n             node0_attrs[\"description\"] += f\"{GRAPH_FIELD_SEP}{node1_attrs['description']}\"\n-            for attr in [\"keywords\", \"source_id\"]:\n-                node0_attrs[attr] = sorted(set(node0_attrs[attr].extend(node1_attrs[attr])))\n+            node0_attrs[\"source_id\"].extend(node1_attrs[\"source_id\"])\n+            node0_attrs[\"source_id\"] = sorted(set(node0_attrs[\"source_id\"]))",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2020822674",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 6691,
+        "pr_file": "graphrag/general/extractor.py",
+        "discussion_id": "2020822674",
+        "commented_code": "@@ -201,8 +201,8 @@ async def _merge_graph_nodes(self, graph: nx.Graph, nodes: list[str], change: Gr\n             # Merge two nodes, keep \"entity_name\", \"entity_type\", \"page_rank\" unchanged.\n             node1_attrs = graph.nodes[node1]\n             node0_attrs[\"description\"] += f\"{GRAPH_FIELD_SEP}{node1_attrs['description']}\"\n-            for attr in [\"keywords\", \"source_id\"]:\n-                node0_attrs[attr] = sorted(set(node0_attrs[attr].extend(node1_attrs[attr])))\n+            node0_attrs[\"source_id\"].extend(node1_attrs[\"source_id\"])\n+            node0_attrs[\"source_id\"] = sorted(set(node0_attrs[\"source_id\"]))",
+        "comment_created_at": "2025-03-31T10:54:14+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "`sorted(set(node0_attrs[attr].extend(node1_attrs.get(attr, []))))`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2020947092",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 6691,
+        "pr_file": "graphrag/general/extractor.py",
+        "discussion_id": "2020822674",
+        "commented_code": "@@ -201,8 +201,8 @@ async def _merge_graph_nodes(self, graph: nx.Graph, nodes: list[str], change: Gr\n             # Merge two nodes, keep \"entity_name\", \"entity_type\", \"page_rank\" unchanged.\n             node1_attrs = graph.nodes[node1]\n             node0_attrs[\"description\"] += f\"{GRAPH_FIELD_SEP}{node1_attrs['description']}\"\n-            for attr in [\"keywords\", \"source_id\"]:\n-                node0_attrs[attr] = sorted(set(node0_attrs[attr].extend(node1_attrs[attr])))\n+            node0_attrs[\"source_id\"].extend(node1_attrs[\"source_id\"])\n+            node0_attrs[\"source_id\"] = sorted(set(node0_attrs[\"source_id\"]))",
+        "comment_created_at": "2025-03-31T12:30:08+00:00",
+        "comment_author": "Yue-Lyu123",
+        "comment_body": "Thanks for the catch! I've updated for clarity in [36881278]( https://github.com/infiniflow/ragflow/commit/36881278)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2021227077",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 6691,
+        "pr_file": "graphrag/general/extractor.py",
+        "discussion_id": "2020822674",
+        "commented_code": "@@ -201,8 +201,8 @@ async def _merge_graph_nodes(self, graph: nx.Graph, nodes: list[str], change: Gr\n             # Merge two nodes, keep \"entity_name\", \"entity_type\", \"page_rank\" unchanged.\n             node1_attrs = graph.nodes[node1]\n             node0_attrs[\"description\"] += f\"{GRAPH_FIELD_SEP}{node1_attrs['description']}\"\n-            for attr in [\"keywords\", \"source_id\"]:\n-                node0_attrs[attr] = sorted(set(node0_attrs[attr].extend(node1_attrs[attr])))\n+            node0_attrs[\"source_id\"].extend(node1_attrs[\"source_id\"])\n+            node0_attrs[\"source_id\"] = sorted(set(node0_attrs[\"source_id\"]))",
+        "comment_created_at": "2025-03-31T15:02:55+00:00",
+        "comment_author": "Yue-Lyu123",
+        "comment_body": "Appreciate your feedback! After testing I believe the original code might be correct for:  The list.extend() method performs an in-place operation, directly modifying the original list and returning None rather than the modified list.\r\nNeither accessing `sorted(set(node0_attrs[attr].extend(node1_attrs.get(attr, []))))` **nor** calling `sorted(set(node0_attrs[attr].extend(node1_attrs[attr])))` will work,  it still causes TypeError: 'NoneType' object is not iterable\r\n```python\r\nsorted(set(node0_attrs[attr].extend(node1_attrs.get(attr, []))))   # TypeError\r\nsorted(set(node0_attrs[attr].extend(node1_attrs.get(attr, [])))) # Still TypeError\r\n```\r\nbetter way is \r\n```python\r\nnode0_attrs[\"source_id\"].extend(node1_attrs.get(\"source_id\", []))\r\nnode0_attrs[\"source_id\"] = sorted(set(node0_attrs[\"source_id\"]))\r\n```\r\nor  \r\n\r\n```python\r\nnode0_attrs[\"source_id\"] = sorted(set(node0_attrs[\"source_id\"] + node1_attrs.get(\"source_id\", [])))\r\n```\r\nThe first method is more memory-efficient, while the second method has cleaner code.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1875836816",
+    "pr_number": 3941,
+    "pr_file": "api/db/services/conversation_service.py",
+    "created_at": "2024-12-09T11:43:25+00:00",
+    "commented_code": "chunk_list = [{\n             \"id\": chunk[\"chunk_id\"],\n-            \"content\": chunk[\"content\"],\n+            \"content\": chunk.get(\"content\",\"\"),",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1875836816",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 3941,
+        "pr_file": "api/db/services/conversation_service.py",
+        "discussion_id": "1875836816",
+        "commented_code": "@@ -58,7 +58,7 @@ def structure_answer(conv, ans, message_id, session_id):\n \n     chunk_list = [{\n             \"id\": chunk[\"chunk_id\"],\n-            \"content\": chunk[\"content\"],\n+            \"content\": chunk.get(\"content\",\"\"),",
+        "comment_created_at": "2024-12-09T11:43:25+00:00",
+        "comment_author": "KevinHuSh",
+        "comment_body": "```suggestion\r\n            \"content\": chunk.get(\"content\") if chunk.get(\"content\") else chunk.get(\"content_with_content\"),\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1971413465",
+    "pr_number": 5397,
+    "pr_file": "api/apps/sdk/session.py",
+    "created_at": "2025-02-26T11:21:39+00:00",
+    "commented_code": "print(completion.choices[0].message.content)\n     \"\"\"\n     req = request.json\n-\n     messages = req.get(\"messages\", [])\n-    # To prevent empty [] input\n-    if len(messages) < 1:\n-        return get_error_data_result(\"You have to provide messages.\")\n-    if messages[-1][\"role\"] != \"user\":\n-        return get_error_data_result(\"The last content of this conversation is not from user.\")\n-\n-    prompt = messages[-1][\"content\"]\n-    # Treat context tokens as reasoning tokens\n-    context_token_used = sum(len(message[\"content\"]) for message in messages)\n+    \n+    if not messages:",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1971413465",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 5397,
+        "pr_file": "api/apps/sdk/session.py",
+        "discussion_id": "1971413465",
+        "commented_code": "@@ -232,116 +232,81 @@ def chat_completion_openai_like(tenant_id, chat_id):\n         print(completion.choices[0].message.content)\n     \"\"\"\n     req = request.json\n-\n     messages = req.get(\"messages\", [])\n-    # To prevent empty [] input\n-    if len(messages) < 1:\n-        return get_error_data_result(\"You have to provide messages.\")\n-    if messages[-1][\"role\"] != \"user\":\n-        return get_error_data_result(\"The last content of this conversation is not from user.\")\n-\n-    prompt = messages[-1][\"content\"]\n-    # Treat context tokens as reasoning tokens\n-    context_token_used = sum(len(message[\"content\"]) for message in messages)\n+    \n+    if not messages:",
+        "comment_created_at": "2025-02-26T11:21:39+00:00",
+        "comment_author": "yongtenglei",
+        "comment_body": "Hi, the `@validate_request` decorator automatically checks if `messages` exists. However, based on our implementation, it doesn't explicitly check for empty values. Therefore, I think the original implementation is a good practice :)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1972668842",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 5397,
+        "pr_file": "api/apps/sdk/session.py",
+        "discussion_id": "1971413465",
+        "commented_code": "@@ -232,116 +232,81 @@ def chat_completion_openai_like(tenant_id, chat_id):\n         print(completion.choices[0].message.content)\n     \"\"\"\n     req = request.json\n-\n     messages = req.get(\"messages\", [])\n-    # To prevent empty [] input\n-    if len(messages) < 1:\n-        return get_error_data_result(\"You have to provide messages.\")\n-    if messages[-1][\"role\"] != \"user\":\n-        return get_error_data_result(\"The last content of this conversation is not from user.\")\n-\n-    prompt = messages[-1][\"content\"]\n-    # Treat context tokens as reasoning tokens\n-    context_token_used = sum(len(message[\"content\"]) for message in messages)\n+    \n+    if not messages:",
+        "comment_created_at": "2025-02-27T01:33:46+00:00",
+        "comment_author": "isthaison",
+        "comment_body": "I had added check after filter message",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

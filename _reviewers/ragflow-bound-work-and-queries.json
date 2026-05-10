@@ -1,0 +1,296 @@
+[
+  {
+    "discussion_id": "2980774124",
+    "pr_number": 13710,
+    "pr_file": "rag/app/table.py",
+    "created_at": "2026-03-24T16:43:24+00:00",
+    "commented_code": "txts.extend([str(c) for c in cln if c])\n         clmns_map = [(py_clmns[i].lower() + fields_map[clmn_tys[i]], str(clmns[i]).replace(\"_\", \" \")) for i in\n                      range(len(clmns))]\n-        # For Infinity/OceanBase: Use original column names as keys since they're stored in chunk_data JSON\n-        # For ES/OS: Use full field names with type suffixes (e.g., url_kwd, body_tks)\n+        # Column roles: only when mode is \"manual\"; otherwise all columns = both (RAGFlow default)\n+        parser_config = kwargs.get(\"parser_config\") or {}\n+        if parser_config.get(\"table_column_mode\") == \"manual\":\n+            column_roles = parser_config.get(\"table_column_roles\") or {}\n+        else:\n+            column_roles = {}\n+        logger.info(\n+            f\"[TABLE_PARSER_DEBUG] effective table_column_mode={parser_config.get('table_column_mode')!r}, \"\n+            f\"column_roles keys={list(column_roles.keys())}\"\n+        )\n+        # field_map: only columns stored in chunk_data (metadata or both) \u2014 used for retrieval/SQL\n+        stored_indices = [\n+            i for i in range(len(clmns))\n+            if column_roles.get(clmns[i], \"both\") in (\"metadata\", \"both\")\n+        ]\n         if settings.DOC_ENGINE_INFINITY or settings.DOC_ENGINE_OCEANBASE:\n-            # For Infinity/OceanBase: key = original column name, value = display name\n-            field_map = {py_clmns[i].lower(): str(clmns[i]).replace(\"_\", \" \") for i in range(len(clmns))}\n+            field_map = {\n+                py_clmns[i].lower(): str(clmns[i]).replace(\"_\", \" \")\n+                for i in stored_indices\n+            }\n         else:\n-            # For ES/OS: key = typed field name, value = display name\n-            field_map = {k: v for k, v in clmns_map}\n+            field_map = {\n+                clmns_map[i][0]: clmns_map[i][1]\n+                for i in stored_indices\n+            }\n         logging.debug(f\"Field map: {field_map}\")\n-        KnowledgebaseService.update_parser_config(kwargs[\"kb_id\"], {\"field_map\": field_map})\n+        KnowledgebaseService.update_parser_config(\n+            kwargs[\"kb_id\"],\n+            {\"field_map\": field_map, \"table_column_names\": list(clmns)},\n+        )",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2982930001",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 13710,
+        "pr_file": "rag/app/table.py",
+        "discussion_id": "2980774124",
+        "commented_code": "@@ -456,46 +462,83 @@ def chunk(filename, binary=None, from_page=0, to_page=10000000000, lang=\"Chinese\n                 txts.extend([str(c) for c in cln if c])\n         clmns_map = [(py_clmns[i].lower() + fields_map[clmn_tys[i]], str(clmns[i]).replace(\"_\", \" \")) for i in\n                      range(len(clmns))]\n-        # For Infinity/OceanBase: Use original column names as keys since they're stored in chunk_data JSON\n-        # For ES/OS: Use full field names with type suffixes (e.g., url_kwd, body_tks)\n+        # Column roles: only when mode is \"manual\"; otherwise all columns = both (RAGFlow default)\n+        parser_config = kwargs.get(\"parser_config\") or {}\n+        if parser_config.get(\"table_column_mode\") == \"manual\":\n+            column_roles = parser_config.get(\"table_column_roles\") or {}\n+        else:\n+            column_roles = {}\n+        logger.info(\n+            f\"[TABLE_PARSER_DEBUG] effective table_column_mode={parser_config.get('table_column_mode')!r}, \"\n+            f\"column_roles keys={list(column_roles.keys())}\"\n+        )\n+        # field_map: only columns stored in chunk_data (metadata or both) \u2014 used for retrieval/SQL\n+        stored_indices = [\n+            i for i in range(len(clmns))\n+            if column_roles.get(clmns[i], \"both\") in (\"metadata\", \"both\")\n+        ]\n         if settings.DOC_ENGINE_INFINITY or settings.DOC_ENGINE_OCEANBASE:\n-            # For Infinity/OceanBase: key = original column name, value = display name\n-            field_map = {py_clmns[i].lower(): str(clmns[i]).replace(\"_\", \" \") for i in range(len(clmns))}\n+            field_map = {\n+                py_clmns[i].lower(): str(clmns[i]).replace(\"_\", \" \")\n+                for i in stored_indices\n+            }\n         else:\n-            # For ES/OS: key = typed field name, value = display name\n-            field_map = {k: v for k, v in clmns_map}\n+            field_map = {\n+                clmns_map[i][0]: clmns_map[i][1]\n+                for i in stored_indices\n+            }\n         logging.debug(f\"Field map: {field_map}\")\n-        KnowledgebaseService.update_parser_config(kwargs[\"kb_id\"], {\"field_map\": field_map})\n+        KnowledgebaseService.update_parser_config(\n+            kwargs[\"kb_id\"],\n+            {\"field_map\": field_map, \"table_column_names\": list(clmns)},\n+        )",
+        "comment_created_at": "2026-03-24T16:43:24+00:00",
+        "comment_author": "ahmadintisar",
+        "comment_body": "The following solution has been implemented:\r\n\r\nApproach\r\nPass 1 \u2014 For each dataframe, compute clmns, clmn_tys, clmns_map, py_clmns, and field_map as before and append a sheet spec (no KB update yet).\r\nMerge \u2014 merged_field_map.update(...) across sheets; table_column_names = ordered union (first occurrence wins, stable order).\r\nSingle KnowledgebaseService.update_parser_config(kb_id, {field_map, table_column_names}).\r\nPass 2 \u2014 Loop sheet_specs and run the existing row \u2192 chunk logic per sheet.\r\nparser_config / column_roles are resolved once before pass 1 (same as before, just hoisted).\r\n\r\nExtra fix\r\nif tbls: (tokenize_table for embedded images) was inside the per-sheet loop, so it could run multiple times for one file. It\u2019s now after all sheets, so it runs once per file (correct for file-level tbls).",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3206692057",
+    "pr_number": 14592,
+    "pr_file": "api/apps/sdk/session.py",
+    "created_at": "2026-05-08T06:21:57+00:00",
+    "commented_code": "objs = APIToken.query(beta=token)\n     if not objs:\n         return get_error_data_result(message='Authentication error: API key is invalid!\"')\n+    tenant_id = objs[0].tenant_id\n+    dialogs = DialogService.query(id=dialog_id, tenant_id=tenant_id, status=StatusEnum.VALID.value)",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3206692057",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14592,
+        "pr_file": "api/apps/sdk/session.py",
+        "discussion_id": "3206692057",
+        "commented_code": "@@ -152,20 +154,67 @@ async def chatbot_completions(dialog_id):\n     objs = APIToken.query(beta=token)\n     if not objs:\n         return get_error_data_result(message='Authentication error: API key is invalid!\"')\n+    tenant_id = objs[0].tenant_id\n+    dialogs = DialogService.query(id=dialog_id, tenant_id=tenant_id, status=StatusEnum.VALID.value)",
+        "comment_created_at": "2026-05-08T06:21:57+00:00",
+        "comment_author": "wangq8",
+        "comment_body": "@dale053  Since we already have the `dialog_id` using get by ID with had greater performance than query, I suggest we use get by ID instead of query.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3206694183",
+    "pr_number": 14592,
+    "pr_file": "api/db/services/conversation_service.py",
+    "created_at": "2026-05-08T06:22:24+00:00",
+    "commented_code": "break\n         yield answer\n \n-async def async_iframe_completion(dialog_id, question, session_id=None, stream=True, **kwargs):\n-    e, dia = DialogService.get_by_id(dialog_id)\n-    assert e, \"Dialog not found\"\n+async def async_iframe_completion(dialog_id, question, session_id=None, stream=True, tenant_id=None, **kwargs):\n+    if tenant_id:\n+        dia = DialogService.query(id=dialog_id, tenant_id=tenant_id, status=StatusEnum.VALID.value)",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3206694183",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14592,
+        "pr_file": "api/db/services/conversation_service.py",
+        "discussion_id": "3206694183",
+        "commented_code": "@@ -201,9 +205,22 @@ async def async_completion(tenant_id, chat_id, question, name=\"New session\", ses\n             break\n         yield answer\n \n-async def async_iframe_completion(dialog_id, question, session_id=None, stream=True, **kwargs):\n-    e, dia = DialogService.get_by_id(dialog_id)\n-    assert e, \"Dialog not found\"\n+async def async_iframe_completion(dialog_id, question, session_id=None, stream=True, tenant_id=None, **kwargs):\n+    if tenant_id:\n+        dia = DialogService.query(id=dialog_id, tenant_id=tenant_id, status=StatusEnum.VALID.value)",
+        "comment_created_at": "2026-05-08T06:22:24+00:00",
+        "comment_author": "wangq8",
+        "comment_body": "@dale053  Since we already have the `dialog_id` using get by ID with had greater performance than query, I suggest we use get by ID instead of query.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3151718437",
+    "pr_number": 14402,
+    "pr_file": "api/apps/services/dataset_api_service.py",
+    "created_at": "2026-04-28T05:13:59+00:00",
+    "commented_code": "return True, {\"from\": from_tag, \"to\": to_tag}\n \n+\n+async def search(dataset_id: str, tenant_id: str, req: dict):\n+    \"\"\"\n+    Search (retrieval test) within a dataset.\n+\n+    :param dataset_id: dataset ID\n+    :param tenant_id: tenant ID\n+    :param req: search request\n+    :return: (success, result) or (success, error_message)\n+    \"\"\"\n+    from api.db.joint_services.tenant_model_service import (\n+        get_model_config_by_id,\n+        get_model_config_by_type_and_name,\n+        get_tenant_default_model_by_type,\n+    )\n+    from api.db.services.doc_metadata_service import DocMetadataService\n+    from api.db.services.llm_service import LLMBundle\n+    from api.db.services.search_service import SearchService\n+    from api.db.services.user_service import UserTenantService\n+    from common.constants import LLMType\n+    from common.metadata_utils import apply_meta_data_filter\n+    from rag.app.tag import label_question\n+    from rag.prompts.generator import cross_languages, keyword_extraction\n+\n+    logging.debug(\n+        \"search(dataset=%s, tenant=%s, question_len=%s)\",\n+        dataset_id,\n+        tenant_id,\n+        len(req.get(\"question\", \"\")),\n+    )\n+\n+    page = int(req.get(\"page\", 1))\n+    size = int(req.get(\"size\", 30))\n+    question = req.get(\"question\", \"\")\n+    doc_ids = req.get(\"doc_ids\", [])\n+    use_kg = req.get(\"use_kg\", False)\n+    top = int(req.get(\"top_k\", 1024))",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3151718437",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14402,
+        "pr_file": "api/apps/services/dataset_api_service.py",
+        "discussion_id": "3151718437",
+        "commented_code": "@@ -900,3 +900,153 @@ def rename_tag(dataset_id: str, tenant_id: str, from_tag: str, to_tag: str):\n \n     return True, {\"from\": from_tag, \"to\": to_tag}\n \n+\n+async def search(dataset_id: str, tenant_id: str, req: dict):\n+    \"\"\"\n+    Search (retrieval test) within a dataset.\n+\n+    :param dataset_id: dataset ID\n+    :param tenant_id: tenant ID\n+    :param req: search request\n+    :return: (success, result) or (success, error_message)\n+    \"\"\"\n+    from api.db.joint_services.tenant_model_service import (\n+        get_model_config_by_id,\n+        get_model_config_by_type_and_name,\n+        get_tenant_default_model_by_type,\n+    )\n+    from api.db.services.doc_metadata_service import DocMetadataService\n+    from api.db.services.llm_service import LLMBundle\n+    from api.db.services.search_service import SearchService\n+    from api.db.services.user_service import UserTenantService\n+    from common.constants import LLMType\n+    from common.metadata_utils import apply_meta_data_filter\n+    from rag.app.tag import label_question\n+    from rag.prompts.generator import cross_languages, keyword_extraction\n+\n+    logging.debug(\n+        \"search(dataset=%s, tenant=%s, question_len=%s)\",\n+        dataset_id,\n+        tenant_id,\n+        len(req.get(\"question\", \"\")),\n+    )\n+\n+    page = int(req.get(\"page\", 1))\n+    size = int(req.get(\"size\", 30))\n+    question = req.get(\"question\", \"\")\n+    doc_ids = req.get(\"doc_ids\", [])\n+    use_kg = req.get(\"use_kg\", False)\n+    top = int(req.get(\"top_k\", 1024))",
+        "comment_created_at": "2026-04-28T05:13:59+00:00",
+        "comment_author": "xugangqiang",
+        "comment_body": "Should we add upper bound check for top_k? If someone incorrectly invokes this API with a very large top_k, system may be impacted if no check.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3145439351",
+    "pr_number": 14385,
+    "pr_file": "deepdoc/parser/pdf_parser.py",
+    "created_at": "2026-04-27T07:16:35+00:00",
+    "commented_code": "return self.__filterout_scraps(deepcopy(self.boxes), zoomin), tbls\n \n     def parse_into_bboxes(self, fnm, callback=None, zoomin=3, from_page=0, to_page=MAXIMUM_PAGE_NUMBER):\n-        start = timer()\n         self.outlines = extract_pdf_outlines(fnm)\n-        self.__images__(fnm, zoomin, from_page, to_page, callback=callback)\n-        if callback:\n-            callback(0.40, \"OCR finished ({:.2f}s)\".format(timer() - start))\n+        batch_size = max(1, int(os.getenv(\"PDF_PARSER_PAGE_BATCH_SIZE\", \"50\")))\n+        if isinstance(fnm, str):\n+            total_pages = self.total_page_number(fnm)\n+        else:\n+            total_pages = self.total_page_number(fnm, binary=fnm)\n+\n+        if total_pages is None:\n+            total_pages = to_page\n \n+        if to_page - from_page <= batch_size:\n+            self.__images__(fnm, zoomin, from_page=from_page, page_to=to_page, callback=callback)\n+            return self._parse_loaded_window_into_bboxes(zoomin, callback=callback)\n+\n+        logging.info(\n+            \"parse_into_bboxes uses chunk mode: from_page=%s, to_page=%s, batch_size=%s\",\n+            from_page,\n+            to_page,\n+            batch_size,\n+        )\n+        all_boxes = []\n+        start = timer()\n+        for page_from in range(from_page, to_page, batch_size):\n+            page_to = min(page_from + batch_size, to_page)\n+            self.__images__(fnm, zoomin, page_from=page_from, page_to=page_to, callback=None)\n+            chunk_boxes = self._parse_loaded_window_into_bboxes(zoomin)\n+            all_boxes.extend(self._to_global_boxes(chunk_boxes))\n+            if callback:\n+                callback((page_to - from_page) / (to_page - from_page), f\"Structured: {page_to}/{total_pages} pages\")\n+\n+        logging.info(\"parse_into_bboxes chunk mode cost %.2fs\", timer() - start)\n+        return all_boxes",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3145482723",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14385,
+        "pr_file": "deepdoc/parser/pdf_parser.py",
+        "discussion_id": "3145439351",
+        "commented_code": "@@ -1696,18 +1698,45 @@ def __call__(self, fnm, need_image=True, zoomin=3, return_html=False, auto_rotat\n         return self.__filterout_scraps(deepcopy(self.boxes), zoomin), tbls\n \n     def parse_into_bboxes(self, fnm, callback=None, zoomin=3, from_page=0, to_page=MAXIMUM_PAGE_NUMBER):\n-        start = timer()\n         self.outlines = extract_pdf_outlines(fnm)\n-        self.__images__(fnm, zoomin, from_page, to_page, callback=callback)\n-        if callback:\n-            callback(0.40, \"OCR finished ({:.2f}s)\".format(timer() - start))\n+        batch_size = max(1, int(os.getenv(\"PDF_PARSER_PAGE_BATCH_SIZE\", \"50\")))\n+        if isinstance(fnm, str):\n+            total_pages = self.total_page_number(fnm)\n+        else:\n+            total_pages = self.total_page_number(fnm, binary=fnm)\n+\n+        if total_pages is None:\n+            total_pages = to_page\n \n+        if to_page - from_page <= batch_size:\n+            self.__images__(fnm, zoomin, from_page=from_page, page_to=to_page, callback=callback)\n+            return self._parse_loaded_window_into_bboxes(zoomin, callback=callback)\n+\n+        logging.info(\n+            \"parse_into_bboxes uses chunk mode: from_page=%s, to_page=%s, batch_size=%s\",\n+            from_page,\n+            to_page,\n+            batch_size,\n+        )\n+        all_boxes = []\n+        start = timer()\n+        for page_from in range(from_page, to_page, batch_size):\n+            page_to = min(page_from + batch_size, to_page)\n+            self.__images__(fnm, zoomin, page_from=page_from, page_to=page_to, callback=None)\n+            chunk_boxes = self._parse_loaded_window_into_bboxes(zoomin)\n+            all_boxes.extend(self._to_global_boxes(chunk_boxes))\n+            if callback:\n+                callback((page_to - from_page) / (to_page - from_page), f\"Structured: {page_to}/{total_pages} pages\")\n+\n+        logging.info(\"parse_into_bboxes chunk mode cost %.2fs\", timer() - start)\n+        return all_boxes",
+        "comment_created_at": "2026-04-27T07:16:35+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "Fixed in commit 0f0c33402 \u2014 the parameter name was `page_from` in `__images__`, not `from_page`. The call now correctly passes `page_from=from_page`. Progress callback also updated to use `to_page` instead of `total_pages` for accuracy when from_page > 0.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3145665977",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14385,
+        "pr_file": "deepdoc/parser/pdf_parser.py",
+        "discussion_id": "3145439351",
+        "commented_code": "@@ -1696,18 +1698,45 @@ def __call__(self, fnm, need_image=True, zoomin=3, return_html=False, auto_rotat\n         return self.__filterout_scraps(deepcopy(self.boxes), zoomin), tbls\n \n     def parse_into_bboxes(self, fnm, callback=None, zoomin=3, from_page=0, to_page=MAXIMUM_PAGE_NUMBER):\n-        start = timer()\n         self.outlines = extract_pdf_outlines(fnm)\n-        self.__images__(fnm, zoomin, from_page, to_page, callback=callback)\n-        if callback:\n-            callback(0.40, \"OCR finished ({:.2f}s)\".format(timer() - start))\n+        batch_size = max(1, int(os.getenv(\"PDF_PARSER_PAGE_BATCH_SIZE\", \"50\")))\n+        if isinstance(fnm, str):\n+            total_pages = self.total_page_number(fnm)\n+        else:\n+            total_pages = self.total_page_number(fnm, binary=fnm)\n+\n+        if total_pages is None:\n+            total_pages = to_page\n \n+        if to_page - from_page <= batch_size:\n+            self.__images__(fnm, zoomin, from_page=from_page, page_to=to_page, callback=callback)\n+            return self._parse_loaded_window_into_bboxes(zoomin, callback=callback)\n+\n+        logging.info(\n+            \"parse_into_bboxes uses chunk mode: from_page=%s, to_page=%s, batch_size=%s\",\n+            from_page,\n+            to_page,\n+            batch_size,\n+        )\n+        all_boxes = []\n+        start = timer()\n+        for page_from in range(from_page, to_page, batch_size):\n+            page_to = min(page_from + batch_size, to_page)\n+            self.__images__(fnm, zoomin, page_from=page_from, page_to=page_to, callback=None)\n+            chunk_boxes = self._parse_loaded_window_into_bboxes(zoomin)\n+            all_boxes.extend(self._to_global_boxes(chunk_boxes))\n+            if callback:\n+                callback((page_to - from_page) / (to_page - from_page), f\"Structured: {page_to}/{total_pages} pages\")\n+\n+        logging.info(\"parse_into_bboxes chunk mode cost %.2fs\", timer() - start)\n+        return all_boxes",
+        "comment_created_at": "2026-04-27T07:50:53+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "Fixed in commit 6e425ea7e \u2014 introduced `effective_to_page = min(to_page, total_pages)` when `total_pages` is known, and `effective_to_page = to_page` with a warning when it's `None`. Both the dispatch check and the chunk loop now use `effective_to_page`, so a 5-page PDF correctly enters single-pass mode even when `to_page` defaults to `MAXIMUM_PAGE_NUMBER=100000`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3078926078",
+    "pr_number": 14096,
+    "pr_file": "rag/graphrag/general/index.py",
+    "created_at": "2026-04-14T10:55:55+00:00",
+    "commented_code": "from rag.nlp import rag_tokenizer, search\n from rag.utils.redis_conn import RedisDistributedLock\n from common import settings\n+from common.doc_store.doc_store_base import OrderByExpr\n+\n+_PAGE_SIZE = 256\n+\n+\n+async def load_subgraph_from_store(tenant_id: str, kb_id: str, doc_id: str):",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3078926078",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14096,
+        "pr_file": "rag/graphrag/general/index.py",
+        "discussion_id": "3078926078",
+        "commented_code": "@@ -43,6 +43,67 @@\n from rag.nlp import rag_tokenizer, search\n from rag.utils.redis_conn import RedisDistributedLock\n from common import settings\n+from common.doc_store.doc_store_base import OrderByExpr\n+\n+_PAGE_SIZE = 256\n+\n+\n+async def load_subgraph_from_store(tenant_id: str, kb_id: str, doc_id: str):",
+        "comment_created_at": "2026-04-14T10:55:55+00:00",
+        "comment_author": "wangq8",
+        "comment_body": "@MinalMahalaShorthillsAI If we have 10,000 results and 100 `doc_id`, the current approach would run 100 queries to ES/DB, each retrieving 10,000 results, this creates significant load and inefficiency.\n\nA better approach is to query once and process all `doc_id` in memory, reducing the number of queries and overall overhead.\n\nAn even more optimal solution is to include doc_id in the search criteria, allowing ES/DB to filter results directly. This leverages indexing and avoids fetching a large result set only to filter it afterward, significantly improving performance if search with `doc_id` supported.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3079230605",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14096,
+        "pr_file": "rag/graphrag/general/index.py",
+        "discussion_id": "3078926078",
+        "commented_code": "@@ -43,6 +43,67 @@\n from rag.nlp import rag_tokenizer, search\n from rag.utils.redis_conn import RedisDistributedLock\n from common import settings\n+from common.doc_store.doc_store_base import OrderByExpr\n+\n+_PAGE_SIZE = 256\n+\n+\n+async def load_subgraph_from_store(tenant_id: str, kb_id: str, doc_id: str):",
+        "comment_created_at": "2026-04-14T11:56:20+00:00",
+        "comment_author": "SHAI-minal",
+        "comment_body": "Thanks for the suggestion! We've now included source_id: [doc_id] directly in the search condition (as hinted by @yuzhichang 's generate_subgraph reference), so the doc store filters by index. Each call fetches at most 1 chunk with limit=1. No pagination or Python-side filtering needed.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2000131908",
+    "pr_number": 6200,
+    "pr_file": "rag/svr/task_executor.py",
+    "created_at": "2025-03-18T03:36:18+00:00",
+    "commented_code": "return None, None\n \n     if not redis_msg:\n+        # Check idle time since last task\n+        idle_time = (datetime.now() - LAST_TASK_TIME).total_seconds()\n+        if idle_time > MODEL_UNLOAD_IDLE_TIME:",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2000131908",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 6200,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2000131908",
+        "commented_code": "@@ -188,7 +210,16 @@ async def collect():\n         return None, None\n \n     if not redis_msg:\n+        # Check idle time since last task\n+        idle_time = (datetime.now() - LAST_TASK_TIME).total_seconds()\n+        if idle_time > MODEL_UNLOAD_IDLE_TIME:",
+        "comment_created_at": "2025-03-18T03:36:18+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "Can the unloaded models be auto-reloaded when necessary?\r\nWhat if the GraphRAG task doesn't complete in 30 minutes?\r\n\r\nI don't think unloading models to save VRAM is a good idea. Resources shall be planed staticly.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2000153498",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 6200,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2000131908",
+        "commented_code": "@@ -188,7 +210,16 @@ async def collect():\n         return None, None\n \n     if not redis_msg:\n+        # Check idle time since last task\n+        idle_time = (datetime.now() - LAST_TASK_TIME).total_seconds()\n+        if idle_time > MODEL_UNLOAD_IDLE_TIME:",
+        "comment_created_at": "2025-03-18T04:03:25+00:00",
+        "comment_author": "liwenju0",
+        "comment_body": "The code has been adjusted to detect whether there are tasks in progress before unloading model, and if there are, it will not be unloaded.\r\nThe problem in the issue is that there are a lot of executors, and after the knowledge base is created, the user does not create a new knowledge base, and there are no new files to parse. In this case, too many executors will continue to occupy memory.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2000180658",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 6200,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2000131908",
+        "commented_code": "@@ -188,7 +210,16 @@ async def collect():\n         return None, None\n \n     if not redis_msg:\n+        # Check idle time since last task\n+        idle_time = (datetime.now() - LAST_TASK_TIME).total_seconds()\n+        if idle_time > MODEL_UNLOAD_IDLE_TIME:",
+        "comment_created_at": "2025-03-18T04:35:00+00:00",
+        "comment_author": "liwenju0",
+        "comment_body": "unloaded model will be auto-reloaded  when  necessary\u3002i check the code here\uff1a\r\n\r\ndo_handle_task will initialize  LLMBundle every time\u3002",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2003479544",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 6200,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2000131908",
+        "commented_code": "@@ -188,7 +210,16 @@ async def collect():\n         return None, None\n \n     if not redis_msg:\n+        # Check idle time since last task\n+        idle_time = (datetime.now() - LAST_TASK_TIME).total_seconds()\n+        if idle_time > MODEL_UNLOAD_IDLE_TIME:",
+        "comment_created_at": "2025-03-19T14:27:01+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "What does `a lot of executors` mean?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2004764682",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 6200,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2000131908",
+        "commented_code": "@@ -188,7 +210,16 @@ async def collect():\n         return None, None\n \n     if not redis_msg:\n+        # Check idle time since last task\n+        idle_time = (datetime.now() - LAST_TASK_TIME).total_seconds()\n+        if idle_time > MODEL_UNLOAD_IDLE_TIME:",
+        "comment_created_at": "2025-03-20T03:48:34+00:00",
+        "comment_author": "liwenju0",
+        "comment_body": "![image](https://github.com/user-attachments/assets/51b46dc4-d0e0-4e9a-9208-136517087247)\r\nAs shown in this image, the user opened 13 task_executor, and each task_executor did not release the embedding and rerank models when idle, putting a lot of pressure on the memory",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2004766155",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 6200,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2000131908",
+        "commented_code": "@@ -188,7 +210,16 @@ async def collect():\n         return None, None\n \n     if not redis_msg:\n+        # Check idle time since last task\n+        idle_time = (datetime.now() - LAST_TASK_TIME).total_seconds()\n+        if idle_time > MODEL_UNLOAD_IDLE_TIME:",
+        "comment_created_at": "2025-03-20T03:51:20+00:00",
+        "comment_author": "KevinHuSh",
+        "comment_body": "What about after `gc.collect()`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2005158142",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 6200,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2000131908",
+        "commented_code": "@@ -188,7 +210,16 @@ async def collect():\n         return None, None\n \n     if not redis_msg:\n+        # Check idle time since last task\n+        idle_time = (datetime.now() - LAST_TASK_TIME).total_seconds()\n+        if idle_time > MODEL_UNLOAD_IDLE_TIME:",
+        "comment_created_at": "2025-03-20T09:24:43+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "@liwenju0 Each task_executor shall be assigned a different ID, for example: 0, 1, 2... so that they have different name.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1990381044",
+    "pr_number": 5941,
+    "pr_file": "rag/svr/task_executor.py",
+    "created_at": "2025-03-12T01:17:19+00:00",
+    "commented_code": "logging.info(f'TaskExecutor: RAGFlow version: {get_ragflow_version()}')\n     settings.init_settings()\n     print_rag_settings()\n-    signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)\n-    signal.signal(signal.SIGUSR2, stop_tracemalloc)\n-    TRACE_MALLOC_ENABLED = int(os.environ.get('TRACE_MALLOC_ENABLED', \"0\"))\n+    if sys.platform != \"win32\":\n+        signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)\n+        signal.signal(signal.SIGUSR2, stop_tracemalloc)\n+    TRACE_MALLOC_ENABLED = int(os.environ.get('TRACE_MALLOC_ENABLED', \"1\"))",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1990381044",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 5941,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "1990381044",
+        "commented_code": "@@ -644,9 +656,10 @@ async def main():\n     logging.info(f'TaskExecutor: RAGFlow version: {get_ragflow_version()}')\n     settings.init_settings()\n     print_rag_settings()\n-    signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)\n-    signal.signal(signal.SIGUSR2, stop_tracemalloc)\n-    TRACE_MALLOC_ENABLED = int(os.environ.get('TRACE_MALLOC_ENABLED', \"0\"))\n+    if sys.platform != \"win32\":\n+        signal.signal(signal.SIGUSR1, start_tracemalloc_and_snapshot)\n+        signal.signal(signal.SIGUSR2, stop_tracemalloc)\n+    TRACE_MALLOC_ENABLED = int(os.environ.get('TRACE_MALLOC_ENABLED', \"1\"))",
+        "comment_created_at": "2025-03-12T01:17:19+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "This line slows down the application since it enables tracemalloc by default. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1741457272",
+    "pr_number": 2209,
+    "pr_file": "api/apps/kb_app.py",
+    "created_at": "2024-09-03T05:42:38+00:00",
+    "commented_code": "def detail():\n     kb_id = request.args[\"kb_id\"]\n     try:\n+        tenants = TenantService.get_joined_tenants_by_user_id(current_user.id)\n+        temp = False\n+        for m in tenants:\n+            if KnowledgebaseService.query(\n+                    tenant_id=m[\"tenant_id\"], id=kb_id):\n+                temp = True",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1741457272",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 2209,
+        "pr_file": "api/apps/kb_app.py",
+        "discussion_id": "1741457272",
+        "commented_code": "@@ -100,6 +100,16 @@ def update():\n def detail():\n     kb_id = request.args[\"kb_id\"]\n     try:\n+        tenants = TenantService.get_joined_tenants_by_user_id(current_user.id)\n+        temp = False\n+        for m in tenants:\n+            if KnowledgebaseService.query(\n+                    tenant_id=m[\"tenant_id\"], id=kb_id):\n+                temp = True",
+        "comment_created_at": "2024-09-03T05:42:38+00:00",
+        "comment_author": "KevinHuSh",
+        "comment_body": "```suggestion\r\n                temp = True\r\n                break\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

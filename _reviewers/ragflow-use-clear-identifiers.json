@@ -1,0 +1,134 @@
+[
+  {
+    "discussion_id": "3083782979",
+    "pr_number": 14020,
+    "pr_file": "common/metadata_utils.py",
+    "created_at": "2026-04-15T03:31:48+00:00",
+    "commented_code": "def update_metadata_to(metadata, meta):\n+    \"\"\"Merge incoming metadata payload into an existing metadata mapping.",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3083782979",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14020,
+        "pr_file": "common/metadata_utils.py",
+        "discussion_id": "3083782979",
+        "commented_code": "@@ -237,6 +237,11 @@ def dedupe_list(values: list) -> list:\n \n \n def update_metadata_to(metadata, meta):\n+    \"\"\"Merge incoming metadata payload into an existing metadata mapping.",
+        "comment_created_at": "2026-04-15T03:31:48+00:00",
+        "comment_author": "xugangqiang",
+        "comment_body": "May I ask for your help to make the arguments more meaningful (eg. existing_metadata, incoming_metadata)?\n\nLike which one is the \"existing metadata\" and which one is the \"incoming metadata payload to be merged\" ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3128608550",
+    "pr_number": 14291,
+    "pr_file": "api/apps/restful_apis/chunk_api.py",
+    "created_at": "2026-04-23T05:50:39+00:00",
+    "commented_code": "+#\n+#  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.\n+#\n+#  Licensed under the Apache License, Version 2.0 (the \"License\");\n+#  you may not use this file except in compliance with the License.\n+#  You may obtain a copy of the License at\n+#\n+#      http://www.apache.org/licenses/LICENSE-2.0\n+#\n+#  Unless required by applicable law or agreed to in writing, software\n+#  distributed under the License is distributed on an \"AS IS\" BASIS,\n+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+#  See the License for the specific language governing permissions and\n+#  limitations under the License.\n+#\n+import base64\n+import datetime\n+import re\n+\n+import xxhash\n+from pydantic import BaseModel, Field, validator\n+from quart import request\n+\n+from api.apps import login_required\n+from api.db.joint_services.tenant_model_service import (\n+    get_model_config_by_id,\n+    get_model_config_by_type_and_name,\n+)\n+from api.db.services.document_service import DocumentService\n+from api.db.services.knowledgebase_service import KnowledgebaseService\n+from api.db.services.tenant_llm_service import TenantLLMService\n+from api.utils.api_utils import (\n+    add_tenant_id_to_kwargs,\n+    check_duplicate_ids,\n+    get_error_data_result,\n+    get_request_json,\n+    get_result,\n+    server_error_response,\n+)\n+from api.utils.image_utils import store_chunk_image\n+from common import settings\n+from common.constants import LLMType, ParserType, RetCode\n+from common.misc_utils import thread_pool_exec\n+from common.string_utils import is_content_empty, remove_redundant_spaces\n+from common.tag_feature_utils import validate_tag_features\n+from rag.app.qa import beAdoc, rmPrefix\n+from rag.nlp import rag_tokenizer, search\n+\n+\n+class Chunk(BaseModel):\n+    id: str = \"\"\n+    content: str = \"\"\n+    document_id: str = \"\"\n+    docnm_kwd: str = \"\"\n+    important_keywords: list = Field(default_factory=list)\n+    tag_kwd: list = Field(default_factory=list)\n+    questions: list = Field(default_factory=list)\n+    question_tks: str = \"\"\n+    image_id: str = \"\"\n+    available: bool = True\n+    positions: list[list[int]] = Field(default_factory=list)\n+\n+    @validator(\"positions\")\n+    def validate_positions(cls, value):\n+        for sublist in value:\n+            if len(sublist) != 5:\n+                raise ValueError(\"Each sublist in positions must have a length of 5\")\n+        return value\n+\n+\n+def _map_doc(doc):\n+    key_mapping = {\n+        \"chunk_num\": \"chunk_count\",\n+        \"kb_id\": \"dataset_id\",\n+        \"token_num\": \"token_count\",\n+        \"parser_id\": \"chunk_method\",\n+    }\n+    run_mapping = {\n+        \"0\": \"UNSTART\",\n+        \"1\": \"RUNNING\",\n+        \"2\": \"CANCEL\",\n+        \"3\": \"DONE\",\n+        \"4\": \"FAIL\",\n+    }\n+    renamed_doc = {}\n+    for key, value in doc.to_dict().items():\n+        renamed_doc[key_mapping.get(key, key)] = value\n+        if key == \"run\":\n+            renamed_doc[\"run\"] = run_mapping.get(str(value))\n+    return renamed_doc\n+\n+\n+def _strip_chunk_runtime_fields(chunk):\n+    for name in [name for name in chunk.keys() if re.search(r\"(_vec$|_sm_|_tks|_ltks)\", name)]:\n+        del chunk[name]\n+    return chunk\n+\n+\n+@manager.route(\"/datasets/<dataset_id>/documents/<document_id>/chunks\", methods=[\"GET\"])  # noqa: F821\n+@login_required\n+@add_tenant_id_to_kwargs\n+async def list_chunks(tenant_id, dataset_id, document_id):\n+    if not KnowledgebaseService.accessible(kb_id=dataset_id, user_id=tenant_id):\n+        return get_error_data_result(message=f\"You don't own the dataset {dataset_id}.\")\n+    doc = DocumentService.query(id=document_id, kb_id=dataset_id)\n+    if not doc:\n+        return get_error_data_result(message=f\"You don't own the document {document_id}.\")\n+    doc = doc[0]\n+    req = request.args\n+    page = int(req.get(\"page\", 1))\n+    size = int(req.get(\"page_size\", 30))\n+    question = req.get(\"keywords\", \"\")\n+    query = {\n+        \"doc_ids\": [document_id],\n+        \"page\": page,\n+        \"size\": size,\n+        \"question\": question,\n+        \"sort\": True,\n+    }\n+    if \"available\" in req:\n+        query[\"available_int\"] = 1 if req[\"available\"] == \"true\" else 0\n+\n+    res = {\"total\": 0, \"chunks\": [], \"doc\": _map_doc(doc)}\n+    if req.get(\"id\"):\n+        chunk = settings.docStoreConn.get(req.get(\"id\"), search.index_name(tenant_id), [dataset_id])\n+        if not chunk:\n+            return get_result(message=f\"Chunk not found: {dataset_id}/{req.get('id')}\", code=RetCode.DATA_ERROR)\n+        if str(chunk.get(\"doc_id\", chunk.get(\"document_id\"))) != str(document_id):\n+            return get_result(message=f\"Chunk not found: {dataset_id}/{req.get('id')}\", code=RetCode.DATA_ERROR)\n+        _strip_chunk_runtime_fields(chunk)\n+        res[\"total\"] = 1\n+        final_chunk = {\n+            \"id\": chunk.get(\"id\", chunk.get(\"chunk_id\")),\n+            \"content\": chunk[\"content_with_weight\"],\n+            \"document_id\": chunk.get(\"doc_id\", chunk.get(\"document_id\")),\n+            \"docnm_kwd\": chunk[\"docnm_kwd\"],\n+            \"important_keywords\": chunk.get(\"important_kwd\", []),\n+            \"questions\": chunk.get(\"question_kwd\", []),\n+            \"dataset_id\": chunk.get(\"kb_id\", chunk.get(\"dataset_id\")),\n+            \"image_id\": chunk.get(\"img_id\", \"\"),\n+            \"available\": bool(chunk.get(\"available_int\", 1)),\n+            \"positions\": chunk.get(\"position_int\", []),\n+            \"tag_kwd\": chunk.get(\"tag_kwd\", []),\n+            \"tag_feas\": chunk.get(\"tag_feas\", {}),",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3128608550",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14291,
+        "pr_file": "api/apps/restful_apis/chunk_api.py",
+        "discussion_id": "3128608550",
+        "commented_code": "@@ -0,0 +1,445 @@\n+#\n+#  Copyright 2026 The InfiniFlow Authors. All Rights Reserved.\n+#\n+#  Licensed under the Apache License, Version 2.0 (the \"License\");\n+#  you may not use this file except in compliance with the License.\n+#  You may obtain a copy of the License at\n+#\n+#      http://www.apache.org/licenses/LICENSE-2.0\n+#\n+#  Unless required by applicable law or agreed to in writing, software\n+#  distributed under the License is distributed on an \"AS IS\" BASIS,\n+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+#  See the License for the specific language governing permissions and\n+#  limitations under the License.\n+#\n+import base64\n+import datetime\n+import re\n+\n+import xxhash\n+from pydantic import BaseModel, Field, validator\n+from quart import request\n+\n+from api.apps import login_required\n+from api.db.joint_services.tenant_model_service import (\n+    get_model_config_by_id,\n+    get_model_config_by_type_and_name,\n+)\n+from api.db.services.document_service import DocumentService\n+from api.db.services.knowledgebase_service import KnowledgebaseService\n+from api.db.services.tenant_llm_service import TenantLLMService\n+from api.utils.api_utils import (\n+    add_tenant_id_to_kwargs,\n+    check_duplicate_ids,\n+    get_error_data_result,\n+    get_request_json,\n+    get_result,\n+    server_error_response,\n+)\n+from api.utils.image_utils import store_chunk_image\n+from common import settings\n+from common.constants import LLMType, ParserType, RetCode\n+from common.misc_utils import thread_pool_exec\n+from common.string_utils import is_content_empty, remove_redundant_spaces\n+from common.tag_feature_utils import validate_tag_features\n+from rag.app.qa import beAdoc, rmPrefix\n+from rag.nlp import rag_tokenizer, search\n+\n+\n+class Chunk(BaseModel):\n+    id: str = \"\"\n+    content: str = \"\"\n+    document_id: str = \"\"\n+    docnm_kwd: str = \"\"\n+    important_keywords: list = Field(default_factory=list)\n+    tag_kwd: list = Field(default_factory=list)\n+    questions: list = Field(default_factory=list)\n+    question_tks: str = \"\"\n+    image_id: str = \"\"\n+    available: bool = True\n+    positions: list[list[int]] = Field(default_factory=list)\n+\n+    @validator(\"positions\")\n+    def validate_positions(cls, value):\n+        for sublist in value:\n+            if len(sublist) != 5:\n+                raise ValueError(\"Each sublist in positions must have a length of 5\")\n+        return value\n+\n+\n+def _map_doc(doc):\n+    key_mapping = {\n+        \"chunk_num\": \"chunk_count\",\n+        \"kb_id\": \"dataset_id\",\n+        \"token_num\": \"token_count\",\n+        \"parser_id\": \"chunk_method\",\n+    }\n+    run_mapping = {\n+        \"0\": \"UNSTART\",\n+        \"1\": \"RUNNING\",\n+        \"2\": \"CANCEL\",\n+        \"3\": \"DONE\",\n+        \"4\": \"FAIL\",\n+    }\n+    renamed_doc = {}\n+    for key, value in doc.to_dict().items():\n+        renamed_doc[key_mapping.get(key, key)] = value\n+        if key == \"run\":\n+            renamed_doc[\"run\"] = run_mapping.get(str(value))\n+    return renamed_doc\n+\n+\n+def _strip_chunk_runtime_fields(chunk):\n+    for name in [name for name in chunk.keys() if re.search(r\"(_vec$|_sm_|_tks|_ltks)\", name)]:\n+        del chunk[name]\n+    return chunk\n+\n+\n+@manager.route(\"/datasets/<dataset_id>/documents/<document_id>/chunks\", methods=[\"GET\"])  # noqa: F821\n+@login_required\n+@add_tenant_id_to_kwargs\n+async def list_chunks(tenant_id, dataset_id, document_id):\n+    if not KnowledgebaseService.accessible(kb_id=dataset_id, user_id=tenant_id):\n+        return get_error_data_result(message=f\"You don't own the dataset {dataset_id}.\")\n+    doc = DocumentService.query(id=document_id, kb_id=dataset_id)\n+    if not doc:\n+        return get_error_data_result(message=f\"You don't own the document {document_id}.\")\n+    doc = doc[0]\n+    req = request.args\n+    page = int(req.get(\"page\", 1))\n+    size = int(req.get(\"page_size\", 30))\n+    question = req.get(\"keywords\", \"\")\n+    query = {\n+        \"doc_ids\": [document_id],\n+        \"page\": page,\n+        \"size\": size,\n+        \"question\": question,\n+        \"sort\": True,\n+    }\n+    if \"available\" in req:\n+        query[\"available_int\"] = 1 if req[\"available\"] == \"true\" else 0\n+\n+    res = {\"total\": 0, \"chunks\": [], \"doc\": _map_doc(doc)}\n+    if req.get(\"id\"):\n+        chunk = settings.docStoreConn.get(req.get(\"id\"), search.index_name(tenant_id), [dataset_id])\n+        if not chunk:\n+            return get_result(message=f\"Chunk not found: {dataset_id}/{req.get('id')}\", code=RetCode.DATA_ERROR)\n+        if str(chunk.get(\"doc_id\", chunk.get(\"document_id\"))) != str(document_id):\n+            return get_result(message=f\"Chunk not found: {dataset_id}/{req.get('id')}\", code=RetCode.DATA_ERROR)\n+        _strip_chunk_runtime_fields(chunk)\n+        res[\"total\"] = 1\n+        final_chunk = {\n+            \"id\": chunk.get(\"id\", chunk.get(\"chunk_id\")),\n+            \"content\": chunk[\"content_with_weight\"],\n+            \"document_id\": chunk.get(\"doc_id\", chunk.get(\"document_id\")),\n+            \"docnm_kwd\": chunk[\"docnm_kwd\"],\n+            \"important_keywords\": chunk.get(\"important_kwd\", []),\n+            \"questions\": chunk.get(\"question_kwd\", []),\n+            \"dataset_id\": chunk.get(\"kb_id\", chunk.get(\"dataset_id\")),\n+            \"image_id\": chunk.get(\"img_id\", \"\"),\n+            \"available\": bool(chunk.get(\"available_int\", 1)),\n+            \"positions\": chunk.get(\"position_int\", []),\n+            \"tag_kwd\": chunk.get(\"tag_kwd\", []),\n+            \"tag_feas\": chunk.get(\"tag_feas\", {}),",
+        "comment_created_at": "2026-04-23T05:50:39+00:00",
+        "comment_author": "wangq8",
+        "comment_body": "```\n\"id\": chunk.get(\"id\", chunk.get(\"chunk_id\")),\n\"content\": chunk[\"content_with_weight\"],\n\"document_id\": chunk.get(\"doc_id\", chunk.get(\"document_id\")),\n\"docnm_kwd\": chunk[\"docnm_kwd\"],\n\"important_keywords\": chunk.get(\"important_kwd\", []),\n\"questions\": chunk.get(\"question_kwd\", []),\n\"dataset_id\": chunk.get(\"kb_id\", chunk.get(\"dataset_id\")),\n\"image_id\": chunk.get(\"img_id\", \"\"),\n\"available\": bool(chunk.get(\"available_int\", 1)),\n\"positions\": chunk.get(\"position_int\", []),\n\"tag_kwd\": chunk.get(\"tag_kwd\", []),\n\"tag_feas\": chunk.get(\"tag_feas\", {}),\ndocument_keywords        <- docnm_kwd        dup of docnm_kwd         (ne add)\ndocument_type_keywords   <- doc_type_kwd     replace of doc_type_kwd\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2643283510",
+    "pr_number": 12137,
+    "pr_file": "agent/component/agent_with_tools.py",
+    "created_at": "2025-12-23T13:57:46+00:00",
+    "commented_code": "raise TypeError(f\"An object type should be returned, but `{f}`\")\n \n                 tool_tasks = []\n-                for func in functions:\n+                for idx, func in enumerate(functions):\n                     name = func[\"name\"]\n                     args = func[\"arguments\"]\n                     if name == COMPLETE_TASK:\n                         append_user_content(hist, f\"Respond with a formal answer. FORGET(DO NOT mention) about `{COMPLETE_TASK}`. The language for the response MUST be as the same as the first user request.\n\")\n                         async for txt, tkcnt in complete():\n                             yield txt, tkcnt\n                         return\n-\n+                    name = f\"{name}_{idx}\"",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2643283510",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 12137,
+        "pr_file": "agent/component/agent_with_tools.py",
+        "discussion_id": "2643283510",
+        "commented_code": "@@ -386,15 +386,15 @@ def append_user_content(hist, content):\n                         raise TypeError(f\"An object type should be returned, but `{f}`\")\n \n                 tool_tasks = []\n-                for func in functions:\n+                for idx, func in enumerate(functions):\n                     name = func[\"name\"]\n                     args = func[\"arguments\"]\n                     if name == COMPLETE_TASK:\n                         append_user_content(hist, f\"Respond with a formal answer. FORGET(DO NOT mention) about `{COMPLETE_TASK}`. The language for the response MUST be as the same as the first user request.\\n\")\n                         async for txt, tkcnt in complete():\n                             yield txt, tkcnt\n                         return\n-\n+                    name = f\"{name}_{idx}\"",
+        "comment_created_at": "2025-12-23T13:57:46+00:00",
+        "comment_author": "buua436",
+        "comment_body": "The functions here are derived from the next_step_async response and are not the same list as in #12110, so appending an index via name = f\"{name}_{idx}\" does not appear to be safe.\r\n\r\nIt would be better to first verify whether name is already in the {name}_{idx} format before attempting to modify it.\r\n\r\nSince use_tool_async simply forwards name, the responsibility for resolving the tool name should be handled either within tool_call_async or by normalizing tool names during initialization (for example, in __init__), rather than mutating name at the call site.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2090497667",
+    "pr_number": 7325,
+    "pr_file": "api/apps/__init__.py",
+    "created_at": "2025-05-15T07:37:30+00:00",
+    "commented_code": "def register_page(page_path):\n     path = f\"{page_path}\"\n \n-    page_name = page_path.stem.rstrip(\"_app\")\n+    page_name = page_path.stem",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2090497667",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 7325,
+        "pr_file": "api/apps/__init__.py",
+        "discussion_id": "2090497667",
+        "commented_code": "@@ -107,7 +107,10 @@ def search_pages_path(pages_dir):\n def register_page(page_path):\n     path = f\"{page_path}\"\n \n-    page_name = page_path.stem.rstrip(\"_app\")\n+    page_name = page_path.stem",
+        "comment_created_at": "2025-05-15T07:37:30+00:00",
+        "comment_author": "asiroliu",
+        "comment_body": "```suggestion\r\n    page_name = page_path.stem.removesuffix(\"_app\")\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2005230096",
+    "pr_number": 6327,
+    "pr_file": "api/settings.py",
+    "created_at": "2025-03-20T10:02:52+00:00",
+    "commented_code": "retrievaler = None\n kg_retrievaler = None\n \n+# user registration switch\n+REGISTER_ENABLE = True",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2005230096",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 6327,
+        "pr_file": "api/settings.py",
+        "discussion_id": "2005230096",
+        "commented_code": "@@ -62,16 +62,20 @@\n retrievaler = None\n kg_retrievaler = None\n \n+# user registration switch\n+REGISTER_ENABLE = True",
+        "comment_created_at": "2025-03-20T10:02:52+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "suggest renaming it as REGISTER_ENABLED, and use integer 0 and 1.\r\nREGISTER_ENABLED = int(os.environ.get('REGISTER_ENABLED', \"1\"))",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1673779383",
+    "pr_number": 1470,
+    "pr_file": "rag/llm/chat_model.py",
+    "created_at": "2024-07-11T10:21:22+00:00",
+    "commented_code": "except Exception as e:\n             yield ans + \"\n**ERROR**: \" + str(e)\n \n-        yield  response._chunks[-1].usage_metadata.total_token_count\n\\ No newline at end of file\n+        yield  response._chunks[-1].usage_metadata.total_token_count\n+\n+\n+\n+class Groqchat:",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1673779383",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 1470,
+        "pr_file": "rag/llm/chat_model.py",
+        "discussion_id": "1673779383",
+        "commented_code": "@@ -681,4 +682,63 @@ def chat_streamly(self, system, history, gen_conf):\n         except Exception as e:\n             yield ans + \"\\n**ERROR**: \" + str(e)\n \n-        yield  response._chunks[-1].usage_metadata.total_token_count\n\\ No newline at end of file\n+        yield  response._chunks[-1].usage_metadata.total_token_count\n+\n+\n+\n+class Groqchat:",
+        "comment_created_at": "2024-07-11T10:21:22+00:00",
+        "comment_author": "KevinHuSh",
+        "comment_body": "```suggestion\r\nclass GroqChat:\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

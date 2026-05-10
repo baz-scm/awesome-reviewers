@@ -1,0 +1,112 @@
+[
+  {
+    "discussion_id": "3128388132",
+    "pr_number": 14314,
+    "pr_file": "api/apps/sdk/session.py",
+    "created_at": "2026-04-23T04:45:40+00:00",
+    "commented_code": "@token_required\n async def agents_completion_openai_compatibility(tenant_id, agent_id):\n     req = await get_request_json()\n+    extra_body = req.get(\"extra_body\", {})",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3128388132",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14314,
+        "pr_file": "api/apps/sdk/session.py",
+        "discussion_id": "3128388132",
+        "commented_code": "@@ -440,6 +440,20 @@ async def streamed_response_generator(chat_id, dia, msg):\n @token_required\n async def agents_completion_openai_compatibility(tenant_id, agent_id):\n     req = await get_request_json()\n+    extra_body = req.get(\"extra_body\", {})",
+        "comment_created_at": "2026-04-23T04:45:40+00:00",
+        "comment_author": "6ba3i",
+        "comment_body": "This parsing block is duplicated again below in `agent_completions(...)`, and I think it can be reduced to a tiny shared helper.\n\nSuggested change here:\n\n```\nerr, include_reference_metadata, metadata_fields = _parse_reference_metadata(req)\nif err:\n    return err\n```\nThen add this helper near the bottom of the file:\n````\ndef _parse_reference_metadata(req):\n    extra_body = req.get(\"extra_body\") or {}\n    if extra_body and not isinstance(extra_body, dict):\n        return get_error_data_result(\"extra_body must be an object.\"), False, None\n    reference_metadata = extra_body.get(\"reference_metadata\") or {}\n    if reference_metadata and not isinstance(reference_metadata, dict):\n        return get_error_data_result(\"reference_metadata must be an object.\"), False, None\n    metadata_fields = reference_metadata.get(\"fields\")\n    if metadata_fields is not None and not isinstance(metadata_fields, list):\n        return get_error_data_result(\"reference_metadata.fields must be an array.\"), False, None\n    return None, bool(reference_metadata.get(\"include\", False)), metadata_fields",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3128404706",
+    "pr_number": 14314,
+    "pr_file": "api/apps/sdk/session.py",
+    "created_at": "2026-04-23T04:52:02+00:00",
+    "commented_code": "@token_required\n async def agent_completions(tenant_id, agent_id):\n     req = await get_request_json()\n+    extra_body = req.get(\"extra_body\", {})",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3128404706",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14314,
+        "pr_file": "api/apps/sdk/session.py",
+        "discussion_id": "3128404706",
+        "commented_code": "@@ -499,6 +526,20 @@ async def agents_completion_openai_compatibility(tenant_id, agent_id):\n @token_required\n async def agent_completions(tenant_id, agent_id):\n     req = await get_request_json()\n+    extra_body = req.get(\"extra_body\", {})",
+        "comment_created_at": "2026-04-23T04:52:02+00:00",
+        "comment_author": "6ba3i",
+        "comment_body": "this is the same `extra_body.reference_metadata` parsing logic again, so I think it should be replaced with the same small helper instead of duplicating the whole block.\n\nSuggested replacement:\n\n```\nerr, include_reference_metadata, metadata_fields = _parse_reference_metadata(req)\nif err:\n    return err\n```\nThat keeps the validation consistent across both agent endpoints and reduces the amount of code changed for this feature.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3121795908",
+    "pr_number": 14277,
+    "pr_file": "rag/nlp/search.py",
+    "created_at": "2026-04-22T05:41:39+00:00",
+    "commented_code": "import math\n from collections import OrderedDict, defaultdict\n from dataclasses import dataclass\n+from typing import List, Dict, Any, Optional, Union\n \n-from rag.nlp import rag_tokenizer, query\n import numpy as np\n+\n+from common import settings\n+from common.constants import PAGERANK_FLD, TAG_FLD\n from common.doc_store.doc_store_base import MatchDenseExpr, FusionExpr, OrderByExpr, DocStoreConnection\n-from common.string_utils import remove_redundant_spaces\n from common.float_utils import get_float\n-from common.constants import PAGERANK_FLD, TAG_FLD\n+from common.misc_utils import thread_pool_exec\n+from common.string_utils import remove_redundant_spaces\n from common.tag_feature_utils import parse_tag_features\n-from common import settings\n+from rag.nlp import rag_tokenizer, query\n \n-from common.misc_utils import thread_pool_exec\n+logger = logging.getLogger(__name__)\n \n-def index_name(uid): return f\"ragflow_{uid}\"\n+# Global configuration constants\n+DEFAULT_FUSION_WEIGHTS = \"0.05,0.95\"\n+DEFAULT_RERANK_LIMIT = 64\n+DEFAULT_CITATION_THRESHOLD = 0.63\n+DEFAULT_SIMILARITY_THRESHOLD = 0.1\n+RETRY_SIMILARITY_FACTOR = 0.17\n+RETRY_MIN_MATCH_FACTOR = 0.1\n+INTERNAL_SMOOTH_S = 1000\n+\n+\n+def index_name(uid) -> str:\n+    \"\"\"Generate index name for tenant id.\"\"\"\n+    return f\"ragflow_{uid}\"\n \n \n class Dealer:\n+    \"\"\"Core retrieval dealer class, handles query routing, hybrid search and reranking.\"\"\"\n     def __init__(self, dataStore: DocStoreConnection):\n         self.qryr = query.FulltextQueryer()\n         self.dataStore = dataStore\n \n     @dataclass\n     class SearchResult:\n+        \"\"\"Dataclass for search result return structure.\"\"\"\n         total: int\n-        ids: list[str]\n-        query_vector: list[float] | None = None\n-        field: dict | None = None\n-        highlight: dict | None = None\n-        aggregation: list | dict | None = None\n-        keywords: list[str] | None = None\n-        group_docs: list[list] | None = None\n-\n-    async def get_vector(self, txt, emb_mdl, topk=10, similarity=0.1):\n+        ids: List[str]\n+        query_vector: Optional[List[float]] = None\n+        field: Optional[Dict[str, Any]] = None\n+        highlight: Optional[Dict[str, Any]] = None\n+        aggregation: Optional[Union[List, Dict]] = None\n+        keywords: Optional[List[str]] = None\n+        group_docs: Optional[List[List]] = None\n+\n+    async def get_vector(self, txt: str, emb_mdl, topk: int = 10, similarity: float = 0.1) -> MatchDenseExpr:\n+        \"\"\"Encode text to dense vector expression for vector search.\"\"\"\n         qv, _ = await thread_pool_exec(emb_mdl.encode_queries, txt)\n         shape = np.array(qv).shape\n         if len(shape) > 1:\n-            raise Exception(\n-                f\"Dealer.get_vector returned array's shape {shape} doesn't match expectation(exact one dimension).\")\n+            raise Exception(f\"Vector shape {shape} is invalid, expected 1D array\")\n+        \n         embedding_data = [get_float(v) for v in qv]\n         vector_column_name = f\"q_{len(embedding_data)}_vec\"\n         return MatchDenseExpr(vector_column_name, embedding_data, 'float', 'cosine', topk, {\"similarity\": similarity})\n \n-    def get_filters(self, req):\n-        condition = dict()\n-        for key, field in {\"kb_ids\": \"kb_id\", \"doc_ids\": \"doc_id\"}.items():\n-            if key in req and req[key] is not None:\n+    def get_filters(self, req: Dict[str, Any]) -> Dict[str, Any]:\n+        \"\"\"Build filter conditions from request parameters.\"\"\"\n+        condition = {}\n+        key_mapping = {\"kb_ids\": \"kb_id\", \"doc_ids\": \"doc_id\"}\n+        for key, field in key_mapping.items():\n+            if req.get(key) is not None:\n                 condition[field] = req[key]\n-        # TODO(yzc): `available_int` is nullable however infinity doesn't support nullable columns.\n-        for key in [\"knowledge_graph_kwd\", \"available_int\", \"entity_kwd\", \"from_entity_kwd\", \"to_entity_kwd\",\n-                    \"removed_kwd\"]:\n-            if key in req and req[key] is not None:\n+        \n+        system_keys = [\"knowledge_graph_kwd\", \"available_int\", \"entity_kwd\", \n+                      \"from_entity_kwd\", \"to_entity_kwd\", \"removed_kwd\"]\n+        for key in system_keys:\n+            if req.get(key) is not None:\n                 condition[key] = req[key]\n         return condition\n \n-    async def search(self, req, idx_names: str | list[str],\n-               kb_ids: list[str],\n-               emb_mdl=None,\n-               highlight: bool | list | None = None,\n-               rank_feature: dict | None = None\n-               ):\n-        if highlight is None:\n-            highlight = False\n-\n+    async def search(self, req: Dict[str, Any], idx_names: Union[str, List[str]],",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3121795908",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14277,
+        "pr_file": "rag/nlp/search.py",
+        "discussion_id": "3121795908",
+        "commented_code": "@@ -19,710 +19,733 @@\n import math\n from collections import OrderedDict, defaultdict\n from dataclasses import dataclass\n+from typing import List, Dict, Any, Optional, Union\n \n-from rag.nlp import rag_tokenizer, query\n import numpy as np\n+\n+from common import settings\n+from common.constants import PAGERANK_FLD, TAG_FLD\n from common.doc_store.doc_store_base import MatchDenseExpr, FusionExpr, OrderByExpr, DocStoreConnection\n-from common.string_utils import remove_redundant_spaces\n from common.float_utils import get_float\n-from common.constants import PAGERANK_FLD, TAG_FLD\n+from common.misc_utils import thread_pool_exec\n+from common.string_utils import remove_redundant_spaces\n from common.tag_feature_utils import parse_tag_features\n-from common import settings\n+from rag.nlp import rag_tokenizer, query\n \n-from common.misc_utils import thread_pool_exec\n+logger = logging.getLogger(__name__)\n \n-def index_name(uid): return f\"ragflow_{uid}\"\n+# Global configuration constants\n+DEFAULT_FUSION_WEIGHTS = \"0.05,0.95\"\n+DEFAULT_RERANK_LIMIT = 64\n+DEFAULT_CITATION_THRESHOLD = 0.63\n+DEFAULT_SIMILARITY_THRESHOLD = 0.1\n+RETRY_SIMILARITY_FACTOR = 0.17\n+RETRY_MIN_MATCH_FACTOR = 0.1\n+INTERNAL_SMOOTH_S = 1000\n+\n+\n+def index_name(uid) -> str:\n+    \"\"\"Generate index name for tenant id.\"\"\"\n+    return f\"ragflow_{uid}\"\n \n \n class Dealer:\n+    \"\"\"Core retrieval dealer class, handles query routing, hybrid search and reranking.\"\"\"\n     def __init__(self, dataStore: DocStoreConnection):\n         self.qryr = query.FulltextQueryer()\n         self.dataStore = dataStore\n \n     @dataclass\n     class SearchResult:\n+        \"\"\"Dataclass for search result return structure.\"\"\"\n         total: int\n-        ids: list[str]\n-        query_vector: list[float] | None = None\n-        field: dict | None = None\n-        highlight: dict | None = None\n-        aggregation: list | dict | None = None\n-        keywords: list[str] | None = None\n-        group_docs: list[list] | None = None\n-\n-    async def get_vector(self, txt, emb_mdl, topk=10, similarity=0.1):\n+        ids: List[str]\n+        query_vector: Optional[List[float]] = None\n+        field: Optional[Dict[str, Any]] = None\n+        highlight: Optional[Dict[str, Any]] = None\n+        aggregation: Optional[Union[List, Dict]] = None\n+        keywords: Optional[List[str]] = None\n+        group_docs: Optional[List[List]] = None\n+\n+    async def get_vector(self, txt: str, emb_mdl, topk: int = 10, similarity: float = 0.1) -> MatchDenseExpr:\n+        \"\"\"Encode text to dense vector expression for vector search.\"\"\"\n         qv, _ = await thread_pool_exec(emb_mdl.encode_queries, txt)\n         shape = np.array(qv).shape\n         if len(shape) > 1:\n-            raise Exception(\n-                f\"Dealer.get_vector returned array's shape {shape} doesn't match expectation(exact one dimension).\")\n+            raise Exception(f\"Vector shape {shape} is invalid, expected 1D array\")\n+        \n         embedding_data = [get_float(v) for v in qv]\n         vector_column_name = f\"q_{len(embedding_data)}_vec\"\n         return MatchDenseExpr(vector_column_name, embedding_data, 'float', 'cosine', topk, {\"similarity\": similarity})\n \n-    def get_filters(self, req):\n-        condition = dict()\n-        for key, field in {\"kb_ids\": \"kb_id\", \"doc_ids\": \"doc_id\"}.items():\n-            if key in req and req[key] is not None:\n+    def get_filters(self, req: Dict[str, Any]) -> Dict[str, Any]:\n+        \"\"\"Build filter conditions from request parameters.\"\"\"\n+        condition = {}\n+        key_mapping = {\"kb_ids\": \"kb_id\", \"doc_ids\": \"doc_id\"}\n+        for key, field in key_mapping.items():\n+            if req.get(key) is not None:\n                 condition[field] = req[key]\n-        # TODO(yzc): `available_int` is nullable however infinity doesn't support nullable columns.\n-        for key in [\"knowledge_graph_kwd\", \"available_int\", \"entity_kwd\", \"from_entity_kwd\", \"to_entity_kwd\",\n-                    \"removed_kwd\"]:\n-            if key in req and req[key] is not None:\n+        \n+        system_keys = [\"knowledge_graph_kwd\", \"available_int\", \"entity_kwd\", \n+                      \"from_entity_kwd\", \"to_entity_kwd\", \"removed_kwd\"]\n+        for key in system_keys:\n+            if req.get(key) is not None:\n                 condition[key] = req[key]\n         return condition\n \n-    async def search(self, req, idx_names: str | list[str],\n-               kb_ids: list[str],\n-               emb_mdl=None,\n-               highlight: bool | list | None = None,\n-               rank_feature: dict | None = None\n-               ):\n-        if highlight is None:\n-            highlight = False\n-\n+    async def search(self, req: Dict[str, Any], idx_names: Union[str, List[str]],",
+        "comment_created_at": "2026-04-22T05:41:39+00:00",
+        "comment_author": "qinling0210",
+        "comment_body": "Union[str, List[str]]  is transitional style.\nWe should use modern python syntax.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3083810520",
+    "pr_number": 14020,
+    "pr_file": "rag/svr/task_executor.py",
+    "created_at": "2026-04-15T03:36:43+00:00",
+    "commented_code": "raise\n         progress_callback(msg=\"Question generation {} chunks completed in {:.2f}s\".format(len(docs), timer() - st))\n \n-    if task[\"parser_config\"].get(\"enable_metadata\", False) and task[\"parser_config\"].get(\"metadata\"):\n+    built_in_metadata = {}\n+    built_in_metadata_setting = task[\"parser_config\"].get(\"built_in_metadata\") or []\n+    if isinstance(built_in_metadata_setting, list):\n+        built_in_metadata_keys = set()\n+        for item in built_in_metadata_setting:\n+            if isinstance(item, str):\n+                built_in_metadata_keys.add(item)\n+            elif isinstance(item, dict):\n+                key = item.get(\"key\")\n+                if isinstance(key, str) and key:\n+                    built_in_metadata_keys.add(key)\n+\n+        if \"file_name\" in built_in_metadata_keys and task.get(\"name\"):\n+            built_in_metadata[\"file_name\"] = str(task[\"name\"])\n+\n+        if \"update_time\" in built_in_metadata_keys:\n+            update_time = task.get(\"update_time\")\n+            if isinstance(update_time, datetime):\n+                built_in_metadata[\"update_time\"] = update_time.isoformat()\n+            elif update_time:\n+                built_in_metadata[\"update_time\"] = str(update_time)",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3083810520",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 14020,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "3083810520",
+        "commented_code": "@@ -407,49 +414,74 @@ async def doc_question_proposal(chat_mdl, d, topn):\n             raise\n         progress_callback(msg=\"Question generation {} chunks completed in {:.2f}s\".format(len(docs), timer() - st))\n \n-    if task[\"parser_config\"].get(\"enable_metadata\", False) and task[\"parser_config\"].get(\"metadata\"):\n+    built_in_metadata = {}\n+    built_in_metadata_setting = task[\"parser_config\"].get(\"built_in_metadata\") or []\n+    if isinstance(built_in_metadata_setting, list):\n+        built_in_metadata_keys = set()\n+        for item in built_in_metadata_setting:\n+            if isinstance(item, str):\n+                built_in_metadata_keys.add(item)\n+            elif isinstance(item, dict):\n+                key = item.get(\"key\")\n+                if isinstance(key, str) and key:\n+                    built_in_metadata_keys.add(key)\n+\n+        if \"file_name\" in built_in_metadata_keys and task.get(\"name\"):\n+            built_in_metadata[\"file_name\"] = str(task[\"name\"])\n+\n+        if \"update_time\" in built_in_metadata_keys:\n+            update_time = task.get(\"update_time\")\n+            if isinstance(update_time, datetime):\n+                built_in_metadata[\"update_time\"] = update_time.isoformat()\n+            elif update_time:\n+                built_in_metadata[\"update_time\"] = str(update_time)",
+        "comment_created_at": "2026-04-15T03:36:43+00:00",
+        "comment_author": "xugangqiang",
+        "comment_body": "So you think it will be a good idea to have a separate method for line 420 - 437? Put too many things inside one method will make it hard to understand.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1848297460",
+    "pr_number": 3498,
+    "pr_file": "agent/component/base.py",
+    "created_at": "2024-11-19T12:46:11+00:00",
+    "commented_code": "def _run(self, history, **kwargs):\n         raise NotImplementedError()\n \n-    def output(self, allow_partial=True) -> tuple[str, pd.DataFrame | partial]:\n+    def output(self, allow_partial=True) -> Tuple[str, Union[pd.DataFrame, partial]]:",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1848297460",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 3498,
+        "pr_file": "agent/component/base.py",
+        "discussion_id": "1848297460",
+        "commented_code": "@@ -416,7 +418,7 @@ def run(self, history, **kwargs):\n     def _run(self, history, **kwargs):\n         raise NotImplementedError()\n \n-    def output(self, allow_partial=True) -> tuple[str, pd.DataFrame | partial]:\n+    def output(self, allow_partial=True) -> Tuple[str, Union[pd.DataFrame, partial]]:",
+        "comment_created_at": "2024-11-19T12:46:11+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "Use `tuple` instead of `Tuple`.\r\nUse `pd.DataFrame | partial` instead of `Union[pd.DataFrame, partial]]`.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

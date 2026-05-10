@@ -1,0 +1,158 @@
+[
+  {
+    "discussion_id": "3057939975",
+    "pr_number": 13176,
+    "pr_file": "api/db/services/task_service.py",
+    "created_at": "2026-04-10T02:54:03+00:00",
+    "commented_code": "), \"Can't access Redis. Please check the Redis' status.\"\n \n \n+def requeue_orphaned_tasks():\n+    \"\"\"Re-queue orphaned tasks after a system crash or reboot.\n+\n+    When the system crashes during document parsing, Redis loses queued tasks\n+    while MySQL retains the 'Parsing' state. This function detects such orphaned\n+    documents and re-queues their incomplete tasks into Redis.\n+    \"\"\"\n+    orphaned_docs = DocumentService.get_orphaned_parsing_docs()\n+    if not orphaned_docs:\n+        return 0\n+\n+    doc_ids = [d[\"id\"] for d in orphaned_docs]\n+    incomplete_tasks = TaskService.get_incomplete_tasks_by_doc_ids(doc_ids)\n+    if not incomplete_tasks:\n+        # No incomplete tasks found; reset orphaned docs to failed state\n+        for doc_id in doc_ids:\n+            DocumentService.update_by_id(doc_id, {\n+                \"run\": TaskStatus.FAIL.value,\n+                \"progress_msg\": \"Task lost after system restart. No incomplete tasks found to re-queue.\",\n+            })\n+        return 0",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "3061774092",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 13176,
+        "pr_file": "api/db/services/task_service.py",
+        "discussion_id": "3057939975",
+        "commented_code": "@@ -464,6 +484,44 @@ def new_task():\n         ), \"Can't access Redis. Please check the Redis' status.\"\n \n \n+def requeue_orphaned_tasks():\n+    \"\"\"Re-queue orphaned tasks after a system crash or reboot.\n+\n+    When the system crashes during document parsing, Redis loses queued tasks\n+    while MySQL retains the 'Parsing' state. This function detects such orphaned\n+    documents and re-queues their incomplete tasks into Redis.\n+    \"\"\"\n+    orphaned_docs = DocumentService.get_orphaned_parsing_docs()\n+    if not orphaned_docs:\n+        return 0\n+\n+    doc_ids = [d[\"id\"] for d in orphaned_docs]\n+    incomplete_tasks = TaskService.get_incomplete_tasks_by_doc_ids(doc_ids)\n+    if not incomplete_tasks:\n+        # No incomplete tasks found; reset orphaned docs to failed state\n+        for doc_id in doc_ids:\n+            DocumentService.update_by_id(doc_id, {\n+                \"run\": TaskStatus.FAIL.value,\n+                \"progress_msg\": \"Task lost after system restart. No incomplete tasks found to re-queue.\",\n+            })\n+        return 0",
+        "comment_created_at": "2026-04-10T02:54:03+00:00",
+        "comment_author": "xugangqiang",
+        "comment_body": "I think this is valid concern. Could you please add some logic here to check if it should be DONE (rather than FAIL)?\n\n----------------\nThere's a TOCTOU race between get_orphaned_parsing_docs() and get_incomplete_tasks_by_doc_ids(). If all tasks for a document complete in this window, the document gets marked as FAIL even though it should be DONE.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2050680553",
+    "pr_number": 7073,
+    "pr_file": "rag/svr/task_executor.py",
+    "created_at": "2025-04-18T14:05:01+00:00",
+    "commented_code": "if TRACE_MALLOC_ENABLED:\n         start_tracemalloc_and_snapshot(None, None)\n \n+    signal.signal(signal.SIGINT, signal_handler)\n+    signal.signal(signal.SIGTERM, signal_handler)\n+\n+    threading.Thread(name=\"RecoverPendingTask\", target=recover_pending_tasks).start()",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2050680553",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 7073,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2050680553",
+        "commented_code": "@@ -669,9 +722,14 @@ async def main():\n     if TRACE_MALLOC_ENABLED:\n         start_tracemalloc_and_snapshot(None, None)\n \n+    signal.signal(signal.SIGINT, signal_handler)\n+    signal.signal(signal.SIGTERM, signal_handler)\n+\n+    threading.Thread(name=\"RecoverPendingTask\", target=recover_pending_tasks).start()",
+        "comment_created_at": "2025-04-18T14:05:01+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "Use async instead of a dedicated thread.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2051367495",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 7073,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2050680553",
+        "commented_code": "@@ -669,9 +722,14 @@ async def main():\n     if TRACE_MALLOC_ENABLED:\n         start_tracemalloc_and_snapshot(None, None)\n \n+    signal.signal(signal.SIGINT, signal_handler)\n+    signal.signal(signal.SIGTERM, signal_handler)\n+\n+    threading.Thread(name=\"RecoverPendingTask\", target=recover_pending_tasks).start()",
+        "comment_created_at": "2025-04-19T03:27:51+00:00",
+        "comment_author": "liuzhenghua",
+        "comment_body": "The async code runs on a single thread. Within a current async task, some Redis operations are blocking, which can prevent other async tasks from being scheduled in a timely manner. While debugging locally, I noticed that the update_task sometimes runs with a delay of around 3 seconds beyond its expected interval. I believe that for heartbeat-like tasks, which are time-sensitive, it's safer to run them in a separate thread \u2014 similar to the approach currently used in ragflow_server.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2008631079",
+    "pr_number": 6413,
+    "pr_file": "graphrag/general/extractor.py",
+    "created_at": "2025-03-22T03:10:10+00:00",
+    "commented_code": "self._get_relation_ = get_relation\n         self._set_relation_ = set_relation\n \n-    def _chat(self, system, history, gen_conf):\n+    async def _chat(self, system, history, gen_conf):\n         hist = deepcopy(history)\n         conf = deepcopy(gen_conf)\n         response = get_llm_cache(self._llm.llm_name, system, hist, conf)\n         if response:\n             return response\n-        _, system_msg = message_fit_in([{\"role\": \"system\", \"content\": system}], int(self._llm.max_length * 0.92))\n-        response = self._llm.chat(system_msg[0][\"content\"], hist, conf)\n-        response = re.sub(r\"<think>.*</think>\", \"\", response, flags=re.DOTALL)\n-        if response.find(\"**ERROR**\") >= 0:\n-            raise Exception(response)\n-        set_llm_cache(self._llm.llm_name, system, response, history, gen_conf)\n-        return response\n+            \n+        # Implement exponential backoff retry strategy\n+        max_retries = 3  # Maximum of 3 retry attempts\n+        base_delay = 1.0  # Initial delay of 1 second\n+        \n+        for attempt in range(max_retries):\n+            try:\n+                # Use upstream's max_length value (0.92 instead of 0.97)\n+                _, system_msg = message_fit_in([{\"role\": \"system\", \"content\": system}], int(self._llm.max_length * 0.92))\n+                response = self._llm.chat(system_msg[0][\"content\"], hist, conf)",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2008631079",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 6413,
+        "pr_file": "graphrag/general/extractor.py",
+        "discussion_id": "2008631079",
+        "commented_code": "@@ -53,19 +55,52 @@ def __init__(\n         self._get_relation_ = get_relation\n         self._set_relation_ = set_relation\n \n-    def _chat(self, system, history, gen_conf):\n+    async def _chat(self, system, history, gen_conf):\n         hist = deepcopy(history)\n         conf = deepcopy(gen_conf)\n         response = get_llm_cache(self._llm.llm_name, system, hist, conf)\n         if response:\n             return response\n-        _, system_msg = message_fit_in([{\"role\": \"system\", \"content\": system}], int(self._llm.max_length * 0.92))\n-        response = self._llm.chat(system_msg[0][\"content\"], hist, conf)\n-        response = re.sub(r\"<think>.*</think>\", \"\", response, flags=re.DOTALL)\n-        if response.find(\"**ERROR**\") >= 0:\n-            raise Exception(response)\n-        set_llm_cache(self._llm.llm_name, system, response, history, gen_conf)\n-        return response\n+            \n+        # Implement exponential backoff retry strategy\n+        max_retries = 3  # Maximum of 3 retry attempts\n+        base_delay = 1.0  # Initial delay of 1 second\n+        \n+        for attempt in range(max_retries):\n+            try:\n+                # Use upstream's max_length value (0.92 instead of 0.97)\n+                _, system_msg = message_fit_in([{\"role\": \"system\", \"content\": system}], int(self._llm.max_length * 0.92))\n+                response = self._llm.chat(system_msg[0][\"content\"], hist, conf)",
+        "comment_created_at": "2025-03-22T03:10:10+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "`chat` at `chat_model.py:42` is a sync function. Your change will block the trio schedule thread.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1986550004",
+    "pr_number": 5697,
+    "pr_file": "deepdoc/parser/pdf_parser.py",
+    "created_at": "2025-03-10T03:25:22+00:00",
+    "commented_code": "except Exception:\n             logging.exception(\"total_page_number\")\n \n-    def __images__(self, fnm, zoomin=3, page_from=0,\n+    async def __images__(self, fnm, zoomin=3, page_from=0,",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "1986550004",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 5697,
+        "pr_file": "deepdoc/parser/pdf_parser.py",
+        "discussion_id": "1986550004",
+        "commented_code": "@@ -963,7 +970,7 @@ def total_page_number(fnm, binary=None):\n         except Exception:\n             logging.exception(\"total_page_number\")\n \n-    def __images__(self, fnm, zoomin=3, page_from=0,\n+    async def __images__(self, fnm, zoomin=3, page_from=0,",
+        "comment_created_at": "2025-03-10T03:25:22+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "`__images__` shall keep be sync since its callers are sync.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2050672293",
+    "pr_number": 7073,
+    "pr_file": "rag/svr/task_executor.py",
+    "created_at": "2025-04-18T14:00:44+00:00",
+    "commented_code": "expired = REDIS_CONN.zcount(CONSUMER_NAME, 0, now.timestamp() - 60 * 30)\n             if expired > 0:\n                 REDIS_CONN.zpopmin(CONSUMER_NAME, expired)\n+\n+            # clean task executor\n+            if redis_lock.acquire():\n+                task_executors = REDIS_CONN.smembers(\"TASKEXE\")\n+                for consumer_name in task_executors:\n+                    if consumer_name == CONSUMER_NAME:\n+                        continue\n+                    expired = REDIS_CONN.zcount(\n+                        consumer_name, now.timestamp() - WORKER_HEARTBEAT_TIMEOUT, now.timestamp() + 10\n+                    )\n+                    if expired == 0:\n+                        logging.info(f\"{consumer_name} expired, removed\")\n+                        REDIS_CONN.srem(\"TASKEXE\", consumer_name)",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2050672293",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 7073,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2050672293",
+        "commented_code": "@@ -646,11 +658,52 @@ async def report_status():\n             expired = REDIS_CONN.zcount(CONSUMER_NAME, 0, now.timestamp() - 60 * 30)\n             if expired > 0:\n                 REDIS_CONN.zpopmin(CONSUMER_NAME, expired)\n+\n+            # clean task executor\n+            if redis_lock.acquire():\n+                task_executors = REDIS_CONN.smembers(\"TASKEXE\")\n+                for consumer_name in task_executors:\n+                    if consumer_name == CONSUMER_NAME:\n+                        continue\n+                    expired = REDIS_CONN.zcount(\n+                        consumer_name, now.timestamp() - WORKER_HEARTBEAT_TIMEOUT, now.timestamp() + 10\n+                    )\n+                    if expired == 0:\n+                        logging.info(f\"{consumer_name} expired, removed\")\n+                        REDIS_CONN.srem(\"TASKEXE\", consumer_name)",
+        "comment_created_at": "2025-04-18T14:00:44+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "Removing the expired member is not good for fixed-memberes case.\r\nMake recover_pending_tasks async.\r\nMake report_status to call recover_pending_tasks.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2050684063",
+    "pr_number": 7073,
+    "pr_file": "rag/svr/task_executor.py",
+    "created_at": "2025-04-18T14:08:41+00:00",
+    "commented_code": "if TRACE_MALLOC_ENABLED:\n         start_tracemalloc_and_snapshot(None, None)\n \n+    signal.signal(signal.SIGINT, signal_handler)\n+    signal.signal(signal.SIGTERM, signal_handler)",
+    "repo_full_name": "infiniflow/ragflow",
+    "discussion_comments": [
+      {
+        "comment_id": "2050684063",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 7073,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2050684063",
+        "commented_code": "@@ -669,9 +722,14 @@ async def main():\n     if TRACE_MALLOC_ENABLED:\n         start_tracemalloc_and_snapshot(None, None)\n \n+    signal.signal(signal.SIGINT, signal_handler)\n+    signal.signal(signal.SIGTERM, signal_handler)",
+        "comment_created_at": "2025-04-18T14:08:41+00:00",
+        "comment_author": "yuzhichang",
+        "comment_body": "> Why handle those signals? Does it make quit more clean than current code?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2051367782",
+        "repo_full_name": "infiniflow/ragflow",
+        "pr_number": 7073,
+        "pr_file": "rag/svr/task_executor.py",
+        "discussion_id": "2050684063",
+        "commented_code": "@@ -669,9 +722,14 @@ async def main():\n     if TRACE_MALLOC_ENABLED:\n         start_tracemalloc_and_snapshot(None, None)\n \n+    signal.signal(signal.SIGINT, signal_handler)\n+    signal.signal(signal.SIGTERM, signal_handler)",
+        "comment_created_at": "2025-04-19T03:29:22+00:00",
+        "comment_author": "liuzhenghua",
+        "comment_body": "The purpose of using signal is to set the stop_event, allowing the while loop that depends on this event to exit gracefully, following the implementation in ragflow_server.py.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

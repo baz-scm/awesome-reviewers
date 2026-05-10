@@ -1,0 +1,116 @@
+[
+  {
+    "discussion_id": "446265310",
+    "pr_number": 1881,
+    "pr_file": "src/layer/lstm.h",
+    "created_at": "2020-06-26T15:49:07+00:00",
+    "commented_code": "Mat weight_hc_data;\n     Mat weight_xc_data;\n     Mat bias_c_data;\n+\n+    mutable Mat hidden;\n+    mutable Mat cell;",
+    "repo_full_name": "Tencent/ncnn",
+    "discussion_comments": [
+      {
+        "comment_id": "446265310",
+        "repo_full_name": "Tencent/ncnn",
+        "pr_number": 1881,
+        "pr_file": "src/layer/lstm.h",
+        "discussion_id": "446265310",
+        "commented_code": "@@ -38,6 +39,11 @@ class LSTM : public Layer\n     Mat weight_hc_data;\n     Mat weight_xc_data;\n     Mat bias_c_data;\n+\n+    mutable Mat hidden;\n+    mutable Mat cell;",
+        "comment_created_at": "2020-06-26T15:49:07+00:00",
+        "comment_author": "nihui",
+        "comment_body": "Declaring mutable members in layer and trying to modify it in forward() function breaks thread safety.\r\nTo keep the state, hidden and cell shall be retrieved from bottom_blobs and returned in top_blobs.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "446298554",
+        "repo_full_name": "Tencent/ncnn",
+        "pr_number": 1881,
+        "pr_file": "src/layer/lstm.h",
+        "discussion_id": "446265310",
+        "commented_code": "@@ -38,6 +39,11 @@ class LSTM : public Layer\n     Mat weight_hc_data;\n     Mat weight_xc_data;\n     Mat bias_c_data;\n+\n+    mutable Mat hidden;\n+    mutable Mat cell;",
+        "comment_created_at": "2020-06-26T16:51:45+00:00",
+        "comment_author": "Timen",
+        "comment_body": "Hmm I see, passing and retrieving hidden states via bottom and top blobs will be quite a hassle once there are multiple layers involved. Do you think there would be some other options where the state gets stored in the Net instance instead of expecting the user to pass and retrieve the hidden states?\r\n\r\nAs long as nothing is writing to  the hidden states inside the openmp loop it should be fine right?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "446536218",
+        "repo_full_name": "Tencent/ncnn",
+        "pr_number": 1881,
+        "pr_file": "src/layer/lstm.h",
+        "discussion_id": "446265310",
+        "commented_code": "@@ -38,6 +39,11 @@ class LSTM : public Layer\n     Mat weight_hc_data;\n     Mat weight_xc_data;\n     Mat bias_c_data;\n+\n+    mutable Mat hidden;\n+    mutable Mat cell;",
+        "comment_created_at": "2020-06-27T15:13:52+00:00",
+        "comment_author": "nihui",
+        "comment_body": "I suggest adding the hidden / cell blobs like how onnx does\r\nhttps://github.com/onnx/onnx/blob/master/docs/Operators.md#LSTM\r\ninitial_h initial_c\r\nY_h Y_c\r\n\r\nThe data race happens when two Extractor instances of the same LSTM model are running concurrently. Weight data can be shared as they are always readonly.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "446542398",
+        "repo_full_name": "Tencent/ncnn",
+        "pr_number": 1881,
+        "pr_file": "src/layer/lstm.h",
+        "discussion_id": "446265310",
+        "commented_code": "@@ -38,6 +39,11 @@ class LSTM : public Layer\n     Mat weight_hc_data;\n     Mat weight_xc_data;\n     Mat bias_c_data;\n+\n+    mutable Mat hidden;\n+    mutable Mat cell;",
+        "comment_created_at": "2020-06-27T16:24:41+00:00",
+        "comment_author": "Timen",
+        "comment_body": "I see i had not considered that use case, in that case i will have to propagate the state blobs myself. I will rework the pr to include a state input and output.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "336341405",
+    "pr_number": 1307,
+    "pr_file": "src/layer/arm/convolution_1x1_int8.h",
+    "created_at": "2019-10-18T06:50:17+00:00",
+    "commented_code": "outptr0++;\n         }\n     }        \n+#endif\n }\n \n \n static void conv1x1s1_sgemm_int8_requant_neon(const Mat &bottom_blob, Mat &top_blob, const Mat &kernel, const Mat &_bias, std::vector<float> scales_requant, const Option& opt)\n {\n+#ifndef __APPLE__\n+    const size_t n = bottom_blob.w * bottom_blob.h;\n+    const size_t k = bottom_blob.c;\n+    const size_t m = top_blob.c;\n+\n+    std::vector<float> scales_tm(m);\n+    std::vector<float> bias_tm(m);\n+    float* scales  = scales_tm.data();\n+    float* bias    = static_cast<float*>(_bias.data);\n+\n+    // outptr0[0]  = float2int8(((float)sum0 * scale_requant_in + bias0) * scale_requant_out);\n+    // the equation could convert to:\n+    //      out = float2int8( (float)sum * (scale_requant_in * scale_requant_out) + (bias * scale_requant_out) )\n+    // prebuild the list of (scales_requant_in*scale_requant_out)\n+    for (size_t i = 0; i < m; ++i)\n+    {\n+        scales_tm[i] = scales_requant[2*i] * scales_requant[2*i + 1];\n+    }\n+    if (_bias.data != NULL)\n+    {\n+        for (size_t i = 0; i < m; ++i)\n+        {\n+            bias_tm[i] = bias[i] * scales_requant[2*i + 1];\n+        }\n+        bias = bias_tm.data();\n+    }\n+\n+    ncnn::Mat bottom_tm(k * n, (size_t)1u, opt.workspace_allocator);\n+    {\n+        int8_t *pData    = static_cast<int8_t*>(bottom_blob.data);\n+        int8_t *pReorder = bottom_tm;\n+        reorder_b(pData, pReorder, k, n, bottom_blob.cstep);\n+    }\n+    \n+    // GEMM\n+    int8_t *pc = static_cast<int8_t*>(top_blob.data);\n+    int8_t *pa = static_cast<int8_t*>(kernel.data);\n+    int8_t *pb = bottom_tm;\n+    const size_t ldc = top_blob.cstep;\n+    size_t i = 0;\n+    #pragma omp parallel for num_threads(opt.num_threads)",
+    "repo_full_name": "Tencent/ncnn",
+    "discussion_comments": [
+      {
+        "comment_id": "336341405",
+        "repo_full_name": "Tencent/ncnn",
+        "pr_number": 1307,
+        "pr_file": "src/layer/arm/convolution_1x1_int8.h",
+        "discussion_id": "336341405",
+        "commented_code": "@@ -690,11 +760,94 @@ static void conv1x1s1_sgemm_int8_neon(const Mat& bottom_blob, Mat& top_blob, con\n             outptr0++;\n         }\n     }        \n+#endif\n }\n \n \n static void conv1x1s1_sgemm_int8_requant_neon(const Mat &bottom_blob, Mat &top_blob, const Mat &kernel, const Mat &_bias, std::vector<float> scales_requant, const Option& opt)\n {\n+#ifndef __APPLE__\n+    const size_t n = bottom_blob.w * bottom_blob.h;\n+    const size_t k = bottom_blob.c;\n+    const size_t m = top_blob.c;\n+\n+    std::vector<float> scales_tm(m);\n+    std::vector<float> bias_tm(m);\n+    float* scales  = scales_tm.data();\n+    float* bias    = static_cast<float*>(_bias.data);\n+\n+    // outptr0[0]  = float2int8(((float)sum0 * scale_requant_in + bias0) * scale_requant_out);\n+    // the equation could convert to:\n+    //      out = float2int8( (float)sum * (scale_requant_in * scale_requant_out) + (bias * scale_requant_out) )\n+    // prebuild the list of (scales_requant_in*scale_requant_out)\n+    for (size_t i = 0; i < m; ++i)\n+    {\n+        scales_tm[i] = scales_requant[2*i] * scales_requant[2*i + 1];\n+    }\n+    if (_bias.data != NULL)\n+    {\n+        for (size_t i = 0; i < m; ++i)\n+        {\n+            bias_tm[i] = bias[i] * scales_requant[2*i + 1];\n+        }\n+        bias = bias_tm.data();\n+    }\n+\n+    ncnn::Mat bottom_tm(k * n, (size_t)1u, opt.workspace_allocator);\n+    {\n+        int8_t *pData    = static_cast<int8_t*>(bottom_blob.data);\n+        int8_t *pReorder = bottom_tm;\n+        reorder_b(pData, pReorder, k, n, bottom_blob.cstep);\n+    }\n+    \n+    // GEMM\n+    int8_t *pc = static_cast<int8_t*>(top_blob.data);\n+    int8_t *pa = static_cast<int8_t*>(kernel.data);\n+    int8_t *pb = bottom_tm;\n+    const size_t ldc = top_blob.cstep;\n+    size_t i = 0;\n+    #pragma omp parallel for num_threads(opt.num_threads)",
+        "comment_created_at": "2019-10-18T06:50:17+00:00",
+        "comment_author": "nihui",
+        "comment_body": "because scales, bias, pc and pa pointer changes among iterations, this is a race condition",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2202405592",
+    "pr_number": 6176,
+    "pr_file": "src/platform.h.in",
+    "created_at": "2025-07-12T07:12:28+00:00",
+    "commented_code": "class NCNN_EXPORT Mutex\n {\n public:\n-    Mutex() { InitializeSRWLock(&srwlock); }\n-    ~Mutex() {}\n-    void lock() { AcquireSRWLockExclusive(&srwlock); }\n-    void unlock() { ReleaseSRWLockExclusive(&srwlock); }\n+    public:\n+    Mutex() { InitializeCriticalSection(&cs); }\n+    ~Mutex() { DeleteCriticalSection(&cs); }\n+    void lock() { EnterCriticalSection(&cs); }\n+    void unlock() { LeaveCriticalSection(&cs); }\n private:\n     friend class ConditionVariable;\n-    // NOTE SRWLock is available from windows vista\n-    SRWLOCK srwlock;\n+    //use CRITICAL_SECTION to make it work on XP\n+    CRITICAL_SECTION cs;",
+    "repo_full_name": "Tencent/ncnn",
+    "discussion_comments": [
+      {
+        "comment_id": "2202405592",
+        "repo_full_name": "Tencent/ncnn",
+        "pr_number": 6176,
+        "pr_file": "src/platform.h.in",
+        "discussion_id": "2202405592",
+        "commented_code": "@@ -87,26 +90,32 @@ namespace ncnn {\n class NCNN_EXPORT Mutex\n {\n public:\n-    Mutex() { InitializeSRWLock(&srwlock); }\n-    ~Mutex() {}\n-    void lock() { AcquireSRWLockExclusive(&srwlock); }\n-    void unlock() { ReleaseSRWLockExclusive(&srwlock); }\n+    public:\n+    Mutex() { InitializeCriticalSection(&cs); }\n+    ~Mutex() { DeleteCriticalSection(&cs); }\n+    void lock() { EnterCriticalSection(&cs); }\n+    void unlock() { LeaveCriticalSection(&cs); }\n private:\n     friend class ConditionVariable;\n-    // NOTE SRWLock is available from windows vista\n-    SRWLOCK srwlock;\n+    //use CRITICAL_SECTION to make it work on XP\n+    CRITICAL_SECTION cs;",
+        "comment_created_at": "2025-07-12T07:12:28+00:00",
+        "comment_author": "nihui",
+        "comment_body": "Use macro guard to use the old-style Mutex and ConditionVariable implementation only for xp target",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2202547718",
+        "repo_full_name": "Tencent/ncnn",
+        "pr_number": 6176,
+        "pr_file": "src/platform.h.in",
+        "discussion_id": "2202405592",
+        "commented_code": "@@ -87,26 +90,32 @@ namespace ncnn {\n class NCNN_EXPORT Mutex\n {\n public:\n-    Mutex() { InitializeSRWLock(&srwlock); }\n-    ~Mutex() {}\n-    void lock() { AcquireSRWLockExclusive(&srwlock); }\n-    void unlock() { ReleaseSRWLockExclusive(&srwlock); }\n+    public:\n+    Mutex() { InitializeCriticalSection(&cs); }\n+    ~Mutex() { DeleteCriticalSection(&cs); }\n+    void lock() { EnterCriticalSection(&cs); }\n+    void unlock() { LeaveCriticalSection(&cs); }\n private:\n     friend class ConditionVariable;\n-    // NOTE SRWLock is available from windows vista\n-    SRWLOCK srwlock;\n+    //use CRITICAL_SECTION to make it work on XP\n+    CRITICAL_SECTION cs;",
+        "comment_created_at": "2025-07-12T11:44:13+00:00",
+        "comment_author": "nihui",
+        "comment_body": "@Sugar-Baby  Use macro guard to use the old-style Mutex and ConditionVariable implementation only for xp target",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

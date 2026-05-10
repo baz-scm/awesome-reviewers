@@ -1,0 +1,114 @@
+[
+  {
+    "discussion_id": "3072906916",
+    "pr_number": 686,
+    "pr_file": "nanochat/gpt.py",
+    "created_at": "2026-04-13T12:17:12+00:00",
+    "commented_code": "# Decaying x0 init: earlier layers get more input embedding blending\n         for i in range(n_layer):\n             self.x0_lambdas.data[i] = 0.20 - (0.15 * i / max(n_layer - 1, 1))\n+        torch.nn.init.zeros_(self.smear_lambda)",
+    "repo_full_name": "karpathy/nanochat",
+    "discussion_comments": [
+      {
+        "comment_id": "3072906916",
+        "repo_full_name": "karpathy/nanochat",
+        "pr_number": 686,
+        "pr_file": "nanochat/gpt.py",
+        "discussion_id": "3072906916",
+        "commented_code": "@@ -237,6 +237,9 @@ def init_weights(self):\n         # Decaying x0 init: earlier layers get more input embedding blending\n         for i in range(n_layer):\n             self.x0_lambdas.data[i] = 0.20 - (0.15 * i / max(n_layer - 1, 1))\n+        torch.nn.init.zeros_(self.smear_lambda)",
+        "comment_created_at": "2026-04-13T12:17:12+00:00",
+        "comment_author": "svlandeg",
+        "comment_body": "```suggestion\n\n        # Smear/backout scalars and smear gate must be explicitly initialized \n        torch.nn.init.zeros_(self.smear_lambda)\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2442752420",
+    "pr_number": 88,
+    "pr_file": "nanochat/dataloader.py",
+    "created_at": "2025-10-19T04:18:47+00:00",
+    "commented_code": "inputs_cpu = scratch[:-1].to(dtype=torch.int32)",
+    "repo_full_name": "karpathy/nanochat",
+    "discussion_comments": [
+      {
+        "comment_id": "2442752420",
+        "repo_full_name": "karpathy/nanochat",
+        "pr_number": 88,
+        "pr_file": "nanochat/dataloader.py",
+        "discussion_id": "2442752420",
+        "commented_code": "@@ -44,6 +44,6 @@ def document_batches():\n         inputs_cpu = scratch[:-1].to(dtype=torch.int32)",
+        "comment_created_at": "2025-10-19T04:18:47+00:00",
+        "comment_author": "qdrk",
+        "comment_body": "FYI: I'm getting the following error at L42\r\n\r\n!self.is_mps() INTERNAL ASSERT FAILED at \"/Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/native/TensorShape.cpp\":1414, please report a bug to PyTorch. as_strided_tensorimpl does not work with MPS; call self.as_strided(...) instead",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2443820981",
+        "repo_full_name": "karpathy/nanochat",
+        "pr_number": 88,
+        "pr_file": "nanochat/dataloader.py",
+        "discussion_id": "2442752420",
+        "commented_code": "@@ -44,6 +44,6 @@ def document_batches():\n         inputs_cpu = scratch[:-1].to(dtype=torch.int32)",
+        "comment_created_at": "2025-10-20T05:03:57+00:00",
+        "comment_author": "qdrk",
+        "comment_body": "To fix it, change L41-42 to\r\n\r\n```\r\ntokens = [token_buffer.popleft() for _ in range(needed_tokens)]\r\nscratch = torch.tensor(tokens, dtype=torch.int64, pin_memory=device.type == \"cuda\")\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2848255768",
+    "pr_number": 520,
+    "pr_file": "nanochat/gpt.py",
+    "created_at": "2026-02-24T16:33:19+00:00",
+    "commented_code": "self.register_buffer(\"cos\", cos, persistent=False) # persistent=False means it's not saved to the checkpoint\n         self.register_buffer(\"sin\", sin, persistent=False)\n \n+    def _ensure_rope_cache(self, needed_seq_len: int, device: torch.device):\n+        \"\"\"\n+        Ensure rotary embedding cache (cos/sin) is long enough for absolute positions [0, needed_seq_len).\n+\n+        We grow lazily to avoid crashes for long prompts / long KV-cache generation.\n+        Growth is amortized by rounding up to the next power of two.\n+\n+        NOTE: We avoid register_buffer() here; we simply overwrite the existing buffers.\n+        \"\"\"\n+        cur_len = self.cos.size(1)\n+        if needed_seq_len <= cur_len:\n+            return\n+\n+        # Safety: mutating buffers during torch.compile tracing is unsafe.\n+        try:\n+            import torch._dynamo\n+            if torch._dynamo.is_compiling():\n+                raise RuntimeError(\n+                    f\"RoPE cache too small during torch.compile (need {needed_seq_len}, have {cur_len}). \"\n+                    f\"Increase initial rotary_seq_len or disable compile for generation.\"\n+                )\n+        except Exception:\n+            # torch._dynamo may not exist in older torch; ignore.\n+            pass\n+\n+        # Next power-of-two >= needed_seq_len\n+        new_len = 1 << (needed_seq_len - 1).bit_length()\n+\n+        head_dim = self.config.n_embd // self.config.n_head\n+        cos, sin = self._precompute_rotary_embeddings(\n+            seq_len=new_len, head_dim=head_dim, device=device)\n+\n+        # Preserve dtype/device invariants (precompute returns bf16 already)\n+        cos = cos.to(dtype=self.cos.dtype, device=device)\n+        sin = sin.to(dtype=self.sin.dtype, device=device)\n+\n+        # Overwrite existing registered buffers (no re-register)",
+    "repo_full_name": "karpathy/nanochat",
+    "discussion_comments": [
+      {
+        "comment_id": "2848255768",
+        "repo_full_name": "karpathy/nanochat",
+        "pr_number": 520,
+        "pr_file": "nanochat/gpt.py",
+        "discussion_id": "2848255768",
+        "commented_code": "@@ -185,6 +185,47 @@ def __init__(self, config, pad_vocab_size_to=64):\n         self.register_buffer(\"cos\", cos, persistent=False) # persistent=False means it's not saved to the checkpoint\n         self.register_buffer(\"sin\", sin, persistent=False)\n \n+    def _ensure_rope_cache(self, needed_seq_len: int, device: torch.device):\n+        \"\"\"\n+        Ensure rotary embedding cache (cos/sin) is long enough for absolute positions [0, needed_seq_len).\n+\n+        We grow lazily to avoid crashes for long prompts / long KV-cache generation.\n+        Growth is amortized by rounding up to the next power of two.\n+\n+        NOTE: We avoid register_buffer() here; we simply overwrite the existing buffers.\n+        \"\"\"\n+        cur_len = self.cos.size(1)\n+        if needed_seq_len <= cur_len:\n+            return\n+\n+        # Safety: mutating buffers during torch.compile tracing is unsafe.\n+        try:\n+            import torch._dynamo\n+            if torch._dynamo.is_compiling():\n+                raise RuntimeError(\n+                    f\"RoPE cache too small during torch.compile (need {needed_seq_len}, have {cur_len}). \"\n+                    f\"Increase initial rotary_seq_len or disable compile for generation.\"\n+                )\n+        except Exception:\n+            # torch._dynamo may not exist in older torch; ignore.\n+            pass\n+\n+        # Next power-of-two >= needed_seq_len\n+        new_len = 1 << (needed_seq_len - 1).bit_length()\n+\n+        head_dim = self.config.n_embd // self.config.n_head\n+        cos, sin = self._precompute_rotary_embeddings(\n+            seq_len=new_len, head_dim=head_dim, device=device)\n+\n+        # Preserve dtype/device invariants (precompute returns bf16 already)\n+        cos = cos.to(dtype=self.cos.dtype, device=device)\n+        sin = sin.to(dtype=self.sin.dtype, device=device)\n+\n+        # Overwrite existing registered buffers (no re-register)",
+        "comment_created_at": "2026-02-24T16:33:19+00:00",
+        "comment_author": "svlandeg",
+        "comment_body": "Why not? (they already are declared as `persistent=False`)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2849732032",
+        "repo_full_name": "karpathy/nanochat",
+        "pr_number": 520,
+        "pr_file": "nanochat/gpt.py",
+        "discussion_id": "2848255768",
+        "commented_code": "@@ -185,6 +185,47 @@ def __init__(self, config, pad_vocab_size_to=64):\n         self.register_buffer(\"cos\", cos, persistent=False) # persistent=False means it's not saved to the checkpoint\n         self.register_buffer(\"sin\", sin, persistent=False)\n \n+    def _ensure_rope_cache(self, needed_seq_len: int, device: torch.device):\n+        \"\"\"\n+        Ensure rotary embedding cache (cos/sin) is long enough for absolute positions [0, needed_seq_len).\n+\n+        We grow lazily to avoid crashes for long prompts / long KV-cache generation.\n+        Growth is amortized by rounding up to the next power of two.\n+\n+        NOTE: We avoid register_buffer() here; we simply overwrite the existing buffers.\n+        \"\"\"\n+        cur_len = self.cos.size(1)\n+        if needed_seq_len <= cur_len:\n+            return\n+\n+        # Safety: mutating buffers during torch.compile tracing is unsafe.\n+        try:\n+            import torch._dynamo\n+            if torch._dynamo.is_compiling():\n+                raise RuntimeError(\n+                    f\"RoPE cache too small during torch.compile (need {needed_seq_len}, have {cur_len}). \"\n+                    f\"Increase initial rotary_seq_len or disable compile for generation.\"\n+                )\n+        except Exception:\n+            # torch._dynamo may not exist in older torch; ignore.\n+            pass\n+\n+        # Next power-of-two >= needed_seq_len\n+        new_len = 1 << (needed_seq_len - 1).bit_length()\n+\n+        head_dim = self.config.n_embd // self.config.n_head\n+        cos, sin = self._precompute_rotary_embeddings(\n+            seq_len=new_len, head_dim=head_dim, device=device)\n+\n+        # Preserve dtype/device invariants (precompute returns bf16 already)\n+        cos = cos.to(dtype=self.cos.dtype, device=device)\n+        sin = sin.to(dtype=self.sin.dtype, device=device)\n+\n+        # Overwrite existing registered buffers (no re-register)",
+        "comment_created_at": "2026-02-24T21:52:24+00:00",
+        "comment_author": "dipeshbabu",
+        "comment_body": "Fair point. I\u2019m not avoiding `register_buffer` for persistence reasons (`persistent=False` is already correct). I kept simple assignment (`self.cos = cos`, `self.sin = sin`) to overwrite the existing buffers in place without re-registering names. I\u2019ll clarify that in the comment or remove the comment if it\u2019s more distracting than helpful.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2450991591",
+    "pr_number": 145,
+    "pr_file": "nanochat/gpt.py",
+    "created_at": "2025-10-22T08:50:41+00:00",
+    "commented_code": "def norm(x):\n     # Purely functional rmsnorm with no learnable params\n-    return F.rms_norm(x, (x.size(-1),))\n+    # Fallback for older PyTorch versions that don't have F.rms_norm\n+    if hasattr(F, 'rms_norm'):\n+        return F.rms_norm(x, (x.size(-1),))\n+    else:",
+    "repo_full_name": "karpathy/nanochat",
+    "discussion_comments": [
+      {
+        "comment_id": "2450991591",
+        "repo_full_name": "karpathy/nanochat",
+        "pr_number": 145,
+        "pr_file": "nanochat/gpt.py",
+        "discussion_id": "2450991591",
+        "commented_code": "@@ -35,7 +35,13 @@ class GPTConfig:\n \n def norm(x):\n     # Purely functional rmsnorm with no learnable params\n-    return F.rms_norm(x, (x.size(-1),))\n+    # Fallback for older PyTorch versions that don't have F.rms_norm\n+    if hasattr(F, 'rms_norm'):\n+        return F.rms_norm(x, (x.size(-1),))\n+    else:",
+        "comment_created_at": "2025-10-22T08:50:41+00:00",
+        "comment_author": "burtenshaw",
+        "comment_body": "Could you try this out with the latest change son `main`? Mainly the `toml`. We should be able to use a `torch` version with `F.rms_norm`.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

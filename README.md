@@ -45,65 +45,12 @@ Awesome Reviewers is positioned as a **Skills Library**:
 
 No installation is required for website usage. You can also inspect prompt sources directly in this repository under `_reviewers/`.
 
-## CLI: Export Reviewers to Claude Skills
+## Deprecated: Export Reviewers to Claude Skills CLI
 
-This repository ships with a Python CLI (`tools/awesome2claude.py`) that converts prompts in `_reviewers/` into [Anthropic Claude Skills](https://github.com/anthropics/claude-skills) folders. The tool can clone/update the Awesome Reviewers repository, parse each prompt’s YAML front matter, and generate a Claude-compatible `SKILL.md` for every reviewer.
+The `tools/awesome2claude.py` exporter has been **deprecated** and is no longer supported.
 
-### Installation
-
-```bash
-pip install click pyyaml
-```
-
-### Usage
-
-```bash
-python tools/awesome2claude.py --output-dir ./claude_skills
-```
-
-Key options:
-
-- `--overwrite` – replace any existing skill directories in the output folder.
-- `--group-by-category` – nest skills under category subdirectories.
-- `--single <filename>` – convert only a specific prompt (useful for testing).
-- `--limit N` – process only the first *N* prompts (after sorting), handy for generating a sample set.
-- `--dry-run` – preview the conversion without writing files.
-- `--project-dir <path>` – scan a local project for package manager manifests and emit a combined skill that stitches together every Awesome Reviewer matching a detected dependency.
-- `--combined-skill-slug`, `--combined-skill-title`, `--combined-skill-description` – customize directory name, title, and description for the combined skill.
-
-Run `python tools/awesome2claude.py --help` for the full list of options.
-
-### Skill-oriented export behavior
-
-Generated `SKILL.md` files include a standardized wrapper to improve agent execution consistency:
-
-- `When to apply`
-- `Review checklist` (derived from bullets/numbered steps in the source prompt when available)
-- `Expected output`
-- `Source guidance` (the original reviewer text)
-
-### Audit reviewer readiness for skill use
-
-Use the audit helper to quantify how skill-ready the `_reviewers/` corpus is:
-
-```bash
-python tools/reviewer_skill_audit.py --write-report docs/reviewer-skill-readiness.md
-```
-
-### Generate a project-specific combined skill
-
-When you supply `--project-dir`, the CLI walks the directory tree looking for popular package manager lockfiles (npm, pnpm, Yarn, Poetry, Pipenv, RubyGems, Cargo, Go modules, Composer, Pub, NuGet, etc.). Discovered dependencies are normalized and matched with the Awesome Reviewers catalog, then merged into a **single Claude skill**.
-
-Example:
-
-```bash
-python tools/awesome2claude.py \
-  --output-dir ./claude_skills \
-  --overwrite \
-  --project-dir ~/code/my-service
-```
-
-After the run, check `./claude_skills/project-dependencies/SKILL.md` (or your configured slug) for the generated combined skill.
+- The command is intentionally disabled and will exit with a deprecation message.
+- Please consume skills directly from this repository (`_reviewers/`) and the website instead.
 
 ## Acknowledgments
 

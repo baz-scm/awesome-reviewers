@@ -1,0 +1,378 @@
+[
+  {
+    "discussion_id": "3049041556",
+    "pr_number": 10253,
+    "pr_file": "celery/worker/consumer/consumer.py",
+    "created_at": "2026-04-08T11:58:11+00:00",
+    "commented_code": "warnings.warn(CANCEL_TASKS_BY_DEFAULT, CPendingDeprecationWarning)\n \n         if self.app.conf.worker_enable_prefetch_count_reduction:\n-            self.initial_prefetch_count = max(\n-                self.prefetch_multiplier,\n-                self.max_prefetch_count - len(tuple(active_requests)) * self.prefetch_multiplier\n-            )\n-\n-            self._maximum_prefetch_restored = self.initial_prefetch_count == self.max_prefetch_count\n-            if not self._maximum_prefetch_restored:\n+            # Per-consumer QoS mode (quorum queues, apply_global=False) does\n+            # not propagate ``basic.qos`` updates to already-running consumers\n+            # so the gradual restoration step in\n+            # ``_restore_prefetch_count_after_connection_restart`` is a no-op\n+            # and the worker would stay stuck at the reduced count after one\n+            # reconnect. Skip the reduction entirely in that mode. See #9512.\n+            if self.qos_global is False:\n                 logger.info(\n-                    f\"Temporarily reducing the prefetch count to {self.initial_prefetch_count} to avoid \"\n-                    f\"over-fetching since {len(tuple(active_requests))} tasks are currently being processed.\n\"\n-                    f\"The prefetch count will be gradually restored to {self.max_prefetch_count} as the tasks \"\n-                    \"complete processing.\"\n+                    \"Skipping prefetch count reduction after connection \"\n+                    \"restart because per-consumer QoS (apply_global=False) \"\n+                    \"is in effect and broker-side prefetch updates would \"\n+                    \"not reach the running consumer.\"\n+                )\n+            else:\n+                self.initial_prefetch_count = max(\n+                    self.prefetch_multiplier,\n+                    self.max_prefetch_count - len(tuple(active_requests)) * self.prefetch_multiplier\n                 )\n \n+                self._maximum_prefetch_restored = self.initial_prefetch_count == self.max_prefetch_count\n+                if not self._maximum_prefetch_restored:\n+                    logger.info(\n+                        f\"Temporarily reducing the prefetch count to {self.initial_prefetch_count} to avoid \"\n+                        f\"over-fetching since {len(tuple(active_requests))} tasks are currently being processed.\n\"",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "3051149193",
+        "repo_full_name": "celery/celery",
+        "pr_number": 10253,
+        "pr_file": "celery/worker/consumer/consumer.py",
+        "discussion_id": "3049041556",
+        "commented_code": "@@ -417,20 +423,34 @@ def on_connection_error_after_connected(self, exc):\n             warnings.warn(CANCEL_TASKS_BY_DEFAULT, CPendingDeprecationWarning)\n \n         if self.app.conf.worker_enable_prefetch_count_reduction:\n-            self.initial_prefetch_count = max(\n-                self.prefetch_multiplier,\n-                self.max_prefetch_count - len(tuple(active_requests)) * self.prefetch_multiplier\n-            )\n-\n-            self._maximum_prefetch_restored = self.initial_prefetch_count == self.max_prefetch_count\n-            if not self._maximum_prefetch_restored:\n+            # Per-consumer QoS mode (quorum queues, apply_global=False) does\n+            # not propagate ``basic.qos`` updates to already-running consumers\n+            # so the gradual restoration step in\n+            # ``_restore_prefetch_count_after_connection_restart`` is a no-op\n+            # and the worker would stay stuck at the reduced count after one\n+            # reconnect. Skip the reduction entirely in that mode. See #9512.\n+            if self.qos_global is False:\n                 logger.info(\n-                    f\"Temporarily reducing the prefetch count to {self.initial_prefetch_count} to avoid \"\n-                    f\"over-fetching since {len(tuple(active_requests))} tasks are currently being processed.\\n\"\n-                    f\"The prefetch count will be gradually restored to {self.max_prefetch_count} as the tasks \"\n-                    \"complete processing.\"\n+                    \"Skipping prefetch count reduction after connection \"\n+                    \"restart because per-consumer QoS (apply_global=False) \"\n+                    \"is in effect and broker-side prefetch updates would \"\n+                    \"not reach the running consumer.\"\n+                )\n+            else:\n+                self.initial_prefetch_count = max(\n+                    self.prefetch_multiplier,\n+                    self.max_prefetch_count - len(tuple(active_requests)) * self.prefetch_multiplier\n                 )\n \n+                self._maximum_prefetch_restored = self.initial_prefetch_count == self.max_prefetch_count\n+                if not self._maximum_prefetch_restored:\n+                    logger.info(\n+                        f\"Temporarily reducing the prefetch count to {self.initial_prefetch_count} to avoid \"\n+                        f\"over-fetching since {len(tuple(active_requests))} tasks are currently being processed.\\n\"",
+        "comment_created_at": "2026-04-08T11:58:11+00:00",
+        "comment_author": "aurangzaib048",
+        "comment_body": "Good catch, addressed in 2bd5f3b44.\n\nReplaced `len(tuple(active_requests))` with a single `active_count = len(active_requests)` snapshot that's reused in both the reduction math and the log message. `active_requests` is a `WeakSet` so `len()` is safe and O(1), and this also guarantees the two values can't drift.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2940723316",
+    "pr_number": 10167,
+    "pr_file": "celery/beat.py",
+    "created_at": "2026-03-16T14:25:06+00:00",
+    "commented_code": "adjust = self.adjust\n         max_interval = self.max_interval\n \n-        if (self._heap is None or\n-                not self.schedules_equal(self.old_schedulers, self.schedule)):\n-            self.old_schedulers = copy.copy(self.schedule)\n+        # Backward compatibility: custom scheduler implementations may override\n+        # schedules_equal() and expect tick() to call it to detect updates.\n+        if self._has_custom_schedules_equal():\n+            if (self._last_schedule is None or\n+                    not self.schedules_equal(self._last_schedule, self.schedule)):\n+                self._heap_invalidated = True\n+\n+            try:\n+                self._last_schedule = copy.copy(self.schedule)\n+            except Exception:",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "2940723316",
+        "repo_full_name": "celery/celery",
+        "pr_number": 10167,
+        "pr_file": "celery/beat.py",
+        "discussion_id": "2940723316",
+        "commented_code": "@@ -335,10 +354,26 @@ def tick(self, event_t=event_t, min=min, heappop=heapq.heappop,\n         adjust = self.adjust\n         max_interval = self.max_interval\n \n-        if (self._heap is None or\n-                not self.schedules_equal(self.old_schedulers, self.schedule)):\n-            self.old_schedulers = copy.copy(self.schedule)\n+        # Backward compatibility: custom scheduler implementations may override\n+        # schedules_equal() and expect tick() to call it to detect updates.\n+        if self._has_custom_schedules_equal():\n+            if (self._last_schedule is None or\n+                    not self.schedules_equal(self._last_schedule, self.schedule)):\n+                self._heap_invalidated = True\n+\n+            try:\n+                self._last_schedule = copy.copy(self.schedule)\n+            except Exception:",
+        "comment_created_at": "2026-03-16T14:25:06+00:00",
+        "comment_author": "ChickenBenny",
+        "comment_body": "Great work on the benchmarks! The flag-based approach is a huge improvement for the common case.\n\nOne tweak regarding the copy.copy behavior: for subclasses overriding schedules_equal, the copy now happens unconditionally on every tick instead of only when the schedule changes.\n\nWe can restore the original behavior by simply moving it inside the condition:\n```python\nif self._has_custom_schedules_equal():\n     if (self._last_schedule is None or\n             not self.schedules_equal(self._last_schedule, self.schedule)):\n         self._heap_invalidated = True\n         try:\n             self._last_schedule = copy.copy(self.schedule)  # only on change\n         except Exception:\n             self._last_schedule = None\n             self._heap_invalidated = True\n```\n\nAlso, two quick thoughts on edge cases:\n- `old_schedulers`: For default schedulers, this now stays None forever. Previously it held a dict after the first tick. Any external introspection tools expecting a dict might break here.\n\n- Flag reset placement: `_heap_invalidated = False` lives in `tick()`. If something calls `populate_heap()` directly (like tests/subclasses), the flag is left dirty and forces a rebuild on the next tick. It's probably safer to move the reset into `populate_heap()` itself.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2187103952",
+    "pr_number": 9799,
+    "pr_file": "celery/app/trace.py",
+    "created_at": "2025-07-05T11:57:04+00:00",
+    "commented_code": "'name': get_task_name(req, task.name),\n                 'exc': str(reason),\n             })\n+            # Note: We return einfo, so we can't clean it up here\n+            # The calling function is responsible for cleanup\n             return einfo\n         finally:\n-            del tb\n+            # MEMORY LEAK FIX: Clean up direct traceback reference to prevent\n+            # retention of frame objects and their local variables (Issue #8882)\n+            if tb is not None:\n+                del tb\n \n     def handle_failure(self, task, req, store_errors=True, call_errbacks=True):\n         \"\"\"Handle exception.\"\"\"\n         orig_exc = self.retval\n+        tb_ref = None\n \n-        exc = get_pickleable_exception(orig_exc)\n-        if exc.__traceback__ is None:\n-            # `get_pickleable_exception` may have created a new exception without\n-            # a traceback.\n-            _, _, exc.__traceback__ = sys.exc_info()\n-\n-        exc_type = get_pickleable_etype(type(orig_exc))\n-\n-        # make sure we only send pickleable exceptions back to parent.\n-        einfo = ExceptionInfo(exc_info=(exc_type, exc, exc.__traceback__))\n-\n-        task.backend.mark_as_failure(\n-            req.id, exc, einfo.traceback,\n-            request=req, store_result=store_errors,\n-            call_errbacks=call_errbacks,\n-        )\n-\n-        task.on_failure(exc, req.id, req.args, req.kwargs, einfo)\n-        signals.task_failure.send(sender=task, task_id=req.id,\n-                                  exception=exc, args=req.args,\n-                                  kwargs=req.kwargs,\n-                                  traceback=exc.__traceback__,\n-                                  einfo=einfo)\n-        self._log_error(task, req, einfo)\n-        return einfo\n+        try:\n+            exc = get_pickleable_exception(orig_exc)\n+            if exc.__traceback__ is None:\n+                # `get_pickleable_exception` may have created a new exception without\n+                # a traceback.\n+                _, _, tb_ref = sys.exc_info()\n+                exc.__traceback__ = tb_ref",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "2187157321",
+        "repo_full_name": "celery/celery",
+        "pr_number": 9799,
+        "pr_file": "celery/app/trace.py",
+        "discussion_id": "2187103952",
+        "commented_code": "@@ -205,39 +206,54 @@ def handle_retry(self, task, req, store_errors=True, **kwargs):\n                 'name': get_task_name(req, task.name),\n                 'exc': str(reason),\n             })\n+            # Note: We return einfo, so we can't clean it up here\n+            # The calling function is responsible for cleanup\n             return einfo\n         finally:\n-            del tb\n+            # MEMORY LEAK FIX: Clean up direct traceback reference to prevent\n+            # retention of frame objects and their local variables (Issue #8882)\n+            if tb is not None:\n+                del tb\n \n     def handle_failure(self, task, req, store_errors=True, call_errbacks=True):\n         \"\"\"Handle exception.\"\"\"\n         orig_exc = self.retval\n+        tb_ref = None\n \n-        exc = get_pickleable_exception(orig_exc)\n-        if exc.__traceback__ is None:\n-            # `get_pickleable_exception` may have created a new exception without\n-            # a traceback.\n-            _, _, exc.__traceback__ = sys.exc_info()\n-\n-        exc_type = get_pickleable_etype(type(orig_exc))\n-\n-        # make sure we only send pickleable exceptions back to parent.\n-        einfo = ExceptionInfo(exc_info=(exc_type, exc, exc.__traceback__))\n-\n-        task.backend.mark_as_failure(\n-            req.id, exc, einfo.traceback,\n-            request=req, store_result=store_errors,\n-            call_errbacks=call_errbacks,\n-        )\n-\n-        task.on_failure(exc, req.id, req.args, req.kwargs, einfo)\n-        signals.task_failure.send(sender=task, task_id=req.id,\n-                                  exception=exc, args=req.args,\n-                                  kwargs=req.kwargs,\n-                                  traceback=exc.__traceback__,\n-                                  einfo=einfo)\n-        self._log_error(task, req, einfo)\n-        return einfo\n+        try:\n+            exc = get_pickleable_exception(orig_exc)\n+            if exc.__traceback__ is None:\n+                # `get_pickleable_exception` may have created a new exception without\n+                # a traceback.\n+                _, _, tb_ref = sys.exc_info()\n+                exc.__traceback__ = tb_ref",
+        "comment_created_at": "2025-07-05T11:57:04+00:00",
+        "comment_author": "jaiganeshs21",
+        "comment_body": "Fixed it - https://github.com/celery/celery/pull/9799/commits/ddf25b8ed7afcca3b2ace2deb038d524485683ed\r\n\r\nAdded `traceback_clear(exc)` to `handle_failure(`), following the same pattern used for `Reject`, `Ignore`, `Retry`, `Exception`, and `EncodeError` handling in the trace module.\r\n\r\nThis works because `traceback_clear(exc`) calls `tb.tb_frame.clear()` on each frame to release local variables while preserving the traceback chain for logging. Tests also cover this.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2187350584",
+    "pr_number": 9799,
+    "pr_file": "celery/app/trace.py",
+    "created_at": "2025-07-05T15:10:19+00:00",
+    "commented_code": "I, R = Info(REJECTED, exc), ExceptionInfo(internal=True)\n                     state, retval = I.state, I.retval\n                     I.handle_reject(task, task_request)\n+                    # MEMORY LEAK FIX: Clear traceback frames to prevent memory retention (Issue #8882)\n                     traceback_clear(exc)\n                 except Ignore as exc:\n                     I, R = Info(IGNORED, exc), ExceptionInfo(internal=True)\n                     state, retval = I.state, I.retval\n                     I.handle_ignore(task, task_request)\n+                    # MEMORY LEAK FIX: Clear traceback frames to prevent memory retention (Issue #8882)\n                     traceback_clear(exc)\n                 except Retry as exc:\n                     I, R, state, retval = on_error(\n                         task_request, exc, RETRY, call_errbacks=False)\n+                    # MEMORY LEAK FIX: Clear traceback frames to prevent memory retention (Issue #8882)\n                     traceback_clear(exc)\n                 except Exception as exc:\n                     I, R, state, retval = on_error(task_request, exc)\n+                    # MEMORY LEAK FIX: Clear traceback frames to prevent memory retention (Issue #8882)\n                     traceback_clear(exc)",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "2187358947",
+        "repo_full_name": "celery/celery",
+        "pr_number": 9799,
+        "pr_file": "celery/app/trace.py",
+        "discussion_id": "2187350584",
+        "commented_code": "@@ -456,18 +482,22 @@ def trace_task(uuid, args, kwargs, request=None):\n                     I, R = Info(REJECTED, exc), ExceptionInfo(internal=True)\n                     state, retval = I.state, I.retval\n                     I.handle_reject(task, task_request)\n+                    # MEMORY LEAK FIX: Clear traceback frames to prevent memory retention (Issue #8882)\n                     traceback_clear(exc)\n                 except Ignore as exc:\n                     I, R = Info(IGNORED, exc), ExceptionInfo(internal=True)\n                     state, retval = I.state, I.retval\n                     I.handle_ignore(task, task_request)\n+                    # MEMORY LEAK FIX: Clear traceback frames to prevent memory retention (Issue #8882)\n                     traceback_clear(exc)\n                 except Retry as exc:\n                     I, R, state, retval = on_error(\n                         task_request, exc, RETRY, call_errbacks=False)\n+                    # MEMORY LEAK FIX: Clear traceback frames to prevent memory retention (Issue #8882)\n                     traceback_clear(exc)\n                 except Exception as exc:\n                     I, R, state, retval = on_error(task_request, exc)\n+                    # MEMORY LEAK FIX: Clear traceback frames to prevent memory retention (Issue #8882)\n                     traceback_clear(exc)",
+        "comment_created_at": "2025-07-05T15:10:19+00:00",
+        "comment_author": "jaiganeshs21",
+        "comment_body": "There is no code duplication. The current implementation is similar to what Copilot suggested.\r\n\r\nThe traceback_clear function was defined and is called in the exception handler.\r\n\r\nWe have now added a comment in every place where this function is called to explain that it is used to prevent memory retention, making it easier for code contributors to understand.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2187362922",
+        "repo_full_name": "celery/celery",
+        "pr_number": 9799,
+        "pr_file": "celery/app/trace.py",
+        "discussion_id": "2187350584",
+        "commented_code": "@@ -456,18 +482,22 @@ def trace_task(uuid, args, kwargs, request=None):\n                     I, R = Info(REJECTED, exc), ExceptionInfo(internal=True)\n                     state, retval = I.state, I.retval\n                     I.handle_reject(task, task_request)\n+                    # MEMORY LEAK FIX: Clear traceback frames to prevent memory retention (Issue #8882)\n                     traceback_clear(exc)\n                 except Ignore as exc:\n                     I, R = Info(IGNORED, exc), ExceptionInfo(internal=True)\n                     state, retval = I.state, I.retval\n                     I.handle_ignore(task, task_request)\n+                    # MEMORY LEAK FIX: Clear traceback frames to prevent memory retention (Issue #8882)\n                     traceback_clear(exc)\n                 except Retry as exc:\n                     I, R, state, retval = on_error(\n                         task_request, exc, RETRY, call_errbacks=False)\n+                    # MEMORY LEAK FIX: Clear traceback frames to prevent memory retention (Issue #8882)\n                     traceback_clear(exc)\n                 except Exception as exc:\n                     I, R, state, retval = on_error(task_request, exc)\n+                    # MEMORY LEAK FIX: Clear traceback frames to prevent memory retention (Issue #8882)\n                     traceback_clear(exc)",
+        "comment_created_at": "2025-07-05T15:15:00+00:00",
+        "comment_author": "auvipy",
+        "comment_body": "they make a lot of wrong suggestion",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1097649972",
+    "pr_number": 8045,
+    "pr_file": "celery/canvas.py",
+    "created_at": "2023-02-06T16:51:44+00:00",
+    "commented_code": "headers (Dict): Stamps that should be added to headers.\n         \"\"\"\n         self.stamp_links(visitor, **headers)\n-\n-        headers = headers.copy()\n+        headers = deepcopy(headers)\n+        visitor_headers = None\n         if visitor is not None:\n-            visitor_headers = visitor.on_signature(self, **headers)\n+            visitor_headers = visitor.on_signature(self, **headers) or {}\n+        headers = self._stamp_headers(visitor_headers, **headers)\n+        return self.set(**headers)\n+\n+    def _stamp_headers(self, visitor_headers=None, **headers):\n+        headers = deepcopy(headers)\n+        if visitor_headers is not None:\n+            visitor_headers = visitor_headers or {}\n             if \"stamped_headers\" not in visitor_headers:\n                 visitor_headers[\"stamped_headers\"] = list(visitor_headers.keys())\n-            _merge_dictionaries(headers, visitor_headers)\n+            _merge_dictionaries(headers, visitor_headers, aggregate_duplicates=False)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n         else:\n-            headers[\"stamped_headers\"] = [header for header in headers.keys() if header not in self.options]\n-            _merge_dictionaries(headers, self.options)\n+            stamped_headers = [\n+                header for header in headers.keys()\n+                if all([\n+                    header != \"stamped_headers\",\n+                    header in self.options.get(\"stamped_headers\", [])\n+                ])\n+            ]\n+            if \"stamped_headers\" in headers:\n+                headers[\"stamped_headers\"].extend(stamped_headers)\n+            else:\n+                headers[\"stamped_headers\"] = stamped_headers\n+            for stamp in headers.keys():\n+                if stamp != \"stamped_headers\" and stamp not in headers[\"stamped_headers\"]:\n+                    headers[\"stamped_headers\"].append(stamp)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "1097649972",
+        "repo_full_name": "celery/celery",
+        "pr_number": 8045,
+        "pr_file": "celery/canvas.py",
+        "discussion_id": "1097649972",
+        "commented_code": "@@ -582,22 +553,47 @@ def stamp(self, visitor=None, **headers):\n             headers (Dict): Stamps that should be added to headers.\n         \"\"\"\n         self.stamp_links(visitor, **headers)\n-\n-        headers = headers.copy()\n+        headers = deepcopy(headers)\n+        visitor_headers = None\n         if visitor is not None:\n-            visitor_headers = visitor.on_signature(self, **headers)\n+            visitor_headers = visitor.on_signature(self, **headers) or {}\n+        headers = self._stamp_headers(visitor_headers, **headers)\n+        return self.set(**headers)\n+\n+    def _stamp_headers(self, visitor_headers=None, **headers):\n+        headers = deepcopy(headers)\n+        if visitor_headers is not None:\n+            visitor_headers = visitor_headers or {}\n             if \"stamped_headers\" not in visitor_headers:\n                 visitor_headers[\"stamped_headers\"] = list(visitor_headers.keys())\n-            _merge_dictionaries(headers, visitor_headers)\n+            _merge_dictionaries(headers, visitor_headers, aggregate_duplicates=False)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n         else:\n-            headers[\"stamped_headers\"] = [header for header in headers.keys() if header not in self.options]\n-            _merge_dictionaries(headers, self.options)\n+            stamped_headers = [\n+                header for header in headers.keys()\n+                if all([\n+                    header != \"stamped_headers\",\n+                    header in self.options.get(\"stamped_headers\", [])\n+                ])\n+            ]\n+            if \"stamped_headers\" in headers:\n+                headers[\"stamped_headers\"].extend(stamped_headers)\n+            else:\n+                headers[\"stamped_headers\"] = stamped_headers\n+            for stamp in headers.keys():\n+                if stamp != \"stamped_headers\" and stamp not in headers[\"stamped_headers\"]:\n+                    headers[\"stamped_headers\"].append(stamp)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))",
+        "comment_created_at": "2023-02-06T16:51:44+00:00",
+        "comment_author": "thedrow",
+        "comment_body": "Isn't it more efficient to initialize a set before the loop and avoid the de-duplication process in the loop and instead convert the set to a list after it has been initialized.\r\n\r\n```python\r\nnew_stamped_headers = {stamp for stamp in itertools.chain(headers, headers[\"stamped_headers\"]) if stamp != \"stamped_headers\"}\r\nheaders[\"stamped_headers\"] = list(new_stamped_headers)\r\n```\r\n\r\nThat way you don't need the O(n) lookup to check if the stamped header already exists in the stamped headers list and instead, you'll get an O(1) lookup since that is one of the set's properties.\r\n`itertools.chain` creates an iterator from multiple iterables.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1097992136",
+        "repo_full_name": "celery/celery",
+        "pr_number": 8045,
+        "pr_file": "celery/canvas.py",
+        "discussion_id": "1097649972",
+        "commented_code": "@@ -582,22 +553,47 @@ def stamp(self, visitor=None, **headers):\n             headers (Dict): Stamps that should be added to headers.\n         \"\"\"\n         self.stamp_links(visitor, **headers)\n-\n-        headers = headers.copy()\n+        headers = deepcopy(headers)\n+        visitor_headers = None\n         if visitor is not None:\n-            visitor_headers = visitor.on_signature(self, **headers)\n+            visitor_headers = visitor.on_signature(self, **headers) or {}\n+        headers = self._stamp_headers(visitor_headers, **headers)\n+        return self.set(**headers)\n+\n+    def _stamp_headers(self, visitor_headers=None, **headers):\n+        headers = deepcopy(headers)\n+        if visitor_headers is not None:\n+            visitor_headers = visitor_headers or {}\n             if \"stamped_headers\" not in visitor_headers:\n                 visitor_headers[\"stamped_headers\"] = list(visitor_headers.keys())\n-            _merge_dictionaries(headers, visitor_headers)\n+            _merge_dictionaries(headers, visitor_headers, aggregate_duplicates=False)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n         else:\n-            headers[\"stamped_headers\"] = [header for header in headers.keys() if header not in self.options]\n-            _merge_dictionaries(headers, self.options)\n+            stamped_headers = [\n+                header for header in headers.keys()\n+                if all([\n+                    header != \"stamped_headers\",\n+                    header in self.options.get(\"stamped_headers\", [])\n+                ])\n+            ]\n+            if \"stamped_headers\" in headers:\n+                headers[\"stamped_headers\"].extend(stamped_headers)\n+            else:\n+                headers[\"stamped_headers\"] = stamped_headers\n+            for stamp in headers.keys():\n+                if stamp != \"stamped_headers\" and stamp not in headers[\"stamped_headers\"]:\n+                    headers[\"stamped_headers\"].append(stamp)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))",
+        "comment_created_at": "2023-02-06T22:38:19+00:00",
+        "comment_author": "Nusnus",
+        "comment_body": "I agree. Thank's for the code snippet.\r\nFix pushed.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1098082823",
+        "repo_full_name": "celery/celery",
+        "pr_number": 8045,
+        "pr_file": "celery/canvas.py",
+        "discussion_id": "1097649972",
+        "commented_code": "@@ -582,22 +553,47 @@ def stamp(self, visitor=None, **headers):\n             headers (Dict): Stamps that should be added to headers.\n         \"\"\"\n         self.stamp_links(visitor, **headers)\n-\n-        headers = headers.copy()\n+        headers = deepcopy(headers)\n+        visitor_headers = None\n         if visitor is not None:\n-            visitor_headers = visitor.on_signature(self, **headers)\n+            visitor_headers = visitor.on_signature(self, **headers) or {}\n+        headers = self._stamp_headers(visitor_headers, **headers)\n+        return self.set(**headers)\n+\n+    def _stamp_headers(self, visitor_headers=None, **headers):\n+        headers = deepcopy(headers)\n+        if visitor_headers is not None:\n+            visitor_headers = visitor_headers or {}\n             if \"stamped_headers\" not in visitor_headers:\n                 visitor_headers[\"stamped_headers\"] = list(visitor_headers.keys())\n-            _merge_dictionaries(headers, visitor_headers)\n+            _merge_dictionaries(headers, visitor_headers, aggregate_duplicates=False)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n         else:\n-            headers[\"stamped_headers\"] = [header for header in headers.keys() if header not in self.options]\n-            _merge_dictionaries(headers, self.options)\n+            stamped_headers = [\n+                header for header in headers.keys()\n+                if all([\n+                    header != \"stamped_headers\",\n+                    header in self.options.get(\"stamped_headers\", [])\n+                ])\n+            ]\n+            if \"stamped_headers\" in headers:\n+                headers[\"stamped_headers\"].extend(stamped_headers)\n+            else:\n+                headers[\"stamped_headers\"] = stamped_headers\n+            for stamp in headers.keys():\n+                if stamp != \"stamped_headers\" and stamp not in headers[\"stamped_headers\"]:\n+                    headers[\"stamped_headers\"].append(stamp)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))",
+        "comment_created_at": "2023-02-07T01:26:43+00:00",
+        "comment_author": "Nusnus",
+        "comment_body": "In the last version of this code it was completely removed so please review it again and ignore:\r\n> I agree. Thank's for the code snippet.\r\n> Fix pushed.\r\n\r\n@thedrow ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "786588432",
+    "pr_number": 7232,
+    "pr_file": "celery/backends/redis.py",
+    "created_at": "2022-01-18T09:59:45+00:00",
+    "commented_code": "self.backend.client.connection_pool.reset()\n         # task state might have changed when the connection was down so we\n         # retrieve meta for all subscribed tasks before going into pubsub mode\n-        metas = self.backend.client.mget(self.subscribed_to)\n-        metas = [meta for meta in metas if meta]\n-        for meta in metas:\n-            self.on_state_change(self._decode_result(meta), None)\n+        if self.subscribed_to:\n+            metas = self.backend.client.mget(self.subscribed_to)\n+            metas = [meta for meta in metas if meta]\n+            for meta in metas:\n+                self.on_state_change(self._decode_result(meta), None)\n         self._pubsub = self.backend.client.pubsub(\n             ignore_subscribe_messages=True,\n         )\n+        # subscribed_to maybe empty after on_state_change\n         if self.subscribed_to:\n             self._pubsub.subscribe(*self.subscribed_to)\n         else:\n-            self._pubsub.ping()",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "786588432",
+        "repo_full_name": "celery/celery",
+        "pr_number": 7232,
+        "pr_file": "celery/backends/redis.py",
+        "discussion_id": "786588432",
+        "commented_code": "@@ -103,17 +103,22 @@ def _reconnect_pubsub(self):\n         self.backend.client.connection_pool.reset()\n         # task state might have changed when the connection was down so we\n         # retrieve meta for all subscribed tasks before going into pubsub mode\n-        metas = self.backend.client.mget(self.subscribed_to)\n-        metas = [meta for meta in metas if meta]\n-        for meta in metas:\n-            self.on_state_change(self._decode_result(meta), None)\n+        if self.subscribed_to:\n+            metas = self.backend.client.mget(self.subscribed_to)\n+            metas = [meta for meta in metas if meta]\n+            for meta in metas:\n+                self.on_state_change(self._decode_result(meta), None)\n         self._pubsub = self.backend.client.pubsub(\n             ignore_subscribe_messages=True,\n         )\n+        # subscribed_to maybe empty after on_state_change\n         if self.subscribed_to:\n             self._pubsub.subscribe(*self.subscribed_to)\n         else:\n-            self._pubsub.ping()",
+        "comment_created_at": "2022-01-18T09:59:45+00:00",
+        "comment_author": "auvipy",
+        "comment_body": "what are the limitations of self._pubsub.ping() ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "786651165",
+        "repo_full_name": "celery/celery",
+        "pr_number": 7232,
+        "pr_file": "celery/backends/redis.py",
+        "discussion_id": "786588432",
+        "commented_code": "@@ -103,17 +103,22 @@ def _reconnect_pubsub(self):\n         self.backend.client.connection_pool.reset()\n         # task state might have changed when the connection was down so we\n         # retrieve meta for all subscribed tasks before going into pubsub mode\n-        metas = self.backend.client.mget(self.subscribed_to)\n-        metas = [meta for meta in metas if meta]\n-        for meta in metas:\n-            self.on_state_change(self._decode_result(meta), None)\n+        if self.subscribed_to:\n+            metas = self.backend.client.mget(self.subscribed_to)\n+            metas = [meta for meta in metas if meta]\n+            for meta in metas:\n+                self.on_state_change(self._decode_result(meta), None)\n         self._pubsub = self.backend.client.pubsub(\n             ignore_subscribe_messages=True,\n         )\n+        # subscribed_to maybe empty after on_state_change\n         if self.subscribed_to:\n             self._pubsub.subscribe(*self.subscribed_to)\n         else:\n-            self._pubsub.ping()",
+        "comment_created_at": "2022-01-18T11:17:47+00:00",
+        "comment_author": "uuip",
+        "comment_body": "pubsub will receive an empty reply b'$0\\r\\n\\r\\n\\0x00...', this has no effect on celery's functionality, but causes extra connections and memory usage.  The reason is not to send a ping, but when redis using hiredis to receive data, each connection has a 64 bytes bytearray. Without sending ping, there are no these empty replies. </br>\r\n This problem was found when analyzing the high memory after running high-frequency tasks for a long time----there are many bytearray(b'$0\\r\\n\\r\\n\\0x00...') takes up some memory.  \r\nThe unexpected growth in memory is related to redis-py, not celery.\r\nredis-py, I also made some changes [redis-py 3.5.3 less memory usage](https://github.com/uuip/redis-py/tree/3.5)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "786656290",
+        "repo_full_name": "celery/celery",
+        "pr_number": 7232,
+        "pr_file": "celery/backends/redis.py",
+        "discussion_id": "786588432",
+        "commented_code": "@@ -103,17 +103,22 @@ def _reconnect_pubsub(self):\n         self.backend.client.connection_pool.reset()\n         # task state might have changed when the connection was down so we\n         # retrieve meta for all subscribed tasks before going into pubsub mode\n-        metas = self.backend.client.mget(self.subscribed_to)\n-        metas = [meta for meta in metas if meta]\n-        for meta in metas:\n-            self.on_state_change(self._decode_result(meta), None)\n+        if self.subscribed_to:\n+            metas = self.backend.client.mget(self.subscribed_to)\n+            metas = [meta for meta in metas if meta]\n+            for meta in metas:\n+                self.on_state_change(self._decode_result(meta), None)\n         self._pubsub = self.backend.client.pubsub(\n             ignore_subscribe_messages=True,\n         )\n+        # subscribed_to maybe empty after on_state_change\n         if self.subscribed_to:\n             self._pubsub.subscribe(*self.subscribed_to)\n         else:\n-            self._pubsub.ping()",
+        "comment_created_at": "2022-01-18T11:24:25+00:00",
+        "comment_author": "auvipy",
+        "comment_body": "OK can you add additional unit tests for the changes?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "786923763",
+        "repo_full_name": "celery/celery",
+        "pr_number": 7232,
+        "pr_file": "celery/backends/redis.py",
+        "discussion_id": "786588432",
+        "commented_code": "@@ -103,17 +103,22 @@ def _reconnect_pubsub(self):\n         self.backend.client.connection_pool.reset()\n         # task state might have changed when the connection was down so we\n         # retrieve meta for all subscribed tasks before going into pubsub mode\n-        metas = self.backend.client.mget(self.subscribed_to)\n-        metas = [meta for meta in metas if meta]\n-        for meta in metas:\n-            self.on_state_change(self._decode_result(meta), None)\n+        if self.subscribed_to:\n+            metas = self.backend.client.mget(self.subscribed_to)\n+            metas = [meta for meta in metas if meta]\n+            for meta in metas:\n+                self.on_state_change(self._decode_result(meta), None)\n         self._pubsub = self.backend.client.pubsub(\n             ignore_subscribe_messages=True,\n         )\n+        # subscribed_to maybe empty after on_state_change\n         if self.subscribed_to:\n             self._pubsub.subscribe(*self.subscribed_to)\n         else:\n-            self._pubsub.ping()",
+        "comment_created_at": "2022-01-18T16:19:32+00:00",
+        "comment_author": "thedrow",
+        "comment_body": "A unit test that verifies this behavior would be nice to have.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2072845748",
+    "pr_number": 9686,
+    "pr_file": "celery/app/base.py",
+    "created_at": "2025-05-05T06:15:44+00:00",
+    "commented_code": "options, route_name or name, args, kwargs, task_type)\n \n         driver_type = self.producer_pool.connections.connection.transport.driver_type\n-        is_native_delayed_delivery = detect_quorum_queues(self, driver_type)[0]\n-        if is_native_delayed_delivery and options['queue'].exchange.type != 'direct':\n-            if eta:\n-                if isinstance(eta, str):\n-                    eta = isoparse(eta)\n-                countdown = (maybe_make_aware(eta) - self.now()).total_seconds()\n-\n-            if countdown:\n-                if countdown > 0:\n-                    routing_key = calculate_routing_key(int(countdown), options[\"queue\"].routing_key)\n-                    exchange = Exchange(\n-                        'celery_delayed_27',\n-                        type='topic',\n-                    )\n-                    del options['queue']\n-                    options['routing_key'] = routing_key\n-                    options['exchange'] = exchange\n-        elif is_native_delayed_delivery and options['queue'].exchange.type == 'direct':\n-            logger.warning(\n-                'Direct exchanges are not supported with native delayed delivery.\n'\n-                f'{options[\"queue\"].exchange.name} is a direct exchange but should be a topic exchange or '\n-                'a fanout exchange in order for native delayed delivery to work properly.\n'\n-                'If quorum queues are used, this task may block the worker process until the ETA arrives.'\n-            )\n+\n+        if (eta or countdown) and detect_quorum_queues(self, driver_type)[0]:",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "2072889465",
+        "repo_full_name": "celery/celery",
+        "pr_number": 9686,
+        "pr_file": "celery/app/base.py",
+        "discussion_id": "2072845748",
+        "commented_code": "@@ -833,30 +833,38 @@ def send_task(self, name, args=None, kwargs=None, countdown=None,\n             options, route_name or name, args, kwargs, task_type)\n \n         driver_type = self.producer_pool.connections.connection.transport.driver_type\n-        is_native_delayed_delivery = detect_quorum_queues(self, driver_type)[0]\n-        if is_native_delayed_delivery and options['queue'].exchange.type != 'direct':\n-            if eta:\n-                if isinstance(eta, str):\n-                    eta = isoparse(eta)\n-                countdown = (maybe_make_aware(eta) - self.now()).total_seconds()\n-\n-            if countdown:\n-                if countdown > 0:\n-                    routing_key = calculate_routing_key(int(countdown), options[\"queue\"].routing_key)\n-                    exchange = Exchange(\n-                        'celery_delayed_27',\n-                        type='topic',\n-                    )\n-                    del options['queue']\n-                    options['routing_key'] = routing_key\n-                    options['exchange'] = exchange\n-        elif is_native_delayed_delivery and options['queue'].exchange.type == 'direct':\n-            logger.warning(\n-                'Direct exchanges are not supported with native delayed delivery.\\n'\n-                f'{options[\"queue\"].exchange.name} is a direct exchange but should be a topic exchange or '\n-                'a fanout exchange in order for native delayed delivery to work properly.\\n'\n-                'If quorum queues are used, this task may block the worker process until the ETA arrives.'\n-            )\n+\n+        if (eta or countdown) and detect_quorum_queues(self, driver_type)[0]:",
+        "comment_created_at": "2025-05-05T06:15:44+00:00",
+        "comment_author": "bityob",
+        "comment_body": "This is wrong suggesstion, `quorum_queues_detected` function is used only once in this module, no need to keep in variable for that\r\n\r\n@auvipy ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2072924151",
+        "repo_full_name": "celery/celery",
+        "pr_number": 9686,
+        "pr_file": "celery/app/base.py",
+        "discussion_id": "2072845748",
+        "commented_code": "@@ -833,30 +833,38 @@ def send_task(self, name, args=None, kwargs=None, countdown=None,\n             options, route_name or name, args, kwargs, task_type)\n \n         driver_type = self.producer_pool.connections.connection.transport.driver_type\n-        is_native_delayed_delivery = detect_quorum_queues(self, driver_type)[0]\n-        if is_native_delayed_delivery and options['queue'].exchange.type != 'direct':\n-            if eta:\n-                if isinstance(eta, str):\n-                    eta = isoparse(eta)\n-                countdown = (maybe_make_aware(eta) - self.now()).total_seconds()\n-\n-            if countdown:\n-                if countdown > 0:\n-                    routing_key = calculate_routing_key(int(countdown), options[\"queue\"].routing_key)\n-                    exchange = Exchange(\n-                        'celery_delayed_27',\n-                        type='topic',\n-                    )\n-                    del options['queue']\n-                    options['routing_key'] = routing_key\n-                    options['exchange'] = exchange\n-        elif is_native_delayed_delivery and options['queue'].exchange.type == 'direct':\n-            logger.warning(\n-                'Direct exchanges are not supported with native delayed delivery.\\n'\n-                f'{options[\"queue\"].exchange.name} is a direct exchange but should be a topic exchange or '\n-                'a fanout exchange in order for native delayed delivery to work properly.\\n'\n-                'If quorum queues are used, this task may block the worker process until the ETA arrives.'\n-            )\n+\n+        if (eta or countdown) and detect_quorum_queues(self, driver_type)[0]:",
+        "comment_created_at": "2025-05-05T06:54:25+00:00",
+        "comment_author": "auvipy",
+        "comment_body": "Ok, you can revert it. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2072929901",
+        "repo_full_name": "celery/celery",
+        "pr_number": 9686,
+        "pr_file": "celery/app/base.py",
+        "discussion_id": "2072845748",
+        "commented_code": "@@ -833,30 +833,38 @@ def send_task(self, name, args=None, kwargs=None, countdown=None,\n             options, route_name or name, args, kwargs, task_type)\n \n         driver_type = self.producer_pool.connections.connection.transport.driver_type\n-        is_native_delayed_delivery = detect_quorum_queues(self, driver_type)[0]\n-        if is_native_delayed_delivery and options['queue'].exchange.type != 'direct':\n-            if eta:\n-                if isinstance(eta, str):\n-                    eta = isoparse(eta)\n-                countdown = (maybe_make_aware(eta) - self.now()).total_seconds()\n-\n-            if countdown:\n-                if countdown > 0:\n-                    routing_key = calculate_routing_key(int(countdown), options[\"queue\"].routing_key)\n-                    exchange = Exchange(\n-                        'celery_delayed_27',\n-                        type='topic',\n-                    )\n-                    del options['queue']\n-                    options['routing_key'] = routing_key\n-                    options['exchange'] = exchange\n-        elif is_native_delayed_delivery and options['queue'].exchange.type == 'direct':\n-            logger.warning(\n-                'Direct exchanges are not supported with native delayed delivery.\\n'\n-                f'{options[\"queue\"].exchange.name} is a direct exchange but should be a topic exchange or '\n-                'a fanout exchange in order for native delayed delivery to work properly.\\n'\n-                'If quorum queues are used, this task may block the worker process until the ETA arrives.'\n-            )\n+\n+        if (eta or countdown) and detect_quorum_queues(self, driver_type)[0]:",
+        "comment_created_at": "2025-05-05T07:00:00+00:00",
+        "comment_author": "bityob",
+        "comment_body": "And it was done in purpose only once after the `eta or coundtown` condition, since we don't need to run this `detect_quorum_queues` function at all, if no `eta` and no `countdown` is used. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2072935584",
+        "repo_full_name": "celery/celery",
+        "pr_number": 9686,
+        "pr_file": "celery/app/base.py",
+        "discussion_id": "2072845748",
+        "commented_code": "@@ -833,30 +833,38 @@ def send_task(self, name, args=None, kwargs=None, countdown=None,\n             options, route_name or name, args, kwargs, task_type)\n \n         driver_type = self.producer_pool.connections.connection.transport.driver_type\n-        is_native_delayed_delivery = detect_quorum_queues(self, driver_type)[0]\n-        if is_native_delayed_delivery and options['queue'].exchange.type != 'direct':\n-            if eta:\n-                if isinstance(eta, str):\n-                    eta = isoparse(eta)\n-                countdown = (maybe_make_aware(eta) - self.now()).total_seconds()\n-\n-            if countdown:\n-                if countdown > 0:\n-                    routing_key = calculate_routing_key(int(countdown), options[\"queue\"].routing_key)\n-                    exchange = Exchange(\n-                        'celery_delayed_27',\n-                        type='topic',\n-                    )\n-                    del options['queue']\n-                    options['routing_key'] = routing_key\n-                    options['exchange'] = exchange\n-        elif is_native_delayed_delivery and options['queue'].exchange.type == 'direct':\n-            logger.warning(\n-                'Direct exchanges are not supported with native delayed delivery.\\n'\n-                f'{options[\"queue\"].exchange.name} is a direct exchange but should be a topic exchange or '\n-                'a fanout exchange in order for native delayed delivery to work properly.\\n'\n-                'If quorum queues are used, this task may block the worker process until the ETA arrives.'\n-            )\n+\n+        if (eta or countdown) and detect_quorum_queues(self, driver_type)[0]:",
+        "comment_created_at": "2025-05-05T07:05:47+00:00",
+        "comment_author": "bityob",
+        "comment_body": "reverted",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "690980995",
+    "pr_number": 6917,
+    "pr_file": "celery/concurrency/eventlet.py",
+    "created_at": "2021-08-18T07:36:59+00:00",
+    "commented_code": "'running-threads': self._pool.running(),\n         })\n         return info\n+\n+    @staticmethod\n+    def _make_killable_target(target):\n+        def killable_target(*args, **kwargs):\n+            try:\n+                return target(*args, **kwargs)\n+            except GreenletExit:\n+                return (False, None, None)\n+            except Exception:\n+                raise\n+        return killable_target\n+\n+    def _add_to_pool_map(self, pid, green_thread):\n+        self._pool_map[pid] = green_thread\n+        green_thread.link(\n+            TaskPool._cleanup_after_job_finish,\n+            self._pool_map,\n+            pid\n+        )\n+\n+    @staticmethod\n+    def _cleanup_after_job_finish(gt, pool_map, pid):\n+        pool_map.pop(pid)",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "690980995",
+        "repo_full_name": "celery/celery",
+        "pr_number": 6917,
+        "pr_file": "celery/concurrency/eventlet.py",
+        "discussion_id": "690980995",
+        "commented_code": "@@ -144,3 +158,26 @@ def _get_info(self):\n             'running-threads': self._pool.running(),\n         })\n         return info\n+\n+    @staticmethod\n+    def _make_killable_target(target):\n+        def killable_target(*args, **kwargs):\n+            try:\n+                return target(*args, **kwargs)\n+            except GreenletExit:\n+                return (False, None, None)\n+            except Exception:\n+                raise\n+        return killable_target\n+\n+    def _add_to_pool_map(self, pid, green_thread):\n+        self._pool_map[pid] = green_thread\n+        green_thread.link(\n+            TaskPool._cleanup_after_job_finish,\n+            self._pool_map,\n+            pid\n+        )\n+\n+    @staticmethod\n+    def _cleanup_after_job_finish(gt, pool_map, pid):\n+        pool_map.pop(pid)",
+        "comment_created_at": "2021-08-18T07:36:59+00:00",
+        "comment_author": "thedrow",
+        "comment_body": "```suggestion\r\n        del pool_map[pid]\r\n```\r\n\r\n`dict.pop()` returns a value we don't need. We should use `del` instead as it will just remove the key.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1367910886",
+    "pr_number": 8581,
+    "pr_file": "celery/worker/consumer/consumer.py",
+    "created_at": "2023-10-22T13:58:09+00:00",
+    "commented_code": "def _restore_prefetch_count_after_connection_restart(self, p, *args):\n         with self.qos._mutex:\n-            if self._maximum_prefetch_restored:\n+            if any([\n+                not self.app.conf.worker_enable_prefetch_count,\n+                self._maximum_prefetch_restored,\n+            ]):",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "1367910886",
+        "repo_full_name": "celery/celery",
+        "pr_number": 8581,
+        "pr_file": "celery/worker/consumer/consumer.py",
+        "discussion_id": "1367910886",
+        "commented_code": "@@ -696,7 +697,10 @@ def on_task_received(message):\n \n     def _restore_prefetch_count_after_connection_restart(self, p, *args):\n         with self.qos._mutex:\n-            if self._maximum_prefetch_restored:\n+            if any([\n+                not self.app.conf.worker_enable_prefetch_count,\n+                self._maximum_prefetch_restored,\n+            ]):",
+        "comment_created_at": "2023-10-22T13:58:09+00:00",
+        "comment_author": "thedrow",
+        "comment_body": "```suggestion\r\n            if any((\r\n                not self.app.conf.worker_enable_prefetch_count,\r\n                self._maximum_prefetch_restored,\r\n            )):\r\n```\r\nUse a tuple as this is more efficient to initialize.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1097658262",
+    "pr_number": 8045,
+    "pr_file": "celery/canvas.py",
+    "created_at": "2023-02-06T16:57:26+00:00",
+    "commented_code": "headers (Dict): Stamps that should be added to headers.\n         \"\"\"\n         self.stamp_links(visitor, **headers)\n-\n-        headers = headers.copy()\n+        headers = deepcopy(headers)\n+        visitor_headers = None\n         if visitor is not None:\n-            visitor_headers = visitor.on_signature(self, **headers)\n+            visitor_headers = visitor.on_signature(self, **headers) or {}\n+        headers = self._stamp_headers(visitor_headers, **headers)\n+        return self.set(**headers)\n+\n+    def _stamp_headers(self, visitor_headers=None, **headers):\n+        headers = deepcopy(headers)\n+        if visitor_headers is not None:\n+            visitor_headers = visitor_headers or {}\n             if \"stamped_headers\" not in visitor_headers:\n                 visitor_headers[\"stamped_headers\"] = list(visitor_headers.keys())\n-            _merge_dictionaries(headers, visitor_headers)\n+            _merge_dictionaries(headers, visitor_headers, aggregate_duplicates=False)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n         else:\n-            headers[\"stamped_headers\"] = [header for header in headers.keys() if header not in self.options]\n-            _merge_dictionaries(headers, self.options)\n+            stamped_headers = [\n+                header for header in headers.keys()\n+                if all([\n+                    header != \"stamped_headers\",\n+                    header in self.options.get(\"stamped_headers\", [])\n+                ])\n+            ]\n+            if \"stamped_headers\" in headers:\n+                headers[\"stamped_headers\"].extend(stamped_headers)\n+            else:\n+                headers[\"stamped_headers\"] = stamped_headers\n+            for stamp in headers.keys():\n+                if stamp != \"stamped_headers\" and stamp not in headers[\"stamped_headers\"]:\n+                    headers[\"stamped_headers\"].append(stamp)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n+            _merge_dictionaries(headers, self.options, aggregate_duplicates=False)\n \n         # Preserve previous stamped headers\n         stamped_headers = set(self.options.get(\"stamped_headers\", []))\n-        stamped_headers.update(headers[\"stamped_headers\"])\n+        stamped_headers.update(headers.get(\"stamped_headers\", []))\n         headers[\"stamped_headers\"] = list(stamped_headers)\n-        return self.set(**headers)\n+        for previous_header in stamped_headers:\n+            if previous_header not in headers and previous_header in self.options:\n+                headers[previous_header] = self.options[previous_header]\n+        return headers",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "1097658262",
+        "repo_full_name": "celery/celery",
+        "pr_number": 8045,
+        "pr_file": "celery/canvas.py",
+        "discussion_id": "1097658262",
+        "commented_code": "@@ -582,22 +553,47 @@ def stamp(self, visitor=None, **headers):\n             headers (Dict): Stamps that should be added to headers.\n         \"\"\"\n         self.stamp_links(visitor, **headers)\n-\n-        headers = headers.copy()\n+        headers = deepcopy(headers)\n+        visitor_headers = None\n         if visitor is not None:\n-            visitor_headers = visitor.on_signature(self, **headers)\n+            visitor_headers = visitor.on_signature(self, **headers) or {}\n+        headers = self._stamp_headers(visitor_headers, **headers)\n+        return self.set(**headers)\n+\n+    def _stamp_headers(self, visitor_headers=None, **headers):\n+        headers = deepcopy(headers)\n+        if visitor_headers is not None:\n+            visitor_headers = visitor_headers or {}\n             if \"stamped_headers\" not in visitor_headers:\n                 visitor_headers[\"stamped_headers\"] = list(visitor_headers.keys())\n-            _merge_dictionaries(headers, visitor_headers)\n+            _merge_dictionaries(headers, visitor_headers, aggregate_duplicates=False)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n         else:\n-            headers[\"stamped_headers\"] = [header for header in headers.keys() if header not in self.options]\n-            _merge_dictionaries(headers, self.options)\n+            stamped_headers = [\n+                header for header in headers.keys()\n+                if all([\n+                    header != \"stamped_headers\",\n+                    header in self.options.get(\"stamped_headers\", [])\n+                ])\n+            ]\n+            if \"stamped_headers\" in headers:\n+                headers[\"stamped_headers\"].extend(stamped_headers)\n+            else:\n+                headers[\"stamped_headers\"] = stamped_headers\n+            for stamp in headers.keys():\n+                if stamp != \"stamped_headers\" and stamp not in headers[\"stamped_headers\"]:\n+                    headers[\"stamped_headers\"].append(stamp)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n+            _merge_dictionaries(headers, self.options, aggregate_duplicates=False)\n \n         # Preserve previous stamped headers\n         stamped_headers = set(self.options.get(\"stamped_headers\", []))\n-        stamped_headers.update(headers[\"stamped_headers\"])\n+        stamped_headers.update(headers.get(\"stamped_headers\", []))\n         headers[\"stamped_headers\"] = list(stamped_headers)\n-        return self.set(**headers)\n+        for previous_header in stamped_headers:\n+            if previous_header not in headers and previous_header in self.options:\n+                headers[previous_header] = self.options[previous_header]\n+        return headers",
+        "comment_created_at": "2023-02-06T16:57:26+00:00",
+        "comment_author": "thedrow",
+        "comment_body": "So now we set all headers every time we stamp? Even the non-stamped headers?\r\nThis is very inefficient. My design should allow us to perform only a partial update on the new headers that were stamped.\r\nIf we now return all headers instead, stamping can become an expensive operation.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1097998577",
+        "repo_full_name": "celery/celery",
+        "pr_number": 8045,
+        "pr_file": "celery/canvas.py",
+        "discussion_id": "1097658262",
+        "commented_code": "@@ -582,22 +553,47 @@ def stamp(self, visitor=None, **headers):\n             headers (Dict): Stamps that should be added to headers.\n         \"\"\"\n         self.stamp_links(visitor, **headers)\n-\n-        headers = headers.copy()\n+        headers = deepcopy(headers)\n+        visitor_headers = None\n         if visitor is not None:\n-            visitor_headers = visitor.on_signature(self, **headers)\n+            visitor_headers = visitor.on_signature(self, **headers) or {}\n+        headers = self._stamp_headers(visitor_headers, **headers)\n+        return self.set(**headers)\n+\n+    def _stamp_headers(self, visitor_headers=None, **headers):\n+        headers = deepcopy(headers)\n+        if visitor_headers is not None:\n+            visitor_headers = visitor_headers or {}\n             if \"stamped_headers\" not in visitor_headers:\n                 visitor_headers[\"stamped_headers\"] = list(visitor_headers.keys())\n-            _merge_dictionaries(headers, visitor_headers)\n+            _merge_dictionaries(headers, visitor_headers, aggregate_duplicates=False)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n         else:\n-            headers[\"stamped_headers\"] = [header for header in headers.keys() if header not in self.options]\n-            _merge_dictionaries(headers, self.options)\n+            stamped_headers = [\n+                header for header in headers.keys()\n+                if all([\n+                    header != \"stamped_headers\",\n+                    header in self.options.get(\"stamped_headers\", [])\n+                ])\n+            ]\n+            if \"stamped_headers\" in headers:\n+                headers[\"stamped_headers\"].extend(stamped_headers)\n+            else:\n+                headers[\"stamped_headers\"] = stamped_headers\n+            for stamp in headers.keys():\n+                if stamp != \"stamped_headers\" and stamp not in headers[\"stamped_headers\"]:\n+                    headers[\"stamped_headers\"].append(stamp)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n+            _merge_dictionaries(headers, self.options, aggregate_duplicates=False)\n \n         # Preserve previous stamped headers\n         stamped_headers = set(self.options.get(\"stamped_headers\", []))\n-        stamped_headers.update(headers[\"stamped_headers\"])\n+        stamped_headers.update(headers.get(\"stamped_headers\", []))\n         headers[\"stamped_headers\"] = list(stamped_headers)\n-        return self.set(**headers)\n+        for previous_header in stamped_headers:\n+            if previous_header not in headers and previous_header in self.options:\n+                headers[previous_header] = self.options[previous_header]\n+        return headers",
+        "comment_created_at": "2023-02-06T22:47:26+00:00",
+        "comment_author": "Nusnus",
+        "comment_body": "I'm not sure I understand your comment, can you please explain \ud83d\ude4f\r\nAlso, please notice the diff between `stamp()` and `_stamp_headers()`, the github diff view might make it look confusing, because I'm not fully sure why you say:\r\n> So now we set all headers every time we stamp? Even the non-stamped headers?\r\n\r\nAnd what difference do you see from the previous implementation logic-wise?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1098079685",
+        "repo_full_name": "celery/celery",
+        "pr_number": 8045,
+        "pr_file": "celery/canvas.py",
+        "discussion_id": "1097658262",
+        "commented_code": "@@ -582,22 +553,47 @@ def stamp(self, visitor=None, **headers):\n             headers (Dict): Stamps that should be added to headers.\n         \"\"\"\n         self.stamp_links(visitor, **headers)\n-\n-        headers = headers.copy()\n+        headers = deepcopy(headers)\n+        visitor_headers = None\n         if visitor is not None:\n-            visitor_headers = visitor.on_signature(self, **headers)\n+            visitor_headers = visitor.on_signature(self, **headers) or {}\n+        headers = self._stamp_headers(visitor_headers, **headers)\n+        return self.set(**headers)\n+\n+    def _stamp_headers(self, visitor_headers=None, **headers):\n+        headers = deepcopy(headers)\n+        if visitor_headers is not None:\n+            visitor_headers = visitor_headers or {}\n             if \"stamped_headers\" not in visitor_headers:\n                 visitor_headers[\"stamped_headers\"] = list(visitor_headers.keys())\n-            _merge_dictionaries(headers, visitor_headers)\n+            _merge_dictionaries(headers, visitor_headers, aggregate_duplicates=False)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n         else:\n-            headers[\"stamped_headers\"] = [header for header in headers.keys() if header not in self.options]\n-            _merge_dictionaries(headers, self.options)\n+            stamped_headers = [\n+                header for header in headers.keys()\n+                if all([\n+                    header != \"stamped_headers\",\n+                    header in self.options.get(\"stamped_headers\", [])\n+                ])\n+            ]\n+            if \"stamped_headers\" in headers:\n+                headers[\"stamped_headers\"].extend(stamped_headers)\n+            else:\n+                headers[\"stamped_headers\"] = stamped_headers\n+            for stamp in headers.keys():\n+                if stamp != \"stamped_headers\" and stamp not in headers[\"stamped_headers\"]:\n+                    headers[\"stamped_headers\"].append(stamp)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n+            _merge_dictionaries(headers, self.options, aggregate_duplicates=False)\n \n         # Preserve previous stamped headers\n         stamped_headers = set(self.options.get(\"stamped_headers\", []))\n-        stamped_headers.update(headers[\"stamped_headers\"])\n+        stamped_headers.update(headers.get(\"stamped_headers\", []))\n         headers[\"stamped_headers\"] = list(stamped_headers)\n-        return self.set(**headers)\n+        for previous_header in stamped_headers:\n+            if previous_header not in headers and previous_header in self.options:\n+                headers[previous_header] = self.options[previous_header]\n+        return headers",
+        "comment_created_at": "2023-02-07T01:20:26+00:00",
+        "comment_author": "Nusnus",
+        "comment_body": "Please review again @thedrow , I've refactored the code to fix the previous comments so it might be easier to understand now",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1098809223",
+        "repo_full_name": "celery/celery",
+        "pr_number": 8045,
+        "pr_file": "celery/canvas.py",
+        "discussion_id": "1097658262",
+        "commented_code": "@@ -582,22 +553,47 @@ def stamp(self, visitor=None, **headers):\n             headers (Dict): Stamps that should be added to headers.\n         \"\"\"\n         self.stamp_links(visitor, **headers)\n-\n-        headers = headers.copy()\n+        headers = deepcopy(headers)\n+        visitor_headers = None\n         if visitor is not None:\n-            visitor_headers = visitor.on_signature(self, **headers)\n+            visitor_headers = visitor.on_signature(self, **headers) or {}\n+        headers = self._stamp_headers(visitor_headers, **headers)\n+        return self.set(**headers)\n+\n+    def _stamp_headers(self, visitor_headers=None, **headers):\n+        headers = deepcopy(headers)\n+        if visitor_headers is not None:\n+            visitor_headers = visitor_headers or {}\n             if \"stamped_headers\" not in visitor_headers:\n                 visitor_headers[\"stamped_headers\"] = list(visitor_headers.keys())\n-            _merge_dictionaries(headers, visitor_headers)\n+            _merge_dictionaries(headers, visitor_headers, aggregate_duplicates=False)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n         else:\n-            headers[\"stamped_headers\"] = [header for header in headers.keys() if header not in self.options]\n-            _merge_dictionaries(headers, self.options)\n+            stamped_headers = [\n+                header for header in headers.keys()\n+                if all([\n+                    header != \"stamped_headers\",\n+                    header in self.options.get(\"stamped_headers\", [])\n+                ])\n+            ]\n+            if \"stamped_headers\" in headers:\n+                headers[\"stamped_headers\"].extend(stamped_headers)\n+            else:\n+                headers[\"stamped_headers\"] = stamped_headers\n+            for stamp in headers.keys():\n+                if stamp != \"stamped_headers\" and stamp not in headers[\"stamped_headers\"]:\n+                    headers[\"stamped_headers\"].append(stamp)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n+            _merge_dictionaries(headers, self.options, aggregate_duplicates=False)\n \n         # Preserve previous stamped headers\n         stamped_headers = set(self.options.get(\"stamped_headers\", []))\n-        stamped_headers.update(headers[\"stamped_headers\"])\n+        stamped_headers.update(headers.get(\"stamped_headers\", []))\n         headers[\"stamped_headers\"] = list(stamped_headers)\n-        return self.set(**headers)\n+        for previous_header in stamped_headers:\n+            if previous_header not in headers and previous_header in self.options:\n+                headers[previous_header] = self.options[previous_header]\n+        return headers",
+        "comment_created_at": "2023-02-07T15:23:07+00:00",
+        "comment_author": "thedrow",
+        "comment_body": "I understand what you're doing now.\r\nWe're not copying all the headers but the stamped headers that were not touched by the current stamping, whether by providing key/values in the `headers` keyword arguments or by a visitor.\r\nIf we have a lot of stamps, that could still be costly to set them.\r\n\r\nMy concern is that if we already have a stamped header `foo` set to the value `True` and we're now stamping the `bar` header with the value `False` then according to this logic, we're setting `foo` again unnecessarily [here](https://github.com/celery/celery/pull/8045/files#diff-3a80ff45da16a11b96e26a63973d7d490187a68ddc1949e2dfd7fd090b208841R570).\r\nThis is less efficient than not touching `foo` at all.\r\nI guess your comment should explain what happens during replacing that requires us to always set all stamped headers even if they were not touched by the visitor or by the kwargs.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1098868959",
+        "repo_full_name": "celery/celery",
+        "pr_number": 8045,
+        "pr_file": "celery/canvas.py",
+        "discussion_id": "1097658262",
+        "commented_code": "@@ -582,22 +553,47 @@ def stamp(self, visitor=None, **headers):\n             headers (Dict): Stamps that should be added to headers.\n         \"\"\"\n         self.stamp_links(visitor, **headers)\n-\n-        headers = headers.copy()\n+        headers = deepcopy(headers)\n+        visitor_headers = None\n         if visitor is not None:\n-            visitor_headers = visitor.on_signature(self, **headers)\n+            visitor_headers = visitor.on_signature(self, **headers) or {}\n+        headers = self._stamp_headers(visitor_headers, **headers)\n+        return self.set(**headers)\n+\n+    def _stamp_headers(self, visitor_headers=None, **headers):\n+        headers = deepcopy(headers)\n+        if visitor_headers is not None:\n+            visitor_headers = visitor_headers or {}\n             if \"stamped_headers\" not in visitor_headers:\n                 visitor_headers[\"stamped_headers\"] = list(visitor_headers.keys())\n-            _merge_dictionaries(headers, visitor_headers)\n+            _merge_dictionaries(headers, visitor_headers, aggregate_duplicates=False)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n         else:\n-            headers[\"stamped_headers\"] = [header for header in headers.keys() if header not in self.options]\n-            _merge_dictionaries(headers, self.options)\n+            stamped_headers = [\n+                header for header in headers.keys()\n+                if all([\n+                    header != \"stamped_headers\",\n+                    header in self.options.get(\"stamped_headers\", [])\n+                ])\n+            ]\n+            if \"stamped_headers\" in headers:\n+                headers[\"stamped_headers\"].extend(stamped_headers)\n+            else:\n+                headers[\"stamped_headers\"] = stamped_headers\n+            for stamp in headers.keys():\n+                if stamp != \"stamped_headers\" and stamp not in headers[\"stamped_headers\"]:\n+                    headers[\"stamped_headers\"].append(stamp)\n+            headers[\"stamped_headers\"] = list(set(headers[\"stamped_headers\"]))\n+            _merge_dictionaries(headers, self.options, aggregate_duplicates=False)\n \n         # Preserve previous stamped headers\n         stamped_headers = set(self.options.get(\"stamped_headers\", []))\n-        stamped_headers.update(headers[\"stamped_headers\"])\n+        stamped_headers.update(headers.get(\"stamped_headers\", []))\n         headers[\"stamped_headers\"] = list(stamped_headers)\n-        return self.set(**headers)\n+        for previous_header in stamped_headers:\n+            if previous_header not in headers and previous_header in self.options:\n+                headers[previous_header] = self.options[previous_header]\n+        return headers",
+        "comment_created_at": "2023-02-07T16:05:40+00:00",
+        "comment_author": "Nusnus",
+        "comment_body": "@thedrow \r\n> I guess your comment should explain what happens during replacing that requires us to always set all stamped headers even if they were not touched by the visitor or by the kwargs.\r\n\r\nTBH I don't know. The new test cases are checking so many new edge cases that in the case of stamping with task replacement, this happened.\r\n\r\nIt is not perfect but it will require a lot of time investigating it just for the comment whereas the feature is still not completed, so if it's acceptable, I'd prefer to leave this code with the comment referencing the replace, but not investigate more at the moment as its too expensive for the sake of having a more detailed comment.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

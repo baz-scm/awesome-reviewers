@@ -1,0 +1,206 @@
+[
+  {
+    "discussion_id": "2509998691",
+    "pr_number": 9713,
+    "pr_file": "celery/app/base.py",
+    "created_at": "2025-11-10T11:09:08+00:00",
+    "commented_code": "\"\"\"\n         parent = have_parent = None\n         amqp = self.amqp\n-        task_id = task_id or uuid()\n+        # task_id = task_id or uuid()\n+        if task_id is None:\n+            task_id_generator = self.conf.get(\"task_id_generator\")",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "2509998691",
+        "repo_full_name": "celery/celery",
+        "pr_number": 9713,
+        "pr_file": "celery/app/base.py",
+        "discussion_id": "2509998691",
+        "commented_code": "@@ -836,7 +836,17 @@ def send_task(self, name, args=None, kwargs=None, countdown=None,\n         \"\"\"\n         parent = have_parent = None\n         amqp = self.amqp\n-        task_id = task_id or uuid()\n+        # task_id = task_id or uuid()\n+        if task_id is None:\n+            task_id_generator = self.conf.get(\"task_id_generator\")",
+        "comment_created_at": "2025-11-10T11:09:08+00:00",
+        "comment_author": "Nusnus",
+        "comment_body": "Should we use this mechanism with a default/built-in task id generator that is implemented with uuid to maintain backwards compatibility?\n\nThis way we won\u2019t get None for `task_id_generator` and avoid the `else: task_id = uuid()`\n\nNot critical, but can make it more elegant, WDYT?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2522051338",
+        "repo_full_name": "celery/celery",
+        "pr_number": 9713,
+        "pr_file": "celery/app/base.py",
+        "discussion_id": "2509998691",
+        "commented_code": "@@ -836,7 +836,17 @@ def send_task(self, name, args=None, kwargs=None, countdown=None,\n         \"\"\"\n         parent = have_parent = None\n         amqp = self.amqp\n-        task_id = task_id or uuid()\n+        # task_id = task_id or uuid()\n+        if task_id is None:\n+            task_id_generator = self.conf.get(\"task_id_generator\")",
+        "comment_created_at": "2025-11-13T07:40:38+00:00",
+        "comment_author": "jiisanda",
+        "comment_body": "Yaa that will make it more cleaner... \n`task_id_generator = self.conf.get(\"task_id_generator\", uuid)`\n\nwith this `task_id_generator` will either be custom generator or `uuid` as the default and never `None`... right? will push...",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3121526633",
+    "pr_number": 10217,
+    "pr_file": "celery/app/base.py",
+    "created_at": "2026-04-22T04:25:46+00:00",
+    "commented_code": "'task_always_eager has no effect on send_task',\n             ), stacklevel=2)\n \n+        # If the caller did not supply a task_type (i.e. a plain\n+        # send_task(\"name\", ...) call), look it up in the local registry\n+        # and apply its execution options as defaults.  We intentionally\n+        # skip this when task_type was already provided (e.g. from\n+        # Task.apply_async) because apply_async already merged exec\n+        # options \u2014 doing it again would override explicit caller values.\n+        #\n+        # Use the underlying registry directly here so send_task() does not\n+        # auto-finalize the app (or raise when autofinalize=False) merely to\n+        # check whether a locally registered task exists. Remote/unregistered\n+        # task names should still be sendable without finalizing the app.\n+        resolved_from_registry = False\n+        if task_type is None:\n+            registry = self._tasks\n+            get = getattr(registry, 'get', None)\n+            if callable(get):\n+                task_type = get(name)\n+            else:\n+                try:\n+                    task_type = registry[name]\n+                except KeyError:\n+                    task_type = None\n+            resolved_from_registry = task_type is not None\n+        if resolved_from_registry and hasattr(task_type, '_get_exec_options'):\n+            get_exec_options = task_type._get_exec_options\n+            if inspect.ismethod(get_exec_options):\n+                task_exec_options = get_exec_options()\n+            else:\n+                task_exec_options = None\n+            if task_exec_options:\n+                # Only merge non-None values so we don't override\n+                # defaults with None.\n+                filtered_opts = {k: v for k, v in task_exec_options.items()\n+                                 if v is not None}\n+                if filtered_opts:\n+                    options = dict(filtered_opts, **options)\n+\n+        # Some execution options (time_limit, soft_time_limit, expires)\n+        # are also passed as explicit arguments to create_task_message.\n+        # Pop them from options to avoid \"got multiple values for argument\"\n+        # errors; use the task-level value as fallback when the caller\n+        # did not provide an explicit value.\n+        if time_limit is None:\n+            time_limit = options.pop('time_limit', None)\n+        else:\n+            options.pop('time_limit', None)\n+        if soft_time_limit is None:\n+            soft_time_limit = options.pop('soft_time_limit', None)\n+        else:\n+            options.pop('soft_time_limit', None)\n+        if expires is None:\n+            expires = options.pop('expires', None)\n+        else:\n+            options.pop('expires', None)",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "3121546288",
+        "repo_full_name": "celery/celery",
+        "pr_number": 10217,
+        "pr_file": "celery/app/base.py",
+        "discussion_id": "3121526633",
+        "commented_code": "@@ -869,6 +869,61 @@ def send_task(self, name, args=None, kwargs=None, countdown=None,\n                 'task_always_eager has no effect on send_task',\n             ), stacklevel=2)\n \n+        # If the caller did not supply a task_type (i.e. a plain\n+        # send_task(\"name\", ...) call), look it up in the local registry\n+        # and apply its execution options as defaults.  We intentionally\n+        # skip this when task_type was already provided (e.g. from\n+        # Task.apply_async) because apply_async already merged exec\n+        # options \u2014 doing it again would override explicit caller values.\n+        #\n+        # Use the underlying registry directly here so send_task() does not\n+        # auto-finalize the app (or raise when autofinalize=False) merely to\n+        # check whether a locally registered task exists. Remote/unregistered\n+        # task names should still be sendable without finalizing the app.\n+        resolved_from_registry = False\n+        if task_type is None:\n+            registry = self._tasks\n+            get = getattr(registry, 'get', None)\n+            if callable(get):\n+                task_type = get(name)\n+            else:\n+                try:\n+                    task_type = registry[name]\n+                except KeyError:\n+                    task_type = None\n+            resolved_from_registry = task_type is not None\n+        if resolved_from_registry and hasattr(task_type, '_get_exec_options'):\n+            get_exec_options = task_type._get_exec_options\n+            if inspect.ismethod(get_exec_options):\n+                task_exec_options = get_exec_options()\n+            else:\n+                task_exec_options = None\n+            if task_exec_options:\n+                # Only merge non-None values so we don't override\n+                # defaults with None.\n+                filtered_opts = {k: v for k, v in task_exec_options.items()\n+                                 if v is not None}\n+                if filtered_opts:\n+                    options = dict(filtered_opts, **options)\n+\n+        # Some execution options (time_limit, soft_time_limit, expires)\n+        # are also passed as explicit arguments to create_task_message.\n+        # Pop them from options to avoid \"got multiple values for argument\"\n+        # errors; use the task-level value as fallback when the caller\n+        # did not provide an explicit value.\n+        if time_limit is None:\n+            time_limit = options.pop('time_limit', None)\n+        else:\n+            options.pop('time_limit', None)\n+        if soft_time_limit is None:\n+            soft_time_limit = options.pop('soft_time_limit', None)\n+        else:\n+            options.pop('soft_time_limit', None)\n+        if expires is None:\n+            expires = options.pop('expires', None)\n+        else:\n+            options.pop('expires', None)",
+        "comment_created_at": "2026-04-22T04:25:46+00:00",
+        "comment_author": "auvipy",
+        "comment_body": "what is view on this suggested changes?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3121552138",
+        "repo_full_name": "celery/celery",
+        "pr_number": 10217,
+        "pr_file": "celery/app/base.py",
+        "discussion_id": "3121526633",
+        "commented_code": "@@ -869,6 +869,61 @@ def send_task(self, name, args=None, kwargs=None, countdown=None,\n                 'task_always_eager has no effect on send_task',\n             ), stacklevel=2)\n \n+        # If the caller did not supply a task_type (i.e. a plain\n+        # send_task(\"name\", ...) call), look it up in the local registry\n+        # and apply its execution options as defaults.  We intentionally\n+        # skip this when task_type was already provided (e.g. from\n+        # Task.apply_async) because apply_async already merged exec\n+        # options \u2014 doing it again would override explicit caller values.\n+        #\n+        # Use the underlying registry directly here so send_task() does not\n+        # auto-finalize the app (or raise when autofinalize=False) merely to\n+        # check whether a locally registered task exists. Remote/unregistered\n+        # task names should still be sendable without finalizing the app.\n+        resolved_from_registry = False\n+        if task_type is None:\n+            registry = self._tasks\n+            get = getattr(registry, 'get', None)\n+            if callable(get):\n+                task_type = get(name)\n+            else:\n+                try:\n+                    task_type = registry[name]\n+                except KeyError:\n+                    task_type = None\n+            resolved_from_registry = task_type is not None\n+        if resolved_from_registry and hasattr(task_type, '_get_exec_options'):\n+            get_exec_options = task_type._get_exec_options\n+            if inspect.ismethod(get_exec_options):\n+                task_exec_options = get_exec_options()\n+            else:\n+                task_exec_options = None\n+            if task_exec_options:\n+                # Only merge non-None values so we don't override\n+                # defaults with None.\n+                filtered_opts = {k: v for k, v in task_exec_options.items()\n+                                 if v is not None}\n+                if filtered_opts:\n+                    options = dict(filtered_opts, **options)\n+\n+        # Some execution options (time_limit, soft_time_limit, expires)\n+        # are also passed as explicit arguments to create_task_message.\n+        # Pop them from options to avoid \"got multiple values for argument\"\n+        # errors; use the task-level value as fallback when the caller\n+        # did not provide an explicit value.\n+        if time_limit is None:\n+            time_limit = options.pop('time_limit', None)\n+        else:\n+            options.pop('time_limit', None)\n+        if soft_time_limit is None:\n+            soft_time_limit = options.pop('soft_time_limit', None)\n+        else:\n+            options.pop('soft_time_limit', None)\n+        if expires is None:\n+            expires = options.pop('expires', None)\n+        else:\n+            options.pop('expires', None)",
+        "comment_created_at": "2026-04-22T04:28:00+00:00",
+        "comment_author": "Krishnachaitanyakc",
+        "comment_body": "that's a valid concern. With None as the default, app.send_task('registered', time_limit=None) was indistinguishable from omitting the argument. \r\nI've addressed this in the latest commit. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3121907629",
+    "pr_number": 10277,
+    "pr_file": "celery/events/dispatcher.py",
+    "created_at": "2026-04-22T07:00:48+00:00",
+    "commented_code": "def _publish(self, event, producer, routing_key, retry=False,\n                  retry_policy=None, utcoffset=utcoffset):\n+        if producer is None:\n+            return",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "3122118524",
+        "repo_full_name": "celery/celery",
+        "pr_number": 10277,
+        "pr_file": "celery/events/dispatcher.py",
+        "discussion_id": "3121907629",
+        "commented_code": "@@ -141,6 +141,8 @@ def publish(self, type, fields, producer,\n \n     def _publish(self, event, producer, routing_key, retry=False,\n                  retry_policy=None, utcoffset=utcoffset):\n+        if producer is None:\n+            return",
+        "comment_created_at": "2026-04-22T07:00:48+00:00",
+        "comment_author": "Song-Junho97",
+        "comment_body": "Agreed this is a latent issue \u2014 `flush()` already discards the exception via `_`, so there's no reason to retain it. I left the cleanup out of this PR on purpose to keep the change scoped to the reproduction in #10273; the    tuple-shape change ripples into `flush()` unpacking and `extend_buffer()` semantics, which deserves its own focused review. Happy to open a follow-up PR once this merges \u2014 or fold it in here if you'd prefer a single change, just let me know.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3122218544",
+        "repo_full_name": "celery/celery",
+        "pr_number": 10277,
+        "pr_file": "celery/events/dispatcher.py",
+        "discussion_id": "3121907629",
+        "commented_code": "@@ -141,6 +141,8 @@ def publish(self, type, fields, producer,\n \n     def _publish(self, event, producer, routing_key, retry=False,\n                  retry_policy=None, utcoffset=utcoffset):\n+        if producer is None:\n+            return",
+        "comment_created_at": "2026-04-22T07:21:47+00:00",
+        "comment_author": "auvipy",
+        "comment_body": "you can handle this and the other review comment in a single pr",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2621573049",
+    "pr_number": 10023,
+    "pr_file": "celery/fixups/django.py",
+    "created_at": "2025-12-16T09:41:21+00:00",
+    "commented_code": "self.worker_fixup.validate_models()\n \n     def on_worker_init(self, **kwargs: Any) -> None:\n+        worker: \"WorkController\" = kwargs.get(\"sender\")",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "2622529052",
+        "repo_full_name": "celery/celery",
+        "pr_number": 10023,
+        "pr_file": "celery/fixups/django.py",
+        "discussion_id": "2621573049",
+        "commented_code": "@@ -102,6 +103,8 @@ def on_import_modules(self, **kwargs: Any) -> None:\n         self.worker_fixup.validate_models()\n \n     def on_worker_init(self, **kwargs: Any) -> None:\n+        worker: \"WorkController\" = kwargs.get(\"sender\")",
+        "comment_created_at": "2025-12-16T09:41:21+00:00",
+        "comment_author": "auvipy",
+        "comment_body": "what is your take on this?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2622640976",
+        "repo_full_name": "celery/celery",
+        "pr_number": 10023,
+        "pr_file": "celery/fixups/django.py",
+        "discussion_id": "2621573049",
+        "commented_code": "@@ -102,6 +103,8 @@ def on_import_modules(self, **kwargs: Any) -> None:\n         self.worker_fixup.validate_models()\n \n     def on_worker_init(self, **kwargs: Any) -> None:\n+        worker: \"WorkController\" = kwargs.get(\"sender\")",
+        "comment_created_at": "2025-12-16T10:11:24+00:00",
+        "comment_author": "petrprikryl",
+        "comment_body": "Added check with warning to avoid setting `None` as `worker`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2903010817",
+    "pr_number": 10184,
+    "pr_file": "celery/app/trace.py",
+    "created_at": "2026-03-09T03:31:25+00:00",
+    "commented_code": "return getattr(request, 'shadow', None) or default\n \n \n+def get_actual_ignore_result(task, req):\n+    \"\"\"Return the effective ignore_result, with request overriding task.\n+\n+    If req provides an explicit ignore_result, that value is used;\n+    otherwise task.ignore_result is returned.\n+    \"\"\"\n+    if req is None:\n+        return task.ignore_result\n+\n+    actual = getattr(req, 'ignore_result', None)",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "2903010817",
+        "repo_full_name": "celery/celery",
+        "pr_number": 10184,
+        "pr_file": "celery/app/trace.py",
+        "discussion_id": "2903010817",
+        "commented_code": "@@ -154,6 +154,25 @@ def get_task_name(request, default):\n     return getattr(request, 'shadow', None) or default\n \n \n+def get_actual_ignore_result(task, req):\n+    \"\"\"Return the effective ignore_result, with request overriding task.\n+\n+    If req provides an explicit ignore_result, that value is used;\n+    otherwise task.ignore_result is returned.\n+    \"\"\"\n+    if req is None:\n+        return task.ignore_result\n+\n+    actual = getattr(req, 'ignore_result', None)",
+        "comment_created_at": "2026-03-09T03:31:25+00:00",
+        "comment_author": "ChickenBenny",
+        "comment_body": "`Context.py` has defined class-level `ignore_result`([ref](https://github.com/celery/celery/blob/main/celery/app/task.py#L92)). So `getattr(task_request, 'ignore_result', None)` returns False (the class default) even when `ignore_result` was never set by the request. Without the `__dict__` check, it's impossible to distinguish \"explicitly set to False\" from \"not set at all, class default returned\". The check correctly sets `actual = None` to trigger the task-level fallback.\n\nThis is non-obvious and essential. Without a comment, a future reader will likely think the branch is dead code and remove it, re-introducing the bug.\n```python\ndef get_actual_ignore_result(task, req):\n    ...\n    actual = getattr(req, 'ignore_result', None)\n\n    # Context defines `ignore_result = False` at class level (see Context\n    # in celery/app/task.py). getattr() above would return the class default\n    # (False) even when the request never set it explicitly, making it\n    # impossible to distinguish \"override=False\" from \"not set\". We check\n    # __dict__ to detect only instance-level (i.e., explicitly set) values.\n    if isinstance(req, Context) and 'ignore_result' not in req.__dict__:\n        actual = None\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2932584071",
+        "repo_full_name": "celery/celery",
+        "pr_number": 10184,
+        "pr_file": "celery/app/trace.py",
+        "discussion_id": "2903010817",
+        "commented_code": "@@ -154,6 +154,25 @@ def get_task_name(request, default):\n     return getattr(request, 'shadow', None) or default\n \n \n+def get_actual_ignore_result(task, req):\n+    \"\"\"Return the effective ignore_result, with request overriding task.\n+\n+    If req provides an explicit ignore_result, that value is used;\n+    otherwise task.ignore_result is returned.\n+    \"\"\"\n+    if req is None:\n+        return task.ignore_result\n+\n+    actual = getattr(req, 'ignore_result', None)",
+        "comment_created_at": "2026-03-13T17:02:14+00:00",
+        "comment_author": "patri27826",
+        "comment_body": "Thanks! Added",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "579769211",
+    "pr_number": 6640,
+    "pr_file": "celery/app/autoretry.py",
+    "created_at": "2021-02-21T08:11:12+00:00",
+    "commented_code": "\"\"\"Tasks auto-retry functionality.\"\"\"\n+import inspect\n+\n from vine.utils import wraps\n \n from celery.exceptions import Ignore, Retry\n from celery.utils.time import get_exponential_backoff_interval\n \n \n+def check_reserved_arg_availability(fun):\n+    arg_spec = inspect.getfullargspec(fun)\n+    if 'autoretry_opts' in set(arg_spec.args):\n+        raise ValueError(\n+            \"'autoretry_opts' is a reserved argument to override \"\n+            \"autoretry options. Use a different name for this \"\n+            \"parameter please.\"\n+        )\n+\n+\n def add_autoretry_behaviour(task, **options):\n     \"\"\"Wrap task's `run` method with auto-retry functionality.\"\"\"\n-    autoretry_for = tuple(\n+    check_reserved_arg_availability(task._orig_run)\n+\n+    _autoretry_for = tuple(\n         options.get('autoretry_for',\n                     getattr(task, 'autoretry_for', ()))\n     )\n-    retry_kwargs = options.get(\n+    _retry_kwargs = options.get(\n         'retry_kwargs', getattr(task, 'retry_kwargs', {})\n     )\n-    retry_backoff = int(\n+    _retry_backoff = int(\n         options.get('retry_backoff',\n                     getattr(task, 'retry_backoff', False))\n     )\n-    retry_backoff_max = int(\n+    _retry_backoff_max = int(\n         options.get('retry_backoff_max',\n                     getattr(task, 'retry_backoff_max', 600))\n     )\n-    retry_jitter = options.get(\n+    _retry_jitter = options.get(\n         'retry_jitter', getattr(task, 'retry_jitter', True)\n     )\n \n-    if autoretry_for and not hasattr(task, '_orig_run'):\n+    if _autoretry_for and not hasattr(task, '_orig_run'):\n \n         @wraps(task.run)\n-        def run(*args, **kwargs):\n+        def run(*args, autoretry_opts=None, **kwargs):\n+            if autoretry_opts is None:",
+    "repo_full_name": "celery/celery",
+    "discussion_comments": [
+      {
+        "comment_id": "579769211",
+        "repo_full_name": "celery/celery",
+        "pr_number": 6640,
+        "pr_file": "celery/app/autoretry.py",
+        "discussion_id": "579769211",
+        "commented_code": "@@ -1,35 +1,56 @@\n \"\"\"Tasks auto-retry functionality.\"\"\"\n+import inspect\n+\n from vine.utils import wraps\n \n from celery.exceptions import Ignore, Retry\n from celery.utils.time import get_exponential_backoff_interval\n \n \n+def check_reserved_arg_availability(fun):\n+    arg_spec = inspect.getfullargspec(fun)\n+    if 'autoretry_opts' in set(arg_spec.args):\n+        raise ValueError(\n+            \"'autoretry_opts' is a reserved argument to override \"\n+            \"autoretry options. Use a different name for this \"\n+            \"parameter please.\"\n+        )\n+\n+\n def add_autoretry_behaviour(task, **options):\n     \"\"\"Wrap task's `run` method with auto-retry functionality.\"\"\"\n-    autoretry_for = tuple(\n+    check_reserved_arg_availability(task._orig_run)\n+\n+    _autoretry_for = tuple(\n         options.get('autoretry_for',\n                     getattr(task, 'autoretry_for', ()))\n     )\n-    retry_kwargs = options.get(\n+    _retry_kwargs = options.get(\n         'retry_kwargs', getattr(task, 'retry_kwargs', {})\n     )\n-    retry_backoff = int(\n+    _retry_backoff = int(\n         options.get('retry_backoff',\n                     getattr(task, 'retry_backoff', False))\n     )\n-    retry_backoff_max = int(\n+    _retry_backoff_max = int(\n         options.get('retry_backoff_max',\n                     getattr(task, 'retry_backoff_max', 600))\n     )\n-    retry_jitter = options.get(\n+    _retry_jitter = options.get(\n         'retry_jitter', getattr(task, 'retry_jitter', True)\n     )\n \n-    if autoretry_for and not hasattr(task, '_orig_run'):\n+    if _autoretry_for and not hasattr(task, '_orig_run'):\n \n         @wraps(task.run)\n-        def run(*args, **kwargs):\n+        def run(*args, autoretry_opts=None, **kwargs):\n+            if autoretry_opts is None:",
+        "comment_created_at": "2021-02-21T08:11:12+00:00",
+        "comment_author": "auvipy",
+        "comment_body": "if autoretry_opts is None: or if autoretry_opts is not None:?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "579770048",
+        "repo_full_name": "celery/celery",
+        "pr_number": 6640,
+        "pr_file": "celery/app/autoretry.py",
+        "discussion_id": "579769211",
+        "commented_code": "@@ -1,35 +1,56 @@\n \"\"\"Tasks auto-retry functionality.\"\"\"\n+import inspect\n+\n from vine.utils import wraps\n \n from celery.exceptions import Ignore, Retry\n from celery.utils.time import get_exponential_backoff_interval\n \n \n+def check_reserved_arg_availability(fun):\n+    arg_spec = inspect.getfullargspec(fun)\n+    if 'autoretry_opts' in set(arg_spec.args):\n+        raise ValueError(\n+            \"'autoretry_opts' is a reserved argument to override \"\n+            \"autoretry options. Use a different name for this \"\n+            \"parameter please.\"\n+        )\n+\n+\n def add_autoretry_behaviour(task, **options):\n     \"\"\"Wrap task's `run` method with auto-retry functionality.\"\"\"\n-    autoretry_for = tuple(\n+    check_reserved_arg_availability(task._orig_run)\n+\n+    _autoretry_for = tuple(\n         options.get('autoretry_for',\n                     getattr(task, 'autoretry_for', ()))\n     )\n-    retry_kwargs = options.get(\n+    _retry_kwargs = options.get(\n         'retry_kwargs', getattr(task, 'retry_kwargs', {})\n     )\n-    retry_backoff = int(\n+    _retry_backoff = int(\n         options.get('retry_backoff',\n                     getattr(task, 'retry_backoff', False))\n     )\n-    retry_backoff_max = int(\n+    _retry_backoff_max = int(\n         options.get('retry_backoff_max',\n                     getattr(task, 'retry_backoff_max', 600))\n     )\n-    retry_jitter = options.get(\n+    _retry_jitter = options.get(\n         'retry_jitter', getattr(task, 'retry_jitter', True)\n     )\n \n-    if autoretry_for and not hasattr(task, '_orig_run'):\n+    if _autoretry_for and not hasattr(task, '_orig_run'):\n \n         @wraps(task.run)\n-        def run(*args, **kwargs):\n+        def run(*args, autoretry_opts=None, **kwargs):\n+            if autoretry_opts is None:",
+        "comment_created_at": "2021-02-21T08:18:04+00:00",
+        "comment_author": "glumia",
+        "comment_body": "`if autoretry_opts is None`, it's just to not set `{}` as default argument because it's mutable. \r\n\r\nEven if it would be safe to do in this case, it's better to avoid it.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

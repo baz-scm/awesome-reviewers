@@ -1,0 +1,228 @@
+[
+  {
+    "discussion_id": "2649875559",
+    "pr_number": 34514,
+    "pr_file": "libs/langchain_v1/langchain/agents/factory.py",
+    "created_at": "2025-12-28T19:08:06+00:00",
+    "commented_code": "return result\n \n \n+def _resolve_middleware_dependencies(\n+    middleware: Sequence[AgentMiddleware[StateT_co, ContextT]],\n+) -> list[AgentMiddleware[StateT_co, ContextT]]:\n+    \"\"\"Resolve middleware dependencies and return ordered list with auto-instantiated deps.\n+\n+    This function:\n+    1. Collects all dependencies from middleware instances\n+    2. Auto-instantiates missing class dependencies with default parameters\n+    3. Uses provided instance dependencies as-is\n+    4. Performs topological sort to ensure dependencies come before dependents\n+    5. Preserves original order for middleware without dependency constraints\n+    6. Detects and raises errors for circular dependencies\n+\n+    Args:\n+        middleware: Original sequence of middleware instances.\n+\n+    Returns:\n+        Ordered list of middleware with dependencies resolved and auto-instantiated.\n+\n+    Raises:\n+        ValueError: If circular dependencies are detected.\n+\n+    Example:\n+        ```python\n+        # MyMiddleware depends on ModelRetryMiddleware class\n+        middleware = [MyMiddleware(depends_on=(ModelRetryMiddleware,))]\n+        resolved = _resolve_middleware_dependencies(middleware)\n+        # Result: [ModelRetryMiddleware(), MyMiddleware(...)]\n+\n+        # Or with an instance\n+        retry = ModelRetryMiddleware(max_retries=5)\n+        middleware = [MyMiddleware(depends_on=(retry,))]\n+        resolved = _resolve_middleware_dependencies(middleware)\n+        # Result: [retry, MyMiddleware(...)]\n+        ```\n+    \"\"\"\n+    # If no middleware has dependencies, return as-is\n+    has_dependencies = any(getattr(m, \"depends_on\", ()) for m in middleware)\n+    if not has_dependencies:\n+        return list(middleware)\n+\n+    # Build a map: class -> instance for all middleware\n+    # For original middleware, use the first instance of each class\n+    instance_by_class: dict[type[AgentMiddleware[Any, Any]], AgentMiddleware[Any, Any]] = {}\n+    original_classes: set[type[AgentMiddleware[Any, Any]]] = set()\n+\n+    for m in middleware:\n+        cls = type(m)\n+        original_classes.add(cls)\n+        # Use the first instance of each class\n+        if cls not in instance_by_class:\n+            instance_by_class[cls] = m\n+\n+    # First pass: collect all instance dependencies (these take priority)\n+    def collect_instance_dependencies(\n+        instance: AgentMiddleware[Any, Any], visited: set[type[AgentMiddleware[Any, Any]]]\n+    ) -> None:\n+        \"\"\"Collect instance dependencies first (they take priority).\"\"\"\n+        deps = getattr(instance, \"depends_on\", ())\n+\n+        for dep in deps:\n+            if not isinstance(dep, type):\n+                # It's an instance\n+                dep_class = type(dep)\n+                # Check for circular dependencies\n+                if dep_class in visited:\n+                    msg = f\"Circular dependency detected in middleware: {dep_class.__name__}\"\n+                    raise ValueError(msg)\n+\n+                # Store the instance (overwrite if already present from original)\n+                instance_by_class[dep_class] = dep\n+\n+                # Recursively collect instance dependencies\n+                collect_instance_dependencies(dep, visited | {dep_class})\n+\n+    # Collect instance dependencies for all original middleware\n+    for m in middleware:\n+        collect_instance_dependencies(m, {type(m)})\n+\n+    # Second pass: collect class dependencies and auto-instantiate\n+    def collect_class_dependencies(\n+        instance: AgentMiddleware[Any, Any], visited: set[type[AgentMiddleware[Any, Any]]]\n+    ) -> None:\n+        \"\"\"Collect class dependencies and auto-instantiate if needed.\"\"\"\n+        deps = getattr(instance, \"depends_on\", ())\n+\n+        for dep in deps:\n+            if isinstance(dep, type):\n+                # It's a class\n+                dep_class = dep\n+                # Check for circular dependencies\n+                if dep_class in visited:\n+                    msg = f\"Circular dependency detected in middleware: {dep_class.__name__}\"\n+                    raise ValueError(msg)\n+\n+                # Instantiate if not already present\n+                if dep_class not in instance_by_class:\n+                    try:\n+                        instance_by_class[dep_class] = dep_class()\n+                    except Exception as e:\n+                        # Log and skip if instantiation fails\n+                        import logging\n+\n+                        logging.getLogger(__name__).debug(\n+                            \"Failed to auto-instantiate middleware %s: %s\", dep_class.__name__, e\n+                        )\n+                        continue\n+\n+                # Recursively collect dependencies\n+                dep_instance = instance_by_class[dep_class]\n+                collect_class_dependencies(dep_instance, visited | {dep_class})\n+            else:\n+                # It's an instance - already handled in first pass\n+                dep_class = type(dep)\n+                dep_instance = instance_by_class[dep_class]\n+                collect_class_dependencies(dep_instance, visited | {dep_class})\n+\n+    # Collect class dependencies for all original middleware\n+    for m in middleware:\n+        collect_class_dependencies(m, {type(m)})\n+\n+    # Topological sort using Kahn's algorithm\n+    # Build dependency graph: class -> set of classes it depends on\n+    dep_graph: dict[type[AgentMiddleware[Any, Any]], set[type[AgentMiddleware[Any, Any]]]] = {}\n+    for cls, instance in instance_by_class.items():\n+        deps = getattr(instance, \"depends_on\", ())\n+        dep_classes = set()\n+        for dep in deps:\n+            dep_class = type(dep) if not isinstance(dep, type) else dep\n+            dep_classes.add(dep_class)\n+        dep_graph[cls] = dep_classes\n+    # Calculate in-degree for each class\n+    in_degree: dict[type[AgentMiddleware[Any, Any]], int] = {\n+        cls: len(dep_graph.get(cls, set())) for cls in instance_by_class\n+    }\n+\n+    # Find all nodes with in-degree 0\n+    queue: list[type[AgentMiddleware[Any, Any]]] = [\n+        cls for cls in instance_by_class if in_degree[cls] == 0\n+    ]\n+    # Sort queue for stability\n+    queue.sort(key=lambda c: c.__name__)\n+\n+    sorted_classes: list[type[AgentMiddleware[Any, Any]]] = []\n+\n+    while queue:\n+        # Remove a node with in-degree 0\n+        current = queue.pop(0)\n+        sorted_classes.append(current)\n+\n+        # For each node that depends on current, decrease its in-degree\n+        for cls, deps in dep_graph.items():\n+            if current in deps:\n+                in_degree[cls] -= 1\n+                if in_degree[cls] == 0:\n+                    queue.append(cls)\n+                    # Keep queue sorted for stability\n+                    queue.sort(key=lambda c: c.__name__)\n+\n+    # Check for circular dependencies\n+    if len(sorted_classes) != len(instance_by_class):\n+        msg = \"Circular dependency detected in middleware\"\n+        raise ValueError(msg)\n+\n+    # Build result list\n+    result: list[AgentMiddleware[StateT_co, ContextT]] = [\n+        instance_by_class[cls] for cls in sorted_classes\n+    ]\n+\n+    return result",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "2649875559",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 34514,
+        "pr_file": "libs/langchain_v1/langchain/agents/factory.py",
+        "discussion_id": "2649875559",
+        "commented_code": "@@ -538,6 +538,178 @@ async def call_inner(req: ToolCallRequest) -> ToolMessage | Command:\n     return result\n \n \n+def _resolve_middleware_dependencies(\n+    middleware: Sequence[AgentMiddleware[StateT_co, ContextT]],\n+) -> list[AgentMiddleware[StateT_co, ContextT]]:\n+    \"\"\"Resolve middleware dependencies and return ordered list with auto-instantiated deps.\n+\n+    This function:\n+    1. Collects all dependencies from middleware instances\n+    2. Auto-instantiates missing class dependencies with default parameters\n+    3. Uses provided instance dependencies as-is\n+    4. Performs topological sort to ensure dependencies come before dependents\n+    5. Preserves original order for middleware without dependency constraints\n+    6. Detects and raises errors for circular dependencies\n+\n+    Args:\n+        middleware: Original sequence of middleware instances.\n+\n+    Returns:\n+        Ordered list of middleware with dependencies resolved and auto-instantiated.\n+\n+    Raises:\n+        ValueError: If circular dependencies are detected.\n+\n+    Example:\n+        ```python\n+        # MyMiddleware depends on ModelRetryMiddleware class\n+        middleware = [MyMiddleware(depends_on=(ModelRetryMiddleware,))]\n+        resolved = _resolve_middleware_dependencies(middleware)\n+        # Result: [ModelRetryMiddleware(), MyMiddleware(...)]\n+\n+        # Or with an instance\n+        retry = ModelRetryMiddleware(max_retries=5)\n+        middleware = [MyMiddleware(depends_on=(retry,))]\n+        resolved = _resolve_middleware_dependencies(middleware)\n+        # Result: [retry, MyMiddleware(...)]\n+        ```\n+    \"\"\"\n+    # If no middleware has dependencies, return as-is\n+    has_dependencies = any(getattr(m, \"depends_on\", ()) for m in middleware)\n+    if not has_dependencies:\n+        return list(middleware)\n+\n+    # Build a map: class -> instance for all middleware\n+    # For original middleware, use the first instance of each class\n+    instance_by_class: dict[type[AgentMiddleware[Any, Any]], AgentMiddleware[Any, Any]] = {}\n+    original_classes: set[type[AgentMiddleware[Any, Any]]] = set()\n+\n+    for m in middleware:\n+        cls = type(m)\n+        original_classes.add(cls)\n+        # Use the first instance of each class\n+        if cls not in instance_by_class:\n+            instance_by_class[cls] = m\n+\n+    # First pass: collect all instance dependencies (these take priority)\n+    def collect_instance_dependencies(\n+        instance: AgentMiddleware[Any, Any], visited: set[type[AgentMiddleware[Any, Any]]]\n+    ) -> None:\n+        \"\"\"Collect instance dependencies first (they take priority).\"\"\"\n+        deps = getattr(instance, \"depends_on\", ())\n+\n+        for dep in deps:\n+            if not isinstance(dep, type):\n+                # It's an instance\n+                dep_class = type(dep)\n+                # Check for circular dependencies\n+                if dep_class in visited:\n+                    msg = f\"Circular dependency detected in middleware: {dep_class.__name__}\"\n+                    raise ValueError(msg)\n+\n+                # Store the instance (overwrite if already present from original)\n+                instance_by_class[dep_class] = dep\n+\n+                # Recursively collect instance dependencies\n+                collect_instance_dependencies(dep, visited | {dep_class})\n+\n+    # Collect instance dependencies for all original middleware\n+    for m in middleware:\n+        collect_instance_dependencies(m, {type(m)})\n+\n+    # Second pass: collect class dependencies and auto-instantiate\n+    def collect_class_dependencies(\n+        instance: AgentMiddleware[Any, Any], visited: set[type[AgentMiddleware[Any, Any]]]\n+    ) -> None:\n+        \"\"\"Collect class dependencies and auto-instantiate if needed.\"\"\"\n+        deps = getattr(instance, \"depends_on\", ())\n+\n+        for dep in deps:\n+            if isinstance(dep, type):\n+                # It's a class\n+                dep_class = dep\n+                # Check for circular dependencies\n+                if dep_class in visited:\n+                    msg = f\"Circular dependency detected in middleware: {dep_class.__name__}\"\n+                    raise ValueError(msg)\n+\n+                # Instantiate if not already present\n+                if dep_class not in instance_by_class:\n+                    try:\n+                        instance_by_class[dep_class] = dep_class()\n+                    except Exception as e:\n+                        # Log and skip if instantiation fails\n+                        import logging\n+\n+                        logging.getLogger(__name__).debug(\n+                            \"Failed to auto-instantiate middleware %s: %s\", dep_class.__name__, e\n+                        )\n+                        continue\n+\n+                # Recursively collect dependencies\n+                dep_instance = instance_by_class[dep_class]\n+                collect_class_dependencies(dep_instance, visited | {dep_class})\n+            else:\n+                # It's an instance - already handled in first pass\n+                dep_class = type(dep)\n+                dep_instance = instance_by_class[dep_class]\n+                collect_class_dependencies(dep_instance, visited | {dep_class})\n+\n+    # Collect class dependencies for all original middleware\n+    for m in middleware:\n+        collect_class_dependencies(m, {type(m)})\n+\n+    # Topological sort using Kahn's algorithm\n+    # Build dependency graph: class -> set of classes it depends on\n+    dep_graph: dict[type[AgentMiddleware[Any, Any]], set[type[AgentMiddleware[Any, Any]]]] = {}\n+    for cls, instance in instance_by_class.items():\n+        deps = getattr(instance, \"depends_on\", ())\n+        dep_classes = set()\n+        for dep in deps:\n+            dep_class = type(dep) if not isinstance(dep, type) else dep\n+            dep_classes.add(dep_class)\n+        dep_graph[cls] = dep_classes\n+    # Calculate in-degree for each class\n+    in_degree: dict[type[AgentMiddleware[Any, Any]], int] = {\n+        cls: len(dep_graph.get(cls, set())) for cls in instance_by_class\n+    }\n+\n+    # Find all nodes with in-degree 0\n+    queue: list[type[AgentMiddleware[Any, Any]]] = [\n+        cls for cls in instance_by_class if in_degree[cls] == 0\n+    ]\n+    # Sort queue for stability\n+    queue.sort(key=lambda c: c.__name__)\n+\n+    sorted_classes: list[type[AgentMiddleware[Any, Any]]] = []\n+\n+    while queue:\n+        # Remove a node with in-degree 0\n+        current = queue.pop(0)\n+        sorted_classes.append(current)\n+\n+        # For each node that depends on current, decrease its in-degree\n+        for cls, deps in dep_graph.items():\n+            if current in deps:\n+                in_degree[cls] -= 1\n+                if in_degree[cls] == 0:\n+                    queue.append(cls)\n+                    # Keep queue sorted for stability\n+                    queue.sort(key=lambda c: c.__name__)\n+\n+    # Check for circular dependencies\n+    if len(sorted_classes) != len(instance_by_class):\n+        msg = \"Circular dependency detected in middleware\"\n+        raise ValueError(msg)\n+\n+    # Build result list\n+    result: list[AgentMiddleware[StateT_co, ContextT]] = [\n+        instance_by_class[cls] for cls in sorted_classes\n+    ]\n+\n+    return result",
+        "comment_created_at": "2025-12-28T19:08:06+00:00",
+        "comment_author": "diffray-bot",
+        "comment_body": "\ud83d\udfe1 **MEDIUM** - Complex dependency resolution logic should be extracted\n**Agent:** [architecture](https://diffray.ai/agents/architecture)\n\n**Category:** architecture\n\n**Description:**\nThe _resolve_middleware_dependencies function (170 lines) implements multiple concerns: graph construction, auto-instantiation, topological sorting, and cycle detection. This increases cognitive load and makes testing harder.\n\n**Suggestion:**\nExtract to separate module (e.g., middleware/dependency_resolver.py). Create a DependencyResolver class with separate methods for each concern. Factory should use a clean interface: resolved_middleware = dependency_resolver.resolve(middleware).\n\n**Confidence:** 70%\n**Rule:** `arch_srp_violation`\n<sub>Review ID: `c9898485-5a76-4c92-ac22-7c83e35a50c8`</sub>\n<sub>Rate it \ud83d\udc4d or \ud83d\udc4e to improve future reviews | Powered by <a href=\"https://diffray.ai?utm_source=github-private-issue\">diffray</a></sub>",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3087436739",
+    "pr_number": 36663,
+    "pr_file": "libs/core/langchain_core/indexing/api.py",
+    "created_at": "2026-04-15T15:03:54+00:00",
+    "commented_code": "def _batch(size: int, iterable: Iterable[T]) -> Iterator[list[T]]:\n     \"\"\"Utility batching function.\"\"\"\n+    if size <= 0:",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "3087436739",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 36663,
+        "pr_file": "libs/core/langchain_core/indexing/api.py",
+        "discussion_id": "3087436739",
+        "commented_code": "@@ -90,6 +90,9 @@ def _hash_nested_dict(\n \n def _batch(size: int, iterable: Iterable[T]) -> Iterator[list[T]]:\n     \"\"\"Utility batching function.\"\"\"\n+    if size <= 0:",
+        "comment_created_at": "2026-04-15T15:03:54+00:00",
+        "comment_author": "afurm",
+        "comment_body": "The fix is correct and well-scoped. A `size=0` case would have caused `_batch` to loop forever since `islice(it, 0)` always yields nothing \u2014 the while loop never breaks. Good catch and clean fix.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3142878118",
+    "pr_number": 37014,
+    "pr_file": "libs/partners/openai/langchain_openai/embeddings/base.py",
+    "created_at": "2026-04-26T02:30:27+00:00",
+    "commented_code": "\"\"\"\n         _chunk_size = chunk_size or self.chunk_size\n         client_kwargs = {**self._invocation_params, **kwargs}\n-        _iter, tokens, indices, token_counts = self._tokenize(texts, _chunk_size)\n+        _iter, tokens, indices = self._tokenize(texts, _chunk_size)\n         batched_embeddings: list[list[float]] = []\n-\n-        # Process in batches respecting the token limit\n-        i = 0\n-        while i < len(tokens):\n-            # Determine how many chunks we can include in this batch\n-            batch_token_count = 0\n-            batch_end = i\n-\n-            for j in range(i, min(i + _chunk_size, len(tokens))):\n-                chunk_tokens = token_counts[j]\n-                # Check if adding this chunk would exceed the limit\n-                if batch_token_count + chunk_tokens > MAX_TOKENS_PER_REQUEST:\n-                    if batch_end == i:\n-                        # Single chunk exceeds limit - handle it anyway\n-                        batch_end = j + 1\n-                    break\n-                batch_token_count += chunk_tokens\n-                batch_end = j + 1\n-\n-            # Make API call with this batch\n-            batch_tokens = tokens[i:batch_end]\n-            response = self.client.create(input=batch_tokens, **client_kwargs)\n+        for i in _iter:\n+            response = self.client.create(\n+                input=tokens[i : i + _chunk_size], **client_kwargs\n+            )",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "3142878118",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 37014,
+        "pr_file": "libs/partners/openai/langchain_openai/embeddings/base.py",
+        "discussion_id": "3142878118",
+        "commented_code": "@@ -592,36 +588,16 @@ def _get_len_safe_embeddings(\n         \"\"\"\n         _chunk_size = chunk_size or self.chunk_size\n         client_kwargs = {**self._invocation_params, **kwargs}\n-        _iter, tokens, indices, token_counts = self._tokenize(texts, _chunk_size)\n+        _iter, tokens, indices = self._tokenize(texts, _chunk_size)\n         batched_embeddings: list[list[float]] = []\n-\n-        # Process in batches respecting the token limit\n-        i = 0\n-        while i < len(tokens):\n-            # Determine how many chunks we can include in this batch\n-            batch_token_count = 0\n-            batch_end = i\n-\n-            for j in range(i, min(i + _chunk_size, len(tokens))):\n-                chunk_tokens = token_counts[j]\n-                # Check if adding this chunk would exceed the limit\n-                if batch_token_count + chunk_tokens > MAX_TOKENS_PER_REQUEST:\n-                    if batch_end == i:\n-                        # Single chunk exceeds limit - handle it anyway\n-                        batch_end = j + 1\n-                    break\n-                batch_token_count += chunk_tokens\n-                batch_end = j + 1\n-\n-            # Make API call with this batch\n-            batch_tokens = tokens[i:batch_end]\n-            response = self.client.create(input=batch_tokens, **client_kwargs)\n+        for i in _iter:\n+            response = self.client.create(\n+                input=tokens[i : i + _chunk_size], **client_kwargs\n+            )",
+        "comment_created_at": "2026-04-26T02:30:27+00:00",
+        "comment_author": "ShivamSinghNow",
+        "comment_body": "\u26a0\ufe0f **ScarTissue: possible regression of historical bug**\n\nThis change rhymes with commit [`2d4f00a`](https://github.com/langchain-ai/langchain/commit/2d4f00a45130f62c1b994ff03c032f308d79456e):\n> fix(openai): Respect 300k token limit for embeddings API requests (#33668)\n\n**Why this matters:** Commit 2d4f00a fixed a `400 BadRequestError: Requested 673477 tokens, max 300000 tokens per request` crash by replacing fixed-size `chunk_size` batching with token-aware dynamic batching that respects `MAX_TOKENS_PER_REQUEST = 300000` \u2014 this PR removes that entire token-counting and dynamic batching mechanism (both `token_counts` tracking in `_tokenize` and the `while` loop in `_get_len_safe_embeddings`/`_aget_len_safe_embeddings`), reverting to the naive fixed-size batching that caused the original crash.\n\n**Suggested fix:**\nRestore token-aware dynamic batching in both `_get_len_safe_embeddings` and `_aget_len_safe_embeddings`:\n```python\n# After _tokenize, compute per-chunk token counts:\ntoken_counts = [len(t) if isinstance(t, list) else len(t.split()) for t in tokens]\n\n# Replace the for loop with:\ni = 0\nwhile i < len(tokens):\n    batch_token_count = 0\n    batch_end = i\n    for j in range(i, min(i + _chunk_size, len(tokens))):\n        chunk_tokens = token_counts[j]\n        if batch_token_count + chunk_tokens > MAX_TOKENS_PER_REQUEST:\n            if batch_end == i:\n                batch_end = j + 1\n            break\n        batch_token_count += chunk_tokens\n        batch_end = j + 1\n    response = self.client.create(input=tokens[i:batch_end], **client_kwargs)\n    ...\n    i = batch_end\n```\n\n**Severity:** high \u00b7 **Confidence:** 97%\n\n---\n<sub>Posted by [ScarTissue](https://github.com/ShivamSinghNow/scartissue) \u2014 every codebase remembers its bugs.</sub>",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2529205019",
+    "pr_number": 33668,
+    "pr_file": "libs/partners/openai/langchain_openai/embeddings/base.py",
+    "created_at": "2025-11-14T23:10:27+00:00",
+    "commented_code": "client_kwargs = {**self._invocation_params, **kwargs}\n         _iter, tokens, indices = self._tokenize(texts, _chunk_size)\n         batched_embeddings: list[list[float]] = []\n-        for i in _iter:\n-            response = self.client.create(\n-                input=tokens[i : i + _chunk_size], **client_kwargs\n-            )\n+        # Calculate token counts per chunk\n+        token_counts = [\n+            len(t) if isinstance(t, list) else len(t.split()) for t in tokens",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "2529205019",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 33668,
+        "pr_file": "libs/partners/openai/langchain_openai/embeddings/base.py",
+        "discussion_id": "2529205019",
+        "commented_code": "@@ -540,14 +543,38 @@ def _get_len_safe_embeddings(\n         client_kwargs = {**self._invocation_params, **kwargs}\n         _iter, tokens, indices = self._tokenize(texts, _chunk_size)\n         batched_embeddings: list[list[float]] = []\n-        for i in _iter:\n-            response = self.client.create(\n-                input=tokens[i : i + _chunk_size], **client_kwargs\n-            )\n+        # Calculate token counts per chunk\n+        token_counts = [\n+            len(t) if isinstance(t, list) else len(t.split()) for t in tokens",
+        "comment_created_at": "2025-11-14T23:10:27+00:00",
+        "comment_author": "ccurme",
+        "comment_body": "when is `t` a string?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2529217136",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 33668,
+        "pr_file": "libs/partners/openai/langchain_openai/embeddings/base.py",
+        "discussion_id": "2529205019",
+        "commented_code": "@@ -540,14 +543,38 @@ def _get_len_safe_embeddings(\n         client_kwargs = {**self._invocation_params, **kwargs}\n         _iter, tokens, indices = self._tokenize(texts, _chunk_size)\n         batched_embeddings: list[list[float]] = []\n-        for i in _iter:\n-            response = self.client.create(\n-                input=tokens[i : i + _chunk_size], **client_kwargs\n-            )\n+        # Calculate token counts per chunk\n+        token_counts = [\n+            len(t) if isinstance(t, list) else len(t.split()) for t in tokens",
+        "comment_created_at": "2025-11-14T23:20:02+00:00",
+        "comment_author": "mdrxy",
+        "comment_body": "when using HuggingFace transformers",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2529205972",
+    "pr_number": 33668,
+    "pr_file": "libs/partners/openai/langchain_openai/embeddings/base.py",
+    "created_at": "2025-11-14T23:11:20+00:00",
+    "commented_code": "client_kwargs = {**self._invocation_params, **kwargs}\n         _iter, tokens, indices = self._tokenize(texts, _chunk_size)\n         batched_embeddings: list[list[float]] = []\n-        for i in _iter:\n-            response = self.client.create(\n-                input=tokens[i : i + _chunk_size], **client_kwargs\n-            )\n+        # Calculate token counts per chunk\n+        token_counts = [\n+            len(t) if isinstance(t, list) else len(t.split()) for t in tokens\n+        ]\n+\n+        # Process in batches respecting the token limit\n+        i = 0\n+        while i < len(tokens):",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "2529205972",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 33668,
+        "pr_file": "libs/partners/openai/langchain_openai/embeddings/base.py",
+        "discussion_id": "2529205972",
+        "commented_code": "@@ -540,14 +543,38 @@ def _get_len_safe_embeddings(\n         client_kwargs = {**self._invocation_params, **kwargs}\n         _iter, tokens, indices = self._tokenize(texts, _chunk_size)\n         batched_embeddings: list[list[float]] = []\n-        for i in _iter:\n-            response = self.client.create(\n-                input=tokens[i : i + _chunk_size], **client_kwargs\n-            )\n+        # Calculate token counts per chunk\n+        token_counts = [\n+            len(t) if isinstance(t, list) else len(t.split()) for t in tokens\n+        ]\n+\n+        # Process in batches respecting the token limit\n+        i = 0\n+        while i < len(tokens):",
+        "comment_created_at": "2025-11-14T23:11:20+00:00",
+        "comment_author": "ccurme",
+        "comment_body": "can we guarantee we exit this loop",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2529263832",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 33668,
+        "pr_file": "libs/partners/openai/langchain_openai/embeddings/base.py",
+        "discussion_id": "2529205972",
+        "commented_code": "@@ -540,14 +543,38 @@ def _get_len_safe_embeddings(\n         client_kwargs = {**self._invocation_params, **kwargs}\n         _iter, tokens, indices = self._tokenize(texts, _chunk_size)\n         batched_embeddings: list[list[float]] = []\n-        for i in _iter:\n-            response = self.client.create(\n-                input=tokens[i : i + _chunk_size], **client_kwargs\n-            )\n+        # Calculate token counts per chunk\n+        token_counts = [\n+            len(t) if isinstance(t, list) else len(t.split()) for t in tokens\n+        ]\n+\n+        # Process in batches respecting the token limit\n+        i = 0\n+        while i < len(tokens):",
+        "comment_created_at": "2025-11-14T23:47:14+00:00",
+        "comment_author": "mdrxy",
+        "comment_body": "yes, `batch_end` is guaranteed to be at least `i + 1` in each iteration and thus will eventually terminate when reaching `len(tokens`)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2331726035",
+    "pr_number": 32857,
+    "pr_file": "libs/core/langchain_core/runnables/graph_mermaid.py",
+    "created_at": "2025-09-09T01:12:54+00:00",
+    "commented_code": "return mermaid_graph\n \n \n-def _escape_node_label(node_label: str) -> str:\n-    \"\"\"Escapes the node label for Mermaid syntax.\"\"\"\n-    return re.sub(r\"[^a-zA-Z-_0-9]\", \"_\", node_label)\n+def _sanitize_node_label(node_label: str) -> str:\n+    \"\"\"Convert a string into a Mermaid-compatible node label.\n+\n+    Any character outside [a-zA-Z0-9_-] is replaced with a 3-digit hash\n+    fragment so that the output is safe to use as a Mermaid identifier.\n+    \"\"\"",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "2331726035",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 32857,
+        "pr_file": "libs/core/langchain_core/runnables/graph_mermaid.py",
+        "discussion_id": "2331726035",
+        "commented_code": "@@ -238,9 +239,18 @@ def add_subgraph(edges: list[Edge], prefix: str) -> None:\n     return mermaid_graph\n \n \n-def _escape_node_label(node_label: str) -> str:\n-    \"\"\"Escapes the node label for Mermaid syntax.\"\"\"\n-    return re.sub(r\"[^a-zA-Z-_0-9]\", \"_\", node_label)\n+def _sanitize_node_label(node_label: str) -> str:\n+    \"\"\"Convert a string into a Mermaid-compatible node label.\n+\n+    Any character outside [a-zA-Z0-9_-] is replaced with a 3-digit hash\n+    fragment so that the output is safe to use as a Mermaid identifier.\n+    \"\"\"",
+        "comment_created_at": "2025-09-09T01:12:54+00:00",
+        "comment_author": "sydney-runkle",
+        "comment_body": "Curious, why this approach?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2331833848",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 32857,
+        "pr_file": "libs/core/langchain_core/runnables/graph_mermaid.py",
+        "discussion_id": "2331726035",
+        "commented_code": "@@ -238,9 +239,18 @@ def add_subgraph(edges: list[Edge], prefix: str) -> None:\n     return mermaid_graph\n \n \n-def _escape_node_label(node_label: str) -> str:\n-    \"\"\"Escapes the node label for Mermaid syntax.\"\"\"\n-    return re.sub(r\"[^a-zA-Z-_0-9]\", \"_\", node_label)\n+def _sanitize_node_label(node_label: str) -> str:\n+    \"\"\"Convert a string into a Mermaid-compatible node label.\n+\n+    Any character outside [a-zA-Z0-9_-] is replaced with a 3-digit hash\n+    fragment so that the output is safe to use as a Mermaid identifier.\n+    \"\"\"",
+        "comment_created_at": "2025-09-09T02:24:57+00:00",
+        "comment_author": "casparb",
+        "comment_body": "I used a hash function because `_escape_node_label` (now `_sanitize_node_label`) is called multiple times for each node when building the Mermaid code:\r\n* in the graph-building phase where the node is first defined (e.g. `8490a5(\u5f00\u59cb)`) \r\n* in the edge-building phase (e.g. `8490a5 --> 341ac9`)\r\n\r\nSo, the replacement for an unsafe character must be non-deterministic, otherwise we'll define a node, then unintentionally use a different node id when defining the edges involving that node later. \r\n\r\nI chose to replace an unsafe characters with three characters to reduce the chance of collisions. It seems much more likely that `hash(unsafe_char_1)[0] == hash(unsafe_char_2)[0]` occurs, instead of `hash(unsafe_char_1)[:3] == hash(unsafe_char_2)[:3]`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2337524132",
+    "pr_number": 32857,
+    "pr_file": "libs/core/langchain_core/runnables/graph_mermaid.py",
+    "created_at": "2025-09-10T18:01:51+00:00",
+    "commented_code": "return mermaid_graph\n \n \n-def _escape_node_label(node_label: str) -> str:\n-    \"\"\"Escapes the node label for Mermaid syntax.\"\"\"\n-    return re.sub(r\"[^a-zA-Z-_0-9]\", \"_\", node_label)\n+def _sanitize_node_label(node_label: str) -> str:",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "2337524132",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 32857,
+        "pr_file": "libs/core/langchain_core/runnables/graph_mermaid.py",
+        "discussion_id": "2337524132",
+        "commented_code": "@@ -238,9 +239,18 @@ def add_subgraph(edges: list[Edge], prefix: str) -> None:\n     return mermaid_graph\n \n \n-def _escape_node_label(node_label: str) -> str:\n-    \"\"\"Escapes the node label for Mermaid syntax.\"\"\"\n-    return re.sub(r\"[^a-zA-Z-_0-9]\", \"_\", node_label)\n+def _sanitize_node_label(node_label: str) -> str:",
+        "comment_created_at": "2025-09-10T18:01:51+00:00",
+        "comment_author": "eyurtsev",
+        "comment_body": "Let's avoid hashing. Could we replace each character outside the allowed range with the equivalent code point representation expressed in ascii? \r\n\r\nThe mapping doesn't need to be reversible, it only needs to be unique.\r\n\r\n--\r\n\r\n```python\r\ndef to_safe_ascii_id(label: str) -> str:\r\n    \"\"\"\r\n    Keep [a-zA-Z0-9] characters unchanged.\r\n    Map every other character -> 'n' + lowercase hex codepoint.\r\n    Result is only [a-z0-9].\r\n    Always prefixes with 'n' if first char isn't [a-zA-Z].\r\n    \"\"\"\r\n    out = []\r\n    for ch in label:\r\n        if ch.isalnum() and ch.isascii():\r\n            out.append(ch.lower())  # keep alphanumeric\r\n        else:\r\n            out.append('n' + format(ord(ch), 'x'))\r\n    slug = ''.join(out)\r\n    if not slug[0].isalpha():  # must start with a letter\r\n        slug = 'n' + slug\r\n    return slug\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2337527906",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 32857,
+        "pr_file": "libs/core/langchain_core/runnables/graph_mermaid.py",
+        "discussion_id": "2337524132",
+        "commented_code": "@@ -238,9 +239,18 @@ def add_subgraph(edges: list[Edge], prefix: str) -> None:\n     return mermaid_graph\n \n \n-def _escape_node_label(node_label: str) -> str:\n-    \"\"\"Escapes the node label for Mermaid syntax.\"\"\"\n-    return re.sub(r\"[^a-zA-Z-_0-9]\", \"_\", node_label)\n+def _sanitize_node_label(node_label: str) -> str:",
+        "comment_created_at": "2025-09-10T18:03:20+00:00",
+        "comment_author": "eyurtsev",
+        "comment_body": "```python\r\nprint(to_safe_ascii_id(\"\u5f00\u59cb\"))        # n5f00n59cb\r\nprint(to_safe_ascii_id(\"\u7ed3\u675f\"))        # n7ed3n675f\r\nprint(to_safe_ascii_id(\"#foo*&!\"))     # n23foo n2a n26 n21 -> n23foonn2ann26n21\r\nprint(to_safe_ascii_id(\"A\ud83d\udca1B\"))        # an1f4a1b\r\nprint(to_safe_ascii_id(\"login123\"))    # login123\r\nprint(to_safe_ascii_id(\"123start\"))    # n3123start  (prefix added since can't start with digit)\r\n\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2337529329",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 32857,
+        "pr_file": "libs/core/langchain_core/runnables/graph_mermaid.py",
+        "discussion_id": "2337524132",
+        "commented_code": "@@ -238,9 +239,18 @@ def add_subgraph(edges: list[Edge], prefix: str) -> None:\n     return mermaid_graph\n \n \n-def _escape_node_label(node_label: str) -> str:\n-    \"\"\"Escapes the node label for Mermaid syntax.\"\"\"\n-    return re.sub(r\"[^a-zA-Z-_0-9]\", \"_\", node_label)\n+def _sanitize_node_label(node_label: str) -> str:",
+        "comment_created_at": "2025-09-10T18:03:57+00:00",
+        "comment_author": "eyurtsev",
+        "comment_body": "Strictly speaking this isn't fully unique, unless you also escape `n`, but it doesn't matter in this case",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2337585525",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 32857,
+        "pr_file": "libs/core/langchain_core/runnables/graph_mermaid.py",
+        "discussion_id": "2337524132",
+        "commented_code": "@@ -238,9 +239,18 @@ def add_subgraph(edges: list[Edge], prefix: str) -> None:\n     return mermaid_graph\n \n \n-def _escape_node_label(node_label: str) -> str:\n-    \"\"\"Escapes the node label for Mermaid syntax.\"\"\"\n-    return re.sub(r\"[^a-zA-Z-_0-9]\", \"_\", node_label)\n+def _sanitize_node_label(node_label: str) -> str:",
+        "comment_created_at": "2025-09-10T18:30:46+00:00",
+        "comment_author": "casparb",
+        "comment_body": "good idea. thanks",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

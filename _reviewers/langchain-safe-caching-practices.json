@@ -1,0 +1,192 @@
+[
+  {
+    "discussion_id": "3173527866",
+    "pr_number": 37103,
+    "pr_file": "libs/core/langchain_core/tools/base.py",
+    "created_at": "2026-05-01T14:21:08+00:00",
+    "commented_code": "def __setattr__(self, name: str, value: object) -> None:\n         \"\"\"Clear schema caches when schema-influencing fields are mutated.\"\"\"\n         if name in self._SCHEMA_INVALIDATING_FIELDS:\n-            self.__dict__.pop(\"tool_call_schema\", None)\n-            self.__dict__.pop(\"args\", None)\n+            # tool_schema is the single root cache; _inferred_input_schema is\n+            # kept separate since it's also used outside the tool_schema path.\n+            self.__dict__.pop(\"tool_schema\", None)\n             self.__dict__.pop(\"_inferred_input_schema\", None)\n-            self.__dict__.pop(\"_approximate_schema_chars\", None)\n         super().__setattr__(name, value)\n \n+    @functools.cached_property",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "3173527866",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 37103,
+        "pr_file": "libs/core/langchain_core/tools/base.py",
+        "discussion_id": "3173527866",
+        "commented_code": "@@ -495,65 +498,100 @@ def __init__(self, **kwargs: Any) -> None:\n     def __setattr__(self, name: str, value: object) -> None:\n         \"\"\"Clear schema caches when schema-influencing fields are mutated.\"\"\"\n         if name in self._SCHEMA_INVALIDATING_FIELDS:\n-            self.__dict__.pop(\"tool_call_schema\", None)\n-            self.__dict__.pop(\"args\", None)\n+            # tool_schema is the single root cache; _inferred_input_schema is\n+            # kept separate since it's also used outside the tool_schema path.\n+            self.__dict__.pop(\"tool_schema\", None)\n             self.__dict__.pop(\"_inferred_input_schema\", None)\n-            self.__dict__.pop(\"_approximate_schema_chars\", None)\n         super().__setattr__(name, value)\n \n+    @functools.cached_property",
+        "comment_created_at": "2026-05-01T14:21:08+00:00",
+        "comment_author": "eyurtsev",
+        "comment_body": "Should we turn this into an LRU instead of a cached_property to reduce chance that user code has a memory leak? (or do we assume that the memory foot print is similar to the foot print of a tool instance?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2476363974",
+    "pr_number": 33728,
+    "pr_file": "libs/model-profiles/langchain/model_profiles/_models_dev_sdk.py",
+    "created_at": "2025-10-30T04:18:36+00:00",
+    "commented_code": null,
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "2476363974",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 33728,
+        "pr_file": "libs/model-profiles/langchain/model_profiles/_models_dev_sdk.py",
+        "discussion_id": "2476363974",
+        "commented_code": null,
+        "comment_created_at": "2025-10-30T04:18:36+00:00",
+        "comment_author": "sydney-runkle",
+        "comment_body": "my initial read here is that it's a bit funky to have a stateful client, maybe something like this would make more sense? no strong pref though bc this seems pretty internal, so do as you wish!\r\n\r\n```py\r\nfrom typing import Any\r\nfrom functools import lru_cache\r\nimport requests\r\n\r\nclass ModelsDevClient:\r\n    \"\"\"Client for interacting with the models.dev API.\"\"\"\r\n    \r\n    API_URL = \"https://models.dev/api.json\"\r\n    \r\n    def __init__(self, timeout: int = 30) -> None:\r\n        self._timeout = timeout\r\n    \r\n    @lru_cache(maxsize=1)\r\n    def fetch_data(self) -> dict[str, Any]:\r\n        \"\"\"Fetch data from the API (cached).\"\"\"\r\n        response = requests.get(self.API_URL, timeout=self._timeout)\r\n        response.raise_for_status()\r\n        return response.json()\r\n    \r\n    def get_profile_data(\r\n        self, provider_id: str, model_id: str\r\n    ) -> dict[str, Any] | None:\r\n        \"\"\"Get a specific model from a provider.\"\"\"\r\n        data = self.fetch_data()\r\n        provider = data.get(provider_id)\r\n        if provider is None:\r\n            return None\r\n        models = provider.get(\"models\", {})\r\n        return models.get(model_id)\r\n```\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2478301340",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 33728,
+        "pr_file": "libs/model-profiles/langchain/model_profiles/_models_dev_sdk.py",
+        "discussion_id": "2476363974",
+        "commented_code": null,
+        "comment_created_at": "2025-10-30T14:19:57+00:00",
+        "comment_author": "ccurme",
+        "comment_body": "thanks, added although I used `@cached_property` because\r\n> B019 Use of `functools.lru_cache` or `functools.cache` on methods can lead to memory leaks",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2246384423",
+    "pr_number": 32358,
+    "pr_file": "libs/core/langchain_core/messages/v1.py",
+    "created_at": "2025-07-31T21:10:22+00:00",
+    "commented_code": "return None\n \n     @property\n-    def tool_calls(self) -> list[types.ToolCall]:  # update once we fix branch\n+    def tool_calls(self) -> list[types.ToolCall]:\n         \"\"\"Get the tool calls made by the AI.\"\"\"\n-        if self._tool_calls:\n-            return self._tool_calls\n-        tool_calls = [block for block in self.content if block[\"type\"] == \"tool_call\"]\n-        if tool_calls:\n-            self._tool_calls = tool_calls\n-        return [block for block in self.content if block[\"type\"] == \"tool_call\"]\n+        if not self._tool_calls:\n+            self._tool_calls = [\n+                block for block in self.content if block[\"type\"] == \"tool_call\"\n+            ]\n+        return self._tool_calls\n \n     @tool_calls.setter\n     def tool_calls(self, value: list[types.ToolCall]) -> None:\n         \"\"\"Set the tool calls for the AI message.\"\"\"\n         self._tool_calls = value\n \n+    @property\n+    def invalid_tool_calls(self) -> list[types.InvalidToolCall]:\n+        \"\"\"Get the invalid tool calls made by the AI.\"\"\"\n+        if not self._invalid_tool_calls:\n+            self._invalid_tool_calls = [",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "2246384423",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 32358,
+        "pr_file": "libs/core/langchain_core/messages/v1.py",
+        "discussion_id": "2246384423",
+        "commented_code": "@@ -190,20 +202,28 @@ def text(self) -> Optional[str]:\n         return None\n \n     @property\n-    def tool_calls(self) -> list[types.ToolCall]:  # update once we fix branch\n+    def tool_calls(self) -> list[types.ToolCall]:\n         \"\"\"Get the tool calls made by the AI.\"\"\"\n-        if self._tool_calls:\n-            return self._tool_calls\n-        tool_calls = [block for block in self.content if block[\"type\"] == \"tool_call\"]\n-        if tool_calls:\n-            self._tool_calls = tool_calls\n-        return [block for block in self.content if block[\"type\"] == \"tool_call\"]\n+        if not self._tool_calls:\n+            self._tool_calls = [\n+                block for block in self.content if block[\"type\"] == \"tool_call\"\n+            ]\n+        return self._tool_calls\n \n     @tool_calls.setter\n     def tool_calls(self, value: list[types.ToolCall]) -> None:\n         \"\"\"Set the tool calls for the AI message.\"\"\"\n         self._tool_calls = value\n \n+    @property\n+    def invalid_tool_calls(self) -> list[types.InvalidToolCall]:\n+        \"\"\"Get the invalid tool calls made by the AI.\"\"\"\n+        if not self._invalid_tool_calls:\n+            self._invalid_tool_calls = [",
+        "comment_created_at": "2025-07-31T21:10:22+00:00",
+        "comment_author": "eyurtsev",
+        "comment_body": "I don't thin kthere's a need to memoize it?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2328328485",
+    "pr_number": 32828,
+    "pr_file": "libs/langchain_v1/langchain/agents/middleware/summarization.py",
+    "created_at": "2025-09-06T19:42:48+00:00",
+    "commented_code": "+import uuid\n+from collections.abc import Callable, Iterable\n+from typing import cast\n+\n+from langchain_core.messages import (\n+    AIMessage,\n+    AnyMessage,\n+    MessageLikeRepresentation,\n+    SystemMessage,\n+    ToolMessage,\n+)\n+from langchain_core.messages.utils import count_tokens_approximately, trim_messages\n+from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage\n+\n+from langchain.agents.types import AgentMiddleware, AgentState\n+from langchain.chat_models import BaseChatModel\n+\n+TokenCounter = Callable[[Iterable[MessageLikeRepresentation]], int]\n+\n+DEFAULT_SUMMARY_PROMPT = \"\"\"<role>\n+Context Extraction Assistant\n+</role>\n+\n+<primary_objective>\n+Your sole objective in this task is to extract the highest quality/most relevant context from the conversation history below.\n+</primary_objective>\n+\n+<objective_information>\n+You're nearing the total number of input tokens you can accept, so you must extract the highest quality/most relevant pieces of information from your conversation history.\n+This context will then overwrite the conversation history presented below. Because of this, ensure the context you extract is only the most important information to your overall goal.\n+</objective_information>\n+\n+<instructions>\n+The conversation history below will be replaced with the context you extract in this step. Because of this, you must do your very best to extract and record all of the most important context from the conversation history.\n+You want to ensure that you don't repeat any actions you've already completed, so the context you extract from the conversation history should be focused on the most important information to your overall goal.\n+</instructions>\n+\n+The user will message you with the full message history you'll be extracting context from, to then replace. Carefully read over it all, and think deeply about what information is most important to your overall goal that should be saved:\n+\n+With all of this in mind, please carefully read over the entire conversation history, and extract the most important and relevant context to replace it so that you can free up space in the conversation history.\n+Respond ONLY with the extracted context. Do not include any additional information, or text before or after the extracted context.\n+\n+<messages>\n+Messages to summarize:\n+{messages}\n+</messages>\"\"\"\n+\n+SUMMARY_PREFIX = \"## Previous conversation summary:\"\n+\n+_DEFAULT_MESSAGES_TO_KEEP = 20\n+_DEFAULT_TRIM_TOKEN_LIMIT = 4000\n+_DEFAULT_FALLBACK_MESSAGE_COUNT = 15\n+_SEARCH_RANGE_FOR_TOOL_PAIRS = 5\n+\n+\n+class SummarizationMiddleware(AgentMiddleware):\n+    \"\"\"Middleware that summarizes conversation history when token limits are approached.\n+\n+    This middleware monitors message token counts and automatically summarizes older\n+    messages when a threshold is reached, preserving recent messages and maintaining\n+    context continuity by ensuring AI/Tool message pairs remain together.\n+    \"\"\"\n+\n+    def __init__(\n+        self,\n+        model: BaseChatModel,\n+        max_tokens_before_summary: int | None = None,\n+        messages_to_keep: int = _DEFAULT_MESSAGES_TO_KEEP,\n+        token_counter: TokenCounter = count_tokens_approximately,\n+        summary_prompt: str = DEFAULT_SUMMARY_PROMPT,\n+        summary_prefix: str = SUMMARY_PREFIX,\n+    ):\n+        \"\"\"Initialize the summarization middleware.\n+\n+        Args:\n+            model: The language model to use for generating summaries.\n+            max_tokens_before_summary: Token threshold to trigger summarization.\n+                If None, summarization is disabled.\n+            messages_to_keep: Number of recent messages to preserve after summarization.\n+            token_counter: Function to count tokens in messages.\n+            summary_prompt: Prompt template for generating summaries.\n+            summary_prefix: Prefix added to system message when including summary.\n+        \"\"\"\n+        super().__init__()\n+        self.model = model\n+        self.max_tokens_before_summary = max_tokens_before_summary\n+        self.messages_to_keep = messages_to_keep\n+        self.token_counter = token_counter\n+        self.summary_prompt = summary_prompt\n+        self.summary_prefix = summary_prefix\n+\n+    def before_model(self, state: AgentState) -> AgentState | None:\n+        \"\"\"Process messages before model invocation, potentially triggering summarization.\"\"\"\n+        messages = state[\"messages\"]\n+        self._ensure_message_ids(messages)\n+\n+        total_tokens = self.token_counter(messages)",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "2328328485",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 32828,
+        "pr_file": "libs/langchain_v1/langchain/agents/middleware/summarization.py",
+        "discussion_id": "2328328485",
+        "commented_code": "@@ -0,0 +1,272 @@\n+import uuid\n+from collections.abc import Callable, Iterable\n+from typing import cast\n+\n+from langchain_core.messages import (\n+    AIMessage,\n+    AnyMessage,\n+    MessageLikeRepresentation,\n+    SystemMessage,\n+    ToolMessage,\n+)\n+from langchain_core.messages.utils import count_tokens_approximately, trim_messages\n+from langgraph.graph.message import REMOVE_ALL_MESSAGES, RemoveMessage\n+\n+from langchain.agents.types import AgentMiddleware, AgentState\n+from langchain.chat_models import BaseChatModel\n+\n+TokenCounter = Callable[[Iterable[MessageLikeRepresentation]], int]\n+\n+DEFAULT_SUMMARY_PROMPT = \"\"\"<role>\n+Context Extraction Assistant\n+</role>\n+\n+<primary_objective>\n+Your sole objective in this task is to extract the highest quality/most relevant context from the conversation history below.\n+</primary_objective>\n+\n+<objective_information>\n+You're nearing the total number of input tokens you can accept, so you must extract the highest quality/most relevant pieces of information from your conversation history.\n+This context will then overwrite the conversation history presented below. Because of this, ensure the context you extract is only the most important information to your overall goal.\n+</objective_information>\n+\n+<instructions>\n+The conversation history below will be replaced with the context you extract in this step. Because of this, you must do your very best to extract and record all of the most important context from the conversation history.\n+You want to ensure that you don't repeat any actions you've already completed, so the context you extract from the conversation history should be focused on the most important information to your overall goal.\n+</instructions>\n+\n+The user will message you with the full message history you'll be extracting context from, to then replace. Carefully read over it all, and think deeply about what information is most important to your overall goal that should be saved:\n+\n+With all of this in mind, please carefully read over the entire conversation history, and extract the most important and relevant context to replace it so that you can free up space in the conversation history.\n+Respond ONLY with the extracted context. Do not include any additional information, or text before or after the extracted context.\n+\n+<messages>\n+Messages to summarize:\n+{messages}\n+</messages>\"\"\"\n+\n+SUMMARY_PREFIX = \"## Previous conversation summary:\"\n+\n+_DEFAULT_MESSAGES_TO_KEEP = 20\n+_DEFAULT_TRIM_TOKEN_LIMIT = 4000\n+_DEFAULT_FALLBACK_MESSAGE_COUNT = 15\n+_SEARCH_RANGE_FOR_TOOL_PAIRS = 5\n+\n+\n+class SummarizationMiddleware(AgentMiddleware):\n+    \"\"\"Middleware that summarizes conversation history when token limits are approached.\n+\n+    This middleware monitors message token counts and automatically summarizes older\n+    messages when a threshold is reached, preserving recent messages and maintaining\n+    context continuity by ensuring AI/Tool message pairs remain together.\n+    \"\"\"\n+\n+    def __init__(\n+        self,\n+        model: BaseChatModel,\n+        max_tokens_before_summary: int | None = None,\n+        messages_to_keep: int = _DEFAULT_MESSAGES_TO_KEEP,\n+        token_counter: TokenCounter = count_tokens_approximately,\n+        summary_prompt: str = DEFAULT_SUMMARY_PROMPT,\n+        summary_prefix: str = SUMMARY_PREFIX,\n+    ):\n+        \"\"\"Initialize the summarization middleware.\n+\n+        Args:\n+            model: The language model to use for generating summaries.\n+            max_tokens_before_summary: Token threshold to trigger summarization.\n+                If None, summarization is disabled.\n+            messages_to_keep: Number of recent messages to preserve after summarization.\n+            token_counter: Function to count tokens in messages.\n+            summary_prompt: Prompt template for generating summaries.\n+            summary_prefix: Prefix added to system message when including summary.\n+        \"\"\"\n+        super().__init__()\n+        self.model = model\n+        self.max_tokens_before_summary = max_tokens_before_summary\n+        self.messages_to_keep = messages_to_keep\n+        self.token_counter = token_counter\n+        self.summary_prompt = summary_prompt\n+        self.summary_prefix = summary_prefix\n+\n+    def before_model(self, state: AgentState) -> AgentState | None:\n+        \"\"\"Process messages before model invocation, potentially triggering summarization.\"\"\"\n+        messages = state[\"messages\"]\n+        self._ensure_message_ids(messages)\n+\n+        total_tokens = self.token_counter(messages)",
+        "comment_created_at": "2025-09-06T19:42:48+00:00",
+        "comment_author": "hwchase17",
+        "comment_body": "do we want to cache this or something? recomputing kind of annoying?\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2748195067",
+    "pr_number": 34928,
+    "pr_file": "libs/core/langchain_core/output_parsers/list.py",
+    "created_at": "2026-01-30T22:16:51+00:00",
+    "commented_code": "pattern: str = r\"\\d+\\.\\s([^\n]+)\"\n     \"\"\"The pattern to match a numbered list item.\"\"\"\n \n+    @cached_property\n+    def _compiled_pattern(self) -> re.Pattern[str]:\n+        \"\"\"Compiled regex pattern for better performance.\"\"\"",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "2748195067",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 34928,
+        "pr_file": "libs/core/langchain_core/output_parsers/list.py",
+        "discussion_id": "2748195067",
+        "commented_code": "@@ -191,6 +192,11 @@ class NumberedListOutputParser(ListOutputParser):\n     pattern: str = r\"\\d+\\.\\s([^\\n]+)\"\n     \"\"\"The pattern to match a numbered list item.\"\"\"\n \n+    @cached_property\n+    def _compiled_pattern(self) -> re.Pattern[str]:\n+        \"\"\"Compiled regex pattern for better performance.\"\"\"",
+        "comment_created_at": "2026-01-30T22:16:51+00:00",
+        "comment_author": "mdrxy",
+        "comment_body": "```suggestion\n        \"\"\"Compile a regex pattern & cache.\"\"\"\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2949736303",
+    "pr_number": 35969,
+    "pr_file": "libs/partners/anthropic/langchain_anthropic/middleware/prompt_caching.py",
+    "created_at": "2026-03-17T21:49:17+00:00",
+    "commented_code": "if not self._should_apply_caching(request):\n             return await handler(request)\n \n-        model_settings = request.model_settings\n-        new_model_settings = {\n-            **model_settings,\n-            \"cache_control\": {\"type\": self.type, \"ttl\": self.ttl},\n-        }\n-        return await handler(request.override(model_settings=new_model_settings))\n+        return await handler(self._apply_caching(request))\n+\n+\n+def _tag_system_message(\n+    system_message: Any,\n+    cache_control: dict[str, str],\n+) -> Any:\n+    \"\"\"Tag the last content block of a system message with cache_control.\n+\n+    Returns the original system_message unchanged if there are no blocks\n+    to tag.\n+\n+    Args:\n+        system_message: The system message to tag.\n+        cache_control: The cache control dict to apply.\n+\n+    Returns:\n+        A new SystemMessage with cache_control on the last block, or the\n+        original if no modification was needed.\n+    \"\"\"\n+    if system_message is None:\n+        return system_message\n+\n+    content = system_message.content",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "2949736303",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 35969,
+        "pr_file": "libs/partners/anthropic/langchain_anthropic/middleware/prompt_caching.py",
+        "discussion_id": "2949736303",
+        "commented_code": "@@ -139,9 +179,77 @@ async def awrap_model_call(\n         if not self._should_apply_caching(request):\n             return await handler(request)\n \n-        model_settings = request.model_settings\n-        new_model_settings = {\n-            **model_settings,\n-            \"cache_control\": {\"type\": self.type, \"ttl\": self.ttl},\n-        }\n-        return await handler(request.override(model_settings=new_model_settings))\n+        return await handler(self._apply_caching(request))\n+\n+\n+def _tag_system_message(\n+    system_message: Any,\n+    cache_control: dict[str, str],\n+) -> Any:\n+    \"\"\"Tag the last content block of a system message with cache_control.\n+\n+    Returns the original system_message unchanged if there are no blocks\n+    to tag.\n+\n+    Args:\n+        system_message: The system message to tag.\n+        cache_control: The cache control dict to apply.\n+\n+    Returns:\n+        A new SystemMessage with cache_control on the last block, or the\n+        original if no modification was needed.\n+    \"\"\"\n+    if system_message is None:\n+        return system_message\n+\n+    content = system_message.content",
+        "comment_created_at": "2026-03-17T21:49:17+00:00",
+        "comment_author": "eyurtsev",
+        "comment_body": "why do we not use content_blocks?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2954194517",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 35969,
+        "pr_file": "libs/partners/anthropic/langchain_anthropic/middleware/prompt_caching.py",
+        "discussion_id": "2949736303",
+        "commented_code": "@@ -139,9 +179,77 @@ async def awrap_model_call(\n         if not self._should_apply_caching(request):\n             return await handler(request)\n \n-        model_settings = request.model_settings\n-        new_model_settings = {\n-            **model_settings,\n-            \"cache_control\": {\"type\": self.type, \"ttl\": self.ttl},\n-        }\n-        return await handler(request.override(model_settings=new_model_settings))\n+        return await handler(self._apply_caching(request))\n+\n+\n+def _tag_system_message(\n+    system_message: Any,\n+    cache_control: dict[str, str],\n+) -> Any:\n+    \"\"\"Tag the last content block of a system message with cache_control.\n+\n+    Returns the original system_message unchanged if there are no blocks\n+    to tag.\n+\n+    Args:\n+        system_message: The system message to tag.\n+        cache_control: The cache control dict to apply.\n+\n+    Returns:\n+        A new SystemMessage with cache_control on the last block, or the\n+        original if no modification was needed.\n+    \"\"\"\n+    if system_message is None:\n+        return system_message\n+\n+    content = system_message.content",
+        "comment_created_at": "2026-03-18T15:14:30+00:00",
+        "comment_author": "ccurme",
+        "comment_body": "if the system message had anything but `text`, this would change the types of those blocks, which I didn't view as the job of this middleware.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2487672490",
+    "pr_number": 32830,
+    "pr_file": "libs/core/langchain_core/messages/ai.py",
+    "created_at": "2025-11-03T19:51:16+00:00",
+    "commented_code": "This is a standard representation of token usage that is consistent across models.\n \n+    .. note::\n+        When using prompt caching (e.g., with Anthropic models), ``input_tokens``\n+        represents the total tokens processed (cached + non-cached), not just the\n+        tokens you're charged for. Use ``input_token_details`` to get the breakdown\n+        of cached vs non-cached tokens for billing calculations.",
+    "repo_full_name": "langchain-ai/langchain",
+    "discussion_comments": [
+      {
+        "comment_id": "2487672490",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 32830,
+        "pr_file": "libs/core/langchain_core/messages/ai.py",
+        "discussion_id": "2487672490",
+        "commented_code": "@@ -108,6 +108,12 @@ class UsageMetadata(TypedDict):\n \n     This is a standard representation of token usage that is consistent across models.\n \n+    .. note::\n+        When using prompt caching (e.g., with Anthropic models), ``input_tokens``\n+        represents the total tokens processed (cached + non-cached), not just the\n+        tokens you're charged for. Use ``input_token_details`` to get the breakdown\n+        of cached vs non-cached tokens for billing calculations.",
+        "comment_created_at": "2025-11-03T19:51:16+00:00",
+        "comment_author": "mdrxy",
+        "comment_body": "```suggestion\n    .. note::\n        When using prompt caching (e.g., with Anthropic models), `input_tokens`\n        represents the total tokens processed (cached and non-cached). Use `input_token_details` for a breakdown\n        of cached vs non-cached tokens for billing calculations.\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2670731485",
+        "repo_full_name": "langchain-ai/langchain",
+        "pr_number": 32830,
+        "pr_file": "libs/core/langchain_core/messages/ai.py",
+        "discussion_id": "2487672490",
+        "commented_code": "@@ -108,6 +108,12 @@ class UsageMetadata(TypedDict):\n \n     This is a standard representation of token usage that is consistent across models.\n \n+    .. note::\n+        When using prompt caching (e.g., with Anthropic models), ``input_tokens``\n+        represents the total tokens processed (cached + non-cached), not just the\n+        tokens you're charged for. Use ``input_token_details`` to get the breakdown\n+        of cached vs non-cached tokens for billing calculations.",
+        "comment_created_at": "2026-01-08T03:28:45+00:00",
+        "comment_author": "nomore8797",
+        "comment_body": "\u041f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u044c\u0442\u0435 \u0442\u043e\u043a\u0435\u043d \"\u0441\u0442\u0440\u0443\u043a\u0442\u0443\u0440\u043d\u043e\u0439 \u0435\u0434\u0438\u043d\u0438\u0446\u0435\u0439\"",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

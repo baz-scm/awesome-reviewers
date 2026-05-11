@@ -1,0 +1,356 @@
+[
+  {
+    "discussion_id": "1464525612",
+    "pr_number": 6758,
+    "pr_file": "packages/react-query/src/useIsFetching.ts",
+    "created_at": "2024-01-24T08:42:54+00:00",
+    "commented_code": "'use client'\n-import * as React from 'react'\n-import { notifyManager } from '@tanstack/query-core'\n-\n-import { useQueryClient } from './QueryClientProvider'\n+import { useQueryState } from './useQueryState'\n import type { QueryClient, QueryFilters } from '@tanstack/query-core'\n \n export function useIsFetching(\n   filters?: QueryFilters,\n   queryClient?: QueryClient,\n ): number {\n-  const client = useQueryClient(queryClient)\n-  const queryCache = client.getQueryCache()\n-\n-  return React.useSyncExternalStore(\n-    React.useCallback(\n-      (onStoreChange) =>\n-        queryCache.subscribe(notifyManager.batchCalls(onStoreChange)),\n-      [queryCache],\n-    ),\n-    () => client.isFetching(filters),\n-    () => client.isFetching(filters),\n-  )\n+  return useQueryState(\n+    { filters: { ...filters, fetchStatus: 'fetching' } },\n+    queryClient,\n+  ).length",
+    "repo_full_name": "TanStack/query",
+    "discussion_comments": [
+      {
+        "comment_id": "1464525612",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6758,
+        "pr_file": "packages/react-query/src/useIsFetching.ts",
+        "discussion_id": "1464525612",
+        "commented_code": "@@ -1,24 +1,13 @@\n 'use client'\n-import * as React from 'react'\n-import { notifyManager } from '@tanstack/query-core'\n-\n-import { useQueryClient } from './QueryClientProvider'\n+import { useQueryState } from './useQueryState'\n import type { QueryClient, QueryFilters } from '@tanstack/query-core'\n \n export function useIsFetching(\n   filters?: QueryFilters,\n   queryClient?: QueryClient,\n ): number {\n-  const client = useQueryClient(queryClient)\n-  const queryCache = client.getQueryCache()\n-\n-  return React.useSyncExternalStore(\n-    React.useCallback(\n-      (onStoreChange) =>\n-        queryCache.subscribe(notifyManager.batchCalls(onStoreChange)),\n-      [queryCache],\n-    ),\n-    () => client.isFetching(filters),\n-    () => client.isFetching(filters),\n-  )\n+  return useQueryState(\n+    { filters: { ...filters, fetchStatus: 'fetching' } },\n+    queryClient,\n+  ).length",
+        "comment_created_at": "2024-01-24T08:42:54+00:00",
+        "comment_author": "TkDodo",
+        "comment_body": "I don't really know why the tests fail here - they really shouldn't, the implementations are pretty much the same. I tracked it down to the `queryObserverOptions` event not being fired initially with the new impl.\r\n\r\nthese are the events we're receiving from the cache subscription:\r\n\r\n```\r\nuseQueryState observerResultsUpdated\r\nuseQueryState updated\r\nfire observerOptionsUpdated\r\nuseQueryState observerOptionsUpdated\r\nuseQueryState observerRemoved\r\n```\r\n\r\nwith the old impl, we get:\r\n\r\n```\r\nfire observerOptionsUpdated\r\nuseIsFetching observerOptionsUpdated\r\nuseIsFetching observerResultsUpdated\r\nuseIsFetching updated\r\nfire observerOptionsUpdated\r\nuseIsFetching observerOptionsUpdated\r\nuseIsFetching observerRemoved\r\n```\r\n\r\nso we get one more `observerOptionsUpdated` event, at which time we are still fetching. In the new impl, the first event we get is `observerResultsUpdated`, at which point we already have data. I don't currently know why that is ...",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1464555363",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6758,
+        "pr_file": "packages/react-query/src/useIsFetching.ts",
+        "discussion_id": "1464525612",
+        "commented_code": "@@ -1,24 +1,13 @@\n 'use client'\n-import * as React from 'react'\n-import { notifyManager } from '@tanstack/query-core'\n-\n-import { useQueryClient } from './QueryClientProvider'\n+import { useQueryState } from './useQueryState'\n import type { QueryClient, QueryFilters } from '@tanstack/query-core'\n \n export function useIsFetching(\n   filters?: QueryFilters,\n   queryClient?: QueryClient,\n ): number {\n-  const client = useQueryClient(queryClient)\n-  const queryCache = client.getQueryCache()\n-\n-  return React.useSyncExternalStore(\n-    React.useCallback(\n-      (onStoreChange) =>\n-        queryCache.subscribe(notifyManager.batchCalls(onStoreChange)),\n-      [queryCache],\n-    ),\n-    () => client.isFetching(filters),\n-    () => client.isFetching(filters),\n-  )\n+  return useQueryState(\n+    { filters: { ...filters, fetchStatus: 'fetching' } },\n+    queryClient,\n+  ).length",
+        "comment_created_at": "2024-01-24T09:06:04+00:00",
+        "comment_author": "TkDodo",
+        "comment_body": "pff, it seems to have something to do with the ref workaround.\r\n\r\nI refactored it back to the original implementation, step by step. Even if we store the `number` result of `client.isFetching()` in a ref, then read from the ref in `getSnapshot`, it fails, but if we directly read from `client.isFetching()` in `getSnapshot`, it works.\r\n\r\nThis is so baffling, I guess \"don't read refs during render\" is coming to bite us here . I tracked the difference by logging the value of the ref and reading `isFetching()` directly, and there are indeed differences:\r\n\r\n```\r\ngetSnapshot 0 0\r\ngetSnapshot 0 0\r\ngetSnapshot 0 1\r\ngetSnapshot 0 1\r\ngetSnapshot 0 1\r\n```\r\n\r\nI think moving the read + structural sharing into `getSnapshot` could solve it \ud83e\udd14 ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1464593187",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6758,
+        "pr_file": "packages/react-query/src/useIsFetching.ts",
+        "discussion_id": "1464525612",
+        "commented_code": "@@ -1,24 +1,13 @@\n 'use client'\n-import * as React from 'react'\n-import { notifyManager } from '@tanstack/query-core'\n-\n-import { useQueryClient } from './QueryClientProvider'\n+import { useQueryState } from './useQueryState'\n import type { QueryClient, QueryFilters } from '@tanstack/query-core'\n \n export function useIsFetching(\n   filters?: QueryFilters,\n   queryClient?: QueryClient,\n ): number {\n-  const client = useQueryClient(queryClient)\n-  const queryCache = client.getQueryCache()\n-\n-  return React.useSyncExternalStore(\n-    React.useCallback(\n-      (onStoreChange) =>\n-        queryCache.subscribe(notifyManager.batchCalls(onStoreChange)),\n-      [queryCache],\n-    ),\n-    () => client.isFetching(filters),\n-    () => client.isFetching(filters),\n-  )\n+  return useQueryState(\n+    { filters: { ...filters, fetchStatus: 'fetching' } },\n+    queryClient,\n+  ).length",
+        "comment_created_at": "2024-01-24T09:23:48+00:00",
+        "comment_author": "TkDodo",
+        "comment_body": "fixed it: 4f000317\r\n\r\n`useMutationState` likely needs the same change",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3063549929",
+    "pr_number": 9968,
+    "pr_file": "packages/query-core/src/queryObserver.ts",
+    "created_at": "2026-04-10T10:04:47+00:00",
+    "commented_code": "if (this.listeners.size === 1) {\n       this.#currentQuery.addObserver(this)\n \n-      if (shouldFetchOnMount(this.#currentQuery, this.options)) {\n+      // Check if this query is pending hydration via options._isHydrating\n+      // If so, skip fetch unless:\n+      // - refetchOnMount is explicitly 'always', or\n+      // - the hydrated data is stale (e.g., cached markup scenario where\n+      //   server fetch happened long ago)\n+      const resolvedRefetchOnMount =\n+        typeof this.options.refetchOnMount === 'function'\n+          ? this.options.refetchOnMount(this.#currentQuery)\n+          : this.options.refetchOnMount\n+\n+      const shouldSkipFetchForHydration =\n+        this.options._isHydrating &&\n+        resolvedRefetchOnMount !== 'always' &&\n+        !isStale(this.#currentQuery, this.options)\n+\n+      if (\n+        shouldFetchOnMount(this.#currentQuery, this.options) &&\n+        !shouldSkipFetchForHydration\n+      ) {",
+    "repo_full_name": "TanStack/query",
+    "discussion_comments": [
+      {
+        "comment_id": "3063549929",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 9968,
+        "pr_file": "packages/query-core/src/queryObserver.ts",
+        "discussion_id": "3063549929",
+        "commented_code": "@@ -96,7 +96,25 @@ export class QueryObserver<\n     if (this.listeners.size === 1) {\n       this.#currentQuery.addObserver(this)\n \n-      if (shouldFetchOnMount(this.#currentQuery, this.options)) {\n+      // Check if this query is pending hydration via options._isHydrating\n+      // If so, skip fetch unless:\n+      // - refetchOnMount is explicitly 'always', or\n+      // - the hydrated data is stale (e.g., cached markup scenario where\n+      //   server fetch happened long ago)\n+      const resolvedRefetchOnMount =\n+        typeof this.options.refetchOnMount === 'function'\n+          ? this.options.refetchOnMount(this.#currentQuery)\n+          : this.options.refetchOnMount\n+\n+      const shouldSkipFetchForHydration =\n+        this.options._isHydrating &&\n+        resolvedRefetchOnMount !== 'always' &&\n+        !isStale(this.#currentQuery, this.options)\n+\n+      if (\n+        shouldFetchOnMount(this.#currentQuery, this.options) &&\n+        !shouldSkipFetchForHydration\n+      ) {",
+        "comment_created_at": "2026-04-10T10:04:47+00:00",
+        "comment_author": "Ephem",
+        "comment_body": "There's also logic in `createResult` that needs to account for this. That's also used to determine what state the query _will be in_, the optimistic result that the query hooks see on first render, before this is called and the actual fetch (possibly) happens.\n\nThis gets into some other tricky territory (where we might already have other bugs tbh), which is that the first render needs to match the render on the server. If the data was not stale when server rendering, but is now stale, we need to:\n\n* Do the first render as if it's not stale to avoid hydration mismatches\n* Still trigger a refetch and update the query _after_ the first render",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2725368241",
+    "pr_number": 10061,
+    "pr_file": "packages/eslint-plugin-query/src/__tests__/no-module-query-client.test.ts",
+    "created_at": "2026-01-25T10:47:55+00:00",
+    "commented_code": "+import { RuleTester } from '@typescript-eslint/rule-tester'\n+import { rule } from '../rules/no-module-query-client/no-module-query-client.rule'\n+import { normalizeIndent } from './test-utils'\n+\n+const ruleTester = new RuleTester()\n+\n+ruleTester.run('no-module-query-client', rule, {\n+  valid: [\n+    {\n+      name: 'QueryClient created with React.useState in _app.tsx',\n+      filename: 'pages/_app.tsx',\n+      code: normalizeIndent`\n+        import { QueryClient } from \"@tanstack/react-query\";\n+        import React from \"react\";\n+\n+        export default function MyApp({ Component, pageProps }) {\n+          const [queryClient] = React.useState(() => new QueryClient());\n+          return null;\n+        }\n+      `,\n+    },\n+    {\n+      name: 'QueryClient created with useState in _app.tsx',\n+      filename: 'pages/_app.tsx',\n+      code: normalizeIndent`\n+        import { QueryClient } from \"@tanstack/react-query\";\n+        import { useState } from \"react\";\n+\n+        export default function MyApp({ Component, pageProps }) {\n+          const [queryClient] = useState(() => new QueryClient());\n+          return null;\n+        }\n+      `,\n+    },\n+    {\n+      name: 'QueryClient created with React.useRef in pages directory',\n+      filename: 'pages/_app.tsx',\n+      code: normalizeIndent`\n+        import { QueryClient } from \"@tanstack/react-query\";\n+        import React from \"react\";\n+\n+        export default function MyApp({ Component, pageProps }) {\n+          const queryClient = React.useRef(new QueryClient());",
+    "repo_full_name": "TanStack/query",
+    "discussion_comments": [
+      {
+        "comment_id": "2725368241",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 10061,
+        "pr_file": "packages/eslint-plugin-query/src/__tests__/no-module-query-client.test.ts",
+        "discussion_id": "2725368241",
+        "commented_code": "@@ -0,0 +1,218 @@\n+import { RuleTester } from '@typescript-eslint/rule-tester'\n+import { rule } from '../rules/no-module-query-client/no-module-query-client.rule'\n+import { normalizeIndent } from './test-utils'\n+\n+const ruleTester = new RuleTester()\n+\n+ruleTester.run('no-module-query-client', rule, {\n+  valid: [\n+    {\n+      name: 'QueryClient created with React.useState in _app.tsx',\n+      filename: 'pages/_app.tsx',\n+      code: normalizeIndent`\n+        import { QueryClient } from \"@tanstack/react-query\";\n+        import React from \"react\";\n+\n+        export default function MyApp({ Component, pageProps }) {\n+          const [queryClient] = React.useState(() => new QueryClient());\n+          return null;\n+        }\n+      `,\n+    },\n+    {\n+      name: 'QueryClient created with useState in _app.tsx',\n+      filename: 'pages/_app.tsx',\n+      code: normalizeIndent`\n+        import { QueryClient } from \"@tanstack/react-query\";\n+        import { useState } from \"react\";\n+\n+        export default function MyApp({ Component, pageProps }) {\n+          const [queryClient] = useState(() => new QueryClient());\n+          return null;\n+        }\n+      `,\n+    },\n+    {\n+      name: 'QueryClient created with React.useRef in pages directory',\n+      filename: 'pages/_app.tsx',\n+      code: normalizeIndent`\n+        import { QueryClient } from \"@tanstack/react-query\";\n+        import React from \"react\";\n+\n+        export default function MyApp({ Component, pageProps }) {\n+          const queryClient = React.useRef(new QueryClient());",
+        "comment_created_at": "2026-01-25T10:47:55+00:00",
+        "comment_author": "TkDodo",
+        "comment_body": "this needs to work, too:\n\n```\nconst queryClient = React.useRef(null)\nif (!queryClient.current) {\n  queryClient.current = new QueryClient()\n}\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1884030716",
+    "pr_number": 8434,
+    "pr_file": "packages/react-query/src/useIsFetching.ts",
+    "created_at": "2024-12-13T14:36:48+00:00",
+    "commented_code": "const client = useQueryClient(queryClient)\n   const queryCache = client.getQueryCache()\n \n-  return React.useSyncExternalStore(\n-    React.useCallback(\n-      (onStoreChange) =>\n-        queryCache.subscribe(notifyManager.batchCalls(onStoreChange)),\n-      [queryCache],\n-    ),\n-    () => client.isFetching(filters),\n-    () => client.isFetching(filters),\n+  const [number, setNumber] = React.useState<number>(() =>\n+    client.isFetching(filters),\n   )\n+\n+  const filtersRef = React.useRef(filters)\n+  React.useEffect(() => {\n+    filtersRef.current = filters\n+  }, [filters])",
+    "repo_full_name": "TanStack/query",
+    "discussion_comments": [
+      {
+        "comment_id": "1884030716",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 8434,
+        "pr_file": "packages/react-query/src/useIsFetching.ts",
+        "discussion_id": "1884030716",
+        "commented_code": "@@ -12,13 +12,27 @@ export function useIsFetching(\n   const client = useQueryClient(queryClient)\n   const queryCache = client.getQueryCache()\n \n-  return React.useSyncExternalStore(\n-    React.useCallback(\n-      (onStoreChange) =>\n-        queryCache.subscribe(notifyManager.batchCalls(onStoreChange)),\n-      [queryCache],\n-    ),\n-    () => client.isFetching(filters),\n-    () => client.isFetching(filters),\n+  const [number, setNumber] = React.useState<number>(() =>\n+    client.isFetching(filters),\n   )\n+\n+  const filtersRef = React.useRef(filters)\n+  React.useEffect(() => {\n+    filtersRef.current = filters\n+  }, [filters])",
+        "comment_created_at": "2024-12-13T14:36:48+00:00",
+        "comment_author": "KATT",
+        "comment_body": "`useMutationState()` was memoizing filters, so I'm guessing we should be doing it here too",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1884968151",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 8434,
+        "pr_file": "packages/react-query/src/useIsFetching.ts",
+        "discussion_id": "1884030716",
+        "commented_code": "@@ -12,13 +12,27 @@ export function useIsFetching(\n   const client = useQueryClient(queryClient)\n   const queryCache = client.getQueryCache()\n \n-  return React.useSyncExternalStore(\n-    React.useCallback(\n-      (onStoreChange) =>\n-        queryCache.subscribe(notifyManager.batchCalls(onStoreChange)),\n-      [queryCache],\n-    ),\n-    () => client.isFetching(filters),\n-    () => client.isFetching(filters),\n+  const [number, setNumber] = React.useState<number>(() =>\n+    client.isFetching(filters),\n   )\n+\n+  const filtersRef = React.useRef(filters)\n+  React.useEffect(() => {\n+    filtersRef.current = filters\n+  }, [filters])",
+        "comment_created_at": "2024-12-14T08:05:11+00:00",
+        "comment_author": "TkDodo",
+        "comment_body": "this could be done without dependency array - updating the ref after every render is fine.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2047396053",
+    "pr_number": 8701,
+    "pr_file": "packages/react-query/src/useBaseQuery.ts",
+    "created_at": "2025-04-16T17:23:02+00:00",
+    "commented_code": "defaultedOptions,\n   )\n \n+  if (process.env.NODE_ENV !== 'production') {\n+    if (!defaultedOptions.queryFn) {",
+    "repo_full_name": "TanStack/query",
+    "discussion_comments": [
+      {
+        "comment_id": "2047396053",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 8701,
+        "pr_file": "packages/react-query/src/useBaseQuery.ts",
+        "discussion_id": "2047396053",
+        "commented_code": "@@ -59,6 +59,14 @@ export function useBaseQuery<\n     defaultedOptions,\n   )\n \n+  if (process.env.NODE_ENV !== 'production') {\n+    if (!defaultedOptions.queryFn) {",
+        "comment_created_at": "2025-04-16T17:23:02+00:00",
+        "comment_author": "frolic",
+        "comment_body": "Thoughts on also checking `enabled` here?\r\n\r\nI often use a pattern like\r\n```ts\r\nconst queryKey = [ ... ];\r\nconst queryOptions = someOptional && anotherOptional\r\n  ? { queryKey, queryFn() { ... } }\r\n  : { queryKey, enabled: false };\r\n```\r\n\r\nso that I don't have to duplicate conditional checks inside the `queryFn` and `enabled`, but now this pattern spews error logs into the console.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2048567586",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 8701,
+        "pr_file": "packages/react-query/src/useBaseQuery.ts",
+        "discussion_id": "2047396053",
+        "commented_code": "@@ -59,6 +59,14 @@ export function useBaseQuery<\n     defaultedOptions,\n   )\n \n+  if (process.env.NODE_ENV !== 'production') {\n+    if (!defaultedOptions.queryFn) {",
+        "comment_created_at": "2025-04-17T09:16:20+00:00",
+        "comment_author": "TkDodo",
+        "comment_body": "you want to use `skipToken` for that:\r\n\r\n```\r\nimport { skipToken } from '@tanstack/react-query'\r\n\r\nqueryOptions = {\r\n  queryKey,\r\n  queryFn: someOptional && anotherOptional ? () => queryFn() : skipToken\r\n}\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2048635362",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 8701,
+        "pr_file": "packages/react-query/src/useBaseQuery.ts",
+        "discussion_id": "2047396053",
+        "commented_code": "@@ -59,6 +59,14 @@ export function useBaseQuery<\n     defaultedOptions,\n   )\n \n+  if (process.env.NODE_ENV !== 'production') {\n+    if (!defaultedOptions.queryFn) {",
+        "comment_created_at": "2025-04-17T09:58:41+00:00",
+        "comment_author": "frolic",
+        "comment_body": "ohh TIL, thank you!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1339745677",
+    "pr_number": 6077,
+    "pr_file": "packages/eslint-plugin-query/src/rules/stable-query-client/stable-query-client.rule.ts",
+    "created_at": "2023-09-28T08:37:49+00:00",
+    "commented_code": "+import { AST_NODE_TYPES } from '@typescript-eslint/utils'\n+import { ASTUtils } from '../../utils/ast-utils'\n+import { createRule } from '../../utils/create-rule'\n+import type { TSESLint } from '@typescript-eslint/utils'\n+\n+export const name = 'stable-query-client'\n+\n+export const rule = createRule({\n+  name,\n+  meta: {\n+    type: 'problem',\n+    docs: {\n+      description: 'Makes sure that QueryClient is stable',\n+      recommended: 'error',\n+    },\n+    messages: {\n+      unstable: [\n+        'QueryClient is not stable. It should be either extracted from the component or wrapped in React.useState.',\n+        'See https://tkdodo.eu/blog/react-query-fa-qs#2-the-queryclient-is-not-stable',\n+      ].join('\n'),\n+      fixTo: 'Fix to {{result}}',\n+    },\n+    hasSuggestions: true,\n+    fixable: 'code',\n+    schema: [],\n+  },\n+  defaultOptions: [],\n+\n+  create(context, _, helpers) {\n+    return {\n+      NewExpression(node) {\n+        if (\n+          node.callee.type !== AST_NODE_TYPES.Identifier ||\n+          node.callee.name !== 'QueryClient' ||\n+          !helpers.isSpecificTanstackQueryImport(\n+            node.callee,\n+            '@tanstack/react-query',\n+          )",
+    "repo_full_name": "TanStack/query",
+    "discussion_comments": [
+      {
+        "comment_id": "1339745677",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6077,
+        "pr_file": "packages/eslint-plugin-query/src/rules/stable-query-client/stable-query-client.rule.ts",
+        "discussion_id": "1339745677",
+        "commented_code": "@@ -0,0 +1,90 @@\n+import { AST_NODE_TYPES } from '@typescript-eslint/utils'\n+import { ASTUtils } from '../../utils/ast-utils'\n+import { createRule } from '../../utils/create-rule'\n+import type { TSESLint } from '@typescript-eslint/utils'\n+\n+export const name = 'stable-query-client'\n+\n+export const rule = createRule({\n+  name,\n+  meta: {\n+    type: 'problem',\n+    docs: {\n+      description: 'Makes sure that QueryClient is stable',\n+      recommended: 'error',\n+    },\n+    messages: {\n+      unstable: [\n+        'QueryClient is not stable. It should be either extracted from the component or wrapped in React.useState.',\n+        'See https://tkdodo.eu/blog/react-query-fa-qs#2-the-queryclient-is-not-stable',\n+      ].join('\\n'),\n+      fixTo: 'Fix to {{result}}',\n+    },\n+    hasSuggestions: true,\n+    fixable: 'code',\n+    schema: [],\n+  },\n+  defaultOptions: [],\n+\n+  create(context, _, helpers) {\n+    return {\n+      NewExpression(node) {\n+        if (\n+          node.callee.type !== AST_NODE_TYPES.Identifier ||\n+          node.callee.name !== 'QueryClient' ||\n+          !helpers.isSpecificTanstackQueryImport(\n+            node.callee,\n+            '@tanstack/react-query',\n+          )",
+        "comment_created_at": "2023-09-28T08:37:49+00:00",
+        "comment_author": "Newbie012",
+        "comment_body": "I was uncertain if this rule is relevant to non-react packages, so currently it works only if QueryClient is imported from `@tanstack/react-query`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1340557442",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6077,
+        "pr_file": "packages/eslint-plugin-query/src/rules/stable-query-client/stable-query-client.rule.ts",
+        "discussion_id": "1339745677",
+        "commented_code": "@@ -0,0 +1,90 @@\n+import { AST_NODE_TYPES } from '@typescript-eslint/utils'\n+import { ASTUtils } from '../../utils/ast-utils'\n+import { createRule } from '../../utils/create-rule'\n+import type { TSESLint } from '@typescript-eslint/utils'\n+\n+export const name = 'stable-query-client'\n+\n+export const rule = createRule({\n+  name,\n+  meta: {\n+    type: 'problem',\n+    docs: {\n+      description: 'Makes sure that QueryClient is stable',\n+      recommended: 'error',\n+    },\n+    messages: {\n+      unstable: [\n+        'QueryClient is not stable. It should be either extracted from the component or wrapped in React.useState.',\n+        'See https://tkdodo.eu/blog/react-query-fa-qs#2-the-queryclient-is-not-stable',\n+      ].join('\\n'),\n+      fixTo: 'Fix to {{result}}',\n+    },\n+    hasSuggestions: true,\n+    fixable: 'code',\n+    schema: [],\n+  },\n+  defaultOptions: [],\n+\n+  create(context, _, helpers) {\n+    return {\n+      NewExpression(node) {\n+        if (\n+          node.callee.type !== AST_NODE_TYPES.Identifier ||\n+          node.callee.name !== 'QueryClient' ||\n+          !helpers.isSpecificTanstackQueryImport(\n+            node.callee,\n+            '@tanstack/react-query',\n+          )",
+        "comment_created_at": "2023-09-28T18:57:56+00:00",
+        "comment_author": "TkDodo",
+        "comment_body": "good call, I think e.g. for solid it doesn't matter.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1340558895",
+    "pr_number": 6077,
+    "pr_file": "packages/eslint-plugin-query/src/rules/stable-query-client/stable-query-client.rule.ts",
+    "created_at": "2023-09-28T18:59:28+00:00",
+    "commented_code": "+import { AST_NODE_TYPES } from '@typescript-eslint/utils'\n+import { ASTUtils } from '../../utils/ast-utils'\n+import { createRule } from '../../utils/create-rule'\n+import type { TSESLint } from '@typescript-eslint/utils'\n+\n+export const name = 'stable-query-client'\n+\n+export const rule = createRule({\n+  name,\n+  meta: {\n+    type: 'problem',\n+    docs: {\n+      description: 'Makes sure that QueryClient is stable',\n+      recommended: 'error',\n+    },\n+    messages: {\n+      unstable: [\n+        'QueryClient is not stable. It should be either extracted from the component or wrapped in React.useState.',\n+        'See https://tkdodo.eu/blog/react-query-fa-qs#2-the-queryclient-is-not-stable',\n+      ].join('\n'),\n+      fixTo: 'Fix to {{result}}',\n+    },\n+    hasSuggestions: true,\n+    fixable: 'code',\n+    schema: [],\n+  },\n+  defaultOptions: [],\n+\n+  create(context, _, helpers) {\n+    return {\n+      NewExpression(node) {\n+        if (\n+          node.callee.type !== AST_NODE_TYPES.Identifier ||\n+          node.callee.name !== 'QueryClient' ||\n+          !helpers.isSpecificTanstackQueryImport(\n+            node.callee,\n+            '@tanstack/react-query',\n+          )\n+        ) {\n+          return\n+        }\n+\n+        const fnAncestor = ASTUtils.getFunctionAncestor(context)\n+\n+        if (!ASTUtils.isValidReactComponentOrHookName(fnAncestor?.id)) {\n+          return\n+        }\n+\n+        const declarator = ASTUtils.getClosestVariableDeclarator(node)\n+\n+        if (\n+          declarator?.init?.type === AST_NODE_TYPES.CallExpression &&\n+          ['useState', 'React.useState'].includes(",
+    "repo_full_name": "TanStack/query",
+    "discussion_comments": [
+      {
+        "comment_id": "1340558895",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6077,
+        "pr_file": "packages/eslint-plugin-query/src/rules/stable-query-client/stable-query-client.rule.ts",
+        "discussion_id": "1340558895",
+        "commented_code": "@@ -0,0 +1,88 @@\n+import { AST_NODE_TYPES } from '@typescript-eslint/utils'\n+import { ASTUtils } from '../../utils/ast-utils'\n+import { createRule } from '../../utils/create-rule'\n+import type { TSESLint } from '@typescript-eslint/utils'\n+\n+export const name = 'stable-query-client'\n+\n+export const rule = createRule({\n+  name,\n+  meta: {\n+    type: 'problem',\n+    docs: {\n+      description: 'Makes sure that QueryClient is stable',\n+      recommended: 'error',\n+    },\n+    messages: {\n+      unstable: [\n+        'QueryClient is not stable. It should be either extracted from the component or wrapped in React.useState.',\n+        'See https://tkdodo.eu/blog/react-query-fa-qs#2-the-queryclient-is-not-stable',\n+      ].join('\\n'),\n+      fixTo: 'Fix to {{result}}',\n+    },\n+    hasSuggestions: true,\n+    fixable: 'code',\n+    schema: [],\n+  },\n+  defaultOptions: [],\n+\n+  create(context, _, helpers) {\n+    return {\n+      NewExpression(node) {\n+        if (\n+          node.callee.type !== AST_NODE_TYPES.Identifier ||\n+          node.callee.name !== 'QueryClient' ||\n+          !helpers.isSpecificTanstackQueryImport(\n+            node.callee,\n+            '@tanstack/react-query',\n+          )\n+        ) {\n+          return\n+        }\n+\n+        const fnAncestor = ASTUtils.getFunctionAncestor(context)\n+\n+        if (!ASTUtils.isValidReactComponentOrHookName(fnAncestor?.id)) {\n+          return\n+        }\n+\n+        const declarator = ASTUtils.getClosestVariableDeclarator(node)\n+\n+        if (\n+          declarator?.init?.type === AST_NODE_TYPES.CallExpression &&\n+          ['useState', 'React.useState'].includes(",
+        "comment_created_at": "2023-09-28T18:59:28+00:00",
+        "comment_author": "TkDodo",
+        "comment_body": "I guess it would also work inside `useRef`, but that's hard to find I guess?\r\n\r\n```\r\nconst ref = useRef()\r\nif (!ref.current) {\r\n  ref.current = new QueryClient()\r\n}\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1340577290",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6077,
+        "pr_file": "packages/eslint-plugin-query/src/rules/stable-query-client/stable-query-client.rule.ts",
+        "discussion_id": "1340558895",
+        "commented_code": "@@ -0,0 +1,88 @@\n+import { AST_NODE_TYPES } from '@typescript-eslint/utils'\n+import { ASTUtils } from '../../utils/ast-utils'\n+import { createRule } from '../../utils/create-rule'\n+import type { TSESLint } from '@typescript-eslint/utils'\n+\n+export const name = 'stable-query-client'\n+\n+export const rule = createRule({\n+  name,\n+  meta: {\n+    type: 'problem',\n+    docs: {\n+      description: 'Makes sure that QueryClient is stable',\n+      recommended: 'error',\n+    },\n+    messages: {\n+      unstable: [\n+        'QueryClient is not stable. It should be either extracted from the component or wrapped in React.useState.',\n+        'See https://tkdodo.eu/blog/react-query-fa-qs#2-the-queryclient-is-not-stable',\n+      ].join('\\n'),\n+      fixTo: 'Fix to {{result}}',\n+    },\n+    hasSuggestions: true,\n+    fixable: 'code',\n+    schema: [],\n+  },\n+  defaultOptions: [],\n+\n+  create(context, _, helpers) {\n+    return {\n+      NewExpression(node) {\n+        if (\n+          node.callee.type !== AST_NODE_TYPES.Identifier ||\n+          node.callee.name !== 'QueryClient' ||\n+          !helpers.isSpecificTanstackQueryImport(\n+            node.callee,\n+            '@tanstack/react-query',\n+          )\n+        ) {\n+          return\n+        }\n+\n+        const fnAncestor = ASTUtils.getFunctionAncestor(context)\n+\n+        if (!ASTUtils.isValidReactComponentOrHookName(fnAncestor?.id)) {\n+          return\n+        }\n+\n+        const declarator = ASTUtils.getClosestVariableDeclarator(node)\n+\n+        if (\n+          declarator?.init?.type === AST_NODE_TYPES.CallExpression &&\n+          ['useState', 'React.useState'].includes(",
+        "comment_created_at": "2023-09-28T19:20:38+00:00",
+        "comment_author": "Newbie012",
+        "comment_body": "Oh, It's doable of course, but is this a real use case?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1340591054",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6077,
+        "pr_file": "packages/eslint-plugin-query/src/rules/stable-query-client/stable-query-client.rule.ts",
+        "discussion_id": "1340558895",
+        "commented_code": "@@ -0,0 +1,88 @@\n+import { AST_NODE_TYPES } from '@typescript-eslint/utils'\n+import { ASTUtils } from '../../utils/ast-utils'\n+import { createRule } from '../../utils/create-rule'\n+import type { TSESLint } from '@typescript-eslint/utils'\n+\n+export const name = 'stable-query-client'\n+\n+export const rule = createRule({\n+  name,\n+  meta: {\n+    type: 'problem',\n+    docs: {\n+      description: 'Makes sure that QueryClient is stable',\n+      recommended: 'error',\n+    },\n+    messages: {\n+      unstable: [\n+        'QueryClient is not stable. It should be either extracted from the component or wrapped in React.useState.',\n+        'See https://tkdodo.eu/blog/react-query-fa-qs#2-the-queryclient-is-not-stable',\n+      ].join('\\n'),\n+      fixTo: 'Fix to {{result}}',\n+    },\n+    hasSuggestions: true,\n+    fixable: 'code',\n+    schema: [],\n+  },\n+  defaultOptions: [],\n+\n+  create(context, _, helpers) {\n+    return {\n+      NewExpression(node) {\n+        if (\n+          node.callee.type !== AST_NODE_TYPES.Identifier ||\n+          node.callee.name !== 'QueryClient' ||\n+          !helpers.isSpecificTanstackQueryImport(\n+            node.callee,\n+            '@tanstack/react-query',\n+          )\n+        ) {\n+          return\n+        }\n+\n+        const fnAncestor = ASTUtils.getFunctionAncestor(context)\n+\n+        if (!ASTUtils.isValidReactComponentOrHookName(fnAncestor?.id)) {\n+          return\n+        }\n+\n+        const declarator = ASTUtils.getClosestVariableDeclarator(node)\n+\n+        if (\n+          declarator?.init?.type === AST_NODE_TYPES.CallExpression &&\n+          ['useState', 'React.useState'].includes(",
+        "comment_created_at": "2023-09-28T19:36:50+00:00",
+        "comment_author": "TkDodo",
+        "comment_body": "interestingly, there are lots of users who like to use refs for this. There's also a popular `useConstant` package that does it like that:\r\n\r\nhttps://github.com/Andarist/use-constant/blob/bdd74e6348c14b7947c278fa5a5abdc03a635ac2/src/index.ts#L5-L13\r\n\r\ncome to think about it, maybe we should only error if `new QueryClient()` is called directly in the render function of a component, without being wrapped in anything? Because:\r\n\r\n```\r\nconst client = useConstant(() => new QueryClient())\r\n```\r\n\r\nshould also work.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1340614103",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6077,
+        "pr_file": "packages/eslint-plugin-query/src/rules/stable-query-client/stable-query-client.rule.ts",
+        "discussion_id": "1340558895",
+        "commented_code": "@@ -0,0 +1,88 @@\n+import { AST_NODE_TYPES } from '@typescript-eslint/utils'\n+import { ASTUtils } from '../../utils/ast-utils'\n+import { createRule } from '../../utils/create-rule'\n+import type { TSESLint } from '@typescript-eslint/utils'\n+\n+export const name = 'stable-query-client'\n+\n+export const rule = createRule({\n+  name,\n+  meta: {\n+    type: 'problem',\n+    docs: {\n+      description: 'Makes sure that QueryClient is stable',\n+      recommended: 'error',\n+    },\n+    messages: {\n+      unstable: [\n+        'QueryClient is not stable. It should be either extracted from the component or wrapped in React.useState.',\n+        'See https://tkdodo.eu/blog/react-query-fa-qs#2-the-queryclient-is-not-stable',\n+      ].join('\\n'),\n+      fixTo: 'Fix to {{result}}',\n+    },\n+    hasSuggestions: true,\n+    fixable: 'code',\n+    schema: [],\n+  },\n+  defaultOptions: [],\n+\n+  create(context, _, helpers) {\n+    return {\n+      NewExpression(node) {\n+        if (\n+          node.callee.type !== AST_NODE_TYPES.Identifier ||\n+          node.callee.name !== 'QueryClient' ||\n+          !helpers.isSpecificTanstackQueryImport(\n+            node.callee,\n+            '@tanstack/react-query',\n+          )\n+        ) {\n+          return\n+        }\n+\n+        const fnAncestor = ASTUtils.getFunctionAncestor(context)\n+\n+        if (!ASTUtils.isValidReactComponentOrHookName(fnAncestor?.id)) {\n+          return\n+        }\n+\n+        const declarator = ASTUtils.getClosestVariableDeclarator(node)\n+\n+        if (\n+          declarator?.init?.type === AST_NODE_TYPES.CallExpression &&\n+          ['useState', 'React.useState'].includes(",
+        "comment_created_at": "2023-09-28T20:01:23+00:00",
+        "comment_author": "Newbie012",
+        "comment_body": "Sounds logical. Even this is considered valid:\r\n\r\n```\r\nconst client = React.useMemo(() => new QueryClient(), [])\r\n```\r\n\r\nI'll update the PR accordingly.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1341454680",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6077,
+        "pr_file": "packages/eslint-plugin-query/src/rules/stable-query-client/stable-query-client.rule.ts",
+        "discussion_id": "1340558895",
+        "commented_code": "@@ -0,0 +1,88 @@\n+import { AST_NODE_TYPES } from '@typescript-eslint/utils'\n+import { ASTUtils } from '../../utils/ast-utils'\n+import { createRule } from '../../utils/create-rule'\n+import type { TSESLint } from '@typescript-eslint/utils'\n+\n+export const name = 'stable-query-client'\n+\n+export const rule = createRule({\n+  name,\n+  meta: {\n+    type: 'problem',\n+    docs: {\n+      description: 'Makes sure that QueryClient is stable',\n+      recommended: 'error',\n+    },\n+    messages: {\n+      unstable: [\n+        'QueryClient is not stable. It should be either extracted from the component or wrapped in React.useState.',\n+        'See https://tkdodo.eu/blog/react-query-fa-qs#2-the-queryclient-is-not-stable',\n+      ].join('\\n'),\n+      fixTo: 'Fix to {{result}}',\n+    },\n+    hasSuggestions: true,\n+    fixable: 'code',\n+    schema: [],\n+  },\n+  defaultOptions: [],\n+\n+  create(context, _, helpers) {\n+    return {\n+      NewExpression(node) {\n+        if (\n+          node.callee.type !== AST_NODE_TYPES.Identifier ||\n+          node.callee.name !== 'QueryClient' ||\n+          !helpers.isSpecificTanstackQueryImport(\n+            node.callee,\n+            '@tanstack/react-query',\n+          )\n+        ) {\n+          return\n+        }\n+\n+        const fnAncestor = ASTUtils.getFunctionAncestor(context)\n+\n+        if (!ASTUtils.isValidReactComponentOrHookName(fnAncestor?.id)) {\n+          return\n+        }\n+\n+        const declarator = ASTUtils.getClosestVariableDeclarator(node)\n+\n+        if (\n+          declarator?.init?.type === AST_NODE_TYPES.CallExpression &&\n+          ['useState', 'React.useState'].includes(",
+        "comment_created_at": "2023-09-29T14:43:57+00:00",
+        "comment_author": "TkDodo",
+        "comment_body": "thanks. another thing I just realised: `new QueryClient()` is actually okay, and recommended, inside server components (async components). From our docs:\r\n\r\n```\r\nexport default async function PostsPage() {\r\n  const queryClient = new QueryClient()\r\n\r\n  await queryClient.prefetchQuery({\r\n    queryKey: ['posts'],\r\n    queryFn: getPosts,\r\n  })\r\n```\r\n\r\nthis is fine because server components never re-render, and if we'd put the QueryClient outside of the component, it would be shared between users and requests. Can we account for that?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1342003291",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6077,
+        "pr_file": "packages/eslint-plugin-query/src/rules/stable-query-client/stable-query-client.rule.ts",
+        "discussion_id": "1340558895",
+        "commented_code": "@@ -0,0 +1,88 @@\n+import { AST_NODE_TYPES } from '@typescript-eslint/utils'\n+import { ASTUtils } from '../../utils/ast-utils'\n+import { createRule } from '../../utils/create-rule'\n+import type { TSESLint } from '@typescript-eslint/utils'\n+\n+export const name = 'stable-query-client'\n+\n+export const rule = createRule({\n+  name,\n+  meta: {\n+    type: 'problem',\n+    docs: {\n+      description: 'Makes sure that QueryClient is stable',\n+      recommended: 'error',\n+    },\n+    messages: {\n+      unstable: [\n+        'QueryClient is not stable. It should be either extracted from the component or wrapped in React.useState.',\n+        'See https://tkdodo.eu/blog/react-query-fa-qs#2-the-queryclient-is-not-stable',\n+      ].join('\\n'),\n+      fixTo: 'Fix to {{result}}',\n+    },\n+    hasSuggestions: true,\n+    fixable: 'code',\n+    schema: [],\n+  },\n+  defaultOptions: [],\n+\n+  create(context, _, helpers) {\n+    return {\n+      NewExpression(node) {\n+        if (\n+          node.callee.type !== AST_NODE_TYPES.Identifier ||\n+          node.callee.name !== 'QueryClient' ||\n+          !helpers.isSpecificTanstackQueryImport(\n+            node.callee,\n+            '@tanstack/react-query',\n+          )\n+        ) {\n+          return\n+        }\n+\n+        const fnAncestor = ASTUtils.getFunctionAncestor(context)\n+\n+        if (!ASTUtils.isValidReactComponentOrHookName(fnAncestor?.id)) {\n+          return\n+        }\n+\n+        const declarator = ASTUtils.getClosestVariableDeclarator(node)\n+\n+        if (\n+          declarator?.init?.type === AST_NODE_TYPES.CallExpression &&\n+          ['useState', 'React.useState'].includes(",
+        "comment_created_at": "2023-09-30T19:55:52+00:00",
+        "comment_author": "Newbie012",
+        "comment_body": "Sure, that would make sense. I have updated the PR accordingly.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "978762615",
+    "pr_number": 4100,
+    "pr_file": "packages/react-query-devtools/src/utils.ts",
+    "created_at": "2022-09-23T14:53:23+00:00",
+    "commented_code": "},\n   )\n }\n+/**\n+ * Resolves to useEffect when \"window\" is not in scope and useLayoutEffect in the browser\n+ */\n+export const useIsomorphicEffect = isServer\n+  ? React.useEffect\n+  : React.useLayoutEffect\n \n export function useIsMounted() {\n   const mountedRef = React.useRef(false)\n   const isMounted = React.useCallback(() => mountedRef.current, [])\n \n-  React[isServer ? 'useEffect' : 'useLayoutEffect'](() => {\n+  useIsomorphicEffect(() => {",
+    "repo_full_name": "TanStack/query",
+    "discussion_comments": [
+      {
+        "comment_id": "978762615",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 4100,
+        "pr_file": "packages/react-query-devtools/src/utils.ts",
+        "discussion_id": "978762615",
+        "commented_code": "@@ -99,12 +99,18 @@ export function styled<T extends keyof HTMLElementTagNameMap>(\n     },\n   )\n }\n+/**\n+ * Resolves to useEffect when \"window\" is not in scope and useLayoutEffect in the browser\n+ */\n+export const useIsomorphicEffect = isServer\n+  ? React.useEffect\n+  : React.useLayoutEffect\n \n export function useIsMounted() {\n   const mountedRef = React.useRef(false)\n   const isMounted = React.useCallback(() => mountedRef.current, [])\n \n-  React[isServer ? 'useEffect' : 'useLayoutEffect'](() => {\n+  useIsomorphicEffect(() => {",
+        "comment_created_at": "2022-09-23T14:53:23+00:00",
+        "comment_author": "TkDodo",
+        "comment_body": "especially this should not be needed and have conflicts. we had some troubles with this and changed it to always be `useEffect` only.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "979102572",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 4100,
+        "pr_file": "packages/react-query-devtools/src/utils.ts",
+        "discussion_id": "978762615",
+        "commented_code": "@@ -99,12 +99,18 @@ export function styled<T extends keyof HTMLElementTagNameMap>(\n     },\n   )\n }\n+/**\n+ * Resolves to useEffect when \"window\" is not in scope and useLayoutEffect in the browser\n+ */\n+export const useIsomorphicEffect = isServer\n+  ? React.useEffect\n+  : React.useLayoutEffect\n \n export function useIsMounted() {\n   const mountedRef = React.useRef(false)\n   const isMounted = React.useCallback(() => mountedRef.current, [])\n \n-  React[isServer ? 'useEffect' : 'useLayoutEffect'](() => {\n+  useIsomorphicEffect(() => {",
+        "comment_created_at": "2022-09-23T22:33:45+00:00",
+        "comment_author": "salamaashoush",
+        "comment_body": "Ok I will fix that",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1393343233",
+    "pr_number": 6350,
+    "pr_file": "packages/react-query/src/suspense.ts",
+    "created_at": "2023-11-14T21:51:01+00:00",
+    "commented_code": "| undefined,\n   result: QueryObserverResult<any, any>,\n   isRestoring: boolean,\n-) => defaultedOptions?.suspense && willFetch(result, isRestoring)\n+) => {\n+  if (defaultedOptions?.suspense && result.isPending && !isRestoring) {\n+    return true\n+  }\n+  return defaultedOptions?.suspense && willFetch(result, isRestoring)",
+    "repo_full_name": "TanStack/query",
+    "discussion_comments": [
+      {
+        "comment_id": "1393343233",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6350,
+        "pr_file": "packages/react-query/src/suspense.ts",
+        "discussion_id": "1393343233",
+        "commented_code": "@@ -41,7 +41,12 @@ export const shouldSuspend = (\n     | undefined,\n   result: QueryObserverResult<any, any>,\n   isRestoring: boolean,\n-) => defaultedOptions?.suspense && willFetch(result, isRestoring)\n+) => {\n+  if (defaultedOptions?.suspense && result.isPending && !isRestoring) {\n+    return true\n+  }\n+  return defaultedOptions?.suspense && willFetch(result, isRestoring)",
+        "comment_created_at": "2023-11-14T21:51:01+00:00",
+        "comment_author": "TkDodo",
+        "comment_body": "I think we can just simplify this to:\r\n\r\n```\r\nreturn defaultedOptions?.suspense && result.isPending\r\n```\r\n\r\nbecause we really want to suspend every time when we have no data, which `isPending` guarantees.\r\n\r\nthe `!isRestoring` will have the same problem as the offline mode - while restoring from external storage, we would render the component with `undefined` ... that is desired for normal useQuery, but not for suspense",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1393809505",
+        "repo_full_name": "TanStack/query",
+        "pr_number": 6350,
+        "pr_file": "packages/react-query/src/suspense.ts",
+        "discussion_id": "1393343233",
+        "commented_code": "@@ -41,7 +41,12 @@ export const shouldSuspend = (\n     | undefined,\n   result: QueryObserverResult<any, any>,\n   isRestoring: boolean,\n-) => defaultedOptions?.suspense && willFetch(result, isRestoring)\n+) => {\n+  if (defaultedOptions?.suspense && result.isPending && !isRestoring) {\n+    return true\n+  }\n+  return defaultedOptions?.suspense && willFetch(result, isRestoring)",
+        "comment_created_at": "2023-11-15T08:13:29+00:00",
+        "comment_author": "incepter",
+        "comment_body": "OK on it.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

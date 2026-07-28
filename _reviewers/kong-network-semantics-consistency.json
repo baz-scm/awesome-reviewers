@@ -1,0 +1,360 @@
+[
+  {
+    "discussion_id": "178368626",
+    "pr_number": 3333,
+    "pr_file": "kong/plugins/http-log/handler.lua",
+    "created_at": "2018-03-30T20:12:31+00:00",
+    "commented_code": "end\n   name = \"[\" .. name .. \"] \"\n \n-  local ok, err\n+  local headers\n+  local req_url\n   local parsed_url = parse_url(conf.http_endpoint)\n-  local host = parsed_url.host\n-  local port = tonumber(parsed_url.port)\n \n-  local sock = ngx.socket.tcp()\n-  sock:settimeout(conf.timeout)\n-\n-  ok, err = sock:connect(host, port)\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to connect to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    return\n+  if parsed_url.userinfo then\n+    -- for lua-resty-http client Authorization\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type,\n+      [\"Authorization\"] = string_format(\n+        \"Basic %s\", ngx.encode_base64(parsed_url.userinfo))\n+    }\n+    req_url = parsed_url.scheme .. \"://\" .. parsed_url.host .. \":\" .. parsed_url.port\n+      .. parsed_url.path .. (parsed_url.params or \"\")\n+  else\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type\n+    }\n+    req_url = conf.http_endpoint\n   end\n \n-  if parsed_url.scheme == HTTPS then\n-    local _, err = sock:sslhandshake(true, host, false)\n-    if err then\n-      ngx.log(ngx.ERR, name .. \"failed to do SSL handshake with \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    end\n+  local httpc = http.new()\n+  httpc:set_timeout(conf.timeout)\n+  local res, err = httpc:request_uri(req_url, {\n+      ssl_verify = false,\n+      method = conf.method:upper(),\n+      body = body,\n+      headers = headers\n+  })\n+\n+  if not res then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url, err)\n+    return\n   end\n \n-  ok, err = sock:send(generate_post_payload(conf.method, conf.content_type, parsed_url, body))\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to send data to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n+  if res.status >= 400 then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url .. \"status: \" .. tostring(res.status), err)\n   end\n \n-  ok, err = sock:setkeepalive(conf.keepalive)\n+  local ok, err = httpc:set_keepalive(conf.keepalive)",
+    "repo_full_name": "Kong/kong",
+    "discussion_comments": [
+      {
+        "comment_id": "178368626",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 3333,
+        "pr_file": "kong/plugins/http-log/handler.lua",
+        "discussion_id": "178368626",
+        "commented_code": "@@ -72,36 +48,47 @@ local function log(premature, conf, body, name)\n   end\n   name = \"[\" .. name .. \"] \"\n \n-  local ok, err\n+  local headers\n+  local req_url\n   local parsed_url = parse_url(conf.http_endpoint)\n-  local host = parsed_url.host\n-  local port = tonumber(parsed_url.port)\n \n-  local sock = ngx.socket.tcp()\n-  sock:settimeout(conf.timeout)\n-\n-  ok, err = sock:connect(host, port)\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to connect to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    return\n+  if parsed_url.userinfo then\n+    -- for lua-resty-http client Authorization\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type,\n+      [\"Authorization\"] = string_format(\n+        \"Basic %s\", ngx.encode_base64(parsed_url.userinfo))\n+    }\n+    req_url = parsed_url.scheme .. \"://\" .. parsed_url.host .. \":\" .. parsed_url.port\n+      .. parsed_url.path .. (parsed_url.params or \"\")\n+  else\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type\n+    }\n+    req_url = conf.http_endpoint\n   end\n \n-  if parsed_url.scheme == HTTPS then\n-    local _, err = sock:sslhandshake(true, host, false)\n-    if err then\n-      ngx.log(ngx.ERR, name .. \"failed to do SSL handshake with \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    end\n+  local httpc = http.new()\n+  httpc:set_timeout(conf.timeout)\n+  local res, err = httpc:request_uri(req_url, {\n+      ssl_verify = false,\n+      method = conf.method:upper(),\n+      body = body,\n+      headers = headers\n+  })\n+\n+  if not res then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url, err)\n+    return\n   end\n \n-  ok, err = sock:send(generate_post_payload(conf.method, conf.content_type, parsed_url, body))\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to send data to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n+  if res.status >= 400 then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url .. \"status: \" .. tostring(res.status), err)\n   end\n \n-  ok, err = sock:setkeepalive(conf.keepalive)\n+  local ok, err = httpc:set_keepalive(conf.keepalive)",
+        "comment_created_at": "2018-03-30T20:12:31+00:00",
+        "comment_author": "thibaultcha",
+        "comment_body": "The [request_uri()](https://github.com/pintsized/lua-resty-http/blob/master/lib/resty/http.lua#L792) interface does the `set_keepalive()` automatically for us, so technically this would not be necessary.\r\n\r\nHowever, using the `request_uri()` interface also renders the `conf.keepalive` parameter useless. We should probably use the lower-level `request()` interface instead. This also mean we will need to handle the SSL handshake ourselves, something that the `request_uri()` interface was doing for us.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "178791901",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 3333,
+        "pr_file": "kong/plugins/http-log/handler.lua",
+        "discussion_id": "178368626",
+        "commented_code": "@@ -72,36 +48,47 @@ local function log(premature, conf, body, name)\n   end\n   name = \"[\" .. name .. \"] \"\n \n-  local ok, err\n+  local headers\n+  local req_url\n   local parsed_url = parse_url(conf.http_endpoint)\n-  local host = parsed_url.host\n-  local port = tonumber(parsed_url.port)\n \n-  local sock = ngx.socket.tcp()\n-  sock:settimeout(conf.timeout)\n-\n-  ok, err = sock:connect(host, port)\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to connect to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    return\n+  if parsed_url.userinfo then\n+    -- for lua-resty-http client Authorization\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type,\n+      [\"Authorization\"] = string_format(\n+        \"Basic %s\", ngx.encode_base64(parsed_url.userinfo))\n+    }\n+    req_url = parsed_url.scheme .. \"://\" .. parsed_url.host .. \":\" .. parsed_url.port\n+      .. parsed_url.path .. (parsed_url.params or \"\")\n+  else\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type\n+    }\n+    req_url = conf.http_endpoint\n   end\n \n-  if parsed_url.scheme == HTTPS then\n-    local _, err = sock:sslhandshake(true, host, false)\n-    if err then\n-      ngx.log(ngx.ERR, name .. \"failed to do SSL handshake with \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    end\n+  local httpc = http.new()\n+  httpc:set_timeout(conf.timeout)\n+  local res, err = httpc:request_uri(req_url, {\n+      ssl_verify = false,\n+      method = conf.method:upper(),\n+      body = body,\n+      headers = headers\n+  })\n+\n+  if not res then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url, err)\n+    return\n   end\n \n-  ok, err = sock:send(generate_post_payload(conf.method, conf.content_type, parsed_url, body))\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to send data to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n+  if res.status >= 400 then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url .. \"status: \" .. tostring(res.status), err)\n   end\n \n-  ok, err = sock:setkeepalive(conf.keepalive)\n+  local ok, err = httpc:set_keepalive(conf.keepalive)",
+        "comment_created_at": "2018-04-03T11:27:04+00:00",
+        "comment_author": "mengskysama",
+        "comment_body": "I PR for http-lua-resty add an option for keepalive, I think that way simple and grace.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "179334570",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 3333,
+        "pr_file": "kong/plugins/http-log/handler.lua",
+        "discussion_id": "178368626",
+        "commented_code": "@@ -72,36 +48,47 @@ local function log(premature, conf, body, name)\n   end\n   name = \"[\" .. name .. \"] \"\n \n-  local ok, err\n+  local headers\n+  local req_url\n   local parsed_url = parse_url(conf.http_endpoint)\n-  local host = parsed_url.host\n-  local port = tonumber(parsed_url.port)\n \n-  local sock = ngx.socket.tcp()\n-  sock:settimeout(conf.timeout)\n-\n-  ok, err = sock:connect(host, port)\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to connect to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    return\n+  if parsed_url.userinfo then\n+    -- for lua-resty-http client Authorization\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type,\n+      [\"Authorization\"] = string_format(\n+        \"Basic %s\", ngx.encode_base64(parsed_url.userinfo))\n+    }\n+    req_url = parsed_url.scheme .. \"://\" .. parsed_url.host .. \":\" .. parsed_url.port\n+      .. parsed_url.path .. (parsed_url.params or \"\")\n+  else\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type\n+    }\n+    req_url = conf.http_endpoint\n   end\n \n-  if parsed_url.scheme == HTTPS then\n-    local _, err = sock:sslhandshake(true, host, false)\n-    if err then\n-      ngx.log(ngx.ERR, name .. \"failed to do SSL handshake with \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    end\n+  local httpc = http.new()\n+  httpc:set_timeout(conf.timeout)\n+  local res, err = httpc:request_uri(req_url, {\n+      ssl_verify = false,\n+      method = conf.method:upper(),\n+      body = body,\n+      headers = headers\n+  })\n+\n+  if not res then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url, err)\n+    return\n   end\n \n-  ok, err = sock:send(generate_post_payload(conf.method, conf.content_type, parsed_url, body))\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to send data to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n+  if res.status >= 400 then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url .. \"status: \" .. tostring(res.status), err)\n   end\n \n-  ok, err = sock:setkeepalive(conf.keepalive)\n+  local ok, err = httpc:set_keepalive(conf.keepalive)",
+        "comment_created_at": "2018-04-05T02:04:36+00:00",
+        "comment_author": "thibaultcha",
+        "comment_body": "That works as well, unfortunately this PR will have to stay stale until/if it is merged upstream and Kong updates its dependency on it then.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "179405894",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 3333,
+        "pr_file": "kong/plugins/http-log/handler.lua",
+        "discussion_id": "178368626",
+        "commented_code": "@@ -72,36 +48,47 @@ local function log(premature, conf, body, name)\n   end\n   name = \"[\" .. name .. \"] \"\n \n-  local ok, err\n+  local headers\n+  local req_url\n   local parsed_url = parse_url(conf.http_endpoint)\n-  local host = parsed_url.host\n-  local port = tonumber(parsed_url.port)\n \n-  local sock = ngx.socket.tcp()\n-  sock:settimeout(conf.timeout)\n-\n-  ok, err = sock:connect(host, port)\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to connect to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    return\n+  if parsed_url.userinfo then\n+    -- for lua-resty-http client Authorization\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type,\n+      [\"Authorization\"] = string_format(\n+        \"Basic %s\", ngx.encode_base64(parsed_url.userinfo))\n+    }\n+    req_url = parsed_url.scheme .. \"://\" .. parsed_url.host .. \":\" .. parsed_url.port\n+      .. parsed_url.path .. (parsed_url.params or \"\")\n+  else\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type\n+    }\n+    req_url = conf.http_endpoint\n   end\n \n-  if parsed_url.scheme == HTTPS then\n-    local _, err = sock:sslhandshake(true, host, false)\n-    if err then\n-      ngx.log(ngx.ERR, name .. \"failed to do SSL handshake with \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    end\n+  local httpc = http.new()\n+  httpc:set_timeout(conf.timeout)\n+  local res, err = httpc:request_uri(req_url, {\n+      ssl_verify = false,\n+      method = conf.method:upper(),\n+      body = body,\n+      headers = headers\n+  })\n+\n+  if not res then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url, err)\n+    return\n   end\n \n-  ok, err = sock:send(generate_post_payload(conf.method, conf.content_type, parsed_url, body))\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to send data to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n+  if res.status >= 400 then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url .. \"status: \" .. tostring(res.status), err)\n   end\n \n-  ok, err = sock:setkeepalive(conf.keepalive)\n+  local ok, err = httpc:set_keepalive(conf.keepalive)",
+        "comment_created_at": "2018-04-05T09:42:46+00:00",
+        "comment_author": "Tieske",
+        "comment_body": "for reference, this is the PR: https://github.com/pintsized/lua-resty-http/pull/145",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "179537666",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 3333,
+        "pr_file": "kong/plugins/http-log/handler.lua",
+        "discussion_id": "178368626",
+        "commented_code": "@@ -72,36 +48,47 @@ local function log(premature, conf, body, name)\n   end\n   name = \"[\" .. name .. \"] \"\n \n-  local ok, err\n+  local headers\n+  local req_url\n   local parsed_url = parse_url(conf.http_endpoint)\n-  local host = parsed_url.host\n-  local port = tonumber(parsed_url.port)\n \n-  local sock = ngx.socket.tcp()\n-  sock:settimeout(conf.timeout)\n-\n-  ok, err = sock:connect(host, port)\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to connect to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    return\n+  if parsed_url.userinfo then\n+    -- for lua-resty-http client Authorization\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type,\n+      [\"Authorization\"] = string_format(\n+        \"Basic %s\", ngx.encode_base64(parsed_url.userinfo))\n+    }\n+    req_url = parsed_url.scheme .. \"://\" .. parsed_url.host .. \":\" .. parsed_url.port\n+      .. parsed_url.path .. (parsed_url.params or \"\")\n+  else\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type\n+    }\n+    req_url = conf.http_endpoint\n   end\n \n-  if parsed_url.scheme == HTTPS then\n-    local _, err = sock:sslhandshake(true, host, false)\n-    if err then\n-      ngx.log(ngx.ERR, name .. \"failed to do SSL handshake with \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    end\n+  local httpc = http.new()\n+  httpc:set_timeout(conf.timeout)\n+  local res, err = httpc:request_uri(req_url, {\n+      ssl_verify = false,\n+      method = conf.method:upper(),\n+      body = body,\n+      headers = headers\n+  })\n+\n+  if not res then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url, err)\n+    return\n   end\n \n-  ok, err = sock:send(generate_post_payload(conf.method, conf.content_type, parsed_url, body))\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to send data to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n+  if res.status >= 400 then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url .. \"status: \" .. tostring(res.status), err)\n   end\n \n-  ok, err = sock:setkeepalive(conf.keepalive)\n+  local ok, err = httpc:set_keepalive(conf.keepalive)",
+        "comment_created_at": "2018-04-05T17:18:55+00:00",
+        "comment_author": "hishamhm",
+        "comment_body": "would it be too ugly to peek inside `httpc` and do `httpc.sock:set_keepalive` in the mean time?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "179641210",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 3333,
+        "pr_file": "kong/plugins/http-log/handler.lua",
+        "discussion_id": "178368626",
+        "commented_code": "@@ -72,36 +48,47 @@ local function log(premature, conf, body, name)\n   end\n   name = \"[\" .. name .. \"] \"\n \n-  local ok, err\n+  local headers\n+  local req_url\n   local parsed_url = parse_url(conf.http_endpoint)\n-  local host = parsed_url.host\n-  local port = tonumber(parsed_url.port)\n \n-  local sock = ngx.socket.tcp()\n-  sock:settimeout(conf.timeout)\n-\n-  ok, err = sock:connect(host, port)\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to connect to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    return\n+  if parsed_url.userinfo then\n+    -- for lua-resty-http client Authorization\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type,\n+      [\"Authorization\"] = string_format(\n+        \"Basic %s\", ngx.encode_base64(parsed_url.userinfo))\n+    }\n+    req_url = parsed_url.scheme .. \"://\" .. parsed_url.host .. \":\" .. parsed_url.port\n+      .. parsed_url.path .. (parsed_url.params or \"\")\n+  else\n+    headers = {\n+      [\"Content-Type\"] = conf.content_type\n+    }\n+    req_url = conf.http_endpoint\n   end\n \n-  if parsed_url.scheme == HTTPS then\n-    local _, err = sock:sslhandshake(true, host, false)\n-    if err then\n-      ngx.log(ngx.ERR, name .. \"failed to do SSL handshake with \" .. host .. \":\" .. tostring(port) .. \": \", err)\n-    end\n+  local httpc = http.new()\n+  httpc:set_timeout(conf.timeout)\n+  local res, err = httpc:request_uri(req_url, {\n+      ssl_verify = false,\n+      method = conf.method:upper(),\n+      body = body,\n+      headers = headers\n+  })\n+\n+  if not res then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url, err)\n+    return\n   end\n \n-  ok, err = sock:send(generate_post_payload(conf.method, conf.content_type, parsed_url, body))\n-  if not ok then\n-    ngx.log(ngx.ERR, name .. \"failed to send data to \" .. host .. \":\" .. tostring(port) .. \": \", err)\n+  if res.status >= 400 then\n+    ngx.log(ngx.ERR, name .. \"request failed: \" .. req_url .. \"status: \" .. tostring(res.status), err)\n   end\n \n-  ok, err = sock:setkeepalive(conf.keepalive)\n+  local ok, err = httpc:set_keepalive(conf.keepalive)",
+        "comment_created_at": "2018-04-06T01:27:13+00:00",
+        "comment_author": "thibaultcha",
+        "comment_body": "Yeah, let's avoid going down that road... If this has been undetected for so long it can stay like this a little bit longer and avoid us setting dangerous precedents.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1914470685",
+    "pr_number": 13915,
+    "pr_file": "kong/observability/tracing/propagation/extractors/instana.lua",
+    "created_at": "2025-01-14T09:04:40+00:00",
+    "commented_code": "+local _EXTRACTOR        = require \"kong.observability.tracing.propagation.extractors._base\"\n+local propagation_utils = require \"kong.observability.tracing.propagation.utils\"\n+local from_hex          = propagation_utils.from_hex\n+\n+local INSTANA_EXTRACTOR = _EXTRACTOR:new({\n+  headers_validate = {\n+    any = {\n+      \"x-instana-t\",\n+      \"x-instana-s\",\n+      \"x-instana-l\",\n+    }\n+  }\n+})\n+\n+function INSTANA_EXTRACTOR:get_context(headers)\n+\n+  local trace_id_raw = headers[\"x-instana-t\"]\n+  local span_id_raw = headers[\"x-instana-s\"]\n+  local level_id_raw = headers[\"x-instana-l\"]",
+    "repo_full_name": "Kong/kong",
+    "discussion_comments": [
+      {
+        "comment_id": "1914470685",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13915,
+        "pr_file": "kong/observability/tracing/propagation/extractors/instana.lua",
+        "discussion_id": "1914470685",
+        "commented_code": "@@ -0,0 +1,55 @@\n+local _EXTRACTOR        = require \"kong.observability.tracing.propagation.extractors._base\"\n+local propagation_utils = require \"kong.observability.tracing.propagation.utils\"\n+local from_hex          = propagation_utils.from_hex\n+\n+local INSTANA_EXTRACTOR = _EXTRACTOR:new({\n+  headers_validate = {\n+    any = {\n+      \"x-instana-t\",\n+      \"x-instana-s\",\n+      \"x-instana-l\",\n+    }\n+  }\n+})\n+\n+function INSTANA_EXTRACTOR:get_context(headers)\n+\n+  local trace_id_raw = headers[\"x-instana-t\"]\n+  local span_id_raw = headers[\"x-instana-s\"]\n+  local level_id_raw = headers[\"x-instana-l\"] ",
+        "comment_created_at": "2025-01-14T09:04:40+00:00",
+        "comment_author": "samugi",
+        "comment_body": "the value of `headers[\"name\"]` can be a string or a table, depending on whether the same header was passed more than once in the request, see: https://github.com/openresty/lua-nginx-module?tab=readme-ov-file#ngxreqget_headers\r\n\r\nWe should handle the scenario where multiple headers are passed, for example by ignoring the header if passed more than once, or grabbing the first value.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1565704652",
+    "pr_number": 12807,
+    "pr_file": "kong/llm/drivers/azure.lua",
+    "created_at": "2024-04-15T12:23:13+00:00",
+    "commented_code": "local url = fmt(\n       \"%s%s\",\n       ai_shared.upstream_url_format[DRIVER_NAME]:format(conf.model.options.azure_instance, conf.model.options.azure_deployment_id),\n-      ai_shared.operation_map[DRIVER_NAME][conf.route_type].path\n+          conf.model.options\n+      and conf.model.options.upstream_path\n+      or ai_shared.operation_map[DRIVER_NAME][conf.route_type].path\n     )\n     parsed_url = socket_url.parse(url)\n   end\n \n+  if string.sub(parsed_url.path, 1, 1) ~= \"/\" then\n+    parsed_url.path = \"/\" .. parsed_url.path\n+  end",
+    "repo_full_name": "Kong/kong",
+    "discussion_comments": [
+      {
+        "comment_id": "1565704652",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 12807,
+        "pr_file": "kong/llm/drivers/azure.lua",
+        "discussion_id": "1565704652",
+        "commented_code": "@@ -92,16 +104,21 @@ function _M.configure_request(conf)\n     local url = fmt(\n       \"%s%s\",\n       ai_shared.upstream_url_format[DRIVER_NAME]:format(conf.model.options.azure_instance, conf.model.options.azure_deployment_id),\n-      ai_shared.operation_map[DRIVER_NAME][conf.route_type].path\n+          conf.model.options\n+      and conf.model.options.upstream_path\n+      or ai_shared.operation_map[DRIVER_NAME][conf.route_type].path\n     )\n     parsed_url = socket_url.parse(url)\n   end\n \n+  if string.sub(parsed_url.path, 1, 1) ~= \"/\" then\n+    parsed_url.path = \"/\" .. parsed_url.path\n+  end",
+        "comment_created_at": "2024-04-15T12:23:13+00:00",
+        "comment_author": "hanshuebner",
+        "comment_body": "A common function to prepend a slash to relative paths should be introduced and used.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1575190145",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 12807,
+        "pr_file": "kong/llm/drivers/azure.lua",
+        "discussion_id": "1565704652",
+        "commented_code": "@@ -92,16 +104,21 @@ function _M.configure_request(conf)\n     local url = fmt(\n       \"%s%s\",\n       ai_shared.upstream_url_format[DRIVER_NAME]:format(conf.model.options.azure_instance, conf.model.options.azure_deployment_id),\n-      ai_shared.operation_map[DRIVER_NAME][conf.route_type].path\n+          conf.model.options\n+      and conf.model.options.upstream_path\n+      or ai_shared.operation_map[DRIVER_NAME][conf.route_type].path\n     )\n     parsed_url = socket_url.parse(url)\n   end\n \n+  if string.sub(parsed_url.path, 1, 1) ~= \"/\" then\n+    parsed_url.path = \"/\" .. parsed_url.path\n+  end",
+        "comment_created_at": "2024-04-22T18:19:07+00:00",
+        "comment_author": "tysoekong",
+        "comment_body": "This PR was re-done, due to messy rebases from other features.\r\n\r\nSee: https://github.com/Kong/kong/pull/12903/files#r1575189707",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1949199886",
+    "pr_number": 13981,
+    "pr_file": "kong/pdk/request.lua",
+    "created_at": "2025-02-10T14:48:00+00:00",
+    "commented_code": "-- body.age  -- \"42\"\n   function _REQUEST.get_body(mimetype, max_args, max_allowed_file_size)\n     check_phase(before_content)\n-\n-    local content_type = mimetype or _REQUEST.get_header(CONTENT_TYPE)\n+    local content_type = mimetype or ngx.var.http_content_type",
+    "repo_full_name": "Kong/kong",
+    "discussion_comments": [
+      {
+        "comment_id": "1949199886",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13981,
+        "pr_file": "kong/pdk/request.lua",
+        "discussion_id": "1949199886",
+        "commented_code": "@@ -820,8 +818,7 @@ local function new(self)\n   -- body.age  -- \"42\"\n   function _REQUEST.get_body(mimetype, max_args, max_allowed_file_size)\n     check_phase(before_content)\n-\n-    local content_type = mimetype or _REQUEST.get_header(CONTENT_TYPE)\n+    local content_type = mimetype or ngx.var.http_content_type",
+        "comment_created_at": "2025-02-10T14:48:00+00:00",
+        "comment_author": "bungle",
+        "comment_body": "@ProBrian\r\n\r\n`ngx.var.content_type` does not seem to be single header. If you send multiple, you will get `\"<value1>, <value2>, ...\"`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1949241460",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13981,
+        "pr_file": "kong/pdk/request.lua",
+        "discussion_id": "1949199886",
+        "commented_code": "@@ -820,8 +818,7 @@ local function new(self)\n   -- body.age  -- \"42\"\n   function _REQUEST.get_body(mimetype, max_args, max_allowed_file_size)\n     check_phase(before_content)\n-\n-    local content_type = mimetype or _REQUEST.get_header(CONTENT_TYPE)\n+    local content_type = mimetype or ngx.var.http_content_type",
+        "comment_created_at": "2025-02-10T14:56:05+00:00",
+        "comment_author": "bungle",
+        "comment_body": "What is even more annoying is that:\r\n```\r\nngx.req.set_header(\"Content-Type\", \"value\")\r\n```\r\n\r\nis only reflected with the first value. Seems like `clear_header` is needed together with `set_header`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1949486665",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13981,
+        "pr_file": "kong/pdk/request.lua",
+        "discussion_id": "1949199886",
+        "commented_code": "@@ -820,8 +818,7 @@ local function new(self)\n   -- body.age  -- \"42\"\n   function _REQUEST.get_body(mimetype, max_args, max_allowed_file_size)\n     check_phase(before_content)\n-\n-    local content_type = mimetype or _REQUEST.get_header(CONTENT_TYPE)\n+    local content_type = mimetype or ngx.var.http_content_type",
+        "comment_created_at": "2025-02-10T16:38:04+00:00",
+        "comment_author": "bungle",
+        "comment_body": "This seems to work properly:\r\n```\r\nlocal ct = kong.request.get_header(\"Content-Type\")\r\nngx.req.clear_header(\"Content-Type\")\r\nngx.req.set_header(\"Content-Type\", ct)\r\n```\r\n\r\nIf I don't do `clear_header`, it does not work properly.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1949487386",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13981,
+        "pr_file": "kong/pdk/request.lua",
+        "discussion_id": "1949199886",
+        "commented_code": "@@ -820,8 +818,7 @@ local function new(self)\n   -- body.age  -- \"42\"\n   function _REQUEST.get_body(mimetype, max_args, max_allowed_file_size)\n     check_phase(before_content)\n-\n-    local content_type = mimetype or _REQUEST.get_header(CONTENT_TYPE)\n+    local content_type = mimetype or ngx.var.http_content_type",
+        "comment_created_at": "2025-02-10T16:38:29+00:00",
+        "comment_author": "bungle",
+        "comment_body": "This is the request I am using:\r\n```\r\nhttp -v :8001 Content-Type:text/html Content-Type:text/json\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1950368953",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13981,
+        "pr_file": "kong/pdk/request.lua",
+        "discussion_id": "1949199886",
+        "commented_code": "@@ -820,8 +818,7 @@ local function new(self)\n   -- body.age  -- \"42\"\n   function _REQUEST.get_body(mimetype, max_args, max_allowed_file_size)\n     check_phase(before_content)\n-\n-    local content_type = mimetype or _REQUEST.get_header(CONTENT_TYPE)\n+    local content_type = mimetype or ngx.var.http_content_type",
+        "comment_created_at": "2025-02-11T07:43:01+00:00",
+        "comment_author": "ProBrian",
+        "comment_body": "\r\nSeems there's a mismatch limitation between openresty and nginx that I've ignored, that is,\r\n\r\n- nginx allows multiple line values for headers like \"Content-Type\".\r\n\r\n- And openresty defines a list of headers that is \"built-in single value\", which includes `\"Content-Type\"`. `ngx.req.set_header` will not allow multiple value for `\"Content-Type\"`, so if we  `ngx.req.set_header(\"Content-Type\", {\"json1\", \"json2\"})` , it will use the last elem as the single value, so then `ngx.req.get_headers()[\"Content-Type\"]` and `ngx.var.http_content_type` will all get a single value `\"json2\"` .\r\n\r\n- But when multiple content type header is sent by http request client, not by openresty set_header API, then the header value is just handled by nginx, and `get_headers` will get a table `{\"json1\", \"json2\"}` and `ngx.var.http_content_type`  will get the value as comma separated string: `\"json1, json2\"`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1950375240",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13981,
+        "pr_file": "kong/pdk/request.lua",
+        "discussion_id": "1949199886",
+        "commented_code": "@@ -820,8 +818,7 @@ local function new(self)\n   -- body.age  -- \"42\"\n   function _REQUEST.get_body(mimetype, max_args, max_allowed_file_size)\n     check_phase(before_content)\n-\n-    local content_type = mimetype or _REQUEST.get_header(CONTENT_TYPE)\n+    local content_type = mimetype or ngx.var.http_content_type",
+        "comment_created_at": "2025-02-11T07:49:29+00:00",
+        "comment_author": "ProBrian",
+        "comment_body": "> What is even more annoying is that:\r\n> \r\n> ```\r\n> ngx.req.set_header(\"Content-Type\", \"value\")\r\n> ```\r\n> \r\n> is only reflected with the first value. Seems like `clear_header` is needed together with `set_header`?\r\n\r\nThat's due to the implementation of openresty, it assumes that `Content-Type` should be single value, so in set_header implementation, the assignment will only take place in the first index of value list.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1950401773",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13981,
+        "pr_file": "kong/pdk/request.lua",
+        "discussion_id": "1949199886",
+        "commented_code": "@@ -820,8 +818,7 @@ local function new(self)\n   -- body.age  -- \"42\"\n   function _REQUEST.get_body(mimetype, max_args, max_allowed_file_size)\n     check_phase(before_content)\n-\n-    local content_type = mimetype or _REQUEST.get_header(CONTENT_TYPE)\n+    local content_type = mimetype or ngx.var.http_content_type",
+        "comment_created_at": "2025-02-11T08:13:46+00:00",
+        "comment_author": "ProBrian",
+        "comment_body": "I will rollback the `var.http_content_type` changes, since `kong.request.get_header` will only get the first value no matter `content-type` is multi value or not from downstream; but `var.http_content_type` rely on the assumption that downstream send single `content-type` or `content-type` is set by `ngx.req.set_header`. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1802672817",
+    "pr_number": 13640,
+    "pr_file": "spec/internal/ssl.lua",
+    "created_at": "2024-10-16T09:05:32+00:00",
+    "commented_code": "end\n \n function SSL:close()\n-  if C.SSL_shutdown(self.ctx) ~= 1 then\n-    return nil, format_error(\"SSL_shutdown\")\n-  end\n+  self.sock:close()",
+    "repo_full_name": "Kong/kong",
+    "discussion_comments": [
+      {
+        "comment_id": "1802672817",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13640,
+        "pr_file": "spec/internal/ssl.lua",
+        "discussion_id": "1802672817",
+        "commented_code": "@@ -259,9 +259,7 @@ function SSL:send(s)\n end\n \n function SSL:close()\n-  if C.SSL_shutdown(self.ctx) ~= 1 then\n-    return nil, format_error(\"SSL_shutdown\")\n-  end\n+  self.sock:close()",
+        "comment_created_at": "2024-10-16T09:05:32+00:00",
+        "comment_author": "catbro666",
+        "comment_body": "To reviewers: `SSL_shutdown` only does a half-close, so the connection can still be used after being closed [here](https://github.com/Kong/kong/blob/9ae36382db4b9485f8889b8cd80d66a0885c86e7/spec/internal/server.lua#L101). This causes some tests in tcp-log_spec.lua and reports_spec.lua to fail because the connection established by a previous test case is reused by the next test case.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1855919558",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13640,
+        "pr_file": "spec/internal/ssl.lua",
+        "discussion_id": "1802672817",
+        "commented_code": "@@ -259,9 +259,7 @@ function SSL:send(s)\n end\n \n function SSL:close()\n-  if C.SSL_shutdown(self.ctx) ~= 1 then\n-    return nil, format_error(\"SSL_shutdown\")\n-  end\n+  self.sock:close()",
+        "comment_created_at": "2024-11-25T06:46:19+00:00",
+        "comment_author": "oowl",
+        "comment_body": "LGTM, but one concern about why we need internal SSL implementation( not related this PR)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1856148159",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13640,
+        "pr_file": "spec/internal/ssl.lua",
+        "discussion_id": "1802672817",
+        "commented_code": "@@ -259,9 +259,7 @@ function SSL:send(s)\n end\n \n function SSL:close()\n-  if C.SSL_shutdown(self.ctx) ~= 1 then\n-    return nil, format_error(\"SSL_shutdown\")\n-  end\n+  self.sock:close()",
+        "comment_created_at": "2024-11-25T08:44:45+00:00",
+        "comment_author": "catbro666",
+        "comment_body": "[This PR](https://github.com/Kong/kong/pull/8534) may explain some reasons.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1858347366",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13640,
+        "pr_file": "spec/internal/ssl.lua",
+        "discussion_id": "1802672817",
+        "commented_code": "@@ -259,9 +259,7 @@ function SSL:send(s)\n end\n \n function SSL:close()\n-  if C.SSL_shutdown(self.ctx) ~= 1 then\n-    return nil, format_error(\"SSL_shutdown\")\n-  end\n+  self.sock:close()",
+        "comment_created_at": "2024-11-26T11:57:59+00:00",
+        "comment_author": "oowl",
+        "comment_body": "I see",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1851676734",
+    "pr_number": 13900,
+    "pr_file": "kong/plugins/redirect/handler.lua",
+    "created_at": "2024-11-21T09:31:37+00:00",
+    "commented_code": "+local kong = kong\n+local kong_meta = require \"kong.meta\"\n+local socket_url = require \"socket.url\"\n+\n+local RedirectHandler = {}\n+\n+-- Priority 779 so that it runs after all rate limiting/validation plugins\n+-- and all transformation plugins, but before any AI plugins which call upstream\n+RedirectHandler.PRIORITY = 779\n+RedirectHandler.VERSION = kong_meta.version\n+\n+function RedirectHandler:access(conf)\n+    -- Use the 'location' as-is as the default\n+    -- This is equivalent to conf.incoming_path == 'ignore'\n+    local location = conf.location\n+\n+    if conf.incoming_path ~= \"ignore\" then\n+        -- Parse the URL in 'conf.location' and the incoming request\n+        local request_path = kong.request.get_path_with_query()\n+        local request_path_url = socket_url.parse(request_path)\n+        local location_path_url = socket_url.parse(location)\n+\n+        -- The path + query are different depending on the 'incoming_path' configuration\n+        local path = \"\"\n+        local query = \"\"\n+\n+        -- If incoming_path == 'keep', use the incoming request query\n+        if conf.incoming_path == \"keep\" then\n+            query = request_path_url.query\n+            path = request_path_url.path;\n+        end\n+\n+        -- If it's 'merge', merge the incoming request path+query with the location path+query\n+        if conf.incoming_path == \"merge\" then\n+            -- Build the path\n+            path = location_path_url.path .. \"/\" .. request_path_url.path\n+\n+            -- Build a table containing all 'location' and 'request' query parameters\n+            -- Overwrite the 'location' query parameters with the 'request' query parameters\n+            local request_path_kv = {}\n+            for k, v in string.gmatch(request_path_url.query, \"([^&=]+)=([^&=]+)\") do\n+                request_path_kv[k] = v\n+            end\n+            for k, v in string.gmatch(location_path_url.query, \"([^&=]+)=([^&=]+)\") do\n+                request_path_kv[k] = v\n+            end",
+    "repo_full_name": "Kong/kong",
+    "discussion_comments": [
+      {
+        "comment_id": "1851676734",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13900,
+        "pr_file": "kong/plugins/redirect/handler.lua",
+        "discussion_id": "1851676734",
+        "commented_code": "@@ -0,0 +1,73 @@\n+local kong = kong\n+local kong_meta = require \"kong.meta\"\n+local socket_url = require \"socket.url\"\n+\n+local RedirectHandler = {}\n+\n+-- Priority 779 so that it runs after all rate limiting/validation plugins\n+-- and all transformation plugins, but before any AI plugins which call upstream\n+RedirectHandler.PRIORITY = 779\n+RedirectHandler.VERSION = kong_meta.version\n+\n+function RedirectHandler:access(conf)\n+    -- Use the 'location' as-is as the default\n+    -- This is equivalent to conf.incoming_path == 'ignore'\n+    local location = conf.location\n+\n+    if conf.incoming_path ~= \"ignore\" then\n+        -- Parse the URL in 'conf.location' and the incoming request\n+        local request_path = kong.request.get_path_with_query()\n+        local request_path_url = socket_url.parse(request_path)\n+        local location_path_url = socket_url.parse(location)\n+\n+        -- The path + query are different depending on the 'incoming_path' configuration\n+        local path = \"\"\n+        local query = \"\"\n+\n+        -- If incoming_path == 'keep', use the incoming request query\n+        if conf.incoming_path == \"keep\" then\n+            query = request_path_url.query\n+            path = request_path_url.path;\n+        end\n+\n+        -- If it's 'merge', merge the incoming request path+query with the location path+query\n+        if conf.incoming_path == \"merge\" then\n+            -- Build the path\n+            path = location_path_url.path .. \"/\" .. request_path_url.path\n+\n+            -- Build a table containing all 'location' and 'request' query parameters\n+            -- Overwrite the 'location' query parameters with the 'request' query parameters\n+            local request_path_kv = {}\n+            for k, v in string.gmatch(request_path_url.query, \"([^&=]+)=([^&=]+)\") do\n+                request_path_kv[k] = v\n+            end\n+            for k, v in string.gmatch(location_path_url.query, \"([^&=]+)=([^&=]+)\") do\n+                request_path_kv[k] = v\n+            end",
+        "comment_created_at": "2024-11-21T09:31:37+00:00",
+        "comment_author": "kikito",
+        "comment_body": "Unfortunately this way of parsing query parameters leaves out edge cases. In particular, it is \"valid\"\u207a to use the same name for a parameter multiple times:\r\n\r\n```\r\nhttp://foo.bar?id=1&id=2&id=3\r\n```\r\n\r\nWith the current approach, the resulting url would lose the first two values:\r\n\r\n```\r\nhttp://foo.bar?id=3\r\n```\r\n\r\nThis also makes me think that when two tables are \"to be merged\", they should include parameters from both. So:\r\n\r\n```\r\nhttp://foo.bar?id=1\r\n```\r\nMerged with\r\n```\r\nhttp://foo.bar?id=2\r\n```\r\n\r\nShould result in\r\n```\r\nhttp://foo.bar?id=1&id=2\r\n```\r\n\r\n[resty.ada.search](https://bungle.github.io/lua-resty-ada/modules/resty.ada.search.html) could be used to parse these parameters instead. Note that [get_all](https://bungle.github.io/lua-resty-ada/modules/resty.ada.search.html#get_all) returns an array instead of a single value.\r\n\r\n\r\n---\r\n\u207a The http protocol does not actually specify how the query parameters work ([SO thread](https://stackoverflow.com/questions/1746507/authoritative-position-of-duplicate-http-get-query-keys)). It's up to the server. At Kong we try to catch \"as wide a net as possible\" when we find these cases.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1852046997",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13900,
+        "pr_file": "kong/plugins/redirect/handler.lua",
+        "discussion_id": "1851676734",
+        "commented_code": "@@ -0,0 +1,73 @@\n+local kong = kong\n+local kong_meta = require \"kong.meta\"\n+local socket_url = require \"socket.url\"\n+\n+local RedirectHandler = {}\n+\n+-- Priority 779 so that it runs after all rate limiting/validation plugins\n+-- and all transformation plugins, but before any AI plugins which call upstream\n+RedirectHandler.PRIORITY = 779\n+RedirectHandler.VERSION = kong_meta.version\n+\n+function RedirectHandler:access(conf)\n+    -- Use the 'location' as-is as the default\n+    -- This is equivalent to conf.incoming_path == 'ignore'\n+    local location = conf.location\n+\n+    if conf.incoming_path ~= \"ignore\" then\n+        -- Parse the URL in 'conf.location' and the incoming request\n+        local request_path = kong.request.get_path_with_query()\n+        local request_path_url = socket_url.parse(request_path)\n+        local location_path_url = socket_url.parse(location)\n+\n+        -- The path + query are different depending on the 'incoming_path' configuration\n+        local path = \"\"\n+        local query = \"\"\n+\n+        -- If incoming_path == 'keep', use the incoming request query\n+        if conf.incoming_path == \"keep\" then\n+            query = request_path_url.query\n+            path = request_path_url.path;\n+        end\n+\n+        -- If it's 'merge', merge the incoming request path+query with the location path+query\n+        if conf.incoming_path == \"merge\" then\n+            -- Build the path\n+            path = location_path_url.path .. \"/\" .. request_path_url.path\n+\n+            -- Build a table containing all 'location' and 'request' query parameters\n+            -- Overwrite the 'location' query parameters with the 'request' query parameters\n+            local request_path_kv = {}\n+            for k, v in string.gmatch(request_path_url.query, \"([^&=]+)=([^&=]+)\") do\n+                request_path_kv[k] = v\n+            end\n+            for k, v in string.gmatch(location_path_url.query, \"([^&=]+)=([^&=]+)\") do\n+                request_path_kv[k] = v\n+            end",
+        "comment_created_at": "2024-11-21T13:17:45+00:00",
+        "comment_author": "mheap",
+        "comment_body": "The thinking behind keeping the query params in `location` was that you could set a known safe query value e.g.  in an OAuth flow and know that they wouldn't be overwritten.\r\n\r\nI'll remove the merging logic altogether as it's not been requested, and leads to more questions than it solves",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1847552589",
+    "pr_number": 13887,
+    "pr_file": "kong/clustering/rpc/manager.lua",
+    "created_at": "2024-11-19T02:29:01+00:00",
+    "commented_code": "return ngx_exit(ngx.HTTP_CLOSE)\n   end\n \n-  if rpc_protocol ~= \"kong.rpc.v1\" then\n+  -- TODO: choice a proper protocol\n+  if not rpc_protocol:find(RPC_MATA_V1, 1, true) then",
+    "repo_full_name": "Kong/kong",
+    "discussion_comments": [
+      {
+        "comment_id": "1847552589",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13887,
+        "pr_file": "kong/clustering/rpc/manager.lua",
+        "discussion_id": "1847552589",
+        "commented_code": "@@ -253,31 +298,22 @@ function _M:handle_websocket()\n     return ngx_exit(ngx.HTTP_CLOSE)\n   end\n \n-  if rpc_protocol ~= \"kong.rpc.v1\" then\n+  -- TODO: choice a proper protocol\n+  if not rpc_protocol:find(RPC_MATA_V1, 1, true) then",
+        "comment_created_at": "2024-11-19T02:29:01+00:00",
+        "comment_author": "dndx",
+        "comment_body": "We need to properly parse the list, if `Sec-WebSocket-Protocol: foo.kong.meta.v1` then this is not compatible and connection must be closed as well.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1847573031",
+        "repo_full_name": "Kong/kong",
+        "pr_number": 13887,
+        "pr_file": "kong/clustering/rpc/manager.lua",
+        "discussion_id": "1847552589",
+        "commented_code": "@@ -253,31 +298,22 @@ function _M:handle_websocket()\n     return ngx_exit(ngx.HTTP_CLOSE)\n   end\n \n-  if rpc_protocol ~= \"kong.rpc.v1\" then\n+  -- TODO: choice a proper protocol\n+  if not rpc_protocol:find(RPC_MATA_V1, 1, true) then",
+        "comment_created_at": "2024-11-19T03:01:16+00:00",
+        "comment_author": "chronolaw",
+        "comment_body": "done.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

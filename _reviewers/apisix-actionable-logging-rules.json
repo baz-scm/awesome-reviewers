@@ -1,0 +1,364 @@
+[
+  {
+    "discussion_id": "3085621365",
+    "pr_number": 12751,
+    "pr_file": "apisix/plugins/limit-count/limit-count-redis.lua",
+    "created_at": "2026-04-15T10:03:20+00:00",
+    "commented_code": "return setmetatable(self, mt)\n end\n \n-function _M.incoming(self, key, cost)\n+\n+local function release_connection(red, conf)\n+    local ok, err = red:set_keepalive(conf.redis_keepalive_timeout, conf.redis_keepalive_pool)\n+    if ok then\n+        return true\n+    end",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3085621365",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12751,
+        "pr_file": "apisix/plugins/limit-count/limit-count-redis.lua",
+        "discussion_id": "3085621365",
+        "commented_code": "@@ -52,37 +43,79 @@ function _M.new(plugin_name, limit, window, conf)\n     return setmetatable(self, mt)\n end\n \n-function _M.incoming(self, key, cost)\n+\n+local function release_connection(red, conf)\n+    local ok, err = red:set_keepalive(conf.redis_keepalive_timeout, conf.redis_keepalive_pool)\n+    if ok then\n+        return true\n+    end",
+        "comment_created_at": "2026-04-15T10:03:20+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Errors from this timer callback are silently swallowed. In OpenResty, return values from `ngx.timer.at` callbacks are discarded \u2014 nobody reads `return red, err` or `return nil, keepalive_err` or `return res, incoming_err`.\n\nFor `ai-rate-limiting`, the log phase is where actual LLM token usage gets deducted from the counter. If Redis is unreachable, the deduction silently fails with **zero visibility** \u2014 tokens are consumed but never counted, and operators have no indication.\n\nThe caller in `init.lua` only catches `ngx.timer.at()` creation failure (extremely rare), not the actual Redis operation failure inside the timer.\n\nSame issue exists in `limit-count-redis-cluster.lua`'s `log_phase_incoming_thread`.\n\nShould add `core.log.error(...)` for each error path inside the callback:\n```lua\nlocal red, err = redis.new(conf)\nif not red then\n    core.log.error(\"failed to create redis in log phase: \", err)\n    return\nend\n...\nif incoming_err then\n    core.log.error(\"failed to deduct tokens in log phase: \", incoming_err)\nend\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3533915756",
+    "pr_number": 13629,
+    "pr_file": "apisix/healthcheck_manager.lua",
+    "created_at": "2026-07-07T05:46:14+00:00",
+    "commented_code": "goto continue\n             end\n \n-            -- if a checker exists then delete it before creating a new one\n+            -- No nodes means there is nothing to health-check. Don't build (or\n+            -- rebuild into) an empty checker here; leave any teardown to\n+            -- timer_working_pool_check, which destroys the checker when the node\n+            -- count drops to 0, so the two timers stay consistent.\n+            if not upstream.nodes or #upstream.nodes == 0 then\n+                goto continue\n+            end\n+\n+            -- If a checker already exists and the `checks` config is unchanged\n+            -- (only the upstream nodes changed), reconcile its targets in place\n+            -- instead of destroying and rebuilding it. A destroy-and-rebuild\n+            -- leaves `up_checker == nil` for the rebuild window, during which\n+            -- traffic is routed to nodes already known to be unhealthy, and it\n+            -- throws away the checker's accumulated health state.\n+            -- sync_checker_targets is the last condition so it only runs when the\n+            -- checker is reuse-eligible; if it reports a partial failure the whole\n+            -- guard is false and we fall through to a full rebuild below, which\n+            -- converges the upstream to the desired targets instead of committing\n+            -- the new version against a half-reconciled checker.\n             local existing_checker = working_pool[resource_path]\n+            if existing_checker and existing_checker.checker\n+               and not existing_checker.checker.dead\n+               and upstream.checks\n+               and upstream.nodes and #upstream.nodes > 0\n+               and core.table.deep_eq(existing_checker.checks, upstream.checks)\n+               and sync_checker_targets(existing_checker.checker, upstream) then\n+                add_working_pool(resource_path, resource_ver, existing_checker.checker,\n+                                 upstream.checks)\n+                core.log.info(\"reused checker with incremental targets: \",\n+                              tostring(existing_checker.checker), \" for resource: \",\n+                              resource_path, \" and version: \", resource_ver)\n+                goto continue\n+            end\n+\n+            -- The checks config changed (or no checker exists): rebuild the\n+            -- checker. delayed_clear() MUST run before create_checker() re-adds\n+            -- the targets: the new checker shares the same shm target list, and\n+            -- add_target() only un-marks a target's purge_time when it is re-added\n+            -- *after* being marked. Clearing first lets surviving targets get\n+            -- un-marked on re-add, while genuinely dropped targets keep their\n+            -- purge_time and are cleaned up; clearing after create (the reverse)\n+            -- would leave the live checker's targets marked and purge them later.\n+            -- In this rebuild path the old checker is only stopped after the new\n+            -- one is published, so this path never leaves a nil/stopped checker for\n+            -- fetch_checker (the checks-change destroy in timer_working_pool_check\n+            -- is a separate path that enqueues a rebuild instead).\n             if existing_checker then\n                 existing_checker.checker:delayed_clear(DELAYED_CLEAR_TIMEOUT)\n-                existing_checker.checker:stop()\n-                core.log.info(\"releasing existing checker: \", tostring(existing_checker.checker),\n-                              \" for resource: \", resource_path, \" and version: \",\n-                              existing_checker.version)\n             end\n             local checker = create_checker(upstream)\n             if not checker then\n+                -- create_checker failed (upstream healthcheck disabled or\n+                -- healthcheck.new errored). The old checker's shm targets were\n+                -- already delayed_clear'd above, so it can no longer health-check\n+                -- reliably; tear it down and drop it from the working pool instead\n+                -- of leaving a stopped/cleared checker that fetch_checker would\n+                -- still hand out (it only checks .dead).\n+                if existing_checker then\n+                    existing_checker.checker.dead = true",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3533915756",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13629,
+        "pr_file": "apisix/healthcheck_manager.lua",
+        "discussion_id": "3533915756",
+        "commented_code": "@@ -209,22 +349,80 @@ local function timer_create_checker()\n                 goto continue\n             end\n \n-            -- if a checker exists then delete it before creating a new one\n+            -- No nodes means there is nothing to health-check. Don't build (or\n+            -- rebuild into) an empty checker here; leave any teardown to\n+            -- timer_working_pool_check, which destroys the checker when the node\n+            -- count drops to 0, so the two timers stay consistent.\n+            if not upstream.nodes or #upstream.nodes == 0 then\n+                goto continue\n+            end\n+\n+            -- If a checker already exists and the `checks` config is unchanged\n+            -- (only the upstream nodes changed), reconcile its targets in place\n+            -- instead of destroying and rebuilding it. A destroy-and-rebuild\n+            -- leaves `up_checker == nil` for the rebuild window, during which\n+            -- traffic is routed to nodes already known to be unhealthy, and it\n+            -- throws away the checker's accumulated health state.\n+            -- sync_checker_targets is the last condition so it only runs when the\n+            -- checker is reuse-eligible; if it reports a partial failure the whole\n+            -- guard is false and we fall through to a full rebuild below, which\n+            -- converges the upstream to the desired targets instead of committing\n+            -- the new version against a half-reconciled checker.\n             local existing_checker = working_pool[resource_path]\n+            if existing_checker and existing_checker.checker\n+               and not existing_checker.checker.dead\n+               and upstream.checks\n+               and upstream.nodes and #upstream.nodes > 0\n+               and core.table.deep_eq(existing_checker.checks, upstream.checks)\n+               and sync_checker_targets(existing_checker.checker, upstream) then\n+                add_working_pool(resource_path, resource_ver, existing_checker.checker,\n+                                 upstream.checks)\n+                core.log.info(\"reused checker with incremental targets: \",\n+                              tostring(existing_checker.checker), \" for resource: \",\n+                              resource_path, \" and version: \", resource_ver)\n+                goto continue\n+            end\n+\n+            -- The checks config changed (or no checker exists): rebuild the\n+            -- checker. delayed_clear() MUST run before create_checker() re-adds\n+            -- the targets: the new checker shares the same shm target list, and\n+            -- add_target() only un-marks a target's purge_time when it is re-added\n+            -- *after* being marked. Clearing first lets surviving targets get\n+            -- un-marked on re-add, while genuinely dropped targets keep their\n+            -- purge_time and are cleaned up; clearing after create (the reverse)\n+            -- would leave the live checker's targets marked and purge them later.\n+            -- In this rebuild path the old checker is only stopped after the new\n+            -- one is published, so this path never leaves a nil/stopped checker for\n+            -- fetch_checker (the checks-change destroy in timer_working_pool_check\n+            -- is a separate path that enqueues a rebuild instead).\n             if existing_checker then\n                 existing_checker.checker:delayed_clear(DELAYED_CLEAR_TIMEOUT)\n-                existing_checker.checker:stop()\n-                core.log.info(\"releasing existing checker: \", tostring(existing_checker.checker),\n-                              \" for resource: \", resource_path, \" and version: \",\n-                              existing_checker.version)\n             end\n             local checker = create_checker(upstream)\n             if not checker then\n+                -- create_checker failed (upstream healthcheck disabled or\n+                -- healthcheck.new errored). The old checker's shm targets were\n+                -- already delayed_clear'd above, so it can no longer health-check\n+                -- reliably; tear it down and drop it from the working pool instead\n+                -- of leaving a stopped/cleared checker that fetch_checker would\n+                -- still hand out (it only checks .dead).\n+                if existing_checker then\n+                    existing_checker.checker.dead = true",
+        "comment_created_at": "2026-07-07T05:46:14+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "nit: worth a log line here \u2014 the old code logged \"releasing existing checker\" on every teardown. When `create_checker` fails (e.g. `disable_upstream_healthcheck` or a `healthcheck.new` error), the checker now silently disappears from the working pool, which will be hard to trace from logs.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3540516135",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13629,
+        "pr_file": "apisix/healthcheck_manager.lua",
+        "discussion_id": "3533915756",
+        "commented_code": "@@ -209,22 +349,80 @@ local function timer_create_checker()\n                 goto continue\n             end\n \n-            -- if a checker exists then delete it before creating a new one\n+            -- No nodes means there is nothing to health-check. Don't build (or\n+            -- rebuild into) an empty checker here; leave any teardown to\n+            -- timer_working_pool_check, which destroys the checker when the node\n+            -- count drops to 0, so the two timers stay consistent.\n+            if not upstream.nodes or #upstream.nodes == 0 then\n+                goto continue\n+            end\n+\n+            -- If a checker already exists and the `checks` config is unchanged\n+            -- (only the upstream nodes changed), reconcile its targets in place\n+            -- instead of destroying and rebuilding it. A destroy-and-rebuild\n+            -- leaves `up_checker == nil` for the rebuild window, during which\n+            -- traffic is routed to nodes already known to be unhealthy, and it\n+            -- throws away the checker's accumulated health state.\n+            -- sync_checker_targets is the last condition so it only runs when the\n+            -- checker is reuse-eligible; if it reports a partial failure the whole\n+            -- guard is false and we fall through to a full rebuild below, which\n+            -- converges the upstream to the desired targets instead of committing\n+            -- the new version against a half-reconciled checker.\n             local existing_checker = working_pool[resource_path]\n+            if existing_checker and existing_checker.checker\n+               and not existing_checker.checker.dead\n+               and upstream.checks\n+               and upstream.nodes and #upstream.nodes > 0\n+               and core.table.deep_eq(existing_checker.checks, upstream.checks)\n+               and sync_checker_targets(existing_checker.checker, upstream) then\n+                add_working_pool(resource_path, resource_ver, existing_checker.checker,\n+                                 upstream.checks)\n+                core.log.info(\"reused checker with incremental targets: \",\n+                              tostring(existing_checker.checker), \" for resource: \",\n+                              resource_path, \" and version: \", resource_ver)\n+                goto continue\n+            end\n+\n+            -- The checks config changed (or no checker exists): rebuild the\n+            -- checker. delayed_clear() MUST run before create_checker() re-adds\n+            -- the targets: the new checker shares the same shm target list, and\n+            -- add_target() only un-marks a target's purge_time when it is re-added\n+            -- *after* being marked. Clearing first lets surviving targets get\n+            -- un-marked on re-add, while genuinely dropped targets keep their\n+            -- purge_time and are cleaned up; clearing after create (the reverse)\n+            -- would leave the live checker's targets marked and purge them later.\n+            -- In this rebuild path the old checker is only stopped after the new\n+            -- one is published, so this path never leaves a nil/stopped checker for\n+            -- fetch_checker (the checks-change destroy in timer_working_pool_check\n+            -- is a separate path that enqueues a rebuild instead).\n             if existing_checker then\n                 existing_checker.checker:delayed_clear(DELAYED_CLEAR_TIMEOUT)\n-                existing_checker.checker:stop()\n-                core.log.info(\"releasing existing checker: \", tostring(existing_checker.checker),\n-                              \" for resource: \", resource_path, \" and version: \",\n-                              existing_checker.version)\n             end\n             local checker = create_checker(upstream)\n             if not checker then\n+                -- create_checker failed (upstream healthcheck disabled or\n+                -- healthcheck.new errored). The old checker's shm targets were\n+                -- already delayed_clear'd above, so it can no longer health-check\n+                -- reliably; tear it down and drop it from the working pool instead\n+                -- of leaving a stopped/cleared checker that fetch_checker would\n+                -- still hand out (it only checks .dead).\n+                if existing_checker then\n+                    existing_checker.checker.dead = true",
+        "comment_created_at": "2026-07-08T00:43:30+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "Added a core.log.warn before dropping the checker from the working pool.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3353252496",
+    "pr_number": 13467,
+    "pr_file": "apisix/plugins/limit-conn/util.lua",
+    "created_at": "2026-06-04T03:36:07+00:00",
+    "commented_code": "conn = res[2]\n \n         if allowed == 0 then\n+            core.log.warn(\"limit-conn: connection limit (\", max, \") reached; note that \",",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3353252496",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13467,
+        "pr_file": "apisix/plugins/limit-conn/util.lua",
+        "discussion_id": "3353252496",
+        "commented_code": "@@ -102,6 +102,11 @@ function _M.incoming(self, red, key, commit)\n         conn = res[2]\n \n         if allowed == 0 then\n+            core.log.warn(\"limit-conn: connection limit (\", max, \") reached; note that \",",
+        "comment_created_at": "2026-06-04T03:36:07+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "I think this is expected and logs should not be printed.\nAnd the `limit-req` does not print logs\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3354334087",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13467,
+        "pr_file": "apisix/plugins/limit-conn/util.lua",
+        "discussion_id": "3353252496",
+        "commented_code": "@@ -102,6 +102,11 @@ function _M.incoming(self, red, key, commit)\n         conn = res[2]\n \n         if allowed == 0 then\n+            core.log.warn(\"limit-conn: connection limit (\", max, \") reached; note that \",",
+        "comment_created_at": "2026-06-04T07:45:25+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "agree, this warning log is printed repeatedly when the connection limiting threshold is exceeded.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3354374859",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13467,
+        "pr_file": "apisix/plugins/limit-conn/util.lua",
+        "discussion_id": "3353252496",
+        "commented_code": "@@ -102,6 +102,11 @@ function _M.incoming(self, red, key, commit)\n         conn = res[2]\n \n         if allowed == 0 then\n+            core.log.warn(\"limit-conn: connection limit (\", max, \") reached; note that \",",
+        "comment_created_at": "2026-06-04T07:52:45+00:00",
+        "comment_author": "shreemaan-abhishek",
+        "comment_body": "done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3135176609",
+    "pr_number": 13288,
+    "pr_file": "apisix/utils/batch-processor.lua",
+    "created_at": "2026-04-24T04:42:06+00:00",
+    "commented_code": "end\n \n         batch.retry_count = batch.retry_count + 1\n-        if batch.retry_count <= self.max_retry_count and #batch.entries > 0 then\n-            schedule_func_exec(self, self.retry_delay,\n-                               batch)\n+        if not premature and batch.retry_count <= self.max_retry_count\n+           and #batch.entries > 0\n+        then\n+            schedule_func_exec(self, self.retry_delay, batch)\n         else\n             self.processed_entries = self.processed_entries + #batch.entries\n-            core.log.error(\"Batch Processor[\", self.name,\"] exceeded \",\n-                           \"the max_retry_count[\", batch.retry_count,\n-                           \"] dropping the entries\")\n+            if premature then\n+                core.log.warn(\"Batch Processor[\", self.name,\n+                              \"] shutdown in progress, dropping \", #batch.entries, \" entries\")\n+            elseif batch.retry_count > self.max_retry_count then\n+                core.log.error(\"Batch Processor[\", self.name,\"] exceeded \",\n+                               \"the max_retry_count[\", batch.retry_count,\n+                               \"] dropping the entries\")\n+            end",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3135483901",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13288,
+        "pr_file": "apisix/utils/batch-processor.lua",
+        "discussion_id": "3135176609",
+        "commented_code": "@@ -100,14 +95,20 @@ function execute_func(premature, self, batch)\n         end\n \n         batch.retry_count = batch.retry_count + 1\n-        if batch.retry_count <= self.max_retry_count and #batch.entries > 0 then\n-            schedule_func_exec(self, self.retry_delay,\n-                               batch)\n+        if not premature and batch.retry_count <= self.max_retry_count\n+           and #batch.entries > 0\n+        then\n+            schedule_func_exec(self, self.retry_delay, batch)\n         else\n             self.processed_entries = self.processed_entries + #batch.entries\n-            core.log.error(\"Batch Processor[\", self.name,\"] exceeded \",\n-                           \"the max_retry_count[\", batch.retry_count,\n-                           \"] dropping the entries\")\n+            if premature then\n+                core.log.warn(\"Batch Processor[\", self.name,\n+                              \"] shutdown in progress, dropping \", #batch.entries, \" entries\")\n+            elseif batch.retry_count > self.max_retry_count then\n+                core.log.error(\"Batch Processor[\", self.name,\"] exceeded \",\n+                               \"the max_retry_count[\", batch.retry_count,\n+                               \"] dropping the entries\")\n+            end",
+        "comment_created_at": "2026-04-24T04:42:06+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "With the latest push, both `flush_buffer` and `execute_func` now return immediately when `premature=true`, so the zero-delay timer fallback in `schedule_func_exec` and `create_buffer_timer` is effectively dead code \u2014 it can never produce a tight retry loop because the callback exits before reaching `schedule_func_exec`.\n\nWe initially tried a \"flush on shutdown\" approach (calling `self.func()` during premature and only skipping retries), but it broke `prometheus3.t TEST 5` \u2014 during worker shutdown the upstream TCP server is already down, so `self.func()` fails and logs at ERROR level, which pollutes the error log for the next test block (`--- no_error_log: [error]` assertion). This is the same behavior as pre-#12711 (data is dropped on shutdown), which is the safe baseline.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2157934607",
+    "pr_number": 12338,
+    "pr_file": "apisix/utils/batch-processor-manager.lua",
+    "created_at": "2025-06-20T02:42:23+00:00",
+    "commented_code": "end\n \n     log_buffer:push(entry)\n+    self.total_pushed_entries = self.total_pushed_entries + 1\n     return true\n end\n \n \n-function _M:add_entry_to_new_processor(conf, entry, ctx, func)\n+function _M:add_entry_to_new_processor(conf, entry, ctx, func, max_pending_entries)\n+    if max_pending_entries and\n+       self.total_pushed_entries - total_processed_entries(self) > max_pending_entries then\n+        core.log.error(\"max pending entries limit exceeded. discarding entry\")",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2157934607",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12338,
+        "pr_file": "apisix/utils/batch-processor-manager.lua",
+        "discussion_id": "2157934607",
+        "commented_code": "@@ -94,11 +108,17 @@ function _M:add_entry(conf, entry)\n     end\n \n     log_buffer:push(entry)\n+    self.total_pushed_entries = self.total_pushed_entries + 1\n     return true\n end\n \n \n-function _M:add_entry_to_new_processor(conf, entry, ctx, func)\n+function _M:add_entry_to_new_processor(conf, entry, ctx, func, max_pending_entries)\n+    if max_pending_entries and\n+       self.total_pushed_entries - total_processed_entries(self) > max_pending_entries then\n+        core.log.error(\"max pending entries limit exceeded. discarding entry\")",
+        "comment_created_at": "2025-06-20T02:42:23+00:00",
+        "comment_author": "membphis",
+        "comment_body": "need to print more useful information, eg: max_pending_entries, `self.total_pushed_entries - total_processed_entries(self)`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3129758346",
+    "pr_number": 13285,
+    "pr_file": "apisix/init.lua",
+    "created_at": "2026-04-23T09:37:15+00:00",
+    "commented_code": "plugin.run_plugin(\"preread\", plugins, api_ctx)\n \n+    if api_ctx.upstream_id then\n+        local new_upstream = apisix_upstream.get_by_id(api_ctx.upstream_id)\n+        if not new_upstream then\n+            core.log.error(\"failed to get upstream by upstream_id: \", api_ctx.upstream_id)",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3129801706",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13285,
+        "pr_file": "apisix/init.lua",
+        "discussion_id": "3129758346",
+        "commented_code": "@@ -1347,6 +1347,15 @@ function _M.stream_preread_phase()\n \n     plugin.run_plugin(\"preread\", plugins, api_ctx)\n \n+    if api_ctx.upstream_id then\n+        local new_upstream = apisix_upstream.get_by_id(api_ctx.upstream_id)\n+        if not new_upstream then\n+            core.log.error(\"failed to get upstream by upstream_id: \", api_ctx.upstream_id)",
+        "comment_created_at": "2026-04-23T09:37:15+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Good point \u2014 `get_by_id()` already logs the error at line 552 (`core.log.error(\"failed to find upstream by id: \", up_id)`). Removed the duplicate log in the latest commit.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3131264145",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13285,
+        "pr_file": "apisix/init.lua",
+        "discussion_id": "3129758346",
+        "commented_code": "@@ -1347,6 +1347,15 @@ function _M.stream_preread_phase()\n \n     plugin.run_plugin(\"preread\", plugins, api_ctx)\n \n+    if api_ctx.upstream_id then\n+        local new_upstream = apisix_upstream.get_by_id(api_ctx.upstream_id)\n+        if not new_upstream then\n+            core.log.error(\"failed to get upstream by upstream_id: \", api_ctx.upstream_id)",
+        "comment_created_at": "2026-04-23T13:47:54+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Already addressed \u2014 the duplicate `core.log.error` was removed in the previous commit. The `get_by_id()` function at line 552 already logs the error, so no additional logging needed here.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2766920259",
+    "pr_number": 12967,
+    "pr_file": "apisix/plugins/limit-count/init.lua",
+    "created_at": "2026-02-05T03:50:08+00:00",
+    "commented_code": "key = ctx.var[\"remote_addr\"]\n     end\n \n+    core.log.info(\"key bef: \", key, \". conf: \", core.json.encode(conf), \". ctx: \", type(ctx))",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2766920259",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12967,
+        "pr_file": "apisix/plugins/limit-count/init.lua",
+        "discussion_id": "2766920259",
+        "commented_code": "@@ -276,6 +297,7 @@ function _M.rate_limit(conf, ctx, name, cost, dry_run)\n         key = ctx.var[\"remote_addr\"]\n     end\n \n+    core.log.info(\"key bef: \", key, \". conf: \", core.json.encode(conf), \". ctx: \", type(ctx))",
+        "comment_created_at": "2026-02-05T03:50:08+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "```suggestion\n    core.log.info(\"key bef: \", key, \". conf: \", core.json.delay_encode(conf), \". ctx: \", type(ctx))\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2766927001",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12967,
+        "pr_file": "apisix/plugins/limit-count/init.lua",
+        "discussion_id": "2766920259",
+        "commented_code": "@@ -276,6 +297,7 @@ function _M.rate_limit(conf, ctx, name, cost, dry_run)\n         key = ctx.var[\"remote_addr\"]\n     end\n \n+    core.log.info(\"key bef: \", key, \". conf: \", core.json.encode(conf), \". ctx: \", type(ctx))",
+        "comment_created_at": "2026-02-05T03:54:15+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "The type(ctx) seems to have no useful information.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2767079800",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12967,
+        "pr_file": "apisix/plugins/limit-count/init.lua",
+        "discussion_id": "2766920259",
+        "commented_code": "@@ -276,6 +297,7 @@ function _M.rate_limit(conf, ctx, name, cost, dry_run)\n         key = ctx.var[\"remote_addr\"]\n     end\n \n+    core.log.info(\"key bef: \", key, \". conf: \", core.json.encode(conf), \". ctx: \", type(ctx))",
+        "comment_created_at": "2026-02-05T04:41:11+00:00",
+        "comment_author": "shreemaan-abhishek",
+        "comment_body": "my bad, I had added this log just for debugging. This whole log line itself does not serve any meaningful purpose so I have removed it. \ud83d\udc4d\ud83c\udffc ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1998044559",
+    "pr_number": 12040,
+    "pr_file": "apisix/admin/consumers.lua",
+    "created_at": "2025-03-17T06:48:10+00:00",
+    "commented_code": "if conf.plugins then\n         ok, err = plugins.check_schema(conf.plugins, core.schema.TYPE_CONSUMER)\n         if not ok then\n-            return nil, {error_msg = \"invalid plugins configuration: \" .. err}\n+            return nil, {\n+                error_msg = \"invalid plugins configuration: \" .. err\n+            }\n+        end\n+\n+        -- check duplicate key\n+        for plugin_name, plugin_conf in pairs(conf.plugins or {}) do\n+            local plugin_obj = plugin.get(plugin_name)\n+            if not plugin_obj then\n+                return nil, {error_msg = \"unknown plugin \" .. plugin_name}\n+            end\n+\n+            if plugin_obj.type == \"auth\" then\n+                local decrypted_conf = core.table.deepcopy(plugin_conf)\n+                plugin.decrypt_conf(plugin_name, decrypted_conf, core.schema.TYPE_CONSUMER)\n+\n+                local plugin_key_map = {\n+                    [\"key-auth\"] = \"key\",\n+                    [\"basic-auth\"] = \"username\",\n+                    [\"jwt-auth\"] = \"key\",\n+                    [\"hmac-auth\"] = \"key_id\"\n+                }\n+\n+                local key_field = plugin_key_map[plugin_name]\n+\n+                if key_field then\n+                    local key_value = decrypted_conf[key_field]\n+\n+                    if key_value then\n+                        local consumer, _, err = consumer\n+                            .find_consumer(plugin_name, key_field, key_value)\n+                        if err then\n+                            core.log.warn(\"failed to find consumer: \", err)",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "1998044559",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12040,
+        "pr_file": "apisix/admin/consumers.lua",
+        "discussion_id": "1998044559",
+        "commented_code": "@@ -32,7 +34,50 @@ local function check_conf(username, conf, need_username, schema)\n     if conf.plugins then\n         ok, err = plugins.check_schema(conf.plugins, core.schema.TYPE_CONSUMER)\n         if not ok then\n-            return nil, {error_msg = \"invalid plugins configuration: \" .. err}\n+            return nil, {\n+                error_msg = \"invalid plugins configuration: \" .. err\n+            }\n+        end\n+\n+        -- check duplicate key\n+        for plugin_name, plugin_conf in pairs(conf.plugins or {}) do\n+            local plugin_obj = plugin.get(plugin_name)\n+            if not plugin_obj then\n+                return nil, {error_msg = \"unknown plugin \" .. plugin_name}\n+            end\n+\n+            if plugin_obj.type == \"auth\" then\n+                local decrypted_conf = core.table.deepcopy(plugin_conf)\n+                plugin.decrypt_conf(plugin_name, decrypted_conf, core.schema.TYPE_CONSUMER)\n+\n+                local plugin_key_map = {\n+                    [\"key-auth\"] = \"key\",\n+                    [\"basic-auth\"] = \"username\",\n+                    [\"jwt-auth\"] = \"key\",\n+                    [\"hmac-auth\"] = \"key_id\"\n+                }\n+\n+                local key_field = plugin_key_map[plugin_name]\n+\n+                if key_field then\n+                    local key_value = decrypted_conf[key_field]\n+\n+                    if key_value then\n+                        local consumer, _, err = consumer\n+                            .find_consumer(plugin_name, key_field, key_value)\n+                        if err then\n+                            core.log.warn(\"failed to find consumer: \", err)",
+        "comment_created_at": "2025-03-17T06:48:10+00:00",
+        "comment_author": "shreemaan-abhishek",
+        "comment_body": "I don't understand the logic here. In the `find_consumer()` method call above. We are checking if the given consumer key already exists, no? If it doesn't exist then the duplication check should be successful (no duplicate found), right?\r\n\r\nIf yes, then there is no point in printing a warn log.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1998110124",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12040,
+        "pr_file": "apisix/admin/consumers.lua",
+        "discussion_id": "1998044559",
+        "commented_code": "@@ -32,7 +34,50 @@ local function check_conf(username, conf, need_username, schema)\n     if conf.plugins then\n         ok, err = plugins.check_schema(conf.plugins, core.schema.TYPE_CONSUMER)\n         if not ok then\n-            return nil, {error_msg = \"invalid plugins configuration: \" .. err}\n+            return nil, {\n+                error_msg = \"invalid plugins configuration: \" .. err\n+            }\n+        end\n+\n+        -- check duplicate key\n+        for plugin_name, plugin_conf in pairs(conf.plugins or {}) do\n+            local plugin_obj = plugin.get(plugin_name)\n+            if not plugin_obj then\n+                return nil, {error_msg = \"unknown plugin \" .. plugin_name}\n+            end\n+\n+            if plugin_obj.type == \"auth\" then\n+                local decrypted_conf = core.table.deepcopy(plugin_conf)\n+                plugin.decrypt_conf(plugin_name, decrypted_conf, core.schema.TYPE_CONSUMER)\n+\n+                local plugin_key_map = {\n+                    [\"key-auth\"] = \"key\",\n+                    [\"basic-auth\"] = \"username\",\n+                    [\"jwt-auth\"] = \"key\",\n+                    [\"hmac-auth\"] = \"key_id\"\n+                }\n+\n+                local key_field = plugin_key_map[plugin_name]\n+\n+                if key_field then\n+                    local key_value = decrypted_conf[key_field]\n+\n+                    if key_value then\n+                        local consumer, _, err = consumer\n+                            .find_consumer(plugin_name, key_field, key_value)\n+                        if err then\n+                            core.log.warn(\"failed to find consumer: \", err)",
+        "comment_created_at": "2025-03-17T07:40:37+00:00",
+        "comment_author": "Baoyuantop",
+        "comment_body": "When fixing the failure test, I found that when calling the `find_consumer()` method, its internal call will do a secret find and replace, and when given a non-existing secret, there will be an internal error log, where the err data is captured and printed.\r\nIt is also possible to remove this log.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1998177933",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12040,
+        "pr_file": "apisix/admin/consumers.lua",
+        "discussion_id": "1998044559",
+        "commented_code": "@@ -32,7 +34,50 @@ local function check_conf(username, conf, need_username, schema)\n     if conf.plugins then\n         ok, err = plugins.check_schema(conf.plugins, core.schema.TYPE_CONSUMER)\n         if not ok then\n-            return nil, {error_msg = \"invalid plugins configuration: \" .. err}\n+            return nil, {\n+                error_msg = \"invalid plugins configuration: \" .. err\n+            }\n+        end\n+\n+        -- check duplicate key\n+        for plugin_name, plugin_conf in pairs(conf.plugins or {}) do\n+            local plugin_obj = plugin.get(plugin_name)\n+            if not plugin_obj then\n+                return nil, {error_msg = \"unknown plugin \" .. plugin_name}\n+            end\n+\n+            if plugin_obj.type == \"auth\" then\n+                local decrypted_conf = core.table.deepcopy(plugin_conf)\n+                plugin.decrypt_conf(plugin_name, decrypted_conf, core.schema.TYPE_CONSUMER)\n+\n+                local plugin_key_map = {\n+                    [\"key-auth\"] = \"key\",\n+                    [\"basic-auth\"] = \"username\",\n+                    [\"jwt-auth\"] = \"key\",\n+                    [\"hmac-auth\"] = \"key_id\"\n+                }\n+\n+                local key_field = plugin_key_map[plugin_name]\n+\n+                if key_field then\n+                    local key_value = decrypted_conf[key_field]\n+\n+                    if key_value then\n+                        local consumer, _, err = consumer\n+                            .find_consumer(plugin_name, key_field, key_value)\n+                        if err then\n+                            core.log.warn(\"failed to find consumer: \", err)",
+        "comment_created_at": "2025-03-17T08:23:37+00:00",
+        "comment_author": "shreemaan-abhishek",
+        "comment_body": "I think you can add this info as a comment in the code.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2013377171",
+    "pr_number": 12040,
+    "pr_file": "apisix/admin/consumers.lua",
+    "created_at": "2025-03-26T04:39:15+00:00",
+    "commented_code": "if not ok then\n             return nil, {error_msg = \"invalid plugins configuration: \" .. err}\n         end\n+\n+        -- check duplicate key\n+        for plugin_name, plugin_conf in pairs(conf.plugins or {}) do\n+            local plugin_obj = plugin.get(plugin_name)\n+            if not plugin_obj then\n+                return nil, {error_msg = \"unknown plugin \" .. plugin_name}\n+            end\n+\n+            if plugin_obj.type == \"auth\" then\n+                local plugin_conf_copy = core.table.deepcopy(plugin_conf)\n+                plugin.decrypt_conf(plugin_name, plugin_conf_copy, core.schema.TYPE_CONSUMER)\n+\n+                local key_field = utils.plugin_key_map[plugin_name]\n+\n+                if key_field then\n+                    local key_value = plugin_conf_copy[key_field]\n+\n+                    if key_value then\n+                        local consumer, _, err = consumer\n+                            .find_consumer(plugin_name, key_field, key_value)\n+                        if err then\n+                            core.log.warn(\"failed to find consumer: \", err)",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2013377171",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12040,
+        "pr_file": "apisix/admin/consumers.lua",
+        "discussion_id": "2013377171",
+        "commented_code": "@@ -34,6 +38,40 @@ local function check_conf(username, conf, need_username, schema)\n         if not ok then\n             return nil, {error_msg = \"invalid plugins configuration: \" .. err}\n         end\n+\n+        -- check duplicate key\n+        for plugin_name, plugin_conf in pairs(conf.plugins or {}) do\n+            local plugin_obj = plugin.get(plugin_name)\n+            if not plugin_obj then\n+                return nil, {error_msg = \"unknown plugin \" .. plugin_name}\n+            end\n+\n+            if plugin_obj.type == \"auth\" then\n+                local plugin_conf_copy = core.table.deepcopy(plugin_conf)\n+                plugin.decrypt_conf(plugin_name, plugin_conf_copy, core.schema.TYPE_CONSUMER)\n+\n+                local key_field = utils.plugin_key_map[plugin_name]\n+\n+                if key_field then\n+                    local key_value = plugin_conf_copy[key_field]\n+\n+                    if key_value then\n+                        local consumer, _, err = consumer\n+                            .find_consumer(plugin_name, key_field, key_value)\n+                        if err then\n+                            core.log.warn(\"failed to find consumer: \", err)",
+        "comment_created_at": "2025-03-26T04:39:15+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "```suggestion\r\n                        local consumer = consumer.find_consumer(plugin_name, key_field, key_value)\r\n                        if consumer then\r\n                           ...\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2013378164",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12040,
+        "pr_file": "apisix/admin/consumers.lua",
+        "discussion_id": "2013377171",
+        "commented_code": "@@ -34,6 +38,40 @@ local function check_conf(username, conf, need_username, schema)\n         if not ok then\n             return nil, {error_msg = \"invalid plugins configuration: \" .. err}\n         end\n+\n+        -- check duplicate key\n+        for plugin_name, plugin_conf in pairs(conf.plugins or {}) do\n+            local plugin_obj = plugin.get(plugin_name)\n+            if not plugin_obj then\n+                return nil, {error_msg = \"unknown plugin \" .. plugin_name}\n+            end\n+\n+            if plugin_obj.type == \"auth\" then\n+                local plugin_conf_copy = core.table.deepcopy(plugin_conf)\n+                plugin.decrypt_conf(plugin_name, plugin_conf_copy, core.schema.TYPE_CONSUMER)\n+\n+                local key_field = utils.plugin_key_map[plugin_name]\n+\n+                if key_field then\n+                    local key_value = plugin_conf_copy[key_field]\n+\n+                    if key_value then\n+                        local consumer, _, err = consumer\n+                            .find_consumer(plugin_name, key_field, key_value)\n+                        if err then\n+                            core.log.warn(\"failed to find consumer: \", err)",
+        "comment_created_at": "2025-03-26T04:40:40+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "The expected outcome is that it cannot be found, so I believe there is no need to record any logs.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2247054300",
+    "pr_number": 12187,
+    "pr_file": "apisix/upstream.lua",
+    "created_at": "2025-08-01T06:18:54+00:00",
+    "commented_code": "return 503, err\n         end\n \n-        local new_nodes, err = dis.nodes(up_conf.service_name, up_conf.discovery_args)\n+        local service_name, err = core.utils.resolve_var(up_conf.service_name, api_ctx.var)\n+        if not service_name or service_name == \"\" then\n+            return 503, \"resolve_var resolves to empty string: \" .. (err or \"nil\")\n+        end\n+\n+        local new_nodes, err = dis.nodes(service_name, up_conf.discovery_args)\n         if not new_nodes then\n             return HTTP_CODE_UPSTREAM_UNAVAILABLE, \"no valid upstream node: \" .. (err or \"nil\")",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2247054300",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12187,
+        "pr_file": "apisix/upstream.lua",
+        "discussion_id": "2247054300",
+        "commented_code": "@@ -305,7 +305,12 @@ function _M.set_by_route(route, api_ctx)\n             return 503, err\n         end\n \n-        local new_nodes, err = dis.nodes(up_conf.service_name, up_conf.discovery_args)\n+        local service_name, err = core.utils.resolve_var(up_conf.service_name, api_ctx.var)\n+        if not service_name or service_name == \"\" then\n+            return 503, \"resolve_var resolves to empty string: \" .. (err or \"nil\")\n+        end\n+\n+        local new_nodes, err = dis.nodes(service_name, up_conf.discovery_args)\n         if not new_nodes then\n             return HTTP_CODE_UPSTREAM_UNAVAILABLE, \"no valid upstream node: \" .. (err or \"nil\")",
+        "comment_created_at": "2025-08-01T06:18:54+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "please add `service_name` to this error log, since `service_name` is no longer a fixed value, we need to know the specific `service_name` when there is a `no valid upstream node`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2247744447",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12187,
+        "pr_file": "apisix/upstream.lua",
+        "discussion_id": "2247054300",
+        "commented_code": "@@ -305,7 +305,12 @@ function _M.set_by_route(route, api_ctx)\n             return 503, err\n         end\n \n-        local new_nodes, err = dis.nodes(up_conf.service_name, up_conf.discovery_args)\n+        local service_name, err = core.utils.resolve_var(up_conf.service_name, api_ctx.var)\n+        if not service_name or service_name == \"\" then\n+            return 503, \"resolve_var resolves to empty string: \" .. (err or \"nil\")\n+        end\n+\n+        local new_nodes, err = dis.nodes(service_name, up_conf.discovery_args)\n         if not new_nodes then\n             return HTTP_CODE_UPSTREAM_UNAVAILABLE, \"no valid upstream node: \" .. (err or \"nil\")",
+        "comment_created_at": "2025-08-01T11:26:38+00:00",
+        "comment_author": "undying",
+        "comment_body": "I added logging service_name. This format is ok?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2667169275",
+    "pr_number": 12868,
+    "pr_file": "t/APISIX.pm",
+    "created_at": "2026-01-07T05:58:12+00:00",
+    "commented_code": "-- timeout one second before the actual timeout to allow shell.run to finish and collect the stdout/stderr\n                     local ok, stdout, stderr, reason, status = shell.run([[ $exec_snippet ]], $stdin, @{[($timeout-1)*1000]}, $max_size)\n                     if not ok then\n-                        ngx.log(ngx.WARN, \"failed to execute the script with status: \" .. (status or \"nil \") .. \", reason: \" .. (reason or \"nil \") .. \", stderr: \" .. (stderr or \"nil \"))\n+                        ngx.log(ngx.WARN, \"failed to execute the script with status: \" .. (status or \"nil \") .. \", reason: \" .. (reason or \"nil \") .. \", stdout: \" .. (stdout or \"nil \") .. \", stderr: \" .. (stderr or \"nil \"))",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2667169275",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12868,
+        "pr_file": "t/APISIX.pm",
+        "discussion_id": "2667169275",
+        "commented_code": "@@ -383,7 +383,7 @@ _EOC_\n                     -- timeout one second before the actual timeout to allow shell.run to finish and collect the stdout/stderr\n                     local ok, stdout, stderr, reason, status = shell.run([[ $exec_snippet ]], $stdin, @{[($timeout-1)*1000]}, $max_size)\n                     if not ok then\n-                        ngx.log(ngx.WARN, \"failed to execute the script with status: \" .. (status or \"nil \") .. \", reason: \" .. (reason or \"nil \") .. \", stderr: \" .. (stderr or \"nil \"))\n+                        ngx.log(ngx.WARN, \"failed to execute the script with status: \" .. (status or \"nil \") .. \", reason: \" .. (reason or \"nil \") .. \", stdout: \" .. (stdout or \"nil \") .. \", stderr: \" .. (stderr or \"nil \"))",
+        "comment_created_at": "2026-01-07T05:58:12+00:00",
+        "comment_author": "shreemaan-abhishek",
+        "comment_body": "we found that when shell.run failed the error log line got executed however, the response body was still empty, due to which we were unable to examine the stdout. So we add the stdout to this log line.\n\n<img width=\"2558\" height=\"768\" alt=\"Image\" src=\"https://github.com/user-attachments/assets/e1860d7f-080e-46fe-b405-531b52bdbe58\" />",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

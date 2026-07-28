@@ -1,0 +1,162 @@
+[
+  {
+    "discussion_id": "3575795856",
+    "pr_number": 13676,
+    "pr_file": "apisix/plugins/ai-providers/azure-openai.lua",
+    "created_at": "2026-07-14T03:17:30+00:00",
+    "commented_code": "path = \"/completions\",\n                 rewrite_request_body = rewrite_chat_request_body,\n             },\n+            [\"openai-embeddings\"] = { path = \"/embeddings\" },",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3575795856",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13676,
+        "pr_file": "apisix/plugins/ai-providers/azure-openai.lua",
+        "discussion_id": "3575795856",
+        "commented_code": "@@ -32,6 +32,7 @@ return require(\"apisix.plugins.ai-providers.base\").new(\n                 path = \"/completions\",\n                 rewrite_request_body = rewrite_chat_request_body,\n             },\n+            [\"openai-embeddings\"] = { path = \"/embeddings\" },",
+        "comment_created_at": "2026-07-14T03:17:30+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Heads up that this `/embeddings` path probably won't take effect for `azure-openai`. In `ai-providers/base.lua`, `build_request` resolves the path as `parsed_url.path or opts.target_path` \u2014 so once the endpoint URL carries a path (which it must for azure, e.g. `.../openai/deployments/{deployment}`), `parsed_url.path` wins and this capability path is dropped. Azure also needs the `?api-version=` query param, which nothing on this path adds.\n\nThe doc example for `embeddings.endpoint` stops at `/openai/deployments/{deployment}` (no `/embeddings`, no `api-version`), so following the docs a semantic route with `provider: azure-openai` would POST to the deployment root and likely 404. All the routing tests use `provider: openai`, so this branch isn't exercised.\n\nCould you either (a) require the azure `embeddings.endpoint` to include the full `/embeddings?api-version=...` and document that, or (b) construct the azure embeddings URL the same way the chat path does \u2014 and add one azure embeddings test so it doesn't silently regress? openai works today, but azure looks unverified.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3576301661",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13676,
+        "pr_file": "apisix/plugins/ai-providers/azure-openai.lua",
+        "discussion_id": "3575795856",
+        "commented_code": "@@ -32,6 +32,7 @@ return require(\"apisix.plugins.ai-providers.base\").new(\n                 path = \"/completions\",\n                 rewrite_request_body = rewrite_chat_request_body,\n             },\n+            [\"openai-embeddings\"] = { path = \"/embeddings\" },",
+        "comment_created_at": "2026-07-14T05:41:00+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "Confirmed \u2014 this was broken, thanks for catching it. `build_request` resolves `parsed_url.path or opts.target_path`, and an Azure endpoint always carries a path, so the capability `/embeddings` was dead code.\r\n\r\nWent with (a), matching the convention the azure chat path and `ai-cache-semantic` already use (full URL, `api-version` in the query):\r\n\r\n- `azure-openai` now declares the capability with **no** default path (`[\"openai-embeddings\"] = {}`), so a path-less endpoint fails loudly in `build_request` instead of silently building a wrong URL.\r\n- `check_schema` rejects an azure `embeddings.endpoint` without a deployment path \u2014 otherwise the route would fail open to the catchall on every request, i.e. silently never work.\r\n- Docs (en + zh) and the schema description now show the full URL: `https://{resource}.openai.azure.com/openai/deployments/{deployment}/embeddings?api-version=2024-02-01`.\r\n- Added an end-to-end test that drives a real azure-shaped URL and asserts the request lands on the deployment path *with* `api-version`, plus a negative schema test.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3585559396",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13676,
+        "pr_file": "apisix/plugins/ai-providers/azure-openai.lua",
+        "discussion_id": "3575795856",
+        "commented_code": "@@ -32,6 +32,7 @@ return require(\"apisix.plugins.ai-providers.base\").new(\n                 path = \"/completions\",\n                 rewrite_request_body = rewrite_chat_request_body,\n             },\n+            [\"openai-embeddings\"] = { path = \"/embeddings\" },",
+        "comment_created_at": "2026-07-15T08:12:19+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Verified end-to-end: `embeddings_target_path` returning nil for the missing capability lets the endpoint path through, `check_schema` rejects a path-less azure endpoint, and TEST 17 asserts the request lands on the deployment path *with* `api-version`. Solid fix, thanks.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3520524183",
+    "pr_number": 13649,
+    "pr_file": "apisix/plugins/openid-connect.lua",
+    "created_at": "2026-07-03T14:36:06+00:00",
+    "commented_code": "end\n \n \n+local function flatten_openidc_options(conf)",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3520524183",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13649,
+        "pr_file": "apisix/plugins/openid-connect.lua",
+        "discussion_id": "3520524183",
+        "commented_code": "@@ -52,6 +52,25 @@ local function build_session_opts(session_conf)\n end\n \n \n+local function flatten_openidc_options(conf)",
+        "comment_created_at": "2026-07-03T14:36:06+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "The new tests are all schema-level, so nothing exercises this mapping at runtime \u2014 a typo in any of these assignments (or an option rename on the lua-resty-openidc side) would still pass CI. A single e2e block would cover it: serve a fake discovery doc plus a PAR mock from the test nginx (t/plugin/openid-connect-redis.t already does the fake-discovery part with a local authorization_endpoint), enable `par` with `endpoint` pointing at the mock, hit the route, and assert the 302 Location carries only `client_id` and `request_uri` and that scope/state stay out of the query. That one test proves the PAR wiring and the flattening end to end.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3520720054",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13649,
+        "pr_file": "apisix/plugins/openid-connect.lua",
+        "discussion_id": "3520524183",
+        "commented_code": "@@ -52,6 +52,25 @@ local function build_session_opts(session_conf)\n end\n \n \n+local function flatten_openidc_options(conf)",
+        "comment_created_at": "2026-07-03T15:14:56+00:00",
+        "comment_author": "kevinlzw",
+        "comment_body": "Thanks, that makes sense. I added a Test::Nginx runtime block with a fake discovery document and a fake PAR endpoint, then configured the plugin through the Admin API and hit the route to exercise the actual flattening path. The test now parses the final authorize redirect and asserts the query shape exactly: only `client_id` and `request_uri` are present, while `scope`, `state`, `response_type`, and `redirect_uri` are absent.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3526212904",
+    "pr_number": 13626,
+    "pr_file": "apisix/init.lua",
+    "created_at": "2026-07-06T02:59:56+00:00",
+    "commented_code": "end\n \n \n+-- Percent-decode every %XX in the path. When keep_slash is true, an encoded\n+-- slash (%2F/%2f) is left as the literal text \"%2F\" instead of being turned\n+-- into a real path separator -- Nginx decodes it into '/' in $uri, which makes\n+-- it indistinguishable from a real separator and breaks path parameter\n+-- matching (see issue #11810). The kept slash is always emitted upper-case so\n+-- an exact route written with %2F matches regardless of the client's casing.\n+local function percent_decode(path, keep_slash)\n+    local decoded = re_gsub(path, [[%([0-9a-fA-F][0-9a-fA-F])]], function(m)\n+        local hex = m[1]\n+        if keep_slash and (hex == \"2f\" or hex == \"2F\") then\n+            return \"%2F\"",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3526212904",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13626,
+        "pr_file": "apisix/init.lua",
+        "discussion_id": "3526212904",
+        "commented_code": "@@ -487,6 +490,42 @@ local function normalize_uri_like_servlet(uri)\n end\n \n \n+-- Percent-decode every %XX in the path. When keep_slash is true, an encoded\n+-- slash (%2F/%2f) is left as the literal text \"%2F\" instead of being turned\n+-- into a real path separator -- Nginx decodes it into '/' in $uri, which makes\n+-- it indistinguishable from a real separator and breaks path parameter\n+-- matching (see issue #11810). The kept slash is always emitted upper-case so\n+-- an exact route written with %2F matches regardless of the client's casing.\n+local function percent_decode(path, keep_slash)\n+    local decoded = re_gsub(path, [[%([0-9a-fA-F][0-9a-fA-F])]], function(m)\n+        local hex = m[1]\n+        if keep_slash and (hex == \"2f\" or hex == \"2F\") then\n+            return \"%2F\"",
+        "comment_created_at": "2026-07-06T02:59:56+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Since the kept slash is always re-emitted upper-case, an exact route authored with lowercase `%2f` (e.g. `/blog/a%2fb`) can never match \u2014 radixtree comparison is byte-exact. The code comment covers the rationale but the user docs don't mention the casing at all; worth one sentence in router-radixtree.md telling users to write `%2F` upper-case in route uris.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3526244076",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13626,
+        "pr_file": "apisix/init.lua",
+        "discussion_id": "3526212904",
+        "commented_code": "@@ -487,6 +490,42 @@ local function normalize_uri_like_servlet(uri)\n end\n \n \n+-- Percent-decode every %XX in the path. When keep_slash is true, an encoded\n+-- slash (%2F/%2f) is left as the literal text \"%2F\" instead of being turned\n+-- into a real path separator -- Nginx decodes it into '/' in $uri, which makes\n+-- it indistinguishable from a real separator and breaks path parameter\n+-- matching (see issue #11810). The kept slash is always emitted upper-case so\n+-- an exact route written with %2F matches regardless of the client's casing.\n+local function percent_decode(path, keep_slash)\n+    local decoded = re_gsub(path, [[%([0-9a-fA-F][0-9a-fA-F])]], function(m)\n+        local hex = m[1]\n+        if keep_slash and (hex == \"2f\" or hex == \"2F\") then\n+            return \"%2F\"",
+        "comment_created_at": "2026-07-06T03:14:46+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "Added a line to router-radixtree.md (en + zh): the kept slash is normalized to upper-case `%2F` and radixtree compares byte-for-byte, so routes must be authored with upper-case `%2F`. f0a07aa66",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2752356010",
+    "pr_number": 12857,
+    "pr_file": "apisix/plugins/ai-drivers/openai-base.lua",
+    "created_at": "2026-02-02T03:03:34+00:00",
+    "commented_code": "local HTTP_GATEWAY_TIMEOUT = ngx.HTTP_GATEWAY_TIMEOUT\n \n \n-function _M.new(opt)\n-    return setmetatable(opt, mt)\n+local function merge_request_query_params(ctx, query_params)\n+    if ctx.var.is_args == \"?\" and ctx.var.args and #ctx.var.args > 0 then\n+        local req_args_tab = core.string.decode_args(ctx.var.args)\n+        if type(req_args_tab) == \"table\" then\n+            core.table.merge(query_params, req_args_tab)\n+        end\n+    end\n+end\n+\n+\n+function _M.new(opts)\n+    local self = {",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2752356010",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12857,
+        "pr_file": "apisix/plugins/ai-drivers/openai-base.lua",
+        "discussion_id": "2752356010",
+        "commented_code": "@@ -45,8 +45,26 @@ local HTTP_INTERNAL_SERVER_ERROR = ngx.HTTP_INTERNAL_SERVER_ERROR\n local HTTP_GATEWAY_TIMEOUT = ngx.HTTP_GATEWAY_TIMEOUT\n \n \n-function _M.new(opt)\n-    return setmetatable(opt, mt)\n+local function merge_request_query_params(ctx, query_params)\n+    if ctx.var.is_args == \"?\" and ctx.var.args and #ctx.var.args > 0 then\n+        local req_args_tab = core.string.decode_args(ctx.var.args)\n+        if type(req_args_tab) == \"table\" then\n+            core.table.merge(query_params, req_args_tab)\n+        end\n+    end\n+end\n+\n+\n+function _M.new(opts)\n+    local self = {",
+        "comment_created_at": "2026-02-02T03:03:34+00:00",
+        "comment_author": "Baoyuantop",
+        "comment_body": "Is this change necessary? It breaks the original transparent pass-through mechanism\u2014now only explicitly listed fields are passed through.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2917269483",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12857,
+        "pr_file": "apisix/plugins/ai-drivers/openai-base.lua",
+        "discussion_id": "2752356010",
+        "commented_code": "@@ -45,8 +45,26 @@ local HTTP_INTERNAL_SERVER_ERROR = ngx.HTTP_INTERNAL_SERVER_ERROR\n local HTTP_GATEWAY_TIMEOUT = ngx.HTTP_GATEWAY_TIMEOUT\n \n \n-function _M.new(opt)\n-    return setmetatable(opt, mt)\n+local function merge_request_query_params(ctx, query_params)\n+    if ctx.var.is_args == \"?\" and ctx.var.args and #ctx.var.args > 0 then\n+        local req_args_tab = core.string.decode_args(ctx.var.args)\n+        if type(req_args_tab) == \"table\" then\n+            core.table.merge(query_params, req_args_tab)\n+        end\n+    end\n+end\n+\n+\n+function _M.new(opts)\n+    local self = {",
+        "comment_created_at": "2026-03-11T10:06:39+00:00",
+        "comment_author": "Baoyuantop",
+        "comment_body": "Hi @sihyeonn, following up on the previous review comments. Please let us know if you have any updates. Thank you.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2957546181",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12857,
+        "pr_file": "apisix/plugins/ai-drivers/openai-base.lua",
+        "discussion_id": "2752356010",
+        "commented_code": "@@ -45,8 +45,26 @@ local HTTP_INTERNAL_SERVER_ERROR = ngx.HTTP_INTERNAL_SERVER_ERROR\n local HTTP_GATEWAY_TIMEOUT = ngx.HTTP_GATEWAY_TIMEOUT\n \n \n-function _M.new(opt)\n-    return setmetatable(opt, mt)\n+local function merge_request_query_params(ctx, query_params)\n+    if ctx.var.is_args == \"?\" and ctx.var.args and #ctx.var.args > 0 then\n+        local req_args_tab = core.string.decode_args(ctx.var.args)\n+        if type(req_args_tab) == \"table\" then\n+            core.table.merge(query_params, req_args_tab)\n+        end\n+    end\n+end\n+\n+\n+function _M.new(opts)\n+    local self = {",
+        "comment_created_at": "2026-03-19T03:06:27+00:00",
+        "comment_author": "sihyeonn",
+        "comment_body": "You're right, that was unintentional. Reverted _M.new back to the original setmetatable(opt, mt) so all fields are passed through transparently. Sorry for the delay on this.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

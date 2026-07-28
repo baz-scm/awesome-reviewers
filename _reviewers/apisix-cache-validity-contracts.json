@@ -1,0 +1,226 @@
+[
+  {
+    "discussion_id": "3618955812",
+    "pr_number": 13707,
+    "pr_file": "apisix/consumer.lua",
+    "created_at": "2026-07-21T02:10:24+00:00",
+    "commented_code": "local function filter(consumer)\n-    if not consumer.value or not consumer.value.plugins then\n+    -- A delete arrives as a value-less event (the etcd watch sets value = nil on\n+    -- removal). Flag it so the next incremental apply reconciles removed ids and\n+    -- the deleted consumer stops authenticating on the next request.\n+    if not consumer.value then\n+        if cached_plugins then\n+            pending_delete = true\n+            has_pending = true\n+        end\n+        return\n+    end\n+\n+    if not consumer.value.plugins then",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3618955812",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13707,
+        "pr_file": "apisix/consumer.lua",
+        "discussion_id": "3618955812",
+        "commented_code": "@@ -309,10 +521,63 @@ end\n \n \n local function filter(consumer)\n-    if not consumer.value or not consumer.value.plugins then\n+    -- A delete arrives as a value-less event (the etcd watch sets value = nil on\n+    -- removal). Flag it so the next incremental apply reconciles removed ids and\n+    -- the deleted consumer stops authenticating on the next request.\n+    if not consumer.value then\n+        if cached_plugins then\n+            pending_delete = true\n+            has_pending = true\n+        end\n+        return\n+    end\n+\n+    if not consumer.value.plugins then",
+        "comment_created_at": "2026-07-21T02:10:24+00:00",
+        "comment_author": "juzhiyuan",
+        "comment_body": "Removing all auth plugins produces a consumer value without `plugins`, so this early return never records the update. `_M.plugin()` will still advance `cached_conf_version` with an empty pending set, leaving the previous auth node and key active indefinitely. Please enqueue the entity before this check so the old entry is removed even when the new plugin set is empty.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3618955816",
+    "pr_number": 13707,
+    "pr_file": "apisix/consumer.lua",
+    "created_at": "2026-07-21T02:10:24+00:00",
+    "commented_code": "end\n \n \n+-- Incremental consumer plugin tree rebuild.\n+-- Instead of rebuilding the full O(N) tree on every conf_version change,\n+-- only process consumers that were created/updated/deleted.\n+-- Full rebuild runs only on bootstrap (first request).\n+-- A background timer runs a lightweight consistency check every 30s:\n+-- it compares tracked IDs against consumers.values without reconstructing data.\n+-- Only triggers a full rebuild if it finds stale entries (extremely rare).\n+-- Motivation: stock APISIX rebuilds this whole O(N) tree on every conf_version change.\n+\n+local cached_plugins\n+local cached_conf_version = 0\n+local node_index = {}           -- \"plugin\\0eid\" -> position in nodes array\n+local entry_plugins = {}        -- eid -> { [plugin_name] = true }\n+local pending_set = {}          -- eid -> consumer item (from filter callback)\n+local has_pending = false\n+local pending_delete = false    -- a delete event was seen; reconcile removed ids\n+local tracked_count = 0         -- count of consumers.values at last sync\n+local FULL_SYNC_INTERVAL = 30   -- seconds between background consistency checks\n+\n+-- key-auth (and the other auth plugins) look consumers up by a key value, not by\n+-- position, via _M.consumers_kv() -> a per-plugin {key_value -> consumer} map.\n+-- That map was rebuilt in full on every conf_version change (O(N) over all\n+-- consumers, each cloned through a fill lru). We instead maintain it incrementally\n+-- alongside the node arrays: kv_upsert on add/update, kv_remove on delete. The\n+-- map lives on the per-plugin data table (pd.kv) and is populated lazily on the\n+-- first lookup (which also teaches us pd.key_attr for that plugin).\n+local function kv_upsert(pd, consumer)\n+    if not pd.kv or not pd.key_attr then\n+        return\n+    end\n+    local nc = core.table.clone(consumer)\n+    nc.auth_conf = secret.fetch_secrets(nc.auth_conf, false)\n+    -- fail closed: skip unset credentials or unresolved secret refs so a client\n+    -- can never authenticate with a literal \"$ENV://...\" reference string.\n+    if secret.has_secret_ref(nc.auth_conf) then\n+        return\n+    end\n+    local key_value = nc.auth_conf[pd.key_attr]\n+    if key_value == nil then\n+        return\n+    end\n+    pd.kv[key_value] = nc\n+    consumer._kvkey = key_value\n+end\n+\n+local function kv_remove(pd, consumer)\n+    if pd.kv and consumer and consumer._kvkey ~= nil then\n+        pd.kv[consumer._kvkey] = nil\n+    end\n+end\n+\n+-- Collect current consumer/credential IDs from consumers.values.\n+local function collect_current_ids()\n+    local ids = {}\n+    for _, val in ipairs(consumers.values or {}) do\n+        if type(val) == \"table\" and val.value and val.value.id then\n+            ids[val.value.id] = true\n+        end\n+    end\n+    return ids\n+end\n+\n+-- Remove all plugin node entries for a given consumer/credential ID.\n+-- Uses swap-with-last for O(1) array removal without holes.\n+local function remove_consumer_entries(eid)\n+    local pset = entry_plugins[eid]\n+    if not pset then return end\n+    for pname in pairs(pset) do\n+        local pd = cached_plugins[pname]\n+        if pd then\n+            local key = pname .. \"\\0\" .. eid\n+            local pos = node_index[key]\n+            if pos and pos <= pd.len then\n+                kv_remove(pd, pd.nodes[pos])\n+                if pos < pd.len then\n+                    -- swap with last element\n+                    local last = pd.nodes[pd.len]\n+                    pd.nodes[pos] = last\n+                    node_index[pname .. \"\\0\" .. last._eid] = pos\n+                end\n+                pd.nodes[pd.len] = nil\n+                pd.len = pd.len - 1\n+            end\n+            node_index[key] = nil\n+        end\n+    end\n+    entry_plugins[eid] = nil\n+end\n+\n+-- Add a consumer/credential to the appropriate auth plugin nodes.\n+local function add_consumer_entry(val)\n+    if type(val) ~= \"table\" or not val.value then return end\n+    local eid = val.value.id\n+    if not eid then return end\n+    for name, config in pairs(val.value.plugins or {}) do\n+        local plugin_obj = plugin.get(name)\n+        if not plugin_obj or plugin_obj.type ~= \"auth\" then\n+            goto next_plugin\n+        end\n+        if not cached_plugins[name] then\n+            cached_plugins[name] = {\n+                nodes = {}, len = 0,\n+                conf_version = consumers.conf_version\n+            }\n+        end\n+        local consumer, err = construct_consumer_data(val, name, config)\n+        if not consumer then\n+            core.log.error(\"incremental: failed to construct consumer for plugin \",\n+                           name, \": \", err)\n+            goto next_plugin\n+        end\n+        consumer._eid = eid\n+        local pd = cached_plugins[name]\n+        pd.len = pd.len + 1\n+        pd.nodes[pd.len] = consumer\n+        node_index[name .. \"\\0\" .. eid] = pd.len\n+        if not entry_plugins[eid] then entry_plugins[eid] = {} end\n+        entry_plugins[eid][name] = true\n+        kv_upsert(pd, consumer)\n+        ::next_plugin::\n+    end\n+end\n+\n+-- Full rebuild: construct entire tree and build indexes from scratch.\n+local function full_rebuild()\n+    cached_plugins = plugin_consumer()\n+    node_index = {}\n+    entry_plugins = {}\n+    for pname, pd in pairs(cached_plugins) do\n+        for i = 1, pd.len do\n+            local c = pd.nodes[i]\n+            local eid = c.credential_id or c.consumer_name",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3618955816",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13707,
+        "pr_file": "apisix/consumer.lua",
+        "discussion_id": "3618955816",
+        "commented_code": "@@ -190,6 +191,200 @@ end\n end\n \n \n+-- Incremental consumer plugin tree rebuild.\n+-- Instead of rebuilding the full O(N) tree on every conf_version change,\n+-- only process consumers that were created/updated/deleted.\n+-- Full rebuild runs only on bootstrap (first request).\n+-- A background timer runs a lightweight consistency check every 30s:\n+-- it compares tracked IDs against consumers.values without reconstructing data.\n+-- Only triggers a full rebuild if it finds stale entries (extremely rare).\n+-- Motivation: stock APISIX rebuilds this whole O(N) tree on every conf_version change.\n+\n+local cached_plugins\n+local cached_conf_version = 0\n+local node_index = {}           -- \"plugin\\0eid\" -> position in nodes array\n+local entry_plugins = {}        -- eid -> { [plugin_name] = true }\n+local pending_set = {}          -- eid -> consumer item (from filter callback)\n+local has_pending = false\n+local pending_delete = false    -- a delete event was seen; reconcile removed ids\n+local tracked_count = 0         -- count of consumers.values at last sync\n+local FULL_SYNC_INTERVAL = 30   -- seconds between background consistency checks\n+\n+-- key-auth (and the other auth plugins) look consumers up by a key value, not by\n+-- position, via _M.consumers_kv() -> a per-plugin {key_value -> consumer} map.\n+-- That map was rebuilt in full on every conf_version change (O(N) over all\n+-- consumers, each cloned through a fill lru). We instead maintain it incrementally\n+-- alongside the node arrays: kv_upsert on add/update, kv_remove on delete. The\n+-- map lives on the per-plugin data table (pd.kv) and is populated lazily on the\n+-- first lookup (which also teaches us pd.key_attr for that plugin).\n+local function kv_upsert(pd, consumer)\n+    if not pd.kv or not pd.key_attr then\n+        return\n+    end\n+    local nc = core.table.clone(consumer)\n+    nc.auth_conf = secret.fetch_secrets(nc.auth_conf, false)\n+    -- fail closed: skip unset credentials or unresolved secret refs so a client\n+    -- can never authenticate with a literal \"$ENV://...\" reference string.\n+    if secret.has_secret_ref(nc.auth_conf) then\n+        return\n+    end\n+    local key_value = nc.auth_conf[pd.key_attr]\n+    if key_value == nil then\n+        return\n+    end\n+    pd.kv[key_value] = nc\n+    consumer._kvkey = key_value\n+end\n+\n+local function kv_remove(pd, consumer)\n+    if pd.kv and consumer and consumer._kvkey ~= nil then\n+        pd.kv[consumer._kvkey] = nil\n+    end\n+end\n+\n+-- Collect current consumer/credential IDs from consumers.values.\n+local function collect_current_ids()\n+    local ids = {}\n+    for _, val in ipairs(consumers.values or {}) do\n+        if type(val) == \"table\" and val.value and val.value.id then\n+            ids[val.value.id] = true\n+        end\n+    end\n+    return ids\n+end\n+\n+-- Remove all plugin node entries for a given consumer/credential ID.\n+-- Uses swap-with-last for O(1) array removal without holes.\n+local function remove_consumer_entries(eid)\n+    local pset = entry_plugins[eid]\n+    if not pset then return end\n+    for pname in pairs(pset) do\n+        local pd = cached_plugins[pname]\n+        if pd then\n+            local key = pname .. \"\\0\" .. eid\n+            local pos = node_index[key]\n+            if pos and pos <= pd.len then\n+                kv_remove(pd, pd.nodes[pos])\n+                if pos < pd.len then\n+                    -- swap with last element\n+                    local last = pd.nodes[pd.len]\n+                    pd.nodes[pos] = last\n+                    node_index[pname .. \"\\0\" .. last._eid] = pos\n+                end\n+                pd.nodes[pd.len] = nil\n+                pd.len = pd.len - 1\n+            end\n+            node_index[key] = nil\n+        end\n+    end\n+    entry_plugins[eid] = nil\n+end\n+\n+-- Add a consumer/credential to the appropriate auth plugin nodes.\n+local function add_consumer_entry(val)\n+    if type(val) ~= \"table\" or not val.value then return end\n+    local eid = val.value.id\n+    if not eid then return end\n+    for name, config in pairs(val.value.plugins or {}) do\n+        local plugin_obj = plugin.get(name)\n+        if not plugin_obj or plugin_obj.type ~= \"auth\" then\n+            goto next_plugin\n+        end\n+        if not cached_plugins[name] then\n+            cached_plugins[name] = {\n+                nodes = {}, len = 0,\n+                conf_version = consumers.conf_version\n+            }\n+        end\n+        local consumer, err = construct_consumer_data(val, name, config)\n+        if not consumer then\n+            core.log.error(\"incremental: failed to construct consumer for plugin \",\n+                           name, \": \", err)\n+            goto next_plugin\n+        end\n+        consumer._eid = eid\n+        local pd = cached_plugins[name]\n+        pd.len = pd.len + 1\n+        pd.nodes[pd.len] = consumer\n+        node_index[name .. \"\\0\" .. eid] = pd.len\n+        if not entry_plugins[eid] then entry_plugins[eid] = {} end\n+        entry_plugins[eid][name] = true\n+        kv_upsert(pd, consumer)\n+        ::next_plugin::\n+    end\n+end\n+\n+-- Full rebuild: construct entire tree and build indexes from scratch.\n+local function full_rebuild()\n+    cached_plugins = plugin_consumer()\n+    node_index = {}\n+    entry_plugins = {}\n+    for pname, pd in pairs(cached_plugins) do\n+        for i = 1, pd.len do\n+            local c = pd.nodes[i]\n+            local eid = c.credential_id or c.consumer_name",
+        "comment_created_at": "2026-07-21T02:10:24+00:00",
+        "comment_author": "juzhiyuan",
+        "comment_body": "`val.value.id` used by incremental events is the key relative to `/consumers` (for example, `jack/credentials/cred-1`), but this full-rebuild path stores only `c.credential_id` (`cred-1`). Consequently an update cannot remove a bootstrapped credential, and the consistency timer will classify it as stale on every run. Please normalize both paths to the same full entity ID; this also avoids collisions between consumers using the same credential ID.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3618955825",
+    "pr_number": 13707,
+    "pr_file": "apisix/consumer.lua",
+    "created_at": "2026-07-21T02:10:24+00:00",
+    "commented_code": "function _M.consumers_kv(plugin_name, consumer_conf, key_attr)\n-    local consumers = lrucache(\"consumers_key#\" .. plugin_name, consumer_conf.conf_version,\n-        create_consume_cache, consumer_conf, key_attr)\n+    -- consumer_conf is the per-plugin node set from _M.plugin(); the key_value ->\n+    -- consumer map is cached on it and maintained incrementally by kv_upsert/\n+    -- kv_remove, so it is not rebuilt on every conf_version change. Rebuild only on\n+    -- first use, a key_attr change, or a version gap the incremental path missed.\n+    if consumer_conf.kv and consumer_conf.key_attr == key_attr",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3618955825",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13707,
+        "pr_file": "apisix/consumer.lua",
+        "discussion_id": "3618955825",
+        "commented_code": "@@ -272,10 +475,19 @@ end\n \n \n function _M.consumers_kv(plugin_name, consumer_conf, key_attr)\n-    local consumers = lrucache(\"consumers_key#\" .. plugin_name, consumer_conf.conf_version,\n-        create_consume_cache, consumer_conf, key_attr)\n+    -- consumer_conf is the per-plugin node set from _M.plugin(); the key_value ->\n+    -- consumer map is cached on it and maintained incrementally by kv_upsert/\n+    -- kv_remove, so it is not rebuilt on every conf_version change. Rebuild only on\n+    -- first use, a key_attr change, or a version gap the incremental path missed.\n+    if consumer_conf.kv and consumer_conf.key_attr == key_attr",
+        "comment_created_at": "2026-07-21T02:10:24+00:00",
+        "comment_author": "juzhiyuan",
+        "comment_body": "With this fast path, the per-plugin map has no time-based expiry, and changes to `/secrets` or an external secret do not affect `consumer_conf.conf_version`. Secret-backed auth values can therefore remain cached indefinitely. Please preserve the previous refresh bound or include a secret version or TTL in the cache validity check.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3655813400",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13707,
+        "pr_file": "apisix/consumer.lua",
+        "discussion_id": "3618955825",
+        "commented_code": "@@ -272,10 +475,19 @@ end\n \n \n function _M.consumers_kv(plugin_name, consumer_conf, key_attr)\n-    local consumers = lrucache(\"consumers_key#\" .. plugin_name, consumer_conf.conf_version,\n-        create_consume_cache, consumer_conf, key_attr)\n+    -- consumer_conf is the per-plugin node set from _M.plugin(); the key_value ->\n+    -- consumer map is cached on it and maintained incrementally by kv_upsert/\n+    -- kv_remove, so it is not rebuilt on every conf_version change. Rebuild only on\n+    -- first use, a key_attr change, or a version gap the incremental path missed.\n+    if consumer_conf.kv and consumer_conf.key_attr == key_attr",
+        "comment_created_at": "2026-07-27T09:12:19+00:00",
+        "comment_author": "jlaupa",
+        "comment_body": "Fixed in d9317ba. The per-plugin key map now carries a TTL (300s, matching the\r\nrefresh bound the previous global lru-cache provided): `consumers_kv()` rebuilds\r\nthe map once the TTL lapses even without a `conf_version` change, so\r\nsecret-backed auth values are re-derived within that bound although `/secrets`\r\nchanges don't bump `conf_version`. Incremental upserts still apply structural\r\nchanges immediately \u2014 the TTL only bounds secret drift.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3025359907",
+    "pr_number": 12990,
+    "pr_file": "apisix/plugins/opentelemetry.lua",
+    "created_at": "2026-04-02T00:58:15+00:00",
+    "commented_code": "local function create_tracer_obj(conf, plugin_info)\n     if plugin_info.trace_id_source == \"x-request-id\" then\n+        local _original_new_ids = id_generator.new_ids\n+\n         id_generator.new_ids = function()\n-            local trace_id = core.request.headers()[\"x-request-id\"] or ngx_var.request_id\n-            return trace_id, id_generator.new_span_id()\n+            local trace_id = core.request.headers()[\"x-request-id\"]\n+                            or ngx_var.request_id\n+\n+            if is_valid_trace_id(trace_id) then\n+                return trace_id, id_generator.new_span_id()\n+            end\n+\n+            return _original_new_ids()",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3025359907",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12990,
+        "pr_file": "apisix/plugins/opentelemetry.lua",
+        "discussion_id": "3025359907",
+        "commented_code": "@@ -231,9 +249,17 @@ end\n \n local function create_tracer_obj(conf, plugin_info)\n     if plugin_info.trace_id_source == \"x-request-id\" then\n+        local _original_new_ids = id_generator.new_ids\n+\n         id_generator.new_ids = function()\n-            local trace_id = core.request.headers()[\"x-request-id\"] or ngx_var.request_id\n-            return trace_id, id_generator.new_span_id()\n+            local trace_id = core.request.headers()[\"x-request-id\"]\n+                            or ngx_var.request_id\n+\n+            if is_valid_trace_id(trace_id) then\n+                return trace_id, id_generator.new_span_id()\n+            end\n+\n+            return _original_new_ids()",
+        "comment_created_at": "2026-04-02T00:58:15+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "The lrucache has a 24-hour TTL After expiry, create_tracer_obj is called again. At that point `id_generator.new_ids` is already the closure from the previous call, so `_original_new_ids` captures the already-overridden function. Each 24h expiry adds another wrapper layer.\n\nThe pre-PR code was idempotent (it overwrote the same closure). This PR makes it strictly worse.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3030325293",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12990,
+        "pr_file": "apisix/plugins/opentelemetry.lua",
+        "discussion_id": "3025359907",
+        "commented_code": "@@ -231,9 +249,17 @@ end\n \n local function create_tracer_obj(conf, plugin_info)\n     if plugin_info.trace_id_source == \"x-request-id\" then\n+        local _original_new_ids = id_generator.new_ids\n+\n         id_generator.new_ids = function()\n-            local trace_id = core.request.headers()[\"x-request-id\"] or ngx_var.request_id\n-            return trace_id, id_generator.new_span_id()\n+            local trace_id = core.request.headers()[\"x-request-id\"]\n+                            or ngx_var.request_id\n+\n+            if is_valid_trace_id(trace_id) then\n+                return trace_id, id_generator.new_span_id()\n+            end\n+\n+            return _original_new_ids()",
+        "comment_created_at": "2026-04-02T20:53:00+00:00",
+        "comment_author": "prasunsrivastav123-lang",
+        "comment_body": " \nYou're right \u2014 the current implementation wraps `id_generator.new_ids` multiple times when the tracer is recreated, which breaks idempotency and can lead to stacked wrappers over time.\n\nMy intention was to validate the x-request-id and fallback safely, but I see that the current approach needs adjustment to avoid repeated wrapping.\n\nI\u2019ll update the implementation to ensure the override happens only once (idempotent behavior) and push a fix shortly",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3071856252",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12990,
+        "pr_file": "apisix/plugins/opentelemetry.lua",
+        "discussion_id": "3025359907",
+        "commented_code": "@@ -231,9 +249,17 @@ end\n \n local function create_tracer_obj(conf, plugin_info)\n     if plugin_info.trace_id_source == \"x-request-id\" then\n+        local _original_new_ids = id_generator.new_ids\n+\n         id_generator.new_ids = function()\n-            local trace_id = core.request.headers()[\"x-request-id\"] or ngx_var.request_id\n-            return trace_id, id_generator.new_span_id()\n+            local trace_id = core.request.headers()[\"x-request-id\"]\n+                            or ngx_var.request_id\n+\n+            if is_valid_trace_id(trace_id) then\n+                return trace_id, id_generator.new_span_id()\n+            end\n+\n+            return _original_new_ids()",
+        "comment_created_at": "2026-04-13T08:52:07+00:00",
+        "comment_author": "Baoyuantop",
+        "comment_body": "Hi @prasunsrivastav123-lang, has this comment been resolved?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3540805124",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12990,
+        "pr_file": "apisix/plugins/opentelemetry.lua",
+        "discussion_id": "3025359907",
+        "commented_code": "@@ -231,9 +249,17 @@ end\n \n local function create_tracer_obj(conf, plugin_info)\n     if plugin_info.trace_id_source == \"x-request-id\" then\n+        local _original_new_ids = id_generator.new_ids\n+\n         id_generator.new_ids = function()\n-            local trace_id = core.request.headers()[\"x-request-id\"] or ngx_var.request_id\n-            return trace_id, id_generator.new_span_id()\n+            local trace_id = core.request.headers()[\"x-request-id\"]\n+                            or ngx_var.request_id\n+\n+            if is_valid_trace_id(trace_id) then\n+                return trace_id, id_generator.new_span_id()\n+            end\n+\n+            return _original_new_ids()",
+        "comment_created_at": "2026-07-08T02:16:14+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "Addressed: the default generator is now captured once at module load (`original_new_ids`) instead of inside the closure, so re-creating the tracer no longer stacks wrappers.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3114688298",
+    "pr_number": 13202,
+    "pr_file": "apisix/plugins/prometheus/exporter.lua",
+    "created_at": "2026-06-09T18:08:11+00:00",
+    "commented_code": "function _M.http_log(conf, ctx)\n     local vars = ctx.var\n+    local disabled_label_metric_map = get_disabled_label_metric_map()",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3382844997",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13202,
+        "pr_file": "apisix/plugins/prometheus/exporter.lua",
+        "discussion_id": "3114688298",
+        "commented_code": "@@ -292,6 +347,7 @@ end\n \n function _M.http_log(conf, ctx)\n     local vars = ctx.var\n+    local disabled_label_metric_map = get_disabled_label_metric_map()",
+        "comment_created_at": "2026-06-09T18:08:11+00:00",
+        "comment_author": "janiussyafiq",
+        "comment_body": "Addressed. `get_disabled_label_metric_map()` now reads the plugin metadata and caches the built lookup with `core.lrucache` keyed by `metadata.modifiedIndex`, so it is rebuilt only when the configuration changes rather than on every request \u2014 the same pattern used by `error-log-logger`/`cors`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3489241605",
+    "pr_number": 13618,
+    "pr_file": "apisix/plugins/opentelemetry.lua",
+    "created_at": "2026-06-29T04:44:29+00:00",
+    "commented_code": "local plugin_info = metadata.value\n     local vars = api_ctx.var\n \n-    local tracer, err = core.lrucache.plugin_ctx(lrucache, api_ctx, nil,\n+    -- key the cache on modifiedIndex so the tracer is rebuilt when metadata changes\n+    local tracer, err = core.lrucache.plugin_ctx(lrucache, api_ctx, metadata.modifiedIndex,\n                                                 create_tracer_obj, conf, plugin_info)",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3489368450",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13618,
+        "pr_file": "apisix/plugins/opentelemetry.lua",
+        "discussion_id": "3489241605",
+        "commented_code": "@@ -341,7 +341,8 @@ function _M.rewrite(conf, api_ctx)\n     local plugin_info = metadata.value\n     local vars = api_ctx.var\n \n-    local tracer, err = core.lrucache.plugin_ctx(lrucache, api_ctx, nil,\n+    -- key the cache on modifiedIndex so the tracer is rebuilt when metadata changes\n+    local tracer, err = core.lrucache.plugin_ctx(lrucache, api_ctx, metadata.modifiedIndex,\n                                                 create_tracer_obj, conf, plugin_info)",
+        "comment_created_at": "2026-06-29T04:44:29+00:00",
+        "comment_author": "shreemaan-abhishek",
+        "comment_body": "Good catch. Fixed in the latest commit: `inject_core_spans` now keys the same lrucache on `metadata.modifiedIndex` too, so the injected core spans are rebuilt on a metadata change instead of being left stale alongside the main span.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3489241634",
+    "pr_number": 13618,
+    "pr_file": "apisix/plugins/opentelemetry.lua",
+    "created_at": "2026-06-29T04:44:31+00:00",
+    "commented_code": "local plugin_info = metadata.value\n     local vars = api_ctx.var\n \n-    local tracer, err = core.lrucache.plugin_ctx(lrucache, api_ctx, nil,\n+    -- key the cache on modifiedIndex so the tracer is rebuilt when metadata changes\n+    local tracer, err = core.lrucache.plugin_ctx(lrucache, api_ctx, metadata.modifiedIndex,",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3489368507",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13618,
+        "pr_file": "apisix/plugins/opentelemetry.lua",
+        "discussion_id": "3489241634",
+        "commented_code": "@@ -341,7 +341,8 @@ function _M.rewrite(conf, api_ctx)\n     local plugin_info = metadata.value\n     local vars = api_ctx.var\n \n-    local tracer, err = core.lrucache.plugin_ctx(lrucache, api_ctx, nil,\n+    -- key the cache on modifiedIndex so the tracer is rebuilt when metadata changes\n+    local tracer, err = core.lrucache.plugin_ctx(lrucache, api_ctx, metadata.modifiedIndex,",
+        "comment_created_at": "2026-06-29T04:44:31+00:00",
+        "comment_author": "shreemaan-abhishek",
+        "comment_body": "Added a regression test (`opentelemetry.t` TEST 29/30). It warms the tracer on a single keepalive worker via pipelined requests, updates the `opentelemetry` plugin_metadata at runtime (changing `resource.service.name`), and asserts the next exported span carries the new value, without waiting for LRU eviction or worker recycle. Verified it fails on master and passes with this change.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2601506921",
+    "pr_number": 12800,
+    "pr_file": "apisix/plugin.lua",
+    "created_at": "2025-12-09T07:58:51+00:00",
+    "commented_code": "api_ctx.global_rules = global_rules\n         end\n \n+        local dummy_global_rule = merge_global_rule_lrucache(conf_version, global_rules, merge_global_rules, global_rules)\n+        if not dummy_global_rule then\n+            core.log.error(\"failed to get merged global rules form cache, using merge_global_rules instead\")\n+            dummy_global_rule = merge_global_rules(global_rules)",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2601506921",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12800,
+        "pr_file": "apisix/plugin.lua",
+        "discussion_id": "2601506921",
+        "commented_code": "@@ -1273,22 +1329,26 @@ function _M.run_global_rules(api_ctx, global_rules, phase_name)\n             api_ctx.global_rules = global_rules\n         end\n \n+        local dummy_global_rule = merge_global_rule_lrucache(conf_version, global_rules, merge_global_rules, global_rules)\n+        if not dummy_global_rule then\n+            core.log.error(\"failed to get merged global rules form cache, using merge_global_rules instead\")\n+            dummy_global_rule = merge_global_rules(global_rules)",
+        "comment_created_at": "2025-12-09T07:58:51+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "This is unnecessary, lruchche will automatically execute `merge_global_rules` when the request key does not exist.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

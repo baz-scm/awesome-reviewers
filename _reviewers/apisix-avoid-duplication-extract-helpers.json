@@ -1,0 +1,422 @@
+[
+  {
+    "discussion_id": "2583737605",
+    "pr_number": 12751,
+    "pr_file": "apisix/plugins/limit-count/limit-count-redis.lua",
+    "created_at": "2025-12-03T05:58:31+00:00",
+    "commented_code": "return setmetatable(self, mt)\n end\n \n-function _M.incoming(self, key, cost)\n+\n+local function log_phase_incoming_thread(premature, self, key, cost)\n     local conf = self.conf\n     local red, err = redis.new(conf)\n     if not red then\n-        return red, err, 0\n+        return red, err\n     end\n+    return util.redis_log_phase_incoming(self, red, key, cost)\n+end\n \n-    local limit = self.limit\n-    local window = self.window\n-    local res\n-    key = self.plugin_name .. tostring(key)\n \n-    local ttl = 0\n-    res, err = red:eval(script, 1, key, limit, window, cost or 1)\n+local function log_phase_incoming(self, key, cost, dry_run)\n+    if dry_run then\n+        return true\n+    end\n \n-    if err then\n-        return nil, err, ttl\n+    local ok, err = ngx_timer_at(0, log_phase_incoming_thread, self, key, cost)\n+    if not ok then\n+        core.log.error(\"failed to create timer: \", err)\n+        return nil, err\n     end\n \n-    local remaining = res[1]\n-    ttl = res[2]\n+    return ok\n+end\n+\n+\n+function _M.incoming(self, key, cost, dry_run)\n+    if get_phase() == \"log\" then",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2583737605",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12751,
+        "pr_file": "apisix/plugins/limit-count/limit-count-redis.lua",
+        "discussion_id": "2583737605",
+        "commented_code": "@@ -52,37 +44,66 @@ function _M.new(plugin_name, limit, window, conf)\n     return setmetatable(self, mt)\n end\n \n-function _M.incoming(self, key, cost)\n+\n+local function log_phase_incoming_thread(premature, self, key, cost)\n     local conf = self.conf\n     local red, err = redis.new(conf)\n     if not red then\n-        return red, err, 0\n+        return red, err\n     end\n+    return util.redis_log_phase_incoming(self, red, key, cost)\n+end\n \n-    local limit = self.limit\n-    local window = self.window\n-    local res\n-    key = self.plugin_name .. tostring(key)\n \n-    local ttl = 0\n-    res, err = red:eval(script, 1, key, limit, window, cost or 1)\n+local function log_phase_incoming(self, key, cost, dry_run)\n+    if dry_run then\n+        return true\n+    end\n \n-    if err then\n-        return nil, err, ttl\n+    local ok, err = ngx_timer_at(0, log_phase_incoming_thread, self, key, cost)\n+    if not ok then\n+        core.log.error(\"failed to create timer: \", err)\n+        return nil, err\n     end\n \n-    local remaining = res[1]\n-    ttl = res[2]\n+    return ok\n+end\n+\n+\n+function _M.incoming(self, key, cost, dry_run)\n+    if get_phase() == \"log\" then",
+        "comment_created_at": "2025-12-03T05:58:31+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "I think we should use a new function to handle the log phase instead of dealing with it within the incoming function. This is because we need to mock parameters like remaining, which isn't reasonable, and the log phase doesn't require a status code.\nhttps://github.com/apache/apisix/blob/896d3c389196e7a06fddeb5c03006bf300fa4704/apisix/plugins/limit-count/init.lua#L301-L322",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2974438480",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12751,
+        "pr_file": "apisix/plugins/limit-count/limit-count-redis.lua",
+        "discussion_id": "2583737605",
+        "commented_code": "@@ -52,37 +44,66 @@ function _M.new(plugin_name, limit, window, conf)\n     return setmetatable(self, mt)\n end\n \n-function _M.incoming(self, key, cost)\n+\n+local function log_phase_incoming_thread(premature, self, key, cost)\n     local conf = self.conf\n     local red, err = redis.new(conf)\n     if not red then\n-        return red, err, 0\n+        return red, err\n     end\n+    return util.redis_log_phase_incoming(self, red, key, cost)\n+end\n \n-    local limit = self.limit\n-    local window = self.window\n-    local res\n-    key = self.plugin_name .. tostring(key)\n \n-    local ttl = 0\n-    res, err = red:eval(script, 1, key, limit, window, cost or 1)\n+local function log_phase_incoming(self, key, cost, dry_run)\n+    if dry_run then\n+        return true\n+    end\n \n-    if err then\n-        return nil, err, ttl\n+    local ok, err = ngx_timer_at(0, log_phase_incoming_thread, self, key, cost)\n+    if not ok then\n+        core.log.error(\"failed to create timer: \", err)\n+        return nil, err\n     end\n \n-    local remaining = res[1]\n-    ttl = res[2]\n+    return ok\n+end\n+\n+\n+function _M.incoming(self, key, cost, dry_run)\n+    if get_phase() == \"log\" then",
+        "comment_created_at": "2026-03-23T11:25:11+00:00",
+        "comment_author": "beardnick",
+        "comment_body": "Agreed, I split this logic into `log_phase_incoming`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2017874635",
+    "pr_number": 12040,
+    "pr_file": "apisix/admin/credentials.lua",
+    "created_at": "2025-03-28T04:03:30+00:00",
+    "commented_code": "return nil, {error_msg = \"invalid plugins configuration: \" .. err}\n         end\n \n-        for name, _ in pairs(conf.plugins) do\n+        for name, plugin_conf in pairs(conf.plugins) do\n             local plugin_obj = plugin.get(name)\n             if not plugin_obj then\n                 return nil, {error_msg = \"unknown plugin \" .. name}\n             end\n+\n             if plugin_obj.type ~= \"auth\" then\n                 return nil, {error_msg = \"only supports auth type plugins in consumer credential\"}\n             end\n+\n+            -- check duplicate key\n+            local decrypted_conf = core.table.deepcopy(plugin_conf)",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2017874635",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12040,
+        "pr_file": "apisix/admin/credentials.lua",
+        "discussion_id": "2017874635",
+        "commented_code": "@@ -32,14 +34,37 @@ local function check_conf(_id, conf, _need_id, schema)\n             return nil, {error_msg = \"invalid plugins configuration: \" .. err}\n         end\n \n-        for name, _ in pairs(conf.plugins) do\n+        for name, plugin_conf in pairs(conf.plugins) do\n             local plugin_obj = plugin.get(name)\n             if not plugin_obj then\n                 return nil, {error_msg = \"unknown plugin \" .. name}\n             end\n+\n             if plugin_obj.type ~= \"auth\" then\n                 return nil, {error_msg = \"only supports auth type plugins in consumer credential\"}\n             end\n+\n+            -- check duplicate key\n+            local decrypted_conf = core.table.deepcopy(plugin_conf)",
+        "comment_created_at": "2025-03-28T04:03:30+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "There are too many nested judgments inside, but I think we can extract this logic into a universal function that can be used by both consumers and credentials.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3526212913",
+    "pr_number": 13626,
+    "pr_file": "apisix/init.lua",
+    "created_at": "2026-07-06T02:59:56+00:00",
+    "commented_code": "handle_x_forwarded_headers(api_ctx)\n \n+    -- When match_uri_encoded_slash is on, match the route against a uri that\n+    -- keeps the encoded slash (%2F) so it is treated as part of a path\n+    -- parameter. This is a router-match-only value: it is swapped in just for\n+    -- dispatch and restored right after, so the rewrite/access phases, plugins\n+    -- and the upstream keep seeing the normalized ctx.var.uri. Only the matched\n+    -- route and its captured params (uri_param_*) retain the encoded slash.\n+    local match_uri\n+    if local_conf.apisix and local_conf.apisix.match_uri_encoded_slash then\n+        local path = api_ctx.var.real_request_uri\n+        if path then\n+            local args_pos = core.string.find(path, \"?\")\n+            if args_pos then\n+                path = str_sub(path, 1, args_pos - 1)\n+            end\n+            if str_find(path, \"%2f\", 1, true)",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3526212913",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13626,
+        "pr_file": "apisix/init.lua",
+        "discussion_id": "3526212913",
+        "commented_code": "@@ -784,8 +823,37 @@ function _M.http_access_phase()\n \n     handle_x_forwarded_headers(api_ctx)\n \n+    -- When match_uri_encoded_slash is on, match the route against a uri that\n+    -- keeps the encoded slash (%2F) so it is treated as part of a path\n+    -- parameter. This is a router-match-only value: it is swapped in just for\n+    -- dispatch and restored right after, so the rewrite/access phases, plugins\n+    -- and the upstream keep seeing the normalized ctx.var.uri. Only the matched\n+    -- route and its captured params (uri_param_*) retain the encoded slash.\n+    local match_uri\n+    if local_conf.apisix and local_conf.apisix.match_uri_encoded_slash then\n+        local path = api_ctx.var.real_request_uri\n+        if path then\n+            local args_pos = core.string.find(path, \"?\")\n+            if args_pos then\n+                path = str_sub(path, 1, args_pos - 1)\n+            end\n+            if str_find(path, \"%2f\", 1, true)",
+        "comment_created_at": "2026-07-06T02:59:56+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "This is exactly `core.string.find` (it's `string.find(haystack, needle, from or 1, true)`), and this block already uses it for the `?` split above. Using it here too lets you drop the new `str_find` import at the top of the file.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3526244234",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13626,
+        "pr_file": "apisix/init.lua",
+        "discussion_id": "3526212913",
+        "commented_code": "@@ -784,8 +823,37 @@ function _M.http_access_phase()\n \n     handle_x_forwarded_headers(api_ctx)\n \n+    -- When match_uri_encoded_slash is on, match the route against a uri that\n+    -- keeps the encoded slash (%2F) so it is treated as part of a path\n+    -- parameter. This is a router-match-only value: it is swapped in just for\n+    -- dispatch and restored right after, so the rewrite/access phases, plugins\n+    -- and the upstream keep seeing the normalized ctx.var.uri. Only the matched\n+    -- route and its captured params (uri_param_*) retain the encoded slash.\n+    local match_uri\n+    if local_conf.apisix and local_conf.apisix.match_uri_encoded_slash then\n+        local path = api_ctx.var.real_request_uri\n+        if path then\n+            local args_pos = core.string.find(path, \"?\")\n+            if args_pos then\n+                path = str_sub(path, 1, args_pos - 1)\n+            end\n+            if str_find(path, \"%2f\", 1, true)",
+        "comment_created_at": "2026-07-06T03:14:51+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "Switched both checks to `core.string.find` and removed the now-unused `str_find` import. f0a07aa66",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2666861047",
+    "pr_number": 12857,
+    "pr_file": "apisix/plugins/ai-drivers/openai-base.lua",
+    "created_at": "2026-01-07T02:30:17+00:00",
+    "commented_code": "end\n     end\n \n-    local path = (parsed_url and parsed_url.path or self.path)\n+    local path_mode = extra_opts.path_mode or \"fixed\"\n+    local endpoint_path = parsed_url and parsed_url.path\n+    local req_path = ctx.var.uri\n+    local path\n+\n+    if path_mode == \"preserve\" then\n+        path = req_path\n+        if ctx.var.is_args and ctx.var.args and #ctx.var.args > 0 then\n+            local req_args_tab = core.string.decode_args(ctx.var.args)\n+            if type(req_args_tab) == \"table\" then\n+                core.table.merge(query_params, req_args_tab)\n+            end\n+        end\n+    elseif path_mode == \"append\" then\n+        local prefix = endpoint_path or \"\"\n+        if prefix == \"\" or prefix == \"/\" then\n+            path = req_path\n+        else\n+            path = prefix .. req_path\n+            path = path:gsub(\"//+\", \"/\")\n+        end\n+        if ctx.var.is_args and ctx.var.args and #ctx.var.args > 0 then\n+            local req_args_tab = core.string.decode_args(ctx.var.args)\n+            if type(req_args_tab) == \"table\" then\n+                core.table.merge(query_params, req_args_tab)\n+            end",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2666861047",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12857,
+        "pr_file": "apisix/plugins/ai-drivers/openai-base.lua",
+        "discussion_id": "2666861047",
+        "commented_code": "@@ -239,7 +239,36 @@ function _M.request(self, ctx, conf, request_table, extra_opts)\n         end\n     end\n \n-    local path = (parsed_url and parsed_url.path or self.path)\n+    local path_mode = extra_opts.path_mode or \"fixed\"\n+    local endpoint_path = parsed_url and parsed_url.path\n+    local req_path = ctx.var.uri\n+    local path\n+\n+    if path_mode == \"preserve\" then\n+        path = req_path\n+        if ctx.var.is_args and ctx.var.args and #ctx.var.args > 0 then\n+            local req_args_tab = core.string.decode_args(ctx.var.args)\n+            if type(req_args_tab) == \"table\" then\n+                core.table.merge(query_params, req_args_tab)\n+            end\n+        end\n+    elseif path_mode == \"append\" then\n+        local prefix = endpoint_path or \"\"\n+        if prefix == \"\" or prefix == \"/\" then\n+            path = req_path\n+        else\n+            path = prefix .. req_path\n+            path = path:gsub(\"//+\", \"/\")\n+        end\n+        if ctx.var.is_args and ctx.var.args and #ctx.var.args > 0 then\n+            local req_args_tab = core.string.decode_args(ctx.var.args)\n+            if type(req_args_tab) == \"table\" then\n+                core.table.merge(query_params, req_args_tab)\n+            end",
+        "comment_created_at": "2026-01-07T02:30:17+00:00",
+        "comment_author": "Baoyuantop",
+        "comment_body": "It can be extracted into a common function.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2666862923",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12857,
+        "pr_file": "apisix/plugins/ai-drivers/openai-base.lua",
+        "discussion_id": "2666861047",
+        "commented_code": "@@ -239,7 +239,36 @@ function _M.request(self, ctx, conf, request_table, extra_opts)\n         end\n     end\n \n-    local path = (parsed_url and parsed_url.path or self.path)\n+    local path_mode = extra_opts.path_mode or \"fixed\"\n+    local endpoint_path = parsed_url and parsed_url.path\n+    local req_path = ctx.var.uri\n+    local path\n+\n+    if path_mode == \"preserve\" then\n+        path = req_path\n+        if ctx.var.is_args and ctx.var.args and #ctx.var.args > 0 then\n+            local req_args_tab = core.string.decode_args(ctx.var.args)\n+            if type(req_args_tab) == \"table\" then\n+                core.table.merge(query_params, req_args_tab)\n+            end\n+        end\n+    elseif path_mode == \"append\" then\n+        local prefix = endpoint_path or \"\"\n+        if prefix == \"\" or prefix == \"/\" then\n+            path = req_path\n+        else\n+            path = prefix .. req_path\n+            path = path:gsub(\"//+\", \"/\")\n+        end\n+        if ctx.var.is_args and ctx.var.args and #ctx.var.args > 0 then\n+            local req_args_tab = core.string.decode_args(ctx.var.args)\n+            if type(req_args_tab) == \"table\" then\n+                core.table.merge(query_params, req_args_tab)\n+            end",
+        "comment_created_at": "2026-01-07T02:31:43+00:00",
+        "comment_author": "Baoyuantop",
+        "comment_body": "It is recommended to use `ctx.var.is_args == \"?\"` to check.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2957545892",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12857,
+        "pr_file": "apisix/plugins/ai-drivers/openai-base.lua",
+        "discussion_id": "2666861047",
+        "commented_code": "@@ -239,7 +239,36 @@ function _M.request(self, ctx, conf, request_table, extra_opts)\n         end\n     end\n \n-    local path = (parsed_url and parsed_url.path or self.path)\n+    local path_mode = extra_opts.path_mode or \"fixed\"\n+    local endpoint_path = parsed_url and parsed_url.path\n+    local req_path = ctx.var.uri\n+    local path\n+\n+    if path_mode == \"preserve\" then\n+        path = req_path\n+        if ctx.var.is_args and ctx.var.args and #ctx.var.args > 0 then\n+            local req_args_tab = core.string.decode_args(ctx.var.args)\n+            if type(req_args_tab) == \"table\" then\n+                core.table.merge(query_params, req_args_tab)\n+            end\n+        end\n+    elseif path_mode == \"append\" then\n+        local prefix = endpoint_path or \"\"\n+        if prefix == \"\" or prefix == \"/\" then\n+            path = req_path\n+        else\n+            path = prefix .. req_path\n+            path = path:gsub(\"//+\", \"/\")\n+        end\n+        if ctx.var.is_args and ctx.var.args and #ctx.var.args > 0 then\n+            local req_args_tab = core.string.decode_args(ctx.var.args)\n+            if type(req_args_tab) == \"table\" then\n+                core.table.merge(query_params, req_args_tab)\n+            end",
+        "comment_created_at": "2026-03-19T03:06:22+00:00",
+        "comment_author": "sihyeonn",
+        "comment_body": "Done \u2014 extracted the path logic into a build_path() helper.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2957545975",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12857,
+        "pr_file": "apisix/plugins/ai-drivers/openai-base.lua",
+        "discussion_id": "2666861047",
+        "commented_code": "@@ -239,7 +239,36 @@ function _M.request(self, ctx, conf, request_table, extra_opts)\n         end\n     end\n \n-    local path = (parsed_url and parsed_url.path or self.path)\n+    local path_mode = extra_opts.path_mode or \"fixed\"\n+    local endpoint_path = parsed_url and parsed_url.path\n+    local req_path = ctx.var.uri\n+    local path\n+\n+    if path_mode == \"preserve\" then\n+        path = req_path\n+        if ctx.var.is_args and ctx.var.args and #ctx.var.args > 0 then\n+            local req_args_tab = core.string.decode_args(ctx.var.args)\n+            if type(req_args_tab) == \"table\" then\n+                core.table.merge(query_params, req_args_tab)\n+            end\n+        end\n+    elseif path_mode == \"append\" then\n+        local prefix = endpoint_path or \"\"\n+        if prefix == \"\" or prefix == \"/\" then\n+            path = req_path\n+        else\n+            path = prefix .. req_path\n+            path = path:gsub(\"//+\", \"/\")\n+        end\n+        if ctx.var.is_args and ctx.var.args and #ctx.var.args > 0 then\n+            local req_args_tab = core.string.decode_args(ctx.var.args)\n+            if type(req_args_tab) == \"table\" then\n+                core.table.merge(query_params, req_args_tab)\n+            end",
+        "comment_created_at": "2026-03-19T03:06:24+00:00",
+        "comment_author": "sihyeonn",
+        "comment_body": "Already using ctx.var.is_args in the merge_request_query_params function, kept as is.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3114688265",
+    "pr_number": 13202,
+    "pr_file": "apisix/plugins/prometheus/exporter.lua",
+    "created_at": "2026-06-09T18:08:10+00:00",
+    "commented_code": "end\n \n \n+local metric_label_map = {\n+    http_status = {\"code\", \"route\", \"matched_uri\", \"matched_host\", \"service\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\", \"response_source\"},\n+    http_latency = {\"type\", \"route\", \"service\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\"},\n+    bandwidth = {\"type\", \"route\", \"service\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\"},\n+    llm_latency = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\"},\n+    llm_prompt_tokens = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\"},\n+    llm_completion_tokens = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\"},\n+    llm_active_connections = {\"route\", \"route_id\", \"matched_uri\", \"matched_host\",\n+        \"service\", \"service_id\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\"},",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3382844861",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13202,
+        "pr_file": "apisix/plugins/prometheus/exporter.lua",
+        "discussion_id": "3114688265",
+        "commented_code": "@@ -107,6 +106,61 @@ local function extra_labels(name, ctx)\n end\n \n \n+local metric_label_map = {\n+    http_status = {\"code\", \"route\", \"matched_uri\", \"matched_host\", \"service\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\", \"response_source\"},\n+    http_latency = {\"type\", \"route\", \"service\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\"},\n+    bandwidth = {\"type\", \"route\", \"service\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\"},\n+    llm_latency = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\"},\n+    llm_prompt_tokens = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\"},\n+    llm_completion_tokens = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\"},\n+    llm_active_connections = {\"route\", \"route_id\", \"matched_uri\", \"matched_host\",\n+        \"service\", \"service_id\", \"consumer\", \"node\",\n+        \"request_type\", \"request_llm_model\", \"llm_model\"},",
+        "comment_created_at": "2026-06-09T18:08:10+00:00",
+        "comment_author": "janiussyafiq",
+        "comment_body": "Addressed. `metric_label_map` is now the single source of truth: every metric is registered in `http_init` via `append_tables(metric_label_map.<name>, extra_labels(...))` and the duplicated inline label lists were removed. Registration and value-collapsing now read the same array, so their ordering can no longer drift.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3385916204",
+    "pr_number": 13202,
+    "pr_file": "apisix/plugins/prometheus.lua",
+    "created_at": "2026-06-10T06:13:15+00:00",
+    "commented_code": "}\n \n \n+-- Per-metric list of built-in labels whose values can be collapsed to an empty\n+-- string to reduce cardinality. The `enum` of each metric intentionally omits\n+-- structural labels that define the metric's identity (`code` on `http_status`,\n+-- `type` on `http_latency`/`bandwidth`), so they cannot be disabled. The enum\n+-- must stay in sync with `metric_label_map` in exporter.lua.\n+local metadata_schema = {\n+    type = \"object\",\n+    properties = {\n+        disabled_labels = {\n+            type = \"object\",\n+            properties = {\n+                http_status = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route\", \"matched_uri\", \"matched_host\", \"service\",\n+                                \"consumer\", \"node\", \"request_type\",\n+                                \"request_llm_model\", \"llm_model\", \"response_source\"},\n+                    },\n+                },\n+                http_latency = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route\", \"service\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                bandwidth = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route\", \"service\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                llm_latency = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                llm_prompt_tokens = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                llm_completion_tokens = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                llm_active_connections = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route\", \"route_id\", \"matched_uri\", \"matched_host\",",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3385916204",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13202,
+        "pr_file": "apisix/plugins/prometheus.lua",
+        "discussion_id": "3385916204",
+        "commented_code": "@@ -29,18 +29,99 @@ local schema = {\n }\n \n \n+-- Per-metric list of built-in labels whose values can be collapsed to an empty\n+-- string to reduce cardinality. The `enum` of each metric intentionally omits\n+-- structural labels that define the metric's identity (`code` on `http_status`,\n+-- `type` on `http_latency`/`bandwidth`), so they cannot be disabled. The enum\n+-- must stay in sync with `metric_label_map` in exporter.lua.\n+local metadata_schema = {\n+    type = \"object\",\n+    properties = {\n+        disabled_labels = {\n+            type = \"object\",\n+            properties = {\n+                http_status = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route\", \"matched_uri\", \"matched_host\", \"service\",\n+                                \"consumer\", \"node\", \"request_type\",\n+                                \"request_llm_model\", \"llm_model\", \"response_source\"},\n+                    },\n+                },\n+                http_latency = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route\", \"service\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                bandwidth = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route\", \"service\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                llm_latency = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                llm_prompt_tokens = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                llm_completion_tokens = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                llm_active_connections = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route\", \"route_id\", \"matched_uri\", \"matched_host\",",
+        "comment_created_at": "2026-06-10T06:13:15+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "The `enum` lists in `metadata_schema` (`prometheus.lua`) are a manual copy of\r\n`metric_label_map` (`exporter.lua`) minus the structural labels. They live in\r\ndifferent files and must be kept in sync by hand \u2014 easy to drift.\r\n\r\nSuggestion: make `metric_label_map` the single source\r\n\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3389984182",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13202,
+        "pr_file": "apisix/plugins/prometheus.lua",
+        "discussion_id": "3385916204",
+        "commented_code": "@@ -29,18 +29,99 @@ local schema = {\n }\n \n \n+-- Per-metric list of built-in labels whose values can be collapsed to an empty\n+-- string to reduce cardinality. The `enum` of each metric intentionally omits\n+-- structural labels that define the metric's identity (`code` on `http_status`,\n+-- `type` on `http_latency`/`bandwidth`), so they cannot be disabled. The enum\n+-- must stay in sync with `metric_label_map` in exporter.lua.\n+local metadata_schema = {\n+    type = \"object\",\n+    properties = {\n+        disabled_labels = {\n+            type = \"object\",\n+            properties = {\n+                http_status = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route\", \"matched_uri\", \"matched_host\", \"service\",\n+                                \"consumer\", \"node\", \"request_type\",\n+                                \"request_llm_model\", \"llm_model\", \"response_source\"},\n+                    },\n+                },\n+                http_latency = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route\", \"service\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                bandwidth = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route\", \"service\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                llm_latency = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                llm_prompt_tokens = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                llm_completion_tokens = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route_id\", \"service_id\", \"consumer\", \"node\",\n+                                \"request_type\", \"request_llm_model\", \"llm_model\"},\n+                    },\n+                },\n+                llm_active_connections = {\n+                    type = \"array\",\n+                    items = {\n+                        type = \"string\",\n+                        enum = {\"route\", \"route_id\", \"matched_uri\", \"matched_host\",",
+        "comment_created_at": "2026-06-10T16:45:28+00:00",
+        "comment_author": "janiussyafiq",
+        "comment_body": "fixed",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3472594016",
+    "pr_number": 13606,
+    "pr_file": "apisix/plugins/ai-lakera-guard.lua",
+    "created_at": "2026-06-25T07:22:53+00:00",
+    "commented_code": "end\n \n \n+function _M.lua_body_filter(conf, ctx, headers, body)\n+    if conf.direction ~= \"output\" and conf.direction ~= \"both\" then\n+        return\n+    end\n+\n+    if ngx.status >= 400 then\n+        return\n+    end\n+\n+    -- Non-streaming: ai-proxy hands us the fully-assembled completion text.\n+    if ctx.var.request_type == \"ai_chat\" then\n+        local text = ctx.var.llm_response_text\n+        if not text or text == \"\" then\n+            return\n+        end\n+        local messages = { { role = \"assistant\", content = text } }\n+        return moderate(ctx, conf, messages, \"response\", conf.response_failure_message)\n+    end\n+\n+    -- Streaming: lua_body_filter is invoked once per upstream chunk. We cannot\n+    -- scan a partial completion and we must not let flagged tokens reach the\n+    -- client, so we buffer every chunk (withholding it with an empty body) and",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3472594016",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13606,
+        "pr_file": "apisix/plugins/ai-lakera-guard.lua",
+        "discussion_id": "3472594016",
+        "commented_code": "@@ -206,4 +215,60 @@ function _M.access(conf, ctx)\n end\n \n \n+function _M.lua_body_filter(conf, ctx, headers, body)\n+    if conf.direction ~= \"output\" and conf.direction ~= \"both\" then\n+        return\n+    end\n+\n+    if ngx.status >= 400 then\n+        return\n+    end\n+\n+    -- Non-streaming: ai-proxy hands us the fully-assembled completion text.\n+    if ctx.var.request_type == \"ai_chat\" then\n+        local text = ctx.var.llm_response_text\n+        if not text or text == \"\" then\n+            return\n+        end\n+        local messages = { { role = \"assistant\", content = text } }\n+        return moderate(ctx, conf, messages, \"response\", conf.response_failure_message)\n+    end\n+\n+    -- Streaming: lua_body_filter is invoked once per upstream chunk. We cannot\n+    -- scan a partial completion and we must not let flagged tokens reach the\n+    -- client, so we buffer every chunk (withholding it with an empty body) and",
+        "comment_created_at": "2026-06-25T07:22:53+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Two minor things while you're here:\n\n- This comment says the chunk is withheld \"with an empty body\", but it's actually replaced with a `:\\n\\n` SSE keep-alive (line 251). Worth fixing the wording to match \u2014 and maybe noting *why* a keep-alive rather than `\"\"`: an empty string trips nginx's \"nothing to flush\", and returning `nil` would let the original chunk leak to the client.\n- `local messages = { { role = \"assistant\", content = text } }` followed by the `moderate(..., \"response\", conf.response_failure_message)` call is duplicated verbatim between this streaming branch and the non-streaming `ai_chat` branch above. A small `moderate_response(ctx, conf, text)` local would collapse both into one.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3478712040",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13606,
+        "pr_file": "apisix/plugins/ai-lakera-guard.lua",
+        "discussion_id": "3472594016",
+        "commented_code": "@@ -206,4 +215,60 @@ function _M.access(conf, ctx)\n end\n \n \n+function _M.lua_body_filter(conf, ctx, headers, body)\n+    if conf.direction ~= \"output\" and conf.direction ~= \"both\" then\n+        return\n+    end\n+\n+    if ngx.status >= 400 then\n+        return\n+    end\n+\n+    -- Non-streaming: ai-proxy hands us the fully-assembled completion text.\n+    if ctx.var.request_type == \"ai_chat\" then\n+        local text = ctx.var.llm_response_text\n+        if not text or text == \"\" then\n+            return\n+        end\n+        local messages = { { role = \"assistant\", content = text } }\n+        return moderate(ctx, conf, messages, \"response\", conf.response_failure_message)\n+    end\n+\n+    -- Streaming: lua_body_filter is invoked once per upstream chunk. We cannot\n+    -- scan a partial completion and we must not let flagged tokens reach the\n+    -- client, so we buffer every chunk (withholding it with an empty body) and",
+        "comment_created_at": "2026-06-26T01:50:02+00:00",
+        "comment_author": "janiussyafiq",
+        "comment_body": "agreed with the refactoring. fixed",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3279485316",
+    "pr_number": 13406,
+    "pr_file": "t/plugin/ai-proxy-request-body-override.t",
+    "created_at": "2026-05-21T07:45:43+00:00",
+    "commented_code": "-=== TEST 3: llm_options: openai provider maps max_tokens to max_completion_tokens\n+=== TEST 3a: ai-proxy forwards the original body when it is not rewritten\n+--- config\n+    location /t {\n+        content_by_lua_block {\n+            local t = require(\"lib.test_admin\").test\n+            local code = t('/apisix/admin/routes/1',\n+                 ngx.HTTP_PUT,\n+                 [[{\n+                    \"uri\": \"/chat\",\n+                    \"plugins\": {\n+                        \"ai-proxy\": {\n+                            \"provider\": \"openai-compatible\",\n+                            \"auth\": { \"header\": { \"Authorization\": \"Bearer t\" } },\n+                            \"override\": {\n+                                \"endpoint\": \"http://localhost:6732\"\n+                            },\n+                            \"ssl_verify\": false\n+                        }\n+                    }\n+                }]]\n+            )\n+            if code >= 300 then ngx.status = code; return end\n+\n+            local raw = '{ \"messages\" : [ { \"role\" : \"user\", \"content\" : \"hi\" } ], \"temperature\" : 0.7 }'\n+            local http = require(\"resty.http\").new()\n+            local res = assert(http:request_uri(\"http://127.0.0.1:\" .. ngx.var.server_port .. \"/chat\", {\n+                method = \"POST\",\n+                body = raw,\n+                headers = { [\"Content-Type\"] = \"application/json\" },\n+            }))\n+            local cjson = require(\"cjson.safe\")\n+            local body = cjson.decode(res.body)\n+            ngx.say(body.choices[1].message.content == raw and \"same body\" or \"body changed\")\n+        }\n+    }\n+--- response_body\n+same body\n+\n+\n+\n+=== TEST 4b: ai-proxy-multi forwards the original body when it is not rewritten",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3279485316",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13406,
+        "pr_file": "t/plugin/ai-proxy-request-body-override.t",
+        "discussion_id": "3279485316",
+        "commented_code": "@@ -174,7 +174,129 @@ __DATA__\n \n \n \n-=== TEST 3: llm_options: openai provider maps max_tokens to max_completion_tokens\n+=== TEST 3a: ai-proxy forwards the original body when it is not rewritten\n+--- config\n+    location /t {\n+        content_by_lua_block {\n+            local t = require(\"lib.test_admin\").test\n+            local code = t('/apisix/admin/routes/1',\n+                 ngx.HTTP_PUT,\n+                 [[{\n+                    \"uri\": \"/chat\",\n+                    \"plugins\": {\n+                        \"ai-proxy\": {\n+                            \"provider\": \"openai-compatible\",\n+                            \"auth\": { \"header\": { \"Authorization\": \"Bearer t\" } },\n+                            \"override\": {\n+                                \"endpoint\": \"http://localhost:6732\"\n+                            },\n+                            \"ssl_verify\": false\n+                        }\n+                    }\n+                }]]\n+            )\n+            if code >= 300 then ngx.status = code; return end\n+\n+            local raw = '{ \"messages\" : [ { \"role\" : \"user\", \"content\" : \"hi\" } ], \"temperature\" : 0.7 }'\n+            local http = require(\"resty.http\").new()\n+            local res = assert(http:request_uri(\"http://127.0.0.1:\" .. ngx.var.server_port .. \"/chat\", {\n+                method = \"POST\",\n+                body = raw,\n+                headers = { [\"Content-Type\"] = \"application/json\" },\n+            }))\n+            local cjson = require(\"cjson.safe\")\n+            local body = cjson.decode(res.body)\n+            ngx.say(body.choices[1].message.content == raw and \"same body\" or \"body changed\")\n+        }\n+    }\n+--- response_body\n+same body\n+\n+\n+\n+=== TEST 4b: ai-proxy-multi forwards the original body when it is not rewritten",
+        "comment_created_at": "2026-05-21T07:45:43+00:00",
+        "comment_author": "shreemaan-abhishek",
+        "comment_body": "I think lint will fail here.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3279491384",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13406,
+        "pr_file": "t/plugin/ai-proxy-request-body-override.t",
+        "discussion_id": "3279485316",
+        "commented_code": "@@ -174,7 +174,129 @@ __DATA__\n \n \n \n-=== TEST 3: llm_options: openai provider maps max_tokens to max_completion_tokens\n+=== TEST 3a: ai-proxy forwards the original body when it is not rewritten\n+--- config\n+    location /t {\n+        content_by_lua_block {\n+            local t = require(\"lib.test_admin\").test\n+            local code = t('/apisix/admin/routes/1',\n+                 ngx.HTTP_PUT,\n+                 [[{\n+                    \"uri\": \"/chat\",\n+                    \"plugins\": {\n+                        \"ai-proxy\": {\n+                            \"provider\": \"openai-compatible\",\n+                            \"auth\": { \"header\": { \"Authorization\": \"Bearer t\" } },\n+                            \"override\": {\n+                                \"endpoint\": \"http://localhost:6732\"\n+                            },\n+                            \"ssl_verify\": false\n+                        }\n+                    }\n+                }]]\n+            )\n+            if code >= 300 then ngx.status = code; return end\n+\n+            local raw = '{ \"messages\" : [ { \"role\" : \"user\", \"content\" : \"hi\" } ], \"temperature\" : 0.7 }'\n+            local http = require(\"resty.http\").new()\n+            local res = assert(http:request_uri(\"http://127.0.0.1:\" .. ngx.var.server_port .. \"/chat\", {\n+                method = \"POST\",\n+                body = raw,\n+                headers = { [\"Content-Type\"] = \"application/json\" },\n+            }))\n+            local cjson = require(\"cjson.safe\")\n+            local body = cjson.decode(res.body)\n+            ngx.say(body.choices[1].message.content == raw and \"same body\" or \"body changed\")\n+        }\n+    }\n+--- response_body\n+same body\n+\n+\n+\n+=== TEST 4b: ai-proxy-multi forwards the original body when it is not rewritten",
+        "comment_created_at": "2026-05-21T07:46:52+00:00",
+        "comment_author": "shreemaan-abhishek",
+        "comment_body": "strange that lint didn't fail here, I remember doing something similar and lint failed, lol.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3279669464",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13406,
+        "pr_file": "t/plugin/ai-proxy-request-body-override.t",
+        "discussion_id": "3279485316",
+        "commented_code": "@@ -174,7 +174,129 @@ __DATA__\n \n \n \n-=== TEST 3: llm_options: openai provider maps max_tokens to max_completion_tokens\n+=== TEST 3a: ai-proxy forwards the original body when it is not rewritten\n+--- config\n+    location /t {\n+        content_by_lua_block {\n+            local t = require(\"lib.test_admin\").test\n+            local code = t('/apisix/admin/routes/1',\n+                 ngx.HTTP_PUT,\n+                 [[{\n+                    \"uri\": \"/chat\",\n+                    \"plugins\": {\n+                        \"ai-proxy\": {\n+                            \"provider\": \"openai-compatible\",\n+                            \"auth\": { \"header\": { \"Authorization\": \"Bearer t\" } },\n+                            \"override\": {\n+                                \"endpoint\": \"http://localhost:6732\"\n+                            },\n+                            \"ssl_verify\": false\n+                        }\n+                    }\n+                }]]\n+            )\n+            if code >= 300 then ngx.status = code; return end\n+\n+            local raw = '{ \"messages\" : [ { \"role\" : \"user\", \"content\" : \"hi\" } ], \"temperature\" : 0.7 }'\n+            local http = require(\"resty.http\").new()\n+            local res = assert(http:request_uri(\"http://127.0.0.1:\" .. ngx.var.server_port .. \"/chat\", {\n+                method = \"POST\",\n+                body = raw,\n+                headers = { [\"Content-Type\"] = \"application/json\" },\n+            }))\n+            local cjson = require(\"cjson.safe\")\n+            local body = cjson.decode(res.body)\n+            ngx.say(body.choices[1].message.content == raw and \"same body\" or \"body changed\")\n+        }\n+    }\n+--- response_body\n+same body\n+\n+\n+\n+=== TEST 4b: ai-proxy-multi forwards the original body when it is not rewritten",
+        "comment_created_at": "2026-05-21T08:17:48+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "```\r\n===TEST 4a\r\n...\r\n===TEST 4b \r\n```\r\nAt this point, Lint will fail.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2659312607",
+    "pr_number": 12853,
+    "pr_file": "apisix/plugins/brotli.lua",
+    "created_at": "2026-01-04T04:16:38+00:00",
+    "commented_code": "end\n \n \n+local function weak_etag_header()\n+    local etag = ngx.header.etag \n+    if not etag then\n+        return\n+    end\n+\n+    local regex = [[^(W/)?\"(.*)\"$]]\n+    local matched, err = ngx.re.match(etag, regex, \"jo\")\n+    if not matched then\n+        -- not standard etag, no quote\n+        ngx.header.etag = nil\n+        return\n+    end\n+\n+    if not matched[1] then\n+        -- strong etag, downgrade it\n+        ngx.header.etag = [[W/\"]] .. matched[2] .. [[\"]]",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2659312607",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12853,
+        "pr_file": "apisix/plugins/brotli.lua",
+        "discussion_id": "2659312607",
+        "commented_code": "@@ -152,6 +152,30 @@ local function check_accept_encoding(ctx)\n end\n \n \n+local function weak_etag_header()\n+    local etag = ngx.header.etag \n+    if not etag then\n+        return\n+    end\n+\n+    local regex = [[^(W/)?\"(.*)\"$]]\n+    local matched, err = ngx.re.match(etag, regex, \"jo\")\n+    if not matched then\n+        -- not standard etag, no quote\n+        ngx.header.etag = nil\n+        return\n+    end\n+\n+    if not matched[1] then\n+        -- strong etag, downgrade it\n+        ngx.header.etag = [[W/\"]] .. matched[2] .. [[\"]]",
+        "comment_created_at": "2026-01-04T04:16:38+00:00",
+        "comment_author": "Baoyuantop",
+        "comment_body": "It is recommended to use core.response.set_header to maintain consistent code style.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2659459287",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12853,
+        "pr_file": "apisix/plugins/brotli.lua",
+        "discussion_id": "2659312607",
+        "commented_code": "@@ -152,6 +152,30 @@ local function check_accept_encoding(ctx)\n end\n \n \n+local function weak_etag_header()\n+    local etag = ngx.header.etag \n+    if not etag then\n+        return\n+    end\n+\n+    local regex = [[^(W/)?\"(.*)\"$]]\n+    local matched, err = ngx.re.match(etag, regex, \"jo\")\n+    if not matched then\n+        -- not standard etag, no quote\n+        ngx.header.etag = nil\n+        return\n+    end\n+\n+    if not matched[1] then\n+        -- strong etag, downgrade it\n+        ngx.header.etag = [[W/\"]] .. matched[2] .. [[\"]]",
+        "comment_created_at": "2026-01-04T07:03:36+00:00",
+        "comment_author": "yuweizzz",
+        "comment_body": "done.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2666825752",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12853,
+        "pr_file": "apisix/plugins/brotli.lua",
+        "discussion_id": "2659312607",
+        "commented_code": "@@ -152,6 +152,30 @@ local function check_accept_encoding(ctx)\n end\n \n \n+local function weak_etag_header()\n+    local etag = ngx.header.etag \n+    if not etag then\n+        return\n+    end\n+\n+    local regex = [[^(W/)?\"(.*)\"$]]\n+    local matched, err = ngx.re.match(etag, regex, \"jo\")\n+    if not matched then\n+        -- not standard etag, no quote\n+        ngx.header.etag = nil\n+        return\n+    end\n+\n+    if not matched[1] then\n+        -- strong etag, downgrade it\n+        ngx.header.etag = [[W/\"]] .. matched[2] .. [[\"]]",
+        "comment_created_at": "2026-01-07T02:03:19+00:00",
+        "comment_author": "Baoyuantop",
+        "comment_body": "Hi @yuweizzz, similar issues exist in other parts of the code; please correct them all.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2670591174",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12853,
+        "pr_file": "apisix/plugins/brotli.lua",
+        "discussion_id": "2659312607",
+        "commented_code": "@@ -152,6 +152,30 @@ local function check_accept_encoding(ctx)\n end\n \n \n+local function weak_etag_header()\n+    local etag = ngx.header.etag \n+    if not etag then\n+        return\n+    end\n+\n+    local regex = [[^(W/)?\"(.*)\"$]]\n+    local matched, err = ngx.re.match(etag, regex, \"jo\")\n+    if not matched then\n+        -- not standard etag, no quote\n+        ngx.header.etag = nil\n+        return\n+    end\n+\n+    if not matched[1] then\n+        -- strong etag, downgrade it\n+        ngx.header.etag = [[W/\"]] .. matched[2] .. [[\"]]",
+        "comment_created_at": "2026-01-08T01:45:16+00:00",
+        "comment_author": "yuweizzz",
+        "comment_body": "I will check it again.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2762681938",
+    "pr_number": 12967,
+    "pr_file": "apisix/plugins/limit-count/init.lua",
+    "created_at": "2026-02-04T07:57:14+00:00",
+    "commented_code": "key = ctx.var[\"remote_addr\"]\n     end\n \n-    key = gen_limit_key(conf, ctx, key)\n+    -- copied from gen_limit_key",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2762681938",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12967,
+        "pr_file": "apisix/plugins/limit-count/init.lua",
+        "discussion_id": "2762681938",
+        "commented_code": "@@ -276,7 +271,32 @@ function _M.rate_limit(conf, ctx, name, cost, dry_run)\n         key = ctx.var[\"remote_addr\"]\n     end\n \n-    key = gen_limit_key(conf, ctx, key)\n+    -- copied from gen_limit_key",
+        "comment_created_at": "2026-02-04T07:57:14+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Why copy the code from the `gen_limit_key` function? This will make `rate_limit` very long and hard to read. It doesn't seem like a necessary change.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2726563312",
+    "pr_number": 12634,
+    "pr_file": "apisix/discovery/kubernetes/init.lua",
+    "created_at": "2026-01-26T07:21:16+00:00",
+    "commented_code": "return left.port < right.port\n end\n \n-local function on_endpoint_slices_modified(handle, endpoint, operate)\n-    if handle.namespace_selector and\n-            not handle:namespace_selector(endpoint.metadata.namespace) then\n-        return\n+local function update_endpoint_slices_cache(handle, endpoint_key, slice, slice_name)\n+    if not handle.endpoint_slices_cache[endpoint_key] then\n+        handle.endpoint_slices_cache[endpoint_key] = {}\n     end\n+    local endpoint_slices = handle.endpoint_slices_cache[endpoint_key]\n+    endpoint_slices[slice_name] = slice\n+end\n \n-    core.log.debug(core.json.delay_encode(endpoint))\n-    core.table.clear(endpoint_buffer)\n-\n-    local endpointslices = endpoint.endpoints\n-    if type(endpointslices) == \"table\" then\n-        for _, endpointslice in ipairs(endpointslices) do\n-            if endpointslice.addresses then\n-                local addresses = endpointslice.addresses\n-                for _, port in ipairs(endpoint.ports or {}) do\n-                    local port_name\n-                    if port.name then\n-                        port_name = port.name\n-                    elseif port.targetPort then\n-                        port_name = tostring(port.targetPort)\n-                    else\n-                        port_name = tostring(port.port)\n-                    end\n-\n-                    if endpointslice.conditions and endpointslice.conditions.ready then\n-                        local nodes = endpoint_buffer[port_name]\n-                        if nodes == nil then\n-                            nodes = core.table.new(0, #endpointslices * #addresses)\n-                            endpoint_buffer[port_name] = nodes\n-                        end\n-\n-                        for _, address in ipairs(addresses) do\n-                            core.table.insert(nodes, {\n-                                host = address.ip,\n-                                port = port.port,\n-                                weight = handle.default_weight\n-                            })\n-                        end\n-                    end\n-                end\n+local function get_endpoints_from_cache(handle, endpoint_key)\n+    local endpoint_slices = handle.endpoint_slices_cache[endpoint_key] or {}\n+    local endpoints = {}\n+    for _, endpoint_slice in pairs(endpoint_slices) do\n+        for port, targets in pairs(endpoint_slice) do\n+            if not endpoints[port] then\n+                endpoints[port] = core.table.new(0, #targets)\n             end\n+            core.table.insert_tail(endpoints[port], unpack(targets))\n         end\n     end\n+    return endpoints\n+end\n \n-    for _, ports in pairs(endpoint_buffer) do\n-        for _, nodes in pairs(ports) do\n-            core.table.sort(nodes, sort_nodes_cmp)\n-        end\n-    end\n-    local endpoint_key = endpoint.metadata.namespace .. \"/\" .. endpoint.metadata.name\n-    local endpoint_content = core.json.encode(endpoint_buffer, true)\n+local function update_endpoint_dict(handle, endpoints, endpoint_key)\n+    local endpoint_content = core.json.encode(endpoints, true)\n     local endpoint_version = ngx.crc32_long(endpoint_content)\n-\n     local _, err\n     _, err = handle.endpoint_dict:safe_set(endpoint_key .. \"#version\", endpoint_version)\n     if err then\n         core.log.error(\"set endpoint version into discovery DICT failed, \", err)\n-        return\n+        return false, err\n     end\n     _, err = handle.endpoint_dict:safe_set(endpoint_key, endpoint_content)\n     if err then\n         core.log.error(\"set endpoint into discovery DICT failed, \", err)\n         handle.endpoint_dict:delete(endpoint_key .. \"#version\")\n+        return false, err\n+    end\n+end\n+\n+local function on_endpoint_slices_modified(handle, endpoint_slice, operate)\n+    if not endpoint_slice.metadata then\n+        core.log.error(\"endpoint_slice has no metadata, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.name then\n+        core.log.error(\"endpoint_slice has no metadata.name, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.namespace then\n+        core.log.error(\"endpoint_slice has no metadata.namespace, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.labels\n+            or not endpoint_slice.metadata.labels[\"kubernetes.io/service-name\"] then\n+        core.log.error(\"endpoint_slice has no service-name, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n         return\n     end\n+\n+    if handle.namespace_selector and\n+            not handle:namespace_selector(endpoint_slice.metadata.namespace) then\n+        return\n+    end\n+\n+    core.log.debug(core.json.delay_encode(endpoint_slice))\n+    --record nodes to every port in service\n+    local port_to_nodes = {}\n+\n+    local slice_endpoints = endpoint_slice.endpoints\n+    if not slice_endpoints or slice_endpoints == ngx.null then\n+        slice_endpoints = {}\n+    end\n+\n+    for _, endpoint in ipairs(slice_endpoints) do\n+        if endpoint.addresses\n+                and endpoint.conditions\n+                and endpoint.conditions.ready then\n+            local addresses = endpoint.addresses\n+            for _, port in ipairs(endpoint_slice.ports or {}) do\n+                local port_name\n+                if port.name then\n+                    port_name = port.name\n+                elseif port.targetPort then\n+                    port_name = tostring(port.targetPort)\n+                else\n+                    port_name = tostring(port.port)\n+                end\n+\n+                local nodes = port_to_nodes[port_name]\n+                if nodes == nil then\n+                    nodes = core.table.new(0, #slice_endpoints * #addresses)\n+                    port_to_nodes[port_name] = nodes\n+                end\n+\n+                for _, ip in ipairs(addresses) do\n+                    core.table.insert(nodes, {\n+                        host = ip,\n+                        port = port.port,\n+                        weight = handle.default_weight\n+                    })\n+                end\n+            end\n+        end\n+    end\n+\n+    local endpoint_key = endpoint_slice.metadata.namespace\n+            .. \"/\" .. endpoint_slice.metadata.labels[\"kubernetes.io/service-name\"]\n+    update_endpoint_slices_cache(handle, endpoint_key, port_to_nodes, endpoint_slice.metadata.name)\n+\n+    local cached_endpoints = get_endpoints_from_cache(handle, endpoint_key)\n+    for _, nodes in pairs(cached_endpoints) do\n+        core.table.sort(nodes, sort_nodes_cmp)\n+    end\n+\n+    update_endpoint_dict(handle, cached_endpoints, endpoint_key)\n     if operate == \"list\" then\n         handle.current_keys_hash[endpoint_key] = true\n         handle.current_keys_hash[endpoint_key .. \"#version\"] = true\n     end\n end\n \n+local function on_endpoint_slices_deleted(handle, endpoint_slice)\n+    if not endpoint_slice.metadata then\n+        core.log.error(\"endpoint_slice has no metadata, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.name then\n+        core.log.error(\"endpoint_slice has no metadata.name, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.namespace then\n+        core.log.error(\"endpoint_slice has no metadata.namespace, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.labels\n+            or not endpoint_slice.metadata.labels[\"kubernetes.io/service-name\"] then\n+        core.log.error(\"endpoint_slice has no service-name, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2726563312",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12634,
+        "pr_file": "apisix/discovery/kubernetes/init.lua",
+        "discussion_id": "2726563312",
+        "commented_code": "@@ -51,77 +51,172 @@ local function sort_nodes_cmp(left, right)\n     return left.port < right.port\n end\n \n-local function on_endpoint_slices_modified(handle, endpoint, operate)\n-    if handle.namespace_selector and\n-            not handle:namespace_selector(endpoint.metadata.namespace) then\n-        return\n+local function update_endpoint_slices_cache(handle, endpoint_key, slice, slice_name)\n+    if not handle.endpoint_slices_cache[endpoint_key] then\n+        handle.endpoint_slices_cache[endpoint_key] = {}\n     end\n+    local endpoint_slices = handle.endpoint_slices_cache[endpoint_key]\n+    endpoint_slices[slice_name] = slice\n+end\n \n-    core.log.debug(core.json.delay_encode(endpoint))\n-    core.table.clear(endpoint_buffer)\n-\n-    local endpointslices = endpoint.endpoints\n-    if type(endpointslices) == \"table\" then\n-        for _, endpointslice in ipairs(endpointslices) do\n-            if endpointslice.addresses then\n-                local addresses = endpointslice.addresses\n-                for _, port in ipairs(endpoint.ports or {}) do\n-                    local port_name\n-                    if port.name then\n-                        port_name = port.name\n-                    elseif port.targetPort then\n-                        port_name = tostring(port.targetPort)\n-                    else\n-                        port_name = tostring(port.port)\n-                    end\n-\n-                    if endpointslice.conditions and endpointslice.conditions.ready then\n-                        local nodes = endpoint_buffer[port_name]\n-                        if nodes == nil then\n-                            nodes = core.table.new(0, #endpointslices * #addresses)\n-                            endpoint_buffer[port_name] = nodes\n-                        end\n-\n-                        for _, address in ipairs(addresses) do\n-                            core.table.insert(nodes, {\n-                                host = address.ip,\n-                                port = port.port,\n-                                weight = handle.default_weight\n-                            })\n-                        end\n-                    end\n-                end\n+local function get_endpoints_from_cache(handle, endpoint_key)\n+    local endpoint_slices = handle.endpoint_slices_cache[endpoint_key] or {}\n+    local endpoints = {}\n+    for _, endpoint_slice in pairs(endpoint_slices) do\n+        for port, targets in pairs(endpoint_slice) do\n+            if not endpoints[port] then\n+                endpoints[port] = core.table.new(0, #targets)\n             end\n+            core.table.insert_tail(endpoints[port], unpack(targets))\n         end\n     end\n+    return endpoints\n+end\n \n-    for _, ports in pairs(endpoint_buffer) do\n-        for _, nodes in pairs(ports) do\n-            core.table.sort(nodes, sort_nodes_cmp)\n-        end\n-    end\n-    local endpoint_key = endpoint.metadata.namespace .. \"/\" .. endpoint.metadata.name\n-    local endpoint_content = core.json.encode(endpoint_buffer, true)\n+local function update_endpoint_dict(handle, endpoints, endpoint_key)\n+    local endpoint_content = core.json.encode(endpoints, true)\n     local endpoint_version = ngx.crc32_long(endpoint_content)\n-\n     local _, err\n     _, err = handle.endpoint_dict:safe_set(endpoint_key .. \"#version\", endpoint_version)\n     if err then\n         core.log.error(\"set endpoint version into discovery DICT failed, \", err)\n-        return\n+        return false, err\n     end\n     _, err = handle.endpoint_dict:safe_set(endpoint_key, endpoint_content)\n     if err then\n         core.log.error(\"set endpoint into discovery DICT failed, \", err)\n         handle.endpoint_dict:delete(endpoint_key .. \"#version\")\n+        return false, err\n+    end\n+end\n+\n+local function on_endpoint_slices_modified(handle, endpoint_slice, operate)\n+    if not endpoint_slice.metadata then\n+        core.log.error(\"endpoint_slice has no metadata, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.name then\n+        core.log.error(\"endpoint_slice has no metadata.name, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.namespace then\n+        core.log.error(\"endpoint_slice has no metadata.namespace, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.labels\n+            or not endpoint_slice.metadata.labels[\"kubernetes.io/service-name\"] then\n+        core.log.error(\"endpoint_slice has no service-name, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n         return\n     end\n+\n+    if handle.namespace_selector and\n+            not handle:namespace_selector(endpoint_slice.metadata.namespace) then\n+        return\n+    end\n+\n+    core.log.debug(core.json.delay_encode(endpoint_slice))\n+    --record nodes to every port in service\n+    local port_to_nodes = {}\n+\n+    local slice_endpoints = endpoint_slice.endpoints\n+    if not slice_endpoints or slice_endpoints == ngx.null then\n+        slice_endpoints = {}\n+    end\n+\n+    for _, endpoint in ipairs(slice_endpoints) do\n+        if endpoint.addresses\n+                and endpoint.conditions\n+                and endpoint.conditions.ready then\n+            local addresses = endpoint.addresses\n+            for _, port in ipairs(endpoint_slice.ports or {}) do\n+                local port_name\n+                if port.name then\n+                    port_name = port.name\n+                elseif port.targetPort then\n+                    port_name = tostring(port.targetPort)\n+                else\n+                    port_name = tostring(port.port)\n+                end\n+\n+                local nodes = port_to_nodes[port_name]\n+                if nodes == nil then\n+                    nodes = core.table.new(0, #slice_endpoints * #addresses)\n+                    port_to_nodes[port_name] = nodes\n+                end\n+\n+                for _, ip in ipairs(addresses) do\n+                    core.table.insert(nodes, {\n+                        host = ip,\n+                        port = port.port,\n+                        weight = handle.default_weight\n+                    })\n+                end\n+            end\n+        end\n+    end\n+\n+    local endpoint_key = endpoint_slice.metadata.namespace\n+            .. \"/\" .. endpoint_slice.metadata.labels[\"kubernetes.io/service-name\"]\n+    update_endpoint_slices_cache(handle, endpoint_key, port_to_nodes, endpoint_slice.metadata.name)\n+\n+    local cached_endpoints = get_endpoints_from_cache(handle, endpoint_key)\n+    for _, nodes in pairs(cached_endpoints) do\n+        core.table.sort(nodes, sort_nodes_cmp)\n+    end\n+\n+    update_endpoint_dict(handle, cached_endpoints, endpoint_key)\n     if operate == \"list\" then\n         handle.current_keys_hash[endpoint_key] = true\n         handle.current_keys_hash[endpoint_key .. \"#version\"] = true\n     end\n end\n \n+local function on_endpoint_slices_deleted(handle, endpoint_slice)\n+    if not endpoint_slice.metadata then\n+        core.log.error(\"endpoint_slice has no metadata, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.name then\n+        core.log.error(\"endpoint_slice has no metadata.name, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.namespace then\n+        core.log.error(\"endpoint_slice has no metadata.namespace, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.labels\n+            or not endpoint_slice.metadata.labels[\"kubernetes.io/service-name\"] then\n+        core.log.error(\"endpoint_slice has no service-name, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return",
+        "comment_created_at": "2026-01-26T07:21:16+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "This part of the code is completely duplicated with that in `on_endpoint_slices_modified` and can be extracted into an independent function.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2727643776",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12634,
+        "pr_file": "apisix/discovery/kubernetes/init.lua",
+        "discussion_id": "2726563312",
+        "commented_code": "@@ -51,77 +51,172 @@ local function sort_nodes_cmp(left, right)\n     return left.port < right.port\n end\n \n-local function on_endpoint_slices_modified(handle, endpoint, operate)\n-    if handle.namespace_selector and\n-            not handle:namespace_selector(endpoint.metadata.namespace) then\n-        return\n+local function update_endpoint_slices_cache(handle, endpoint_key, slice, slice_name)\n+    if not handle.endpoint_slices_cache[endpoint_key] then\n+        handle.endpoint_slices_cache[endpoint_key] = {}\n     end\n+    local endpoint_slices = handle.endpoint_slices_cache[endpoint_key]\n+    endpoint_slices[slice_name] = slice\n+end\n \n-    core.log.debug(core.json.delay_encode(endpoint))\n-    core.table.clear(endpoint_buffer)\n-\n-    local endpointslices = endpoint.endpoints\n-    if type(endpointslices) == \"table\" then\n-        for _, endpointslice in ipairs(endpointslices) do\n-            if endpointslice.addresses then\n-                local addresses = endpointslice.addresses\n-                for _, port in ipairs(endpoint.ports or {}) do\n-                    local port_name\n-                    if port.name then\n-                        port_name = port.name\n-                    elseif port.targetPort then\n-                        port_name = tostring(port.targetPort)\n-                    else\n-                        port_name = tostring(port.port)\n-                    end\n-\n-                    if endpointslice.conditions and endpointslice.conditions.ready then\n-                        local nodes = endpoint_buffer[port_name]\n-                        if nodes == nil then\n-                            nodes = core.table.new(0, #endpointslices * #addresses)\n-                            endpoint_buffer[port_name] = nodes\n-                        end\n-\n-                        for _, address in ipairs(addresses) do\n-                            core.table.insert(nodes, {\n-                                host = address.ip,\n-                                port = port.port,\n-                                weight = handle.default_weight\n-                            })\n-                        end\n-                    end\n-                end\n+local function get_endpoints_from_cache(handle, endpoint_key)\n+    local endpoint_slices = handle.endpoint_slices_cache[endpoint_key] or {}\n+    local endpoints = {}\n+    for _, endpoint_slice in pairs(endpoint_slices) do\n+        for port, targets in pairs(endpoint_slice) do\n+            if not endpoints[port] then\n+                endpoints[port] = core.table.new(0, #targets)\n             end\n+            core.table.insert_tail(endpoints[port], unpack(targets))\n         end\n     end\n+    return endpoints\n+end\n \n-    for _, ports in pairs(endpoint_buffer) do\n-        for _, nodes in pairs(ports) do\n-            core.table.sort(nodes, sort_nodes_cmp)\n-        end\n-    end\n-    local endpoint_key = endpoint.metadata.namespace .. \"/\" .. endpoint.metadata.name\n-    local endpoint_content = core.json.encode(endpoint_buffer, true)\n+local function update_endpoint_dict(handle, endpoints, endpoint_key)\n+    local endpoint_content = core.json.encode(endpoints, true)\n     local endpoint_version = ngx.crc32_long(endpoint_content)\n-\n     local _, err\n     _, err = handle.endpoint_dict:safe_set(endpoint_key .. \"#version\", endpoint_version)\n     if err then\n         core.log.error(\"set endpoint version into discovery DICT failed, \", err)\n-        return\n+        return false, err\n     end\n     _, err = handle.endpoint_dict:safe_set(endpoint_key, endpoint_content)\n     if err then\n         core.log.error(\"set endpoint into discovery DICT failed, \", err)\n         handle.endpoint_dict:delete(endpoint_key .. \"#version\")\n+        return false, err\n+    end\n+end\n+\n+local function on_endpoint_slices_modified(handle, endpoint_slice, operate)\n+    if not endpoint_slice.metadata then\n+        core.log.error(\"endpoint_slice has no metadata, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.name then\n+        core.log.error(\"endpoint_slice has no metadata.name, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.namespace then\n+        core.log.error(\"endpoint_slice has no metadata.namespace, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.labels\n+            or not endpoint_slice.metadata.labels[\"kubernetes.io/service-name\"] then\n+        core.log.error(\"endpoint_slice has no service-name, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n         return\n     end\n+\n+    if handle.namespace_selector and\n+            not handle:namespace_selector(endpoint_slice.metadata.namespace) then\n+        return\n+    end\n+\n+    core.log.debug(core.json.delay_encode(endpoint_slice))\n+    --record nodes to every port in service\n+    local port_to_nodes = {}\n+\n+    local slice_endpoints = endpoint_slice.endpoints\n+    if not slice_endpoints or slice_endpoints == ngx.null then\n+        slice_endpoints = {}\n+    end\n+\n+    for _, endpoint in ipairs(slice_endpoints) do\n+        if endpoint.addresses\n+                and endpoint.conditions\n+                and endpoint.conditions.ready then\n+            local addresses = endpoint.addresses\n+            for _, port in ipairs(endpoint_slice.ports or {}) do\n+                local port_name\n+                if port.name then\n+                    port_name = port.name\n+                elseif port.targetPort then\n+                    port_name = tostring(port.targetPort)\n+                else\n+                    port_name = tostring(port.port)\n+                end\n+\n+                local nodes = port_to_nodes[port_name]\n+                if nodes == nil then\n+                    nodes = core.table.new(0, #slice_endpoints * #addresses)\n+                    port_to_nodes[port_name] = nodes\n+                end\n+\n+                for _, ip in ipairs(addresses) do\n+                    core.table.insert(nodes, {\n+                        host = ip,\n+                        port = port.port,\n+                        weight = handle.default_weight\n+                    })\n+                end\n+            end\n+        end\n+    end\n+\n+    local endpoint_key = endpoint_slice.metadata.namespace\n+            .. \"/\" .. endpoint_slice.metadata.labels[\"kubernetes.io/service-name\"]\n+    update_endpoint_slices_cache(handle, endpoint_key, port_to_nodes, endpoint_slice.metadata.name)\n+\n+    local cached_endpoints = get_endpoints_from_cache(handle, endpoint_key)\n+    for _, nodes in pairs(cached_endpoints) do\n+        core.table.sort(nodes, sort_nodes_cmp)\n+    end\n+\n+    update_endpoint_dict(handle, cached_endpoints, endpoint_key)\n     if operate == \"list\" then\n         handle.current_keys_hash[endpoint_key] = true\n         handle.current_keys_hash[endpoint_key .. \"#version\"] = true\n     end\n end\n \n+local function on_endpoint_slices_deleted(handle, endpoint_slice)\n+    if not endpoint_slice.metadata then\n+        core.log.error(\"endpoint_slice has no metadata, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.name then\n+        core.log.error(\"endpoint_slice has no metadata.name, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.namespace then\n+        core.log.error(\"endpoint_slice has no metadata.namespace, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return\n+    end\n+    if not endpoint_slice.metadata.labels\n+            or not endpoint_slice.metadata.labels[\"kubernetes.io/service-name\"] then\n+        core.log.error(\"endpoint_slice has no service-name, endpointSlice: \",\n+                core.json.delay_encode(endpoint_slice))\n+        return",
+        "comment_created_at": "2026-01-26T13:38:12+00:00",
+        "comment_author": "ChuanFF",
+        "comment_body": "done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2659438210",
+    "pr_number": 12852,
+    "pr_file": "apisix/discovery/kubernetes/init.lua",
+    "created_at": "2026-01-04T06:13:09+00:00",
+    "commented_code": "end\n \n \n+local function check_ready(id)\n+    local endpoint_dict = get_endpoint_dict(id)\n+    if not endpoint_dict then\n+        core.log.error(\"failed to get lua_shared_dict:\", get_endpoint_dict_name(id),\n+                \", please check your APISIX version\")\n+        return false, \"failed to get lua_shared_dict: \", get_endpoint_dict_name(id),",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2659438210",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12852,
+        "pr_file": "apisix/discovery/kubernetes/init.lua",
+        "discussion_id": "2659438210",
+        "commented_code": "@@ -715,4 +723,55 @@ function _M.dump_data()\n end\n \n \n+local function check_ready(id)\n+    local endpoint_dict = get_endpoint_dict(id)\n+    if not endpoint_dict then\n+        core.log.error(\"failed to get lua_shared_dict:\", get_endpoint_dict_name(id),\n+                \", please check your APISIX version\")\n+        return false, \"failed to get lua_shared_dict: \", get_endpoint_dict_name(id),",
+        "comment_created_at": "2026-01-04T06:13:09+00:00",
+        "comment_author": "Baoyuantop",
+        "comment_body": "Please use `..` for string concatenation.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

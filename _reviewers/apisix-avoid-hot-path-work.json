@@ -1,0 +1,182 @@
+[
+  {
+    "discussion_id": "3393122437",
+    "pr_number": 13062,
+    "pr_file": "apisix/init.lua",
+    "created_at": "2026-06-11T03:49:06+00:00",
+    "commented_code": "return ngx_exit(1)\n         end\n \n+        local new_upstream_ssl = apisix_secret.fetch_secrets(upstream_ssl, true)",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3393122437",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13062,
+        "pr_file": "apisix/init.lua",
+        "discussion_id": "3393122437",
+        "commented_code": "@@ -552,9 +552,22 @@ function _M.handle_upstream(api_ctx, route, enable_websocket)\n             return ngx_exit(1)\n         end\n \n+        local new_upstream_ssl = apisix_secret.fetch_secrets(upstream_ssl, true)",
+        "comment_created_at": "2026-06-11T03:49:06+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "`fetch_secrets()` does a `core.table.deepcopy` of the whole SSL object on every request through this path, even when the config contains no secret refs at all \u2014 the `true` arg only caches the individual URI lookups (`secrets_cache` in `apisix/secret.lua` is keyed by URI), it doesn't avoid the per-request copy. Unlike the SNI path in `radixtree_sni.lua` which runs per handshake, this runs for every proxied request to an upstream with `tls.client_cert_id`.\n\nHow about guarding it with `secret.has_secret_ref(upstream_ssl)` (added in #13312, available once you merge master)? That keeps the zero-copy assignment for the common case where the SSL object holds plain cert/key.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3548069859",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13062,
+        "pr_file": "apisix/init.lua",
+        "discussion_id": "3393122437",
+        "commented_code": "@@ -552,9 +552,22 @@ function _M.handle_upstream(api_ctx, route, enable_websocket)\n             return ngx_exit(1)\n         end\n \n+        local new_upstream_ssl = apisix_secret.fetch_secrets(upstream_ssl, true)",
+        "comment_created_at": "2026-07-09T00:30:59+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "Done. Master refactored this into `resolve_upstream_client_cert()`, so the resolve now lives there and is gated on `secret.has_secret_ref(upstream_ssl)` \u2014 plain cert/key keeps the zero-copy path, and the stream subsystem gets the fix too since it shares that helper.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3503009133",
+    "pr_number": 13632,
+    "pr_file": "apisix/plugins/ai-cache.lua",
+    "created_at": "2026-07-01T03:04:16+00:00",
+    "commented_code": "ctx.ai_cache_status = \"MISS\"\n         return\n     end\n-    release(conf, red)\n-\n     if res ~= nil and res ~= ngx_null then\n         local cached = core.json.decode(res)\n         if cached and cached.body then\n+            release(conf, red)\n             return serve_hit(conf, ctx, cached)\n         end\n         core.log.warn(\"ai-cache: discarding malformed cache entry for \", ctx.ai_cache_key)\n     end\n \n+    -- L1 miss: attempt an L2 semantic lookup when the layer is configured.\n+    -- `red` is still open and reused inside lookup() for the L1 backfill SET.\n+    -- pcall ensures ANY throw (e.g. FFI pack failure on malformed embedding) stays\n+    -- fail-open and never leaks the connection or 500s the request.\n+    if has_layer(conf, \"semantic\") and conf.semantic then\n+        local ok, hit = pcall(semantic.lookup, red, conf, ctx, body)",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3503009133",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13632,
+        "pr_file": "apisix/plugins/ai-cache.lua",
+        "discussion_id": "3503009133",
+        "commented_code": "@@ -126,16 +159,35 @@ function _M.access(conf, ctx)\n         ctx.ai_cache_status = \"MISS\"\n         return\n     end\n-    release(conf, red)\n-\n     if res ~= nil and res ~= ngx_null then\n         local cached = core.json.decode(res)\n         if cached and cached.body then\n+            release(conf, red)\n             return serve_hit(conf, ctx, cached)\n         end\n         core.log.warn(\"ai-cache: discarding malformed cache entry for \", ctx.ai_cache_key)\n     end\n \n+    -- L1 miss: attempt an L2 semantic lookup when the layer is configured.\n+    -- `red` is still open and reused inside lookup() for the L1 backfill SET.\n+    -- pcall ensures ANY throw (e.g. FFI pack failure on malformed embedding) stays\n+    -- fail-open and never leaks the connection or 500s the request.\n+    if has_layer(conf, \"semantic\") and conf.semantic then\n+        local ok, hit = pcall(semantic.lookup, red, conf, ctx, body)",
+        "comment_created_at": "2026-07-01T03:04:16+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "On an L1 miss `red` is still checked out from the keepalive pool here, but `semantic.lookup` calls `embed()` first \u2014 an outbound HTTP request to the embedding provider, bounded by `timeout` (default 5s) \u2014 and only touches `red` afterwards for `ensure_index`/`knn_search`. So a pooled Redis connection stays pinned for the whole embedding round-trip; under load that drains `redis_keepalive_pool` and forces a fresh TCP connection to Redis on every miss.\n\n`embed()` doesn't need `red`, so computing the embedding before reusing the connection (or releasing/re-acquiring around it) would avoid holding the pool slot across the network call. What do you think?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3503219457",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13632,
+        "pr_file": "apisix/plugins/ai-cache.lua",
+        "discussion_id": "3503009133",
+        "commented_code": "@@ -126,16 +159,35 @@ function _M.access(conf, ctx)\n         ctx.ai_cache_status = \"MISS\"\n         return\n     end\n-    release(conf, red)\n-\n     if res ~= nil and res ~= ngx_null then\n         local cached = core.json.decode(res)\n         if cached and cached.body then\n+            release(conf, red)\n             return serve_hit(conf, ctx, cached)\n         end\n         core.log.warn(\"ai-cache: discarding malformed cache entry for \", ctx.ai_cache_key)\n     end\n \n+    -- L1 miss: attempt an L2 semantic lookup when the layer is configured.\n+    -- `red` is still open and reused inside lookup() for the L1 backfill SET.\n+    -- pcall ensures ANY throw (e.g. FFI pack failure on malformed embedding) stays\n+    -- fail-open and never leaks the connection or 500s the request.\n+    if has_layer(conf, \"semantic\") and conf.semantic then\n+        local ok, hit = pcall(semantic.lookup, red, conf, ctx, body)",
+        "comment_created_at": "2026-07-01T04:08:29+00:00",
+        "comment_author": "janiussyafiq",
+        "comment_body": "Agreed, after the fix I ran some QA test and found that peak conns dropped significantly. Good catch!\r\n<img width=\"553\" height=\"130\" alt=\"image\" src=\"https://github.com/user-attachments/assets/df92ad32-e185-4c73-958a-3ad68ca659c6\" />\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3472147418",
+    "pr_number": 13606,
+    "pr_file": "apisix/plugins/ai-lakera-guard.lua",
+    "created_at": "2026-06-25T05:45:18+00:00",
+    "commented_code": "end\n \n \n+function _M.lua_body_filter(conf, ctx, headers, body)\n+    if conf.direction ~= \"output\" and conf.direction ~= \"both\" then\n+        return\n+    end\n+\n+    if ngx.status >= 400 then\n+        return\n+    end\n+\n+    -- Non-streaming: ai-proxy hands us the fully-assembled completion text.\n+    if ctx.var.request_type == \"ai_chat\" then\n+        local text = ctx.var.llm_response_text\n+        if not text or text == \"\" then\n+            return\n+        end\n+        local messages = { { role = \"assistant\", content = text } }\n+        return moderate(ctx, conf, messages, \"response\", conf.response_failure_message)\n+    end\n+\n+    -- Streaming: lua_body_filter is invoked once per upstream chunk. We cannot\n+    -- scan a partial completion and we must not let flagged tokens reach the\n+    -- client, so we buffer every chunk (withholding it with an empty body) and\n+    -- scan the assembled completion once at end-of-stream. This trades\n+    -- incremental delivery for true blocking.\n+    if ctx.var.request_type == \"ai_stream\" then",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3472147418",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13606,
+        "pr_file": "apisix/plugins/ai-lakera-guard.lua",
+        "discussion_id": "3472147418",
+        "commented_code": "@@ -206,4 +215,60 @@ function _M.access(conf, ctx)\n end\n \n \n+function _M.lua_body_filter(conf, ctx, headers, body)\n+    if conf.direction ~= \"output\" and conf.direction ~= \"both\" then\n+        return\n+    end\n+\n+    if ngx.status >= 400 then\n+        return\n+    end\n+\n+    -- Non-streaming: ai-proxy hands us the fully-assembled completion text.\n+    if ctx.var.request_type == \"ai_chat\" then\n+        local text = ctx.var.llm_response_text\n+        if not text or text == \"\" then\n+            return\n+        end\n+        local messages = { { role = \"assistant\", content = text } }\n+        return moderate(ctx, conf, messages, \"response\", conf.response_failure_message)\n+    end\n+\n+    -- Streaming: lua_body_filter is invoked once per upstream chunk. We cannot\n+    -- scan a partial completion and we must not let flagged tokens reach the\n+    -- client, so we buffer every chunk (withholding it with an empty body) and\n+    -- scan the assembled completion once at end-of-stream. This trades\n+    -- incremental delivery for true blocking.\n+    if ctx.var.request_type == \"ai_stream\" then",
+        "comment_created_at": "2026-06-25T05:45:18+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "In `alert` (shadow) mode this still buffers the whole stream and withholds every chunk until end-of-stream, then releases it all at once. The docs frame `alert` as a non-intrusive, log-only pass-through, but on streaming routes the client loses token-by-token delivery and instead receives the full body in one shot once scanning finishes. So someone who sets `direction: output, action: alert` precisely to observe Lakera verdicts *without* affecting traffic does change the observable latency/streaming behavior.\n\nWould it make sense to skip the buffering when `action == \"alert\"` (let chunks flow through live and scan a copy at the end), or at least document the streaming caveat for shadow mode?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3478703194",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13606,
+        "pr_file": "apisix/plugins/ai-lakera-guard.lua",
+        "discussion_id": "3472147418",
+        "commented_code": "@@ -206,4 +215,60 @@ function _M.access(conf, ctx)\n end\n \n \n+function _M.lua_body_filter(conf, ctx, headers, body)\n+    if conf.direction ~= \"output\" and conf.direction ~= \"both\" then\n+        return\n+    end\n+\n+    if ngx.status >= 400 then\n+        return\n+    end\n+\n+    -- Non-streaming: ai-proxy hands us the fully-assembled completion text.\n+    if ctx.var.request_type == \"ai_chat\" then\n+        local text = ctx.var.llm_response_text\n+        if not text or text == \"\" then\n+            return\n+        end\n+        local messages = { { role = \"assistant\", content = text } }\n+        return moderate(ctx, conf, messages, \"response\", conf.response_failure_message)\n+    end\n+\n+    -- Streaming: lua_body_filter is invoked once per upstream chunk. We cannot\n+    -- scan a partial completion and we must not let flagged tokens reach the\n+    -- client, so we buffer every chunk (withholding it with an empty body) and\n+    -- scan the assembled completion once at end-of-stream. This trades\n+    -- incremental delivery for true blocking.\n+    if ctx.var.request_type == \"ai_stream\" then",
+        "comment_created_at": "2026-06-26T01:46:20+00:00",
+        "comment_author": "janiussyafiq",
+        "comment_body": "agreed, alert mode show allow chunks flow. fixed",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3263250780",
+    "pr_number": 13386,
+    "pr_file": "apisix/core/request_json.lua",
+    "created_at": "2026-05-19T02:13:41+00:00",
+    "commented_code": "+--\n+-- Licensed to the Apache Software Foundation (ASF) under one or more\n+-- contributor license agreements.  See the NOTICE file distributed with\n+-- this work for additional information regarding copyright ownership.\n+-- The ASF licenses this file to You under the Apache License, Version 2.0\n+-- (the \"License\"); you may not use this file except in compliance with\n+-- the License.  You may obtain a copy of the License at\n+--\n+--     http://www.apache.org/licenses/LICENSE-2.0\n+--\n+-- Unless required by applicable law or agreed to in writing, software\n+-- distributed under the License is distributed on an \"AS IS\" BASIS,\n+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+-- See the License for the specific language governing permissions and\n+-- limitations under the License.\n+--\n+\n+local config_local = require(\"apisix.core.config_local\")\n+local log = require(\"apisix.core.log\")\n+local core_json = require(\"apisix.core.json\")\n+local require = require\n+local pcall = pcall\n+\n+\n+local DEFAULT_JSON_LIB = \"qjson\"\n+local json_libs = {\n+    cjson = true,\n+    qjson = true,\n+    simdjson = true,\n+}\n+\n+local qjson\n+local simdjson_parser\n+\n+local _M = {}\n+\n+\n+local function configured_json_lib()\n+    local local_conf = config_local.local_conf()\n+    local name = local_conf and local_conf.apisix\n+                 and local_conf.apisix.request_body_json_lib\n+                 or DEFAULT_JSON_LIB\n+\n+    if not json_libs[name] then\n+        log.warn(\"invalid apisix.request_body_json_lib: \", name,\n+                 \", fallback to \", DEFAULT_JSON_LIB)\n+        return DEFAULT_JSON_LIB\n+    end\n+\n+    return name",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3263263987",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13386,
+        "pr_file": "apisix/core/request_json.lua",
+        "discussion_id": "3263250780",
+        "commented_code": "@@ -0,0 +1,129 @@\n+--\n+-- Licensed to the Apache Software Foundation (ASF) under one or more\n+-- contributor license agreements.  See the NOTICE file distributed with\n+-- this work for additional information regarding copyright ownership.\n+-- The ASF licenses this file to You under the Apache License, Version 2.0\n+-- (the \"License\"); you may not use this file except in compliance with\n+-- the License.  You may obtain a copy of the License at\n+--\n+--     http://www.apache.org/licenses/LICENSE-2.0\n+--\n+-- Unless required by applicable law or agreed to in writing, software\n+-- distributed under the License is distributed on an \"AS IS\" BASIS,\n+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+-- See the License for the specific language governing permissions and\n+-- limitations under the License.\n+--\n+\n+local config_local = require(\"apisix.core.config_local\")\n+local log = require(\"apisix.core.log\")\n+local core_json = require(\"apisix.core.json\")\n+local require = require\n+local pcall = pcall\n+\n+\n+local DEFAULT_JSON_LIB = \"qjson\"\n+local json_libs = {\n+    cjson = true,\n+    qjson = true,\n+    simdjson = true,\n+}\n+\n+local qjson\n+local simdjson_parser\n+\n+local _M = {}\n+\n+\n+local function configured_json_lib()\n+    local local_conf = config_local.local_conf()\n+    local name = local_conf and local_conf.apisix\n+                 and local_conf.apisix.request_body_json_lib\n+                 or DEFAULT_JSON_LIB\n+\n+    if not json_libs[name] then\n+        log.warn(\"invalid apisix.request_body_json_lib: \", name,\n+                 \", fallback to \", DEFAULT_JSON_LIB)\n+        return DEFAULT_JSON_LIB\n+    end\n+\n+    return name",
+        "comment_created_at": "2026-05-19T02:13:41+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Addressed in ff40b98: the configured library name is memoized after the first lookup, so the hot path no longer calls config_local.local_conf() on every decode/encode.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2633984754",
+    "pr_number": 12772,
+    "pr_file": "apisix/discovery/zookeeper/init.lua",
+    "created_at": "2025-12-19T07:15:31+00:00",
+    "commented_code": "+--\n+-- Licensed to the Apache Software Foundation (ASF) under one or more\n+-- contributor license agreements.  See the NOTICE file distributed with\n+-- this work for additional information regarding copyright ownership.\n+-- The ASF licenses this file to You under the Apache License, Version 2.0\n+-- (the \"License\"); you may not use this file except in compliance with\n+-- the License.  You may obtain a copy of the License at\n+--\n+--     http://www.apache.org/licenses/LICENSE-2.0\n+--\n+-- Unless required by applicable law or agreed to in writing, software\n+-- distributed under the License is distributed on an \"AS IS\" BASIS,\n+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+-- See the License for the specific language governing permissions and\n+-- limitations under the License.\n+--\n+\n+local core = require(\"apisix.core\")\n+local utils = require(\"apisix.discovery.zookeeper.utils\")\n+local lrucache = require(\"resty.lrucache\")\n+local table = require(\"apisix.core.table\")\n+local local_conf = require(\"apisix.core.config_local\").local_conf()\n+local ngx = ngx\n+local ipairs = ipairs\n+local log = core.log\n+\n+local _M = {\n+    version = 0.1,\n+    priority = 1000,\n+    name = \"zookeeper\",\n+}\n+\n+-- Global Configuration\n+local zookeeper_conf\n+-- Service Instance Cache\uff08service_name -> {nodes, expire_time}\uff09\n+local instance_cache = lrucache.new(1024)\n+\n+-- Timer Identifier\n+local fetch_timer\n+\n+-- The instance list of a single service from ZooKeeper\n+local function fetch_service_instances(conf, service_name)\n+    -- 1. Init connect\n+    local client, err = utils.new_zk_client(conf)\n+    if not client then\n+        return nil, err\n+    end\n+\n+    -- 2. Create path\n+    local service_path = conf.root_path .. \"/\" .. service_name\n+    local ok, err = utils.create_zk_path(client, service_path)\n+    if not ok then\n+        utils.close_zk_client(client)\n+        return nil, err\n+    end\n+\n+    -- 3. All instance nodes under a service\n+    local children, err = client:get_children(service_path)\n+    if not children then\n+        utils.close_zk_client(client)\n+        if err == \"not exists\" then\n+            log.warn(\"service path not exists: \", service_path)\n+            return {}\n+        end\n+        log.error(\"get zk children failed: \", err)\n+        return nil, err\n+    end\n+\n+    -- 4. Parse the data of each instance node one by one\n+    local instances = {}\n+    for _, child in ipairs(children) do\n+        local instance_path = service_path .. \"/\" .. child\n+        local data, stat, err = client:get_data(instance_path)\n+        do\n+            if not data then\n+                log.error(\"get instance data failed: \", instance_path, \" stat:\", stat, \" err: \", err)\n+                break\n+            end\n+\n+            -- Parse instance data\n+            local instance = utils.parse_instance_data(data)\n+            if instance then\n+                table.insert(instances, instance)\n+            end\n+        end\n+    end\n+\n+    -- 5. Close connects\n+    utils.close_zk_client(client)\n+\n+    log.debug(\"fetch service instances: \", service_name, \" count: \", #instances)\n+    return instances\n+end\n+\n+-- Scheduled fetch of all service instances (full cache update)\uff09\n+local function fetch_all_services()",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2633984754",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12772,
+        "pr_file": "apisix/discovery/zookeeper/init.lua",
+        "discussion_id": "2633984754",
+        "commented_code": "@@ -0,0 +1,238 @@\n+--\n+-- Licensed to the Apache Software Foundation (ASF) under one or more\n+-- contributor license agreements.  See the NOTICE file distributed with\n+-- this work for additional information regarding copyright ownership.\n+-- The ASF licenses this file to You under the Apache License, Version 2.0\n+-- (the \"License\"); you may not use this file except in compliance with\n+-- the License.  You may obtain a copy of the License at\n+--\n+--     http://www.apache.org/licenses/LICENSE-2.0\n+--\n+-- Unless required by applicable law or agreed to in writing, software\n+-- distributed under the License is distributed on an \"AS IS\" BASIS,\n+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+-- See the License for the specific language governing permissions and\n+-- limitations under the License.\n+--\n+\n+local core = require(\"apisix.core\")\n+local utils = require(\"apisix.discovery.zookeeper.utils\")\n+local lrucache = require(\"resty.lrucache\")\n+local table = require(\"apisix.core.table\")\n+local local_conf = require(\"apisix.core.config_local\").local_conf()\n+local ngx = ngx\n+local ipairs = ipairs\n+local log = core.log\n+\n+local _M = {\n+    version = 0.1,\n+    priority = 1000,\n+    name = \"zookeeper\",\n+}\n+\n+-- Global Configuration\n+local zookeeper_conf\n+-- Service Instance Cache\uff08service_name -> {nodes, expire_time}\uff09\n+local instance_cache = lrucache.new(1024)\n+\n+-- Timer Identifier\n+local fetch_timer\n+\n+-- The instance list of a single service from ZooKeeper\n+local function fetch_service_instances(conf, service_name)\n+    -- 1. Init connect\n+    local client, err = utils.new_zk_client(conf)\n+    if not client then\n+        return nil, err\n+    end\n+\n+    -- 2. Create path\n+    local service_path = conf.root_path .. \"/\" .. service_name\n+    local ok, err = utils.create_zk_path(client, service_path)\n+    if not ok then\n+        utils.close_zk_client(client)\n+        return nil, err\n+    end\n+\n+    -- 3. All instance nodes under a service\n+    local children, err = client:get_children(service_path)\n+    if not children then\n+        utils.close_zk_client(client)\n+        if err == \"not exists\" then\n+            log.warn(\"service path not exists: \", service_path)\n+            return {}\n+        end\n+        log.error(\"get zk children failed: \", err)\n+        return nil, err\n+    end\n+\n+    -- 4. Parse the data of each instance node one by one\n+    local instances = {}\n+    for _, child in ipairs(children) do\n+        local instance_path = service_path .. \"/\" .. child\n+        local data, stat, err = client:get_data(instance_path)\n+        do\n+            if not data then\n+                log.error(\"get instance data failed: \", instance_path, \" stat:\", stat, \" err: \", err)\n+                break\n+            end\n+\n+            -- Parse instance data\n+            local instance = utils.parse_instance_data(data)\n+            if instance then\n+                table.insert(instances, instance)\n+            end\n+        end\n+    end\n+\n+    -- 5. Close connects\n+    utils.close_zk_client(client)\n+\n+    log.debug(\"fetch service instances: \", service_name, \" count: \", #instances)\n+    return instances\n+end\n+\n+-- Scheduled fetch of all service instances (full cache update)\uff09\n+local function fetch_all_services()",
+        "comment_created_at": "2025-12-19T07:15:31+00:00",
+        "comment_author": "Baoyuantop",
+        "comment_body": "Do not fetch all services from ZooKeeper. This can cause significant network overhead when there are many services in ZooKeeper. It is recommended to refer to the Nacos implementation and use a timer to iterate through the currently configured Upstream, Route, and Service resources of APISIX, collecting all currently used service_names (with discovery_type set to zookeeper). Only perform ZooKeeper queries and cache updates on these \"in-use\" services.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3107926053",
+    "pr_number": 13255,
+    "pr_file": "apisix/plugins/ai-providers/base.lua",
+    "created_at": "2026-04-20T02:06:01+00:00",
+    "commented_code": "else\n             plugin.lua_response_filter(ctx, res.headers, chunk)\n         end\n+\n+        -- Yield to the nginx scheduler so other coroutines on this worker",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3107926053",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13255,
+        "pr_file": "apisix/plugins/ai-providers/base.lua",
+        "discussion_id": "3107926053",
+        "commented_code": "@@ -361,6 +361,13 @@ function _M.parse_streaming_response(self, ctx, res, target_proto, converter)\n         else\n             plugin.lua_response_filter(ctx, res.headers, chunk)\n         end\n+\n+        -- Yield to the nginx scheduler so other coroutines on this worker",
+        "comment_created_at": "2026-04-20T02:06:01+00:00",
+        "comment_author": "membphis",
+        "comment_body": "It doesn't completely prevent CPU exhaustion; it only prevents the current request from monopolizing CPU resources. \nIt's a temporary, quick fix, but it doesn't truly solve or avoid the problem.\n\nCreate a todo issue and update the current code comments to clarify that the current fix is \u200b\u200bonly a workaround, not a real solution.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3107948033",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13255,
+        "pr_file": "apisix/plugins/ai-providers/base.lua",
+        "discussion_id": "3107926053",
+        "commented_code": "@@ -361,6 +361,13 @@ function _M.parse_streaming_response(self, ctx, res, target_proto, converter)\n         else\n             plugin.lua_response_filter(ctx, res.headers, chunk)\n         end\n+\n+        -- Yield to the nginx scheduler so other coroutines on this worker",
+        "comment_created_at": "2026-04-20T02:17:09+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Good point \u2014 agreed it is a workaround, not a real fix.\n\nFiled #13256 to track the proper solution (per-stream CPU/time bounds, backpressure, fairness for SSE streaming) and updated the inline comment in 401a7ae5 to be explicit that this yield only prevents single-request monopolization and points to the tracking issue.\n\nProposing we keep the workaround for now since it does materially improve worker behavior under bursty providers, with the real fix tracked separately.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

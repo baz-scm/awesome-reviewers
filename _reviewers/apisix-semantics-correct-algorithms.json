@@ -1,0 +1,186 @@
+[
+  {
+    "discussion_id": "3575795850",
+    "pr_number": 13676,
+    "pr_file": "apisix/plugins/ai-proxy/schema.lua",
+    "created_at": "2026-07-14T03:17:30+00:00",
+    "commented_code": "properties = {\n                 algorithm = {\n                     type = \"string\",\n-                    enum = { \"chash\", \"roundrobin\" },\n+                    enum = { \"chash\", \"roundrobin\", \"semantic\" },\n+                    description = \"Load-balancing algorithm. Note: 'semantic' \"\n+                        .. \"picks an instance by prompt similarity and does not \"\n+                        .. \"participate in health checks or fallback_strategy / \"\n+                        .. \"retry \u2014 an upstream failure on the chosen instance is \"\n+                        .. \"returned to the client. It only falls back (to the \"\n+                        .. \"catchall, else the first instance) when no instance \"\n+                        .. \"clears its threshold or embedding fails.\",\n+                },\n+                threshold = {\n+                    type = \"number\",\n+                    description = \"Global minimum cosine similarity for the \"\n+                        .. \"semantic algorithm. When no instance clears its \"\n+                        .. \"threshold the request falls back to the catchall \"\n+                        .. \"instance, or the first instance if none is set.\",\n+                },\n+                aggregation = {\n+                    type = \"string\",\n+                    enum = { \"avg\", \"max\", \"min\" },",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3575795850",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13676,
+        "pr_file": "apisix/plugins/ai-proxy/schema.lua",
+        "discussion_id": "3575795850",
+        "commented_code": "@@ -303,7 +360,35 @@ _M.ai_proxy_multi_schema = {\n             properties = {\n                 algorithm = {\n                     type = \"string\",\n-                    enum = { \"chash\", \"roundrobin\" },\n+                    enum = { \"chash\", \"roundrobin\", \"semantic\" },\n+                    description = \"Load-balancing algorithm. Note: 'semantic' \"\n+                        .. \"picks an instance by prompt similarity and does not \"\n+                        .. \"participate in health checks or fallback_strategy / \"\n+                        .. \"retry \u2014 an upstream failure on the chosen instance is \"\n+                        .. \"returned to the client. It only falls back (to the \"\n+                        .. \"catchall, else the first instance) when no instance \"\n+                        .. \"clears its threshold or embedding fails.\",\n+                },\n+                threshold = {\n+                    type = \"number\",\n+                    description = \"Global minimum cosine similarity for the \"\n+                        .. \"semantic algorithm. When no instance clears its \"\n+                        .. \"threshold the request falls back to the catchall \"\n+                        .. \"instance, or the first instance if none is set.\",\n+                },\n+                aggregation = {\n+                    type = \"string\",\n+                    enum = { \"avg\", \"max\", \"min\" },",
+        "comment_created_at": "2026-07-14T03:17:30+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Would it make sense to drop `avg`/`min` here and just keep `max` (ideally as the fixed behaviour, not a knob)?\n\n`max` is what the closest prior art does \u2014 LiteLLM's auto-routing hardcodes MAX aggregation for exactly this reason: \"a strong match on one keyword in a tier is not diluted by that tier's other utterances.\" `avg` reintroduces that dilution: an instance with one dead-on example plus a couple of loosely-related ones scores *lower* than an instance whose examples are all mediocre-but-consistent, which is usually the opposite of what you want for intent routing.\n\nAnd since `avg` is the default, the out-of-the-box behaviour is the diluted one \u2014 a route that works great with two tight examples can start mis-routing the moment someone adds a third, broader example.\n\nIf there's a concrete use case for `avg`/`min` I'm happy to be wrong, but otherwise a single `max` (no enum, no default to reason about) is simpler and matches what people expect from semantic routing. What do you think?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3576301474",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13676,
+        "pr_file": "apisix/plugins/ai-proxy/schema.lua",
+        "discussion_id": "3575795850",
+        "commented_code": "@@ -303,7 +360,35 @@ _M.ai_proxy_multi_schema = {\n             properties = {\n                 algorithm = {\n                     type = \"string\",\n-                    enum = { \"chash\", \"roundrobin\" },\n+                    enum = { \"chash\", \"roundrobin\", \"semantic\" },\n+                    description = \"Load-balancing algorithm. Note: 'semantic' \"\n+                        .. \"picks an instance by prompt similarity and does not \"\n+                        .. \"participate in health checks or fallback_strategy / \"\n+                        .. \"retry \u2014 an upstream failure on the chosen instance is \"\n+                        .. \"returned to the client. It only falls back (to the \"\n+                        .. \"catchall, else the first instance) when no instance \"\n+                        .. \"clears its threshold or embedding fails.\",\n+                },\n+                threshold = {\n+                    type = \"number\",\n+                    description = \"Global minimum cosine similarity for the \"\n+                        .. \"semantic algorithm. When no instance clears its \"\n+                        .. \"threshold the request falls back to the catchall \"\n+                        .. \"instance, or the first instance if none is set.\",\n+                },\n+                aggregation = {\n+                    type = \"string\",\n+                    enum = { \"avg\", \"max\", \"min\" },",
+        "comment_created_at": "2026-07-14T05:40:57+00:00",
+        "comment_author": "AlinsRan",
+        "comment_body": "You are right, and the numbers back it up. `examples` are alternative phrasings of one intent, so the question is \"does **any** of them match\" \u2014 that is `max`. I ran the aggregation on a concrete case:\n\n| | A: one dead-on example + two broader ones (1.0 / 0.5 / 0.4) | B: uniformly mediocre (0.7 / 0.7) | picked |\n|---|---|---|---|\n| `avg` | 0.633 | 0.700 | **B** \u2014 despite A having a perfect match |\n| `max` | 1.000 | 0.700 | **A** |\n| `min` | 0.400 | 0.700 | **B** |\n\nAnd your \"adding a third example breaks the route\" point reproduces exactly: `avg` drops 0.750 \u2192 0.633 when a broader example is appended, so a route that cleared a 0.7 threshold stops clearing it \u2014 for `max` nothing changes.\n\n`min` is worse still: it demands that *every* phrasing match, which is nonsense for alternatives.\n\nSo there is no use case I can defend for either, and `avg`-as-default meant the out-of-the-box behaviour was the diluted one. Dropped the knob entirely in 9c58718 \u2014 no enum, no default: an instance is scored by its best-matching example. `semantic.aggregate(scores, method)` is now just `semantic.max(scores)`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3585559125",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13676,
+        "pr_file": "apisix/plugins/ai-proxy/schema.lua",
+        "discussion_id": "3575795850",
+        "commented_code": "@@ -303,7 +360,35 @@ _M.ai_proxy_multi_schema = {\n             properties = {\n                 algorithm = {\n                     type = \"string\",\n-                    enum = { \"chash\", \"roundrobin\" },\n+                    enum = { \"chash\", \"roundrobin\", \"semantic\" },\n+                    description = \"Load-balancing algorithm. Note: 'semantic' \"\n+                        .. \"picks an instance by prompt similarity and does not \"\n+                        .. \"participate in health checks or fallback_strategy / \"\n+                        .. \"retry \u2014 an upstream failure on the chosen instance is \"\n+                        .. \"returned to the client. It only falls back (to the \"\n+                        .. \"catchall, else the first instance) when no instance \"\n+                        .. \"clears its threshold or embedding fails.\",\n+                },\n+                threshold = {\n+                    type = \"number\",\n+                    description = \"Global minimum cosine similarity for the \"\n+                        .. \"semantic algorithm. When no instance clears its \"\n+                        .. \"threshold the request falls back to the catchall \"\n+                        .. \"instance, or the first instance if none is set.\",\n+                },\n+                aggregation = {\n+                    type = \"string\",\n+                    enum = { \"avg\", \"max\", \"min\" },",
+        "comment_created_at": "2026-07-15T08:12:17+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Confirmed against the pushed code \u2014 `semantic.max` is the only path now and the schema knob is gone (docs too). The number table nails exactly why; this matches what I'd expect. \ud83d\udc4d",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2601317271",
+    "pr_number": 12756,
+    "pr_file": "apisix/plugins/limit-count/limit-count-redis-cluster.lua",
+    "created_at": "2025-12-09T06:47:34+00:00",
+    "commented_code": "]=])\n \n \n-function _M.new(plugin_name, limit, window, conf)\n+local script_sliding = core.string.compress_script([=[\n+    assert(tonumber(ARGV[3]) >= 1, \"cost must be at least 1\")\n+\n+    local now = tonumber(ARGV[1])\n+    local window = tonumber(ARGV[2])\n+    local limit = tonumber(ARGV[3])\n+    local cost = tonumber(ARGV[4])\n+    local req_id = ARGV[5]\n+\n+    local window_start = now - window\n+\n+    redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, window_start)\n+\n+    local current = redis.call('ZCARD', KEYS[1])\n+\n+    if current + cost > limit then\n+        local earliest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')\n+        local reset = 0\n+        if #earliest == 2 then\n+            reset = earliest[2] + window - now\n+            if reset < 0 then\n+                reset = 0\n+            end\n+        end\n+        return {-1, reset}\n+    end\n+\n+    for i = 1, cost do\n+        local member = req_id .. ':' .. i\n+        redis.call('ZADD', KEYS[1], now, member)\n+    end",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "2601317271",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12756,
+        "pr_file": "apisix/plugins/limit-count/limit-count-redis-cluster.lua",
+        "discussion_id": "2601317271",
+        "commented_code": "@@ -39,7 +40,56 @@ local script = core.string.compress_script([=[\n ]=])\n \n \n-function _M.new(plugin_name, limit, window, conf)\n+local script_sliding = core.string.compress_script([=[\n+    assert(tonumber(ARGV[3]) >= 1, \"cost must be at least 1\")\n+\n+    local now = tonumber(ARGV[1])\n+    local window = tonumber(ARGV[2])\n+    local limit = tonumber(ARGV[3])\n+    local cost = tonumber(ARGV[4])\n+    local req_id = ARGV[5]\n+\n+    local window_start = now - window\n+\n+    redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, window_start)\n+\n+    local current = redis.call('ZCARD', KEYS[1])\n+\n+    if current + cost > limit then\n+        local earliest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')\n+        local reset = 0\n+        if #earliest == 2 then\n+            reset = earliest[2] + window - now\n+            if reset < 0 then\n+                reset = 0\n+            end\n+        end\n+        return {-1, reset}\n+    end\n+\n+    for i = 1, cost do\n+        local member = req_id .. ':' .. i\n+        redis.call('ZADD', KEYS[1], now, member)\n+    end",
+        "comment_created_at": "2025-12-09T06:47:34+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "In the current implementation, each request needs to record an entry in the Redis set. This puts too much pressure on Redis and is probably not a good solution.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2601493623",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12756,
+        "pr_file": "apisix/plugins/limit-count/limit-count-redis-cluster.lua",
+        "discussion_id": "2601317271",
+        "commented_code": "@@ -39,7 +40,56 @@ local script = core.string.compress_script([=[\n ]=])\n \n \n-function _M.new(plugin_name, limit, window, conf)\n+local script_sliding = core.string.compress_script([=[\n+    assert(tonumber(ARGV[3]) >= 1, \"cost must be at least 1\")\n+\n+    local now = tonumber(ARGV[1])\n+    local window = tonumber(ARGV[2])\n+    local limit = tonumber(ARGV[3])\n+    local cost = tonumber(ARGV[4])\n+    local req_id = ARGV[5]\n+\n+    local window_start = now - window\n+\n+    redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, window_start)\n+\n+    local current = redis.call('ZCARD', KEYS[1])\n+\n+    if current + cost > limit then\n+        local earliest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')\n+        local reset = 0\n+        if #earliest == 2 then\n+            reset = earliest[2] + window - now\n+            if reset < 0 then\n+                reset = 0\n+            end\n+        end\n+        return {-1, reset}\n+    end\n+\n+    for i = 1, cost do\n+        local member = req_id .. ':' .. i\n+        redis.call('ZADD', KEYS[1], now, member)\n+    end",
+        "comment_created_at": "2025-12-09T07:53:45+00:00",
+        "comment_author": "sihyeonn",
+        "comment_body": "@nic-6443 \r\n\r\nThanks for raising this concern!\r\n\r\nIn this sliding-window implementation, we intentionally trade some Redis work per request for *exact* \u201cN requests per rolling window\u201d semantics. However, the memory and per-key load are bounded:\r\n\r\n- on every request we first call `ZREMRANGEBYSCORE` to drop all events outside of the current window and then enforce `current + cost <= limit` before inserting new members,\r\n- rejected requests do **not** insert new entries,\r\n- so for each key the ZSET cardinality is always `<= limit`, and Redis memory for this key is bounded by that limit.\r\n\r\nBecause of this, even though we do one `ZADD` per allowed request, we don\u2019t end up with unbounded growth like in some TTL-only designs \u2013 the sliding window state per key stays O(limit). Also, `window_type = \"sliding\"` is an opt-in mode and the docs explicitly call out that it is more expensive than the default fixed window, so it\u2019s intended for use cases that really need accurate rolling windows and can accept the extra Redis cost.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2630343519",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12756,
+        "pr_file": "apisix/plugins/limit-count/limit-count-redis-cluster.lua",
+        "discussion_id": "2601317271",
+        "commented_code": "@@ -39,7 +40,56 @@ local script = core.string.compress_script([=[\n ]=])\n \n \n-function _M.new(plugin_name, limit, window, conf)\n+local script_sliding = core.string.compress_script([=[\n+    assert(tonumber(ARGV[3]) >= 1, \"cost must be at least 1\")\n+\n+    local now = tonumber(ARGV[1])\n+    local window = tonumber(ARGV[2])\n+    local limit = tonumber(ARGV[3])\n+    local cost = tonumber(ARGV[4])\n+    local req_id = ARGV[5]\n+\n+    local window_start = now - window\n+\n+    redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, window_start)\n+\n+    local current = redis.call('ZCARD', KEYS[1])\n+\n+    if current + cost > limit then\n+        local earliest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')\n+        local reset = 0\n+        if #earliest == 2 then\n+            reset = earliest[2] + window - now\n+            if reset < 0 then\n+                reset = 0\n+            end\n+        end\n+        return {-1, reset}\n+    end\n+\n+    for i = 1, cost do\n+        local member = req_id .. ':' .. i\n+        redis.call('ZADD', KEYS[1], now, member)\n+    end",
+        "comment_created_at": "2025-12-18T09:53:32+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "I suggest you use the approximate sliding window mentioned in this blog https://blog.cloudflare.com/counting-things-a-lot-of-different-things/ to implement this function. You can refer to the code here: https://github.com/ElvinEfendi/lua-resty-global-throttle/blob/main/lib/resty/global_throttle/sliding_window.lua",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2644684570",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12756,
+        "pr_file": "apisix/plugins/limit-count/limit-count-redis-cluster.lua",
+        "discussion_id": "2601317271",
+        "commented_code": "@@ -39,7 +40,56 @@ local script = core.string.compress_script([=[\n ]=])\n \n \n-function _M.new(plugin_name, limit, window, conf)\n+local script_sliding = core.string.compress_script([=[\n+    assert(tonumber(ARGV[3]) >= 1, \"cost must be at least 1\")\n+\n+    local now = tonumber(ARGV[1])\n+    local window = tonumber(ARGV[2])\n+    local limit = tonumber(ARGV[3])\n+    local cost = tonumber(ARGV[4])\n+    local req_id = ARGV[5]\n+\n+    local window_start = now - window\n+\n+    redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, window_start)\n+\n+    local current = redis.call('ZCARD', KEYS[1])\n+\n+    if current + cost > limit then\n+        local earliest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')\n+        local reset = 0\n+        if #earliest == 2 then\n+            reset = earliest[2] + window - now\n+            if reset < 0 then\n+                reset = 0\n+            end\n+        end\n+        return {-1, reset}\n+    end\n+\n+    for i = 1, cost do\n+        local member = req_id .. ':' .. i\n+        redis.call('ZADD', KEYS[1], now, member)\n+    end",
+        "comment_created_at": "2025-12-24T03:09:07+00:00",
+        "comment_author": "Baoyuantop",
+        "comment_body": "Hi @sihyeonn, following up on the previous review comments. Please let us know if you have any updates. Thank you.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2652145297",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12756,
+        "pr_file": "apisix/plugins/limit-count/limit-count-redis-cluster.lua",
+        "discussion_id": "2601317271",
+        "commented_code": "@@ -39,7 +40,56 @@ local script = core.string.compress_script([=[\n ]=])\n \n \n-function _M.new(plugin_name, limit, window, conf)\n+local script_sliding = core.string.compress_script([=[\n+    assert(tonumber(ARGV[3]) >= 1, \"cost must be at least 1\")\n+\n+    local now = tonumber(ARGV[1])\n+    local window = tonumber(ARGV[2])\n+    local limit = tonumber(ARGV[3])\n+    local cost = tonumber(ARGV[4])\n+    local req_id = ARGV[5]\n+\n+    local window_start = now - window\n+\n+    redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, window_start)\n+\n+    local current = redis.call('ZCARD', KEYS[1])\n+\n+    if current + cost > limit then\n+        local earliest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')\n+        local reset = 0\n+        if #earliest == 2 then\n+            reset = earliest[2] + window - now\n+            if reset < 0 then\n+                reset = 0\n+            end\n+        end\n+        return {-1, reset}\n+    end\n+\n+    for i = 1, cost do\n+        local member = req_id .. ':' .. i\n+        redis.call('ZADD', KEYS[1], now, member)\n+    end",
+        "comment_created_at": "2025-12-30T03:34:29+00:00",
+        "comment_author": "sihyeonn",
+        "comment_body": "@spacewander @Baoyuantop Thank you so much for the excellent suggestion and providing both the Cloudflare blog reference and the implementation code! This was incredibly helpful.\r\n\r\n\r\nI've implemented both approaches in this PR to give users flexibility based on their requirements:\r\n\r\n**Sliding window goal**\r\n\r\nFixed window allows burst traffic at window boundaries. For example, with `limit=100, time_window=60s`, a user could make 100 requests at 11:00:59 and another 100 at 11:01:00 \u2014 effectively 200 requests in 2 seconds, defeating the rate limit purpose.\r\nSliding window prevents this by enforcing the limit over any rolling time period.\r\n\r\n1. Exact sliding window (`window_type: \"sliding\"`)\r\n- 100% accuracy using sorted sets\r\n- ~100 bytes per request\r\n- Best for: Payment APIs, security-sensitive endpoints where burst prevention is critical\r\n\r\n2. Approximate sliding window (`window_type: \"approximate_sliding\"`)\r\n- ~99.997% accuracy (0.003% error, validated with 400B+ requests per Cloudflare)\r\n- ~16 bytes per key (counter-based: `prev_count \u00d7 (1 - rate) + curr_count`)\r\n- Best for: High-traffic APIs, CDN edges, cost-sensitive deployments\r\n\r\nTest cases have been added for both modes. Please let me know if you'd like any adjustments!\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2957547530",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 12756,
+        "pr_file": "apisix/plugins/limit-count/limit-count-redis-cluster.lua",
+        "discussion_id": "2601317271",
+        "commented_code": "@@ -39,7 +40,56 @@ local script = core.string.compress_script([=[\n ]=])\n \n \n-function _M.new(plugin_name, limit, window, conf)\n+local script_sliding = core.string.compress_script([=[\n+    assert(tonumber(ARGV[3]) >= 1, \"cost must be at least 1\")\n+\n+    local now = tonumber(ARGV[1])\n+    local window = tonumber(ARGV[2])\n+    local limit = tonumber(ARGV[3])\n+    local cost = tonumber(ARGV[4])\n+    local req_id = ARGV[5]\n+\n+    local window_start = now - window\n+\n+    redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, window_start)\n+\n+    local current = redis.call('ZCARD', KEYS[1])\n+\n+    if current + cost > limit then\n+        local earliest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')\n+        local reset = 0\n+        if #earliest == 2 then\n+            reset = earliest[2] + window - now\n+            if reset < 0 then\n+                reset = 0\n+            end\n+        end\n+        return {-1, reset}\n+    end\n+\n+    for i = 1, cost do\n+        local member = req_id .. ':' .. i\n+        redis.call('ZADD', KEYS[1], now, member)\n+    end",
+        "comment_created_at": "2026-03-19T03:06:50+00:00",
+        "comment_author": "sihyeonn",
+        "comment_body": "Sorry for the late response! Pushed a fix addressing the remaining feedback \u2014 CROSSSLOT prevention with hash tags, TTL unit normalization (ms to seconds), request_id fallback, docs for approximate_sliding, and test improvements. Please take a look when you get a chance.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3517018049",
+    "pr_number": 13644,
+    "pr_file": "apisix/plugins/ai-cache/stream.lua",
+    "created_at": "2026-07-03T01:58:13+00:00",
+    "commented_code": "+--\n+-- Licensed to the Apache Software Foundation (ASF) under one or more\n+-- contributor license agreements.  See the NOTICE file distributed with\n+-- this work for additional information regarding copyright ownership.\n+-- The ASF licenses this file to You under the Apache License, Version 2.0\n+-- (the \"License\"); you may not use this file except in compliance with\n+-- the License.  You may obtain a copy of the License at\n+--\n+--     http://www.apache.org/licenses/LICENSE-2.0\n+--\n+-- Unless required by applicable law or agreed to in writing, software\n+-- distributed under the License is distributed on an \"AS IS\" BASIS,\n+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+-- See the License for the specific language governing permissions and\n+-- limitations under the License.\n+--\n+--\n+-- Streaming (SSE) capture + replay policy for ai-cache: body_filter buffers\n+-- the raw client-wire frames, log() stores them once complete, serve_hit\n+-- replays them as one text/event-stream body.\n+--\n+local sse       = require(\"apisix.plugins.ai-transport.sse\")\n+local protocols = require(\"apisix.plugins.ai-protocols\")\n+\n+local _M = {}\n+\n+-- Replay format tag stored on every cache entry (L1 envelope and L2 doc).\n+_M.FORMAT_JSON = \"json\"   -- single-shot application/json body\n+_M.FORMAT_SSE  = \"sse\"    -- raw text/event-stream frames incl. terminal event\n+\n+\n+-- Replayable: single-shot (no framing) or SSE. Binary framings\n+-- (aws-eventstream) are not.\n+function _M.capturable(ctx)\n+    local framing = ctx.ai_stream_framing\n+    return not framing or framing == \"sse\"\n+end\n+\n+\n+-- End offset of the last plain-text `needle` ending at or before `limit`, or nil.\n+local function find_last(s, needle, limit)\n+    local last, init = nil, 1\n+    while true do\n+        local i, j = s:find(needle, init, true)\n+        if not i or j > limit then\n+            return last\n+        end\n+        last = j\n+        init = i + 1\n+    end\n+end\n+\n+\n+-- True when the buffer ends, at a frame boundary, with the client protocol's\n+-- terminal event ([DONE], message_stop, response.completed). Deliberately NOT\n+-- ctx.var.llm_request_done, which is also set on aborts; log() separately\n+-- refuses aborted captures. Only the terminal frame is decoded: full-buffer\n+-- sse.decode is quadratic, and without the boundary check a frame truncated\n+-- mid-write could parse into an event that is_done_event accepts.\n+function _M.stream_completed(ctx, body)\n+    if not body or body == \"\" then\n+        return false\n+    end\n+    local proto = ctx.ai_client_protocol and protocols.get(ctx.ai_client_protocol)\n+    if not (proto and proto.is_done_event) then\n+        return false\n+    end\n+    local tail = body:sub(-256)\n+    if not (tail:find(\"\n\n%s*$\") or tail:find(\"\\r\n\\r\n%s*$\")) then\n+        return false\n+    end\n+    -- last non-whitespace byte = end of the terminal frame's content\n+    local content_end = #body\n+    while content_end > 0 do\n+        local b = body:byte(content_end)\n+        if b ~= 10 and b ~= 13 and b ~= 32 and b ~= 9 then\n+            break\n+        end\n+        content_end = content_end - 1\n+    end\n+    local lf   = find_last(body, \"\n\n\", content_end) or 0\n+    local crlf = find_last(body, \"\\r\n\\r\n\", content_end) or 0\n+    local frame_start = (lf > crlf and lf or crlf) + 1\n+    local events = sse.decode(body:sub(frame_start))",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3517018049",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13644,
+        "pr_file": "apisix/plugins/ai-cache/stream.lua",
+        "discussion_id": "3517018049",
+        "commented_code": "@@ -0,0 +1,113 @@\n+--\n+-- Licensed to the Apache Software Foundation (ASF) under one or more\n+-- contributor license agreements.  See the NOTICE file distributed with\n+-- this work for additional information regarding copyright ownership.\n+-- The ASF licenses this file to You under the Apache License, Version 2.0\n+-- (the \"License\"); you may not use this file except in compliance with\n+-- the License.  You may obtain a copy of the License at\n+--\n+--     http://www.apache.org/licenses/LICENSE-2.0\n+--\n+-- Unless required by applicable law or agreed to in writing, software\n+-- distributed under the License is distributed on an \"AS IS\" BASIS,\n+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+-- See the License for the specific language governing permissions and\n+-- limitations under the License.\n+--\n+--\n+-- Streaming (SSE) capture + replay policy for ai-cache: body_filter buffers\n+-- the raw client-wire frames, log() stores them once complete, serve_hit\n+-- replays them as one text/event-stream body.\n+--\n+local sse       = require(\"apisix.plugins.ai-transport.sse\")\n+local protocols = require(\"apisix.plugins.ai-protocols\")\n+\n+local _M = {}\n+\n+-- Replay format tag stored on every cache entry (L1 envelope and L2 doc).\n+_M.FORMAT_JSON = \"json\"   -- single-shot application/json body\n+_M.FORMAT_SSE  = \"sse\"    -- raw text/event-stream frames incl. terminal event\n+\n+\n+-- Replayable: single-shot (no framing) or SSE. Binary framings\n+-- (aws-eventstream) are not.\n+function _M.capturable(ctx)\n+    local framing = ctx.ai_stream_framing\n+    return not framing or framing == \"sse\"\n+end\n+\n+\n+-- End offset of the last plain-text `needle` ending at or before `limit`, or nil.\n+local function find_last(s, needle, limit)\n+    local last, init = nil, 1\n+    while true do\n+        local i, j = s:find(needle, init, true)\n+        if not i or j > limit then\n+            return last\n+        end\n+        last = j\n+        init = i + 1\n+    end\n+end\n+\n+\n+-- True when the buffer ends, at a frame boundary, with the client protocol's\n+-- terminal event ([DONE], message_stop, response.completed). Deliberately NOT\n+-- ctx.var.llm_request_done, which is also set on aborts; log() separately\n+-- refuses aborted captures. Only the terminal frame is decoded: full-buffer\n+-- sse.decode is quadratic, and without the boundary check a frame truncated\n+-- mid-write could parse into an event that is_done_event accepts.\n+function _M.stream_completed(ctx, body)\n+    if not body or body == \"\" then\n+        return false\n+    end\n+    local proto = ctx.ai_client_protocol and protocols.get(ctx.ai_client_protocol)\n+    if not (proto and proto.is_done_event) then\n+        return false\n+    end\n+    local tail = body:sub(-256)\n+    if not (tail:find(\"\\n\\n%s*$\") or tail:find(\"\\r\\n\\r\\n%s*$\")) then\n+        return false\n+    end\n+    -- last non-whitespace byte = end of the terminal frame's content\n+    local content_end = #body\n+    while content_end > 0 do\n+        local b = body:byte(content_end)\n+        if b ~= 10 and b ~= 13 and b ~= 32 and b ~= 9 then\n+            break\n+        end\n+        content_end = content_end - 1\n+    end\n+    local lf   = find_last(body, \"\\n\\n\", content_end) or 0\n+    local crlf = find_last(body, \"\\r\\n\\r\\n\", content_end) or 0\n+    local frame_start = (lf > crlf and lf or crlf) + 1\n+    local events = sse.decode(body:sub(frame_start))",
+        "comment_created_at": "2026-07-03T01:58:13+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Decoding only the last frame breaks on a spec-legal trailing comment/heartbeat frame after the terminal event. I traced this locally:\n\n```lua\nstream_completed(octx, 'data: hi\\n\\ndata: [DONE]\\n\\n: keepalive\\n\\n')  -- false\n```\n\n`find_last` picks the `: keepalive` frame as the \"terminal\" one, `parse_raw_event` skips comment-only frames, so `events` is empty and `capture_format` returns nil \u2014 every response from an upstream that pings after `[DONE]` is silently never cached (no log line either, since `log()` just returns).\n\nAlso the comment above says full-buffer `sse.decode` is quadratic, but it's a single forward pass over the buffer \u2014 O(n). So you could keep the frame-boundary tail check as the truncation guard and then just `sse.decode(body)` and test `is_done_event(events[#events])`: comments are dropped by the decoder, so the last event is the real terminal one, which fixes the case above and deletes the `find_last`/`frame_start` boundary math. WDYT?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3517421152",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13644,
+        "pr_file": "apisix/plugins/ai-cache/stream.lua",
+        "discussion_id": "3517018049",
+        "commented_code": "@@ -0,0 +1,113 @@\n+--\n+-- Licensed to the Apache Software Foundation (ASF) under one or more\n+-- contributor license agreements.  See the NOTICE file distributed with\n+-- this work for additional information regarding copyright ownership.\n+-- The ASF licenses this file to You under the Apache License, Version 2.0\n+-- (the \"License\"); you may not use this file except in compliance with\n+-- the License.  You may obtain a copy of the License at\n+--\n+--     http://www.apache.org/licenses/LICENSE-2.0\n+--\n+-- Unless required by applicable law or agreed to in writing, software\n+-- distributed under the License is distributed on an \"AS IS\" BASIS,\n+-- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+-- See the License for the specific language governing permissions and\n+-- limitations under the License.\n+--\n+--\n+-- Streaming (SSE) capture + replay policy for ai-cache: body_filter buffers\n+-- the raw client-wire frames, log() stores them once complete, serve_hit\n+-- replays them as one text/event-stream body.\n+--\n+local sse       = require(\"apisix.plugins.ai-transport.sse\")\n+local protocols = require(\"apisix.plugins.ai-protocols\")\n+\n+local _M = {}\n+\n+-- Replay format tag stored on every cache entry (L1 envelope and L2 doc).\n+_M.FORMAT_JSON = \"json\"   -- single-shot application/json body\n+_M.FORMAT_SSE  = \"sse\"    -- raw text/event-stream frames incl. terminal event\n+\n+\n+-- Replayable: single-shot (no framing) or SSE. Binary framings\n+-- (aws-eventstream) are not.\n+function _M.capturable(ctx)\n+    local framing = ctx.ai_stream_framing\n+    return not framing or framing == \"sse\"\n+end\n+\n+\n+-- End offset of the last plain-text `needle` ending at or before `limit`, or nil.\n+local function find_last(s, needle, limit)\n+    local last, init = nil, 1\n+    while true do\n+        local i, j = s:find(needle, init, true)\n+        if not i or j > limit then\n+            return last\n+        end\n+        last = j\n+        init = i + 1\n+    end\n+end\n+\n+\n+-- True when the buffer ends, at a frame boundary, with the client protocol's\n+-- terminal event ([DONE], message_stop, response.completed). Deliberately NOT\n+-- ctx.var.llm_request_done, which is also set on aborts; log() separately\n+-- refuses aborted captures. Only the terminal frame is decoded: full-buffer\n+-- sse.decode is quadratic, and without the boundary check a frame truncated\n+-- mid-write could parse into an event that is_done_event accepts.\n+function _M.stream_completed(ctx, body)\n+    if not body or body == \"\" then\n+        return false\n+    end\n+    local proto = ctx.ai_client_protocol and protocols.get(ctx.ai_client_protocol)\n+    if not (proto and proto.is_done_event) then\n+        return false\n+    end\n+    local tail = body:sub(-256)\n+    if not (tail:find(\"\\n\\n%s*$\") or tail:find(\"\\r\\n\\r\\n%s*$\")) then\n+        return false\n+    end\n+    -- last non-whitespace byte = end of the terminal frame's content\n+    local content_end = #body\n+    while content_end > 0 do\n+        local b = body:byte(content_end)\n+        if b ~= 10 and b ~= 13 and b ~= 32 and b ~= 9 then\n+            break\n+        end\n+        content_end = content_end - 1\n+    end\n+    local lf   = find_last(body, \"\\n\\n\", content_end) or 0\n+    local crlf = find_last(body, \"\\r\\n\\r\\n\", content_end) or 0\n+    local frame_start = (lf > crlf and lf or crlf) + 1\n+    local events = sse.decode(body:sub(frame_start))",
+        "comment_created_at": "2026-07-03T04:11:20+00:00",
+        "comment_author": "janiussyafiq",
+        "comment_body": "fixed according to your suggestion",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3116232033",
+    "pr_number": 13269,
+    "pr_file": "apisix/plugins/ai-protocols/init.lua",
+    "created_at": "2026-04-21T09:03:54+00:00",
+    "commented_code": "+--- Get the list of all registered protocol names.\n+-- @return table Array of protocol names\n+function _M.names()\n+    local names = {}\n+    for name in pairs(registered) do\n+        names[#names + 1] = name\n+    end",
+    "repo_full_name": "apache/apisix",
+    "discussion_comments": [
+      {
+        "comment_id": "3116275404",
+        "repo_full_name": "apache/apisix",
+        "pr_number": 13269,
+        "pr_file": "apisix/plugins/ai-protocols/init.lua",
+        "discussion_id": "3116232033",
+        "commented_code": "@@ -66,6 +67,17 @@ end\n \n \n \n+--- Get the list of all registered protocol names.\n+-- @return table Array of protocol names\n+function _M.names()\n+    local names = {}\n+    for name in pairs(registered) do\n+        names[#names + 1] = name\n+    end",
+        "comment_created_at": "2026-04-21T09:03:54+00:00",
+        "comment_author": "nic-6443",
+        "comment_body": "Good catch \u2014 fixed in 015f812. `table.sort(names)` now ensures deterministic ordering.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

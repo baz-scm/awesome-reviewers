@@ -1,0 +1,156 @@
+[
+  {
+    "discussion_id": "3652006329",
+    "pr_number": 7743,
+    "pr_file": "scripts/audit-runtime-critical.js",
+    "created_at": "2026-07-26T07:27:48+00:00",
+    "commented_code": "+/**\n+ * @license\n+ * Copyright 2026 Qwen Team\n+ * SPDX-License-Identifier: Apache-2.0\n+ */\n+\n+import { spawnSync } from 'node:child_process';\n+import { pathToFileURL } from 'node:url';\n+\n+const AUDIT_ARGS = ['audit', '--omit=dev', '--audit-level=critical', '--json'];\n+\n+/**\n+ * Decide what `npm audit --json` actually told us.\n+ *\n+ * npm exits 1 both when it finds a critical vulnerability and when it never\n+ * reached the registry, so the exit code alone cannot gate a merge: treating\n+ * every non-zero as \"vulnerable\" blocks the whole repository on an npm outage,\n+ * and treating it as \"fine\" silently disables the gate. The payload separates\n+ * them \u2014 a real audit always carries `metadata.vulnerabilities`, while a\n+ * transport failure carries the request error instead.\n+ *\n+ * @param {string} stdout raw stdout from `npm audit --json`\n+ * @returns {'audited' | 'unreachable' | 'unreadable'}\n+ */\n+export function classifyAuditOutput(stdout) {\n+  let parsed;\n+  try {\n+    parsed = JSON.parse(stdout);\n+  } catch {\n+    return 'unreadable';\n+  }\n+  if (parsed?.metadata?.vulnerabilities) {\n+    return 'audited';\n+  }\n+  if (parsed?.error || typeof parsed?.statusCode === 'number') {\n+    return 'unreachable';\n+  }\n+  return 'unreadable';\n+}\n+\n+function main() {\n+  const result = spawnSync('npm', AUDIT_ARGS, {\n+    encoding: 'utf8',\n+    shell: process.platform === 'win32',\n+  });\n+  const stdout = result.stdout ?? '';\n+  const verdict = classifyAuditOutput(stdout);",
+    "repo_full_name": "QwenLM/qwen-code",
+    "discussion_comments": [
+      {
+        "comment_id": "3652006329",
+        "repo_full_name": "QwenLM/qwen-code",
+        "pr_number": 7743,
+        "pr_file": "scripts/audit-runtime-critical.js",
+        "discussion_id": "3652006329",
+        "commented_code": "@@ -0,0 +1,88 @@\n+/**\n+ * @license\n+ * Copyright 2026 Qwen Team\n+ * SPDX-License-Identifier: Apache-2.0\n+ */\n+\n+import { spawnSync } from 'node:child_process';\n+import { pathToFileURL } from 'node:url';\n+\n+const AUDIT_ARGS = ['audit', '--omit=dev', '--audit-level=critical', '--json'];\n+\n+/**\n+ * Decide what `npm audit --json` actually told us.\n+ *\n+ * npm exits 1 both when it finds a critical vulnerability and when it never\n+ * reached the registry, so the exit code alone cannot gate a merge: treating\n+ * every non-zero as \"vulnerable\" blocks the whole repository on an npm outage,\n+ * and treating it as \"fine\" silently disables the gate. The payload separates\n+ * them \u2014 a real audit always carries `metadata.vulnerabilities`, while a\n+ * transport failure carries the request error instead.\n+ *\n+ * @param {string} stdout raw stdout from `npm audit --json`\n+ * @returns {'audited' | 'unreachable' | 'unreadable'}\n+ */\n+export function classifyAuditOutput(stdout) {\n+  let parsed;\n+  try {\n+    parsed = JSON.parse(stdout);\n+  } catch {\n+    return 'unreadable';\n+  }\n+  if (parsed?.metadata?.vulnerabilities) {\n+    return 'audited';\n+  }\n+  if (parsed?.error || typeof parsed?.statusCode === 'number') {\n+    return 'unreachable';\n+  }\n+  return 'unreadable';\n+}\n+\n+function main() {\n+  const result = spawnSync('npm', AUDIT_ARGS, {\n+    encoding: 'utf8',\n+    shell: process.platform === 'win32',\n+  });\n+  const stdout = result.stdout ?? '';\n+  const verdict = classifyAuditOutput(stdout);",
+        "comment_created_at": "2026-07-26T07:27:48+00:00",
+        "comment_author": "wenshao",
+        "comment_body": "**[Suggestion]** `result.error` from `spawnSync` is never checked. When npm cannot be spawned at all (e.g. `spawn npm ENOENT` on a runner without npm on `PATH`), `result.stdout` is `null` \u2192 `''` \u2192 classified `unreadable`, and the log reads \"npm audit produced output this checker does not recognise\" followed by an empty line \u2014 the real cause is hidden. The gate still fails closed (exit 1), so this is a diagnostics gap, not a correctness bug.\n\nConcrete cost: a maintainer debugging that red build sees \"unrecognised output\" with no output and no error, and must reproduce locally to discover npm was simply missing.\n\n```suggestion\n  const result = spawnSync('npm', AUDIT_ARGS, {\n    encoding: 'utf8',\n    shell: process.platform === 'win32',\n  });\n  if (result.error) {\n    console.error(`Failed to run npm audit: ${result.error.message}`);\n    process.exitCode = 1;\n    return;\n  }\n  const stdout = result.stdout ?? '';\n  const verdict = classifyAuditOutput(stdout);\n```\n\n<details>\n<summary>\u4e2d\u6587\u8bf4\u660e</summary>\n\n`spawnSync` \u8fd4\u56de\u7684 `result.error` \u4ece\u672a\u88ab\u68c0\u67e5\u3002\u5f53 npm \u6839\u672c\u65e0\u6cd5\u88ab\u62c9\u8d77\u65f6\uff08\u4f8b\u5982\u8fd0\u884c\u5668 `PATH` \u4e0a\u6ca1\u6709 npm \u5bfc\u81f4 `spawn npm ENOENT`\uff09\uff0c`result.stdout` \u4e3a `null` \u2192 `''` \u2192 \u88ab\u5224\u4e3a `unreadable`\uff0c\u65e5\u5fd7\u4f1a\u6253\u5370 \"npm audit produced output this checker does not recognise\" \u540e\u8ddf\u4e00\u4e2a\u7a7a\u884c\u2014\u2014\u771f\u5b9e\u539f\u56e0\u88ab\u9690\u85cf\u3002\u95e8\u7981\u4ecd\u4f1a fail closed\uff08\u9000\u51fa\u7801 1\uff09\uff0c\u56e0\u6b64\u8fd9\u662f\u8bca\u65ad\u4fe1\u606f\u7f3a\u9677\uff0c\u800c\u975e\u6b63\u786e\u6027 bug\u3002\n\n\u5177\u4f53\u4ee3\u4ef7\uff1a\u6392\u67e5\u8be5\u7ea2\u8272\u6784\u5efa\u7684\u7ef4\u62a4\u8005\u53ea\u770b\u5230 \"unrecognised output\"\uff0c\u6ca1\u6709\u8f93\u51fa\u4e5f\u6ca1\u6709\u9519\u8bef\uff0c\u5fc5\u987b\u5728\u672c\u5730\u590d\u73b0\u624d\u80fd\u53d1\u73b0\u53ea\u662f\u7f3a\u5c11 npm\u3002\n\n</details>\n\n_\u2014 qwen3.8-max-preview via Qwen Code /review_",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3651875449",
+    "pr_number": 7738,
+    "pr_file": "scripts/tests/qwen-autofix-workflow.test.js",
+    "created_at": "2026-07-26T05:50:53+00:00",
+    "commented_code": ").toBe(0);\n   });\n \n+  it('announces a working round up front and closes the same status comment', () => {\n+    // The whole point: the live run link reaches the thread BEFORE the\n+    // 80-minute agent step, not after it. Without this the PR is silent from\n+    // takeover until \"Push and report\", so a working round and a stuck one\n+    // look identical.\n+    expect(postStatusCommentStep.length).toBeGreaterThan(0);\n+    expect(postStatusCommentStep).toContain('<!-- autofix-status -->');\n+    expect(postStatusCommentStep).toContain(\n+      'actions/runs/${{ github.run_id }}',\n+    );\n+    expect(postStatusCommentStep).toContain('Watch live progress');\n+    // Announced only for a round that will really run, and never on a dry run.\n+    expect(postStatusCommentStep).toContain(\n+      \"steps.prepare.outputs.stale != 'true'\",\n+    );\n+    expect(postStatusCommentStep).toContain(\n+      \"needs.route.outputs.dry_run != 'true'\",\n+    );\n+    // One comment per PR, EDITED each round: a new comment per round would\n+    // stack up to MAX_ROUNDS of them on a managed PR.\n+    expect(postStatusCommentStep).toContain('--method PATCH');\n+    expect(postStatusCommentStep).toContain('contains($m)');\n+    // Best-effort \u2014 a failed status post warns and continues, never costs a round.\n+    expect(postStatusCommentStep).toContain('set -uo pipefail');\n+    expect(postStatusCommentStep).toContain('continuing.');",
+    "repo_full_name": "QwenLM/qwen-code",
+    "discussion_comments": [
+      {
+        "comment_id": "3651875449",
+        "repo_full_name": "QwenLM/qwen-code",
+        "pr_number": 7738,
+        "pr_file": "scripts/tests/qwen-autofix-workflow.test.js",
+        "discussion_id": "3651875449",
+        "commented_code": "@@ -4809,6 +4820,73 @@ describe('qwen-autofix workflow', () => {\n     ).toBe(0);\n   });\n \n+  it('announces a working round up front and closes the same status comment', () => {\n+    // The whole point: the live run link reaches the thread BEFORE the\n+    // 80-minute agent step, not after it. Without this the PR is silent from\n+    // takeover until \"Push and report\", so a working round and a stuck one\n+    // look identical.\n+    expect(postStatusCommentStep.length).toBeGreaterThan(0);\n+    expect(postStatusCommentStep).toContain('<!-- autofix-status -->');\n+    expect(postStatusCommentStep).toContain(\n+      'actions/runs/${{ github.run_id }}',\n+    );\n+    expect(postStatusCommentStep).toContain('Watch live progress');\n+    // Announced only for a round that will really run, and never on a dry run.\n+    expect(postStatusCommentStep).toContain(\n+      \"steps.prepare.outputs.stale != 'true'\",\n+    );\n+    expect(postStatusCommentStep).toContain(\n+      \"needs.route.outputs.dry_run != 'true'\",\n+    );\n+    // One comment per PR, EDITED each round: a new comment per round would\n+    // stack up to MAX_ROUNDS of them on a managed PR.\n+    expect(postStatusCommentStep).toContain('--method PATCH');\n+    expect(postStatusCommentStep).toContain('contains($m)');\n+    // Best-effort \u2014 a failed status post warns and continues, never costs a round.\n+    expect(postStatusCommentStep).toContain('set -uo pipefail');\n+    expect(postStatusCommentStep).toContain('continuing.');",
+        "comment_created_at": "2026-07-26T05:50:53+00:00",
+        "comment_author": "qwen-code-ci-bot",
+        "comment_body": "**[Suggestion]** The post step's best-effort error handling is tested here (`set -uo pipefail` and `continuing.`), but the finalize step's equivalent guards are not asserted \u2014 the finalize step also has `set -uo pipefail` and `|| echo \"::warning::...continuing.\"`, but neither is asserted on `finalizeStatusCommentStep`. \u2014 Failure scenario: a future edit removes the `|| echo` fallback from the finalize step's `gh api --method PATCH` call; a transient API failure then fails the step, and since it runs under `always()` the entire job is marked failed even though the round succeeded.\n\n```suggestion\n    expect(postStatusCommentStep).toContain('set -uo pipefail');\n    expect(postStatusCommentStep).toContain('continuing.');\n    expect(finalizeStatusCommentStep).toContain('set -uo pipefail');\n    expect(finalizeStatusCommentStep).toContain('continuing.');\n```\n\n<details>\n<summary>\u4e2d\u6587\u8bf4\u660e</summary>\n\n**[Suggestion]** post \u6b65\u9aa4\u7684\u5c3d\u529b\u800c\u4e3a\u9519\u8bef\u5904\u7406\u5728\u6b64\u5904\u6709\u6d4b\u8bd5\uff08`set -uo pipefail` \u548c `continuing.`\uff09\uff0c\u4f46 finalize \u6b65\u9aa4\u7684\u7b49\u4ef7\u5b88\u536b\u5374\u6ca1\u6709\u65ad\u8a00 \u2014\u2014 finalize \u6b65\u9aa4\u540c\u6837\u6709 `set -uo pipefail` \u548c `|| echo \"::warning::...continuing.\"`\uff0c\u4f46 `finalizeStatusCommentStep` \u4e0a\u5747\u672a\u65ad\u8a00\u3002 \u2014\u2014 \u5931\u8d25\u573a\u666f\uff1a\u672a\u6765\u7684\u4fee\u6539\u79fb\u9664\u4e86 finalize \u6b65\u9aa4 `gh api --method PATCH` \u8c03\u7528\u4e2d\u7684 `|| echo` \u515c\u5e95\uff1b\u4e00\u6b21\u77ac\u65f6 API \u6545\u969c\u5c31\u4f1a\u5bfc\u81f4\u6b65\u9aa4\u5931\u8d25\uff0c\u800c\u7531\u4e8e\u5b83\u5728 `always()` \u4e0b\u8fd0\u884c\uff0c\u6574\u4e2a job \u4f1a\u88ab\u6807\u8bb0\u4e3a\u5931\u8d25\uff0c\u5373\u4f7f\u8be5\u8f6e\u5b9e\u9645\u5df2\u6210\u529f\u3002\n\n</details>\n\n_\u2014 qwen3.7-max via Qwen Code /review_",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3658649780",
+    "pr_number": 7854,
+    "pr_file": "scripts/generate-release-notes.js",
+    "created_at": "2026-07-27T15:37:00+00:00",
+    "commented_code": "for (;;) {\n       const remainingMs = deadline - Date.now();\n       if (remainingMs <= 0) {\n-        throw new Error('Model generation time budget exhausted.');\n+        throw new Error(`Model generation time budget exhausted: ${error?.message ?? 'unknown error'}`);\n       }",
+    "repo_full_name": "QwenLM/qwen-code",
+    "discussion_comments": [
+      {
+        "comment_id": "3658649780",
+        "repo_full_name": "QwenLM/qwen-code",
+        "pr_number": 7854,
+        "pr_file": "scripts/generate-release-notes.js",
+        "discussion_id": "3658649780",
+        "commented_code": "@@ -452,7 +458,7 @@ export function createOpenAiCompleter({\n     for (;;) {\n       const remainingMs = deadline - Date.now();\n       if (remainingMs <= 0) {\n-        throw new Error('Model generation time budget exhausted.');\n+        throw new Error(`Model generation time budget exhausted: ${error?.message ?? 'unknown error'}`);\n       }",
+        "comment_created_at": "2026-07-27T15:37:00+00:00",
+        "comment_author": "qwen-code-ci-bot",
+        "comment_body": "**[Critical]** `error` is not declared in scope at this throw site \u2014 it only exists as the `catch (error)` parameter inside the catch block below. Optional chaining does NOT suppress `ReferenceError` for undeclared identifiers.\n\nFailure scenario: when the deadline expires between retry iterations (after `await sleep(delayMs)` overshoots the deadline), the loop re-enters with `remainingMs <= 0` and this line throws `ReferenceError: error is not defined` instead of the intended budget-exhausted message. The existing test \"shares the time budget across calls\" exercises exactly this path and now fails.\n\nAdd `let lastError;` before the `for` loop and `lastError = error;` at the top of the catch block, then reference `lastError?.message` here:\n```suggestion\n        throw new Error(`Model generation time budget exhausted: ${lastError?.message ?? 'unknown error'}`);\n      }\n```\n\n_\u2014 qwen3.7-max via Qwen Code /review_",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3658649790",
+    "pr_number": 7854,
+    "pr_file": "scripts/generate-release-notes.js",
+    "created_at": "2026-07-27T15:37:00+00:00",
+    "commented_code": "return true;\n   }\n   const match = /HTTP (\\d{3})/.exec(error?.message ?? '');\n+  // Content-validation errors from our own code are deterministic \u2014 retrying\n+  // the same prompt will reproduce the same failure. Only network-level errors\n+  // (no HTTP status) are transient.\n+  if (error?.message === 'Model response did not contain message content.') {\n+    return false;\n+  }",
+    "repo_full_name": "QwenLM/qwen-code",
+    "discussion_comments": [
+      {
+        "comment_id": "3658649790",
+        "repo_full_name": "QwenLM/qwen-code",
+        "pr_number": 7854,
+        "pr_file": "scripts/generate-release-notes.js",
+        "discussion_id": "3658649790",
+        "commented_code": "@@ -426,6 +426,12 @@ function isRetryableModelError(error) {\n     return true;\n   }\n   const match = /HTTP (\\d{3})/.exec(error?.message ?? '');\n+  // Content-validation errors from our own code are deterministic \u2014 retrying\n+  // the same prompt will reproduce the same failure. Only network-level errors\n+  // (no HTTP status) are transient.\n+  if (error?.message === 'Model response did not contain message content.') {\n+    return false;\n+  }",
+        "comment_created_at": "2026-07-27T15:37:00+00:00",
+        "comment_author": "qwen-code-ci-bot",
+        "comment_body": "**[Suggestion]** The retry decision uses exact string matching against an error message thrown at line ~488, creating hidden coupling. If the message text is ever reworded at the throw site, content-validation errors silently become retryable \u2014 the check never matches, falls through to `!match \u2192 return true`, and up to `maxRetries` identical requests are wasted on a deterministic failure.\n\nConcrete cost: a future reword of the error message silently reverts the fix this PR makes, with no compile-time or test-time signal.\n\nConsider extracting the message as a module-level constant:\n```js\nconst CONTENT_VALIDATION_ERROR_MSG = 'Model response did not contain message content.';\n```\nThen use it at both the throw site and this check.\n\n_\u2014 qwen3.7-max via Qwen Code /review_",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3658863618",
+    "pr_number": 7854,
+    "pr_file": "scripts/generate-release-notes.js",
+    "created_at": "2026-07-27T16:03:33+00:00",
+    "commented_code": "for (;;) {\n       const remainingMs = deadline - Date.now();\n       if (remainingMs <= 0) {\n-        throw new Error('Model generation time budget exhausted.');\n+        throw new Error(`Model generation time budget exhausted: ${error?.message ?? 'unknown error'}`);\n       }\n       try {",
+    "repo_full_name": "QwenLM/qwen-code",
+    "discussion_comments": [
+      {
+        "comment_id": "3658863618",
+        "repo_full_name": "QwenLM/qwen-code",
+        "pr_number": 7854,
+        "pr_file": "scripts/generate-release-notes.js",
+        "discussion_id": "3658863618",
+        "commented_code": "@@ -452,7 +458,7 @@ export function createOpenAiCompleter({\n     for (;;) {\n       const remainingMs = deadline - Date.now();\n       if (remainingMs <= 0) {\n-        throw new Error('Model generation time budget exhausted.');\n+        throw new Error(`Model generation time budget exhausted: ${error?.message ?? 'unknown error'}`);\n       }\n       try {",
+        "comment_created_at": "2026-07-27T16:03:33+00:00",
+        "comment_author": "doudouOUC",
+        "comment_body": "**[Critical]** `error` is not in scope at the top-of-loop deadline check \u2014 Failure scenario: the retry loop re-enters after a caught error and `sleep()`, the deadline expires, and `remainingMs <= 0` fires at line 461. The template literal evaluates `error?.message`, but `error` is only declared inside the `catch (error)` block (line 491) \u2014 it is not visible here. JavaScript throws `ReferenceError: error is not defined` instead of the intended deadline message. Confirmed by test failure: the pre-existing \"shares the time budget across calls\" test exercises this path and fails with `Received: \"error is not defined\"`.\n\n```suggestion\n      const remainingMs = deadline - Date.now();\n      if (remainingMs <= 0) {\n        throw new Error(`Model generation time budget exhausted: ${lastError?.message ?? 'unknown error'}`);\n      }\n      try {\n```\n\nAdd `let lastError;` before the `for (;;)` loop and `lastError = error;` at the start of the `catch` block so the last-seen error is available at the top-of-loop check.\n\n_\u2014 qwen3.7-max via Qwen Code /review_",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3659676837",
+    "pr_number": 7854,
+    "pr_file": "scripts/generate-release-notes.js",
+    "created_at": "2026-07-27T17:57:27+00:00",
+    "commented_code": "const data = await response.json();\n         const content = data?.choices?.[0]?.message?.content;\n         if (typeof content !== 'string' || !content.trim()) {\n-          throw new Error('Model response did not contain message content.');\n+          throw new Error(CONTENT_VALIDATION_ERROR_MESSAGE);\n         }\n         return content;\n       } catch (error) {\n+        lastError = error;\n         attempt += 1;\n         if (Date.now() >= deadline) {\n-          throw new Error('Model generation time budget exhausted.');\n+          throw new Error(`Model generation time budget exhausted: ${error?.message ?? 'unknown error'}`);",
+    "repo_full_name": "QwenLM/qwen-code",
+    "discussion_comments": [
+      {
+        "comment_id": "3659676837",
+        "repo_full_name": "QwenLM/qwen-code",
+        "pr_number": 7854,
+        "pr_file": "scripts/generate-release-notes.js",
+        "discussion_id": "3659676837",
+        "commented_code": "@@ -479,21 +490,22 @@ export function createOpenAiCompleter({\n         const data = await response.json();\n         const content = data?.choices?.[0]?.message?.content;\n         if (typeof content !== 'string' || !content.trim()) {\n-          throw new Error('Model response did not contain message content.');\n+          throw new Error(CONTENT_VALIDATION_ERROR_MESSAGE);\n         }\n         return content;\n       } catch (error) {\n+        lastError = error;\n         attempt += 1;\n         if (Date.now() >= deadline) {\n-          throw new Error('Model generation time budget exhausted.');\n+          throw new Error(`Model generation time budget exhausted: ${error?.message ?? 'unknown error'}`);",
+        "comment_created_at": "2026-07-27T17:57:27+00:00",
+        "comment_author": "wenshao",
+        "comment_body": "**[Suggestion]** The deadline-expired error template is constructed identically at three sites (lines 465, 500, 508), with an inconsistent source variable (`lastError` at line 465 vs `error` at lines 500/508) even though `lastError = error` makes them equivalent at the catch-block sites \u2014 Concrete cost: if the message format changes, three sites must be edited in lockstep; missing one produces inconsistent error text in CI logs, and the `lastError`/`error` discrepancy invites a future editor to \"fix\" one site without the others.\n\n```suggestion\n          throw deadlineError();\n```\n\nExtract a one-line helper before the loop: `const deadlineError = () => new Error(\\`Model generation time budget exhausted: ${lastError?.message ?? 'unknown error'}\\`);` and use it at all three sites.\n\n_\u2014 qwen3.8-max-preview via Qwen Code /review_",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3659676858",
+    "pr_number": 7854,
+    "pr_file": "scripts/generate-release-notes.js",
+    "created_at": "2026-07-27T17:57:27+00:00",
+    "commented_code": "return async (request) => {\n     const prompt = promptFor(request);\n     let attempt = 0;\n+    let lastError;\n     for (;;) {\n       const remainingMs = deadline - Date.now();\n       if (remainingMs <= 0) {\n-        throw new Error('Model generation time budget exhausted.');\n+        throw new Error(\n+          `Model generation time budget exhausted: ${lastError?.message ?? 'unknown error'}`,\n+        );",
+    "repo_full_name": "QwenLM/qwen-code",
+    "discussion_comments": [
+      {
+        "comment_id": "3659676858",
+        "repo_full_name": "QwenLM/qwen-code",
+        "pr_number": 7854,
+        "pr_file": "scripts/generate-release-notes.js",
+        "discussion_id": "3659676858",
+        "commented_code": "@@ -449,10 +457,13 @@ export function createOpenAiCompleter({\n   return async (request) => {\n     const prompt = promptFor(request);\n     let attempt = 0;\n+    let lastError;\n     for (;;) {\n       const remainingMs = deadline - Date.now();\n       if (remainingMs <= 0) {\n-        throw new Error('Model generation time budget exhausted.');\n+        throw new Error(\n+          `Model generation time budget exhausted: ${lastError?.message ?? 'unknown error'}`,\n+        );",
+        "comment_created_at": "2026-07-27T17:57:27+00:00",
+        "comment_author": "wenshao",
+        "comment_body": "**[Suggestion]** All three deadline-expired throw sites embed the original error's message as a string but discard the error object itself, losing its stack trace and type \u2014 Concrete cost: a CI run fails with \"Model generation time budget exhausted: Model request failed with HTTP 503.\" The maintainer opens the stack trace and sees only the `throw new Error(...)` line; they cannot tell whether the 503 came from the initial fetch, a retry, or JSON parsing \u2014 the original error's stack, which would show this, has been replaced. Node.js \u2265 16.9 supports `Error(message, { cause })` and this project requires \u2265 22.\n\n```suggestion\n        throw new Error(\n          `Model generation time budget exhausted: ${lastError?.message ?? 'unknown error'}`,\n          { cause: lastError },\n        );\n```\n\nApply the same `{ cause: error }` pattern at the two catch-block sites (lines 500, 508).\n\n_\u2014 qwen3.8-max-preview via Qwen Code /review_",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

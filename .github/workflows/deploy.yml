@@ -7,16 +7,19 @@ on:
     branches: [main]
     paths:
       - '_reviewers/**'
-      - 'escape_liquid.py'
-      - 'generate_leaderboard.py'
-      - 'generate_orgs_data.py'
-      - 'generate_crawler_files.py'
-      - 'github_utils.py'
+      - '_data/**'
+      - '_includes/**'
+      - '_layouts/**'
+      - 'assets/**'
+      - '*.html'
+      - '*.py'
+      - '_config.yml'
+      - 'Gemfile'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
 
@@ -25,67 +28,57 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-      - name: Install Python dependencies
-        run: pip install pyyaml
+
+      # The corpus is the only source of truth, so it has to stay in the shape
+      # the site expects: discussions in sibling JSON files, no raw Liquid in
+      # instruction bodies.
       - name: Validate reviewer migrations
         run: |
           python migrate_json.py
-          if [[ -n "$(git status --porcelain)" ]]; then
+          if [[ -n "$(git status --porcelain _reviewers)" ]]; then
             echo "::error::Reviewer markdown files need JSON migration. Run 'python migrate_json.py' locally and commit the results."
-            git status --short
+            git status --short _reviewers
             exit 1
           fi
+
       - name: Validate Liquid escaping
         run: |
           python escape_liquid.py
-          if [[ -n "$(git status --porcelain)" ]]; then
+          if [[ -n "$(git status --porcelain _reviewers)" ]]; then
             echo "::error::Reviewer markdown files contain unescaped Liquid syntax. Run 'python escape_liquid.py' locally and commit the results."
-            git status --short
+            git status --short _reviewers
             exit 1
           fi
-      - name: Generate leaderboard
-        run: python generate_leaderboard.py
-      - name: Generate orgs data
-        run: python generate_orgs_data.py
-      - name: Generate crawler files
-        run: python generate_crawler_files.py
-      - name: Commit generated data
-        if: github.event_name == 'push'
-        run: |
-          if [[ `git status --porcelain` ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add _data/leaderboard.json assets/data/contributors.json _data/orgs.json robots.txt llms.txt
-            git commit -m "Update generated data [skip ci]"
-            git push
-          fi
+
+      # Domain stats, dates, indexes, raw endpoints, bundles and llms.txt are all
+      # derived from _reviewers/ and are not committed.
+      - name: Build derived data
+        run: python build_data.py
+
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.2'
           bundler-cache: true
+
       - name: Build site
         run: bundle exec jekyll build
-      - name: Remove symlinks in _site
+
+      - name: Strip links that Pages will not publish
         run: |
           find ./_site -type l -exec rm -v {} +
-      - name: Check for symlinks and hardlinks in _site
-        run: |
-          echo "\U1F50D Searching for symlinks:"
-          find ./_site -type l || true
-
-          echo "\U1F50D Searching for hardlinks:"
           find ./_site -type f -links +1 || true
+
       - name: Add .nojekyll file
         run: touch _site/.nojekyll
+
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name == 'push'
         with:
@@ -93,7 +86,7 @@ jobs:
 
   deploy:
     if: github.event_name == 'push'
-    needs: validate
+    needs: build
     runs-on: ubuntu-latest
     environment:
       name: github-pages

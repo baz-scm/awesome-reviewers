@@ -1,61 +1,95 @@
-<div align="center">
-   <img align="center" width="128px" src="https://avatars.githubusercontent.com/u/140384842?s=200&v=4" />
-   <h1 align="center"><b>Awesome Reviewers ✨ </b></h1>
-   <p align="center">
-      A skills library of reusable prompts for AI-assisted code review.
-      <br />
-      <a href="https://awesomereviewers.com"><strong>AwesomeReviewers.com »</strong></a>
-      <br />
-   </p>
-</div>
+# Awesome Reviewers
 
-**Awesome Reviewers** is an open-source skills library of reusable prompts for agentic code review. Each skill is distilled from real code review feedback in leading open-source repositories, then packaged into copy-ready guidance you can apply in your AI workflows. You can browse, filter, and open any skill on the website, then use it in your editor, chat assistant, or automated review pipeline.
+Expert engineering instructions for AI and infrastructure domains, distilled from code review
+discussions in production open-source repositories.
 
-<div align="center">
+**[awesomereviewers.com](https://awesomereviewers.com)**
 
-🧠 **Skills-first UX** &nbsp;&nbsp;•&nbsp;&nbsp; 🔎 Search + filters &nbsp;&nbsp;•&nbsp;&nbsp; 🚀 Deployable review agents
+Each entry is a self-contained instruction — a rule, why it exists, and usually an example — written
+from recurring reviewer feedback in one repository. They are plain markdown, so they drop into an
+agent, a review harness, a context broker, or a prompt you are assembling by hand.
 
-</div>
+## Raw access
 
-## What the project is today
+Everything is a static file. No key, no rate limit.
 
-Awesome Reviewers is positioned as a **Skills Library**:
+```bash
+# one instruction
+curl https://awesomereviewers.com/raw/<slug>.md
 
-- **Skills-centric browsing:** The homepage is focused on discovering reusable review skills with search, language filters, and tag filters.
-- **Practical guidance:** Every skill page provides copy-ready, actionable review instructions.
-- **Source-backed prompts:** Skills are derived from recurring patterns in real maintainer feedback.
-- **Automation-ready:** Selected skills can be deployed as reviewer agents through Baz.
+# every instruction in a domain, concatenated
+curl https://awesomereviewers.com/raw/bundles/llm-infra.md
 
-## Core Features
+# machine index: slug, title, description, domain, topic, language, source, updated, raw URL
+curl https://awesomereviewers.com/raw/index.json
 
-- **🧩 Reusable review skills:** A large catalog of prompts covering quality, security, readability, testing, infrastructure, and more.
-- **🔎 Fast discovery:** Search and filter by tag/language to find the right reviewer quickly.
-- **📄 Skill detail pages:** Inspect the full guidance, associated metadata, and shareable links.
-- **🚀 One-click Baz deployment:** Launch skills as PR review agents via **Deploy to baz**.
-- **🏢 Organizations explorer:** Explore contributor and repository activity by organization.
-- **🧠 Methodology transparency:** Learn how patterns are extracted and turned into practical review guidance.
+# domain-grouped listing of the whole corpus
+curl https://awesomereviewers.com/llms.txt
+```
 
-## Getting Started
+Every instruction carries the date of the most recent review comment behind it, so a scheduled job
+can diff `/raw/index.json` against its last run instead of refetching everything.
 
-1. **Browse skills** at [awesomereviewers.com](https://awesomereviewers.com).
-2. **Open a skill** and copy its guidance.
-3. **Apply it in your AI workflow** as a system/agent instruction in tools like VS Code, Cursor, ChatGPT, or Claude.
-4. **Iterate on feedback** and combine skills as needed.
-5. **(Optional) Deploy with Baz** to run the skill automatically on pull requests.
+## Domains
 
-No installation is required for website usage. You can also inspect prompt sources directly in this repository under `_reviewers/`.
+| Domain | What it covers |
+| --- | --- |
+| `ai-agents` | Agent loops, tool calling, prompt and context assembly, agent SDKs, coding assistants |
+| `llm-infra` | Inference servers, model gateways and routers, KV caching, retrieval and ingestion |
+| `ml-systems` | Training and inference frameworks, tensor and kernel code, ML platforms |
+| `orchestration` | Kubernetes, schedulers, service meshes, container tooling, workflow engines |
+| `cloud-infra` | Infrastructure as code, cloud SDKs, edge runtimes, proxies, gateways, tunnels |
+| `data-systems` | Query engines, storage, replication, streaming, ORMs, analytics backends |
+| `observability` | Metrics, tracing, logging, error tracking, instrumentation |
+| `security` | Static analysis, cloud posture scanning, auth, authorization, secrets |
+| `runtimes` | Interpreters, compilers, async runtimes, parsers, low-level systems code |
+| `devtools` | Editors, terminals, build systems, package managers, linters, test runners |
+| `app-frameworks` | Web and mobile frameworks, component libraries, API layers, product code |
+| `docs` | Reference material and learning resources — mostly writing and structure guidance |
 
-## Deprecated: Export Reviewers to Claude Skills CLI
+Domain is assigned from the source repository, because that determines what kind of system the
+expertise applies to. Topic (`Security`, `Concurrency`, `API`, …) and language cut across domains and
+are filterable on every domain page.
 
-The `tools/awesome2claude.py` exporter has been **deprecated** and is no longer supported.
+## Repository layout
 
-- The command is intentionally disabled and will exit with a deprecation message.
-- Please consume skills directly from this repository (`_reviewers/`) and the website instead.
+```
+_reviewers/            source of truth — <slug>.md instruction + <slug>.json source discussions
+build_data.py          derives everything else from _reviewers/
+_layouts/, _includes/  base, domain and instruction layouts
+assets/css/site.scss   the site's only stylesheet
+assets/js/site.js      the site's only script
+index.html             search, domains, recently updated
+domains.html           domain overview          -> /domains/
+sources.html           source repositories      -> /sources/
+api.html               raw endpoint reference   -> /api/
+methodology.html       how entries are derived  -> /methodology/
+```
 
-## Acknowledgments
+Nothing outside `_reviewers/` is a source of truth. Domain stats, dates, indexes, raw endpoints,
+bundles, domain pages and `llms.txt` are all generated and are not committed — see `.gitignore`.
 
-This project is maintained by the team at [**Baz**](https://baz.co) as part of a mission to make agentic code reviews more accessible. The prompt library is inspired by patterns found in open-source review conversations across many repositories.
+## Local development
+
+```bash
+python build_data.py                 # generate derived data (required before the first build)
+bundle install
+bundle exec jekyll serve
+```
+
+`build_data.py` needs only the standard library. Re-run it after changing anything in `_reviewers/`.
+
+## Contributing
+
+- **Add a repository:** submit it from the [sources page](https://awesomereviewers.com/sources/) and
+  it is queued for extraction. Private repositories go through [Baz](https://baz.co/agents).
+- **Fix an instruction:** open a pull request against its file in `_reviewers/`.
+- **Fix a domain assignment:** repositories are mapped explicitly in `build_data.py`.
 
 ## Disclaimer
 
-Awesome Reviewers is community-contributed. While we aim for high quality, we cannot guarantee complete accuracy, completeness, or security for every prompt. Prompts are inspired by repository maintainer feedback and are not official guidance from those projects. If you encounter suspicious or harmful content, please open an issue in this repository.
+Community-contributed material distilled from public review discussions. It is not official guidance
+from the projects it was derived from, and it is not guaranteed to be correct for your codebase.
+Report anything harmful or wrong as an issue.
+
+Maintained by the team at [Baz](https://baz.co). Apache-2.0.

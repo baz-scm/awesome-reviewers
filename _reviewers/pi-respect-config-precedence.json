@@ -1,0 +1,172 @@
+[
+  {
+    "discussion_id": "3350086813",
+    "pr_number": 5262,
+    "pr_file": "packages/ai/src/providers/anthropic-vertex.ts",
+    "created_at": "2026-06-03T16:07:34+00:00",
+    "commented_code": "+import type Anthropic from \"@anthropic-ai/sdk\";\n+import AnthropicVertex from \"@anthropic-ai/vertex-sdk\";\n+import type { Context, Model, SimpleStreamOptions, StreamFunction } from \"../types.ts\";\n+import { type AnthropicEffort, type AnthropicOptions, streamAnthropic } from \"./anthropic.ts\";\n+import { adjustMaxTokensForThinking, buildBaseOptions } from \"./simple-options.ts\";\n+\n+const INTERLEAVED_THINKING_BETA = \"interleaved-thinking-2025-05-14\";\n+// Reference: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#interleaved-thinking\n+// Vertex AI rejects this beta header on models that Anthropic has not listed as\n+// supporting interleaved thinking on Vertex AI and Bedrock.\n+// Keep this as a positive allowlist. Some adaptive-thinking IDs\n+// below currently skip the header because of compat.forceAdaptiveThinking,\n+// but keeping them here preserves the allowlist if that metadata changes.\n+const INTERLEAVED_THINKING_BETA_MODEL_IDS = new Set([\n+\t\"claude-opus-4-8\",\n+\t\"claude-opus-4-7\",\n+\t\"claude-opus-4-6\",\n+\t\"claude-sonnet-4-6\",\n+\t\"claude-opus-4-5@20251101\",\n+\t\"claude-opus-4-1@20250805\",\n+\t\"claude-opus-4@20250514\",\n+\t\"claude-sonnet-4-5@20250929\",\n+\t\"claude-sonnet-4@20250514\",\n+]);\n+\n+/**\n+ * Options for Claude models served through Google Cloud Vertex AI.\n+ * Authentication uses Google Application Default Credentials (ADC);\n+ * Anthropic API keys are intentionally not accepted.\n+ */\n+export interface AnthropicVertexOptions extends Omit<AnthropicOptions, \"client\" | \"apiKey\"> {\n+\tproject?: string;\n+\tlocation?: string;\n+\tbaseUrl?: string;\n+}\n+\n+/**\n+ * Construct an Anthropic Vertex SDK client and delegate streaming to the shared\n+ * Anthropic Messages implementation.\n+ */\n+export const streamAnthropicVertex: StreamFunction<\"anthropic-vertex\", AnthropicVertexOptions> = (\n+\tmodel: Model<\"anthropic-vertex\">,\n+\tcontext: Context,\n+\toptions?: AnthropicVertexOptions,\n+) => {\n+\tconst projectId = resolveProject(options);\n+\tconst baseURL = resolveCustomBaseUrl(options?.baseUrl) ?? resolveCustomBaseUrl(model.baseUrl);\n+\tconst vertexClient = new AnthropicVertex({\n+\t\t...(projectId ? { projectId } : {}),\n+\t\tregion: resolveLocation(options),\n+\t\t...(baseURL ? { baseURL } : {}),\n+\t\tdefaultHeaders: buildDefaultHeaders(model, options),\n+\t\t...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),\n+\t\tmaxRetries: options?.maxRetries ?? 0,\n+\t});\n+\n+\t// streamAnthropic only uses the Messages API surface, which AnthropicVertex\n+\t// implements with the same SDK streaming abstraction as the direct client.\n+\tconst client = vertexClient as unknown as Anthropic;\n+\n+\treturn streamAnthropic(model as unknown as Model<\"anthropic-messages\">, context, {\n+\t\t...options,\n+\t\tclient,\n+\t\tapiKey: undefined,\n+\t} satisfies AnthropicOptions);\n+};\n+\n+export const streamSimpleAnthropicVertex: StreamFunction<\"anthropic-vertex\", SimpleStreamOptions> = (\n+\tmodel: Model<\"anthropic-vertex\">,\n+\tcontext: Context,\n+\toptions?: SimpleStreamOptions,\n+) => {\n+\tconst base = buildBaseOptions(model, options, undefined);\n+\tif (!options?.reasoning) {\n+\t\treturn streamAnthropicVertex(model, context, {\n+\t\t\t...base,\n+\t\t\tthinkingEnabled: false,\n+\t\t} satisfies AnthropicVertexOptions);\n+\t}\n+\n+\tif (model.compat?.forceAdaptiveThinking === true) {\n+\t\treturn streamAnthropicVertex(model, context, {\n+\t\t\t...base,\n+\t\t\tthinkingEnabled: true,\n+\t\t\teffort: mapThinkingLevelToEffort(model, options.reasoning),\n+\t\t} satisfies AnthropicVertexOptions);\n+\t}\n+\n+\tconst adjusted = adjustMaxTokensForThinking(\n+\t\tbase.maxTokens,\n+\t\tmodel.maxTokens,\n+\t\toptions.reasoning,\n+\t\toptions.thinkingBudgets,\n+\t);\n+\n+\treturn streamAnthropicVertex(model, context, {\n+\t\t...base,\n+\t\tmaxTokens: adjusted.maxTokens,\n+\t\tthinkingEnabled: true,\n+\t\tthinkingBudgetTokens: adjusted.thinkingBudget,\n+\t} satisfies AnthropicVertexOptions);\n+};\n+\n+function buildDefaultHeaders(\n+\tmodel: Model<\"anthropic-vertex\">,\n+\toptions?: AnthropicVertexOptions,\n+): Record<string, string> {\n+\t// Match the direct Anthropic provider: start with auto-added beta headers,\n+\t// then let generated model metadata override them, then let caller headers win.\n+\treturn {\n+\t\t...buildBetaHeader(model, options),\n+\t\t...model.headers,\n+\t\t...options?.headers,\n+\t};\n+}\n+\n+function buildBetaHeader(\n+\tmodel: Model<\"anthropic-vertex\">,\n+\toptions?: AnthropicVertexOptions,\n+): Record<string, string> | undefined {\n+\t// Adaptive models enable interleaved thinking natively, so they do not need the beta header.\n+\tconst needsInterleavedBeta =\n+\t\t(options?.interleavedThinking ?? true) &&\n+\t\tmodel.compat?.forceAdaptiveThinking !== true &&\n+\t\tINTERLEAVED_THINKING_BETA_MODEL_IDS.has(model.id);\n+\n+\treturn needsInterleavedBeta ? { \"anthropic-beta\": INTERLEAVED_THINKING_BETA } : undefined;\n+}\n+\n+function resolveProject(options?: AnthropicVertexOptions): string | undefined {\n+\t// Match the project env var precedence documented for Claude Code's Vertex support.\n+\t// If none is set, leave projectId undefined so the Vertex SDK can infer it from ADC credentials.\n+\t// Reference: https://code.claude.com/docs/en/google-vertex-ai\n+\treturn firstNonEmpty(\n+\t\toptions?.project,\n+\t\tprocess.env.GOOGLE_CLOUD_PROJECT,\n+\t\tprocess.env.GCLOUD_PROJECT,\n+\t\tprocess.env.ANTHROPIC_VERTEX_PROJECT_ID,",
+    "repo_full_name": "earendil-works/pi",
+    "discussion_comments": [
+      {
+        "comment_id": "3350086813",
+        "repo_full_name": "earendil-works/pi",
+        "pr_number": 5262,
+        "pr_file": "packages/ai/src/providers/anthropic-vertex.ts",
+        "discussion_id": "3350086813",
+        "commented_code": "@@ -0,0 +1,185 @@\n+import type Anthropic from \"@anthropic-ai/sdk\";\n+import AnthropicVertex from \"@anthropic-ai/vertex-sdk\";\n+import type { Context, Model, SimpleStreamOptions, StreamFunction } from \"../types.ts\";\n+import { type AnthropicEffort, type AnthropicOptions, streamAnthropic } from \"./anthropic.ts\";\n+import { adjustMaxTokensForThinking, buildBaseOptions } from \"./simple-options.ts\";\n+\n+const INTERLEAVED_THINKING_BETA = \"interleaved-thinking-2025-05-14\";\n+// Reference: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#interleaved-thinking\n+// Vertex AI rejects this beta header on models that Anthropic has not listed as\n+// supporting interleaved thinking on Vertex AI and Bedrock.\n+// Keep this as a positive allowlist. Some adaptive-thinking IDs\n+// below currently skip the header because of compat.forceAdaptiveThinking,\n+// but keeping them here preserves the allowlist if that metadata changes.\n+const INTERLEAVED_THINKING_BETA_MODEL_IDS = new Set([\n+\t\"claude-opus-4-8\",\n+\t\"claude-opus-4-7\",\n+\t\"claude-opus-4-6\",\n+\t\"claude-sonnet-4-6\",\n+\t\"claude-opus-4-5@20251101\",\n+\t\"claude-opus-4-1@20250805\",\n+\t\"claude-opus-4@20250514\",\n+\t\"claude-sonnet-4-5@20250929\",\n+\t\"claude-sonnet-4@20250514\",\n+]);\n+\n+/**\n+ * Options for Claude models served through Google Cloud Vertex AI.\n+ * Authentication uses Google Application Default Credentials (ADC);\n+ * Anthropic API keys are intentionally not accepted.\n+ */\n+export interface AnthropicVertexOptions extends Omit<AnthropicOptions, \"client\" | \"apiKey\"> {\n+\tproject?: string;\n+\tlocation?: string;\n+\tbaseUrl?: string;\n+}\n+\n+/**\n+ * Construct an Anthropic Vertex SDK client and delegate streaming to the shared\n+ * Anthropic Messages implementation.\n+ */\n+export const streamAnthropicVertex: StreamFunction<\"anthropic-vertex\", AnthropicVertexOptions> = (\n+\tmodel: Model<\"anthropic-vertex\">,\n+\tcontext: Context,\n+\toptions?: AnthropicVertexOptions,\n+) => {\n+\tconst projectId = resolveProject(options);\n+\tconst baseURL = resolveCustomBaseUrl(options?.baseUrl) ?? resolveCustomBaseUrl(model.baseUrl);\n+\tconst vertexClient = new AnthropicVertex({\n+\t\t...(projectId ? { projectId } : {}),\n+\t\tregion: resolveLocation(options),\n+\t\t...(baseURL ? { baseURL } : {}),\n+\t\tdefaultHeaders: buildDefaultHeaders(model, options),\n+\t\t...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),\n+\t\tmaxRetries: options?.maxRetries ?? 0,\n+\t});\n+\n+\t// streamAnthropic only uses the Messages API surface, which AnthropicVertex\n+\t// implements with the same SDK streaming abstraction as the direct client.\n+\tconst client = vertexClient as unknown as Anthropic;\n+\n+\treturn streamAnthropic(model as unknown as Model<\"anthropic-messages\">, context, {\n+\t\t...options,\n+\t\tclient,\n+\t\tapiKey: undefined,\n+\t} satisfies AnthropicOptions);\n+};\n+\n+export const streamSimpleAnthropicVertex: StreamFunction<\"anthropic-vertex\", SimpleStreamOptions> = (\n+\tmodel: Model<\"anthropic-vertex\">,\n+\tcontext: Context,\n+\toptions?: SimpleStreamOptions,\n+) => {\n+\tconst base = buildBaseOptions(model, options, undefined);\n+\tif (!options?.reasoning) {\n+\t\treturn streamAnthropicVertex(model, context, {\n+\t\t\t...base,\n+\t\t\tthinkingEnabled: false,\n+\t\t} satisfies AnthropicVertexOptions);\n+\t}\n+\n+\tif (model.compat?.forceAdaptiveThinking === true) {\n+\t\treturn streamAnthropicVertex(model, context, {\n+\t\t\t...base,\n+\t\t\tthinkingEnabled: true,\n+\t\t\teffort: mapThinkingLevelToEffort(model, options.reasoning),\n+\t\t} satisfies AnthropicVertexOptions);\n+\t}\n+\n+\tconst adjusted = adjustMaxTokensForThinking(\n+\t\tbase.maxTokens,\n+\t\tmodel.maxTokens,\n+\t\toptions.reasoning,\n+\t\toptions.thinkingBudgets,\n+\t);\n+\n+\treturn streamAnthropicVertex(model, context, {\n+\t\t...base,\n+\t\tmaxTokens: adjusted.maxTokens,\n+\t\tthinkingEnabled: true,\n+\t\tthinkingBudgetTokens: adjusted.thinkingBudget,\n+\t} satisfies AnthropicVertexOptions);\n+};\n+\n+function buildDefaultHeaders(\n+\tmodel: Model<\"anthropic-vertex\">,\n+\toptions?: AnthropicVertexOptions,\n+): Record<string, string> {\n+\t// Match the direct Anthropic provider: start with auto-added beta headers,\n+\t// then let generated model metadata override them, then let caller headers win.\n+\treturn {\n+\t\t...buildBetaHeader(model, options),\n+\t\t...model.headers,\n+\t\t...options?.headers,\n+\t};\n+}\n+\n+function buildBetaHeader(\n+\tmodel: Model<\"anthropic-vertex\">,\n+\toptions?: AnthropicVertexOptions,\n+): Record<string, string> | undefined {\n+\t// Adaptive models enable interleaved thinking natively, so they do not need the beta header.\n+\tconst needsInterleavedBeta =\n+\t\t(options?.interleavedThinking ?? true) &&\n+\t\tmodel.compat?.forceAdaptiveThinking !== true &&\n+\t\tINTERLEAVED_THINKING_BETA_MODEL_IDS.has(model.id);\n+\n+\treturn needsInterleavedBeta ? { \"anthropic-beta\": INTERLEAVED_THINKING_BETA } : undefined;\n+}\n+\n+function resolveProject(options?: AnthropicVertexOptions): string | undefined {\n+\t// Match the project env var precedence documented for Claude Code's Vertex support.\n+\t// If none is set, leave projectId undefined so the Vertex SDK can infer it from ADC credentials.\n+\t// Reference: https://code.claude.com/docs/en/google-vertex-ai\n+\treturn firstNonEmpty(\n+\t\toptions?.project,\n+\t\tprocess.env.GOOGLE_CLOUD_PROJECT,\n+\t\tprocess.env.GCLOUD_PROJECT,\n+\t\tprocess.env.ANTHROPIC_VERTEX_PROJECT_ID,",
+        "comment_created_at": "2026-06-03T16:07:34+00:00",
+        "comment_author": "jimlloyd-mse",
+        "comment_body": "Consider placing ANTHROPIC_VERTEX_PROJECT_ID first in precedence, for users that want both Gemini and Anthropic models via Vertex AI but with different projects.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3351400812",
+        "repo_full_name": "earendil-works/pi",
+        "pr_number": 5262,
+        "pr_file": "packages/ai/src/providers/anthropic-vertex.ts",
+        "discussion_id": "3350086813",
+        "commented_code": "@@ -0,0 +1,185 @@\n+import type Anthropic from \"@anthropic-ai/sdk\";\n+import AnthropicVertex from \"@anthropic-ai/vertex-sdk\";\n+import type { Context, Model, SimpleStreamOptions, StreamFunction } from \"../types.ts\";\n+import { type AnthropicEffort, type AnthropicOptions, streamAnthropic } from \"./anthropic.ts\";\n+import { adjustMaxTokensForThinking, buildBaseOptions } from \"./simple-options.ts\";\n+\n+const INTERLEAVED_THINKING_BETA = \"interleaved-thinking-2025-05-14\";\n+// Reference: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#interleaved-thinking\n+// Vertex AI rejects this beta header on models that Anthropic has not listed as\n+// supporting interleaved thinking on Vertex AI and Bedrock.\n+// Keep this as a positive allowlist. Some adaptive-thinking IDs\n+// below currently skip the header because of compat.forceAdaptiveThinking,\n+// but keeping them here preserves the allowlist if that metadata changes.\n+const INTERLEAVED_THINKING_BETA_MODEL_IDS = new Set([\n+\t\"claude-opus-4-8\",\n+\t\"claude-opus-4-7\",\n+\t\"claude-opus-4-6\",\n+\t\"claude-sonnet-4-6\",\n+\t\"claude-opus-4-5@20251101\",\n+\t\"claude-opus-4-1@20250805\",\n+\t\"claude-opus-4@20250514\",\n+\t\"claude-sonnet-4-5@20250929\",\n+\t\"claude-sonnet-4@20250514\",\n+]);\n+\n+/**\n+ * Options for Claude models served through Google Cloud Vertex AI.\n+ * Authentication uses Google Application Default Credentials (ADC);\n+ * Anthropic API keys are intentionally not accepted.\n+ */\n+export interface AnthropicVertexOptions extends Omit<AnthropicOptions, \"client\" | \"apiKey\"> {\n+\tproject?: string;\n+\tlocation?: string;\n+\tbaseUrl?: string;\n+}\n+\n+/**\n+ * Construct an Anthropic Vertex SDK client and delegate streaming to the shared\n+ * Anthropic Messages implementation.\n+ */\n+export const streamAnthropicVertex: StreamFunction<\"anthropic-vertex\", AnthropicVertexOptions> = (\n+\tmodel: Model<\"anthropic-vertex\">,\n+\tcontext: Context,\n+\toptions?: AnthropicVertexOptions,\n+) => {\n+\tconst projectId = resolveProject(options);\n+\tconst baseURL = resolveCustomBaseUrl(options?.baseUrl) ?? resolveCustomBaseUrl(model.baseUrl);\n+\tconst vertexClient = new AnthropicVertex({\n+\t\t...(projectId ? { projectId } : {}),\n+\t\tregion: resolveLocation(options),\n+\t\t...(baseURL ? { baseURL } : {}),\n+\t\tdefaultHeaders: buildDefaultHeaders(model, options),\n+\t\t...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),\n+\t\tmaxRetries: options?.maxRetries ?? 0,\n+\t});\n+\n+\t// streamAnthropic only uses the Messages API surface, which AnthropicVertex\n+\t// implements with the same SDK streaming abstraction as the direct client.\n+\tconst client = vertexClient as unknown as Anthropic;\n+\n+\treturn streamAnthropic(model as unknown as Model<\"anthropic-messages\">, context, {\n+\t\t...options,\n+\t\tclient,\n+\t\tapiKey: undefined,\n+\t} satisfies AnthropicOptions);\n+};\n+\n+export const streamSimpleAnthropicVertex: StreamFunction<\"anthropic-vertex\", SimpleStreamOptions> = (\n+\tmodel: Model<\"anthropic-vertex\">,\n+\tcontext: Context,\n+\toptions?: SimpleStreamOptions,\n+) => {\n+\tconst base = buildBaseOptions(model, options, undefined);\n+\tif (!options?.reasoning) {\n+\t\treturn streamAnthropicVertex(model, context, {\n+\t\t\t...base,\n+\t\t\tthinkingEnabled: false,\n+\t\t} satisfies AnthropicVertexOptions);\n+\t}\n+\n+\tif (model.compat?.forceAdaptiveThinking === true) {\n+\t\treturn streamAnthropicVertex(model, context, {\n+\t\t\t...base,\n+\t\t\tthinkingEnabled: true,\n+\t\t\teffort: mapThinkingLevelToEffort(model, options.reasoning),\n+\t\t} satisfies AnthropicVertexOptions);\n+\t}\n+\n+\tconst adjusted = adjustMaxTokensForThinking(\n+\t\tbase.maxTokens,\n+\t\tmodel.maxTokens,\n+\t\toptions.reasoning,\n+\t\toptions.thinkingBudgets,\n+\t);\n+\n+\treturn streamAnthropicVertex(model, context, {\n+\t\t...base,\n+\t\tmaxTokens: adjusted.maxTokens,\n+\t\tthinkingEnabled: true,\n+\t\tthinkingBudgetTokens: adjusted.thinkingBudget,\n+\t} satisfies AnthropicVertexOptions);\n+};\n+\n+function buildDefaultHeaders(\n+\tmodel: Model<\"anthropic-vertex\">,\n+\toptions?: AnthropicVertexOptions,\n+): Record<string, string> {\n+\t// Match the direct Anthropic provider: start with auto-added beta headers,\n+\t// then let generated model metadata override them, then let caller headers win.\n+\treturn {\n+\t\t...buildBetaHeader(model, options),\n+\t\t...model.headers,\n+\t\t...options?.headers,\n+\t};\n+}\n+\n+function buildBetaHeader(\n+\tmodel: Model<\"anthropic-vertex\">,\n+\toptions?: AnthropicVertexOptions,\n+): Record<string, string> | undefined {\n+\t// Adaptive models enable interleaved thinking natively, so they do not need the beta header.\n+\tconst needsInterleavedBeta =\n+\t\t(options?.interleavedThinking ?? true) &&\n+\t\tmodel.compat?.forceAdaptiveThinking !== true &&\n+\t\tINTERLEAVED_THINKING_BETA_MODEL_IDS.has(model.id);\n+\n+\treturn needsInterleavedBeta ? { \"anthropic-beta\": INTERLEAVED_THINKING_BETA } : undefined;\n+}\n+\n+function resolveProject(options?: AnthropicVertexOptions): string | undefined {\n+\t// Match the project env var precedence documented for Claude Code's Vertex support.\n+\t// If none is set, leave projectId undefined so the Vertex SDK can infer it from ADC credentials.\n+\t// Reference: https://code.claude.com/docs/en/google-vertex-ai\n+\treturn firstNonEmpty(\n+\t\toptions?.project,\n+\t\tprocess.env.GOOGLE_CLOUD_PROJECT,\n+\t\tprocess.env.GCLOUD_PROJECT,\n+\t\tprocess.env.ANTHROPIC_VERTEX_PROJECT_ID,",
+        "comment_created_at": "2026-06-03T19:42:55+00:00",
+        "comment_author": "MichaelYochpaz",
+        "comment_body": "Thanks for the feedback, what you propose does make sense, however this precedence order was taken from [Anthropic's docs](https://code.claude.com/docs/en/google-vertex-ai#3-configure-gcp-credentials) describing the precedence of these env vars Claude Code:\r\n\r\n> Claude Code uses `ANTHROPIC_VERTEX_PROJECT_ID` as the project ID for Vertex AI requests. The `GCLOUD_PROJECT` and `GOOGLE_CLOUD_PROJECT` environment variables and the credential file referenced by `GOOGLE_APPLICATION_CREDENTIALS` take precedence over it. If none of these are set, the project ID is resolved from your gcloud configuration or the attached service account.\r\n\r\nOf course, we don't have to follow Claude Code's precedence, but then there's the edge case where users that have both env vars set to different values will get different GCP projects being used between Pi and Claude Code.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3618687036",
+    "pr_number": 6216,
+    "pr_file": "packages/ai/scripts/generate-models.ts",
+    "created_at": "2026-07-21T01:03:19+00:00",
+    "commented_code": ": \"https://bedrock-runtime.us-east-1.amazonaws.com\";\n }\n \n+// Bedrock Mantle (OpenAI-compatible Responses API) is currently offered in\n+// us-east-2 only. Pinning the region here keeps the bearer-token scope aligned",
+    "repo_full_name": "earendil-works/pi",
+    "discussion_comments": [
+      {
+        "comment_id": "3618687036",
+        "repo_full_name": "earendil-works/pi",
+        "pr_number": 6216,
+        "pr_file": "packages/ai/scripts/generate-models.ts",
+        "discussion_id": "3618687036",
+        "commented_code": "@@ -776,6 +787,20 @@ function getBedrockBaseUrl(modelId: string): string {\n \t\t: \"https://bedrock-runtime.us-east-1.amazonaws.com\";\n }\n \n+// Bedrock Mantle (OpenAI-compatible Responses API) is currently offered in\n+// us-east-2 only. Pinning the region here keeps the bearer-token scope aligned",
+        "comment_created_at": "2026-07-21T01:03:19+00:00",
+        "comment_author": "GZGavinZhao",
+        "comment_body": "Maybe it's true when this PR was originally written, but as of 2026-07-20 Bedrock Mantle are available in a lot more regions (see [Region availability by endpoints](https://docs.aws.amazon.com/bedrock/latest/userguide/endpoints-region-availability.html)). I think we should allow this region to be configurable.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3625567237",
+        "repo_full_name": "earendil-works/pi",
+        "pr_number": 6216,
+        "pr_file": "packages/ai/scripts/generate-models.ts",
+        "discussion_id": "3618687036",
+        "commented_code": "@@ -776,6 +787,20 @@ function getBedrockBaseUrl(modelId: string): string {\n \t\t: \"https://bedrock-runtime.us-east-1.amazonaws.com\";\n }\n \n+// Bedrock Mantle (OpenAI-compatible Responses API) is currently offered in\n+// us-east-2 only. Pinning the region here keeps the bearer-token scope aligned",
+        "comment_created_at": "2026-07-21T20:42:18+00:00",
+        "comment_author": "unexge",
+        "comment_body": "Bedrock Mantle is available in much more regions but OpenAI models are still available only in a few US regions, see https://docs.aws.amazon.com/bedrock/latest/userguide/models-region-compatibility.html#model-regions-openai.\r\n\r\nI've updated to use `https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1\"` as the `baseUrl` and also added hardcoded region availability per-model for now - I think ideally that should be coming from models.dev: https://github.com/earendil-works/pi/pull/6216/commits/a4bbfd21ad6a574ff734e4efd51c68235997905e",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2714692269",
+    "pr_number": 868,
+    "pr_file": "packages/coding-agent/src/modes/interactive/components/session-selector.ts",
+    "created_at": "2026-01-21T23:22:07+00:00",
+    "commented_code": "return;\n \t\t}\n \n+\t\t// Ctrl+N: toggle name filter\n+\t\tif (matchesKey(keyData, \"ctrl+n\")) {",
+    "repo_full_name": "earendil-works/pi",
+    "discussion_comments": [
+      {
+        "comment_id": "2714692269",
+        "repo_full_name": "earendil-works/pi",
+        "pr_number": 868,
+        "pr_file": "packages/coding-agent/src/modes/interactive/components/session-selector.ts",
+        "discussion_id": "2714692269",
+        "commented_code": "@@ -374,6 +403,12 @@ class SessionList implements Component, Focusable {\n \t\t\treturn;\n \t\t}\n \n+\t\t// Ctrl+N: toggle name filter\n+\t\tif (matchesKey(keyData, \"ctrl+n\")) {",
+        "comment_created_at": "2026-01-21T23:22:07+00:00",
+        "comment_author": "aos",
+        "comment_body": "Please make this configurable :-) I rebind `ctrl+n` in session picker for \"select down\". Here's part of my keybindings:\n```\n  \"selectUp\": [\"up\", \"ctrl+p\"],\n  \"selectDown\": [\"down\", \"ctrl+n\"],\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2714693850",
+        "repo_full_name": "earendil-works/pi",
+        "pr_number": 868,
+        "pr_file": "packages/coding-agent/src/modes/interactive/components/session-selector.ts",
+        "discussion_id": "2714692269",
+        "commented_code": "@@ -374,6 +403,12 @@ class SessionList implements Component, Focusable {\n \t\t\treturn;\n \t\t}\n \n+\t\t// Ctrl+N: toggle name filter\n+\t\tif (matchesKey(keyData, \"ctrl+n\")) {",
+        "comment_created_at": "2026-01-21T23:22:49+00:00",
+        "comment_author": "aos",
+        "comment_body": "These are just standard Emacs/readline keybindings btw",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2714922274",
+        "repo_full_name": "earendil-works/pi",
+        "pr_number": 868,
+        "pr_file": "packages/coding-agent/src/modes/interactive/components/session-selector.ts",
+        "discussion_id": "2714692269",
+        "commented_code": "@@ -374,6 +403,12 @@ class SessionList implements Component, Focusable {\n \t\t\treturn;\n \t\t}\n \n+\t\t// Ctrl+N: toggle name filter\n+\t\tif (matchesKey(keyData, \"ctrl+n\")) {",
+        "comment_created_at": "2026-01-22T01:03:23+00:00",
+        "comment_author": "w-winter",
+        "comment_body": "Good call.  The named-only toggle is now configurable via `~/.pi/agent/keybindings.json`:\r\n```\r\n{\r\n  \"toggleSessionNamedFilter\": \"whatever\"\r\n}\r\n```\r\n\r\n@badlogic Do you want a follow-up that makes the other `/resume` picker shortcuts configurable too (`ctrl+r` sort, `ctrl+p` path toggle, `ctrl+d` delete), or should we those hardcoded?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2699688706",
+    "pr_number": 777,
+    "pr_file": "packages/coding-agent/src/core/settings-manager.ts",
+    "created_at": "2026-01-16T19:18:41+00:00",
+    "commented_code": "high?: number;\n }\n \n+export interface StartupSettings {",
+    "repo_full_name": "earendil-works/pi",
+    "discussion_comments": [
+      {
+        "comment_id": "2699688706",
+        "repo_full_name": "earendil-works/pi",
+        "pr_number": 777,
+        "pr_file": "packages/coding-agent/src/core/settings-manager.ts",
+        "discussion_id": "2699688706",
+        "commented_code": "@@ -47,6 +47,10 @@ export interface ThinkingBudgetsSettings {\n \thigh?: number;\n }\n \n+export interface StartupSettings {",
+        "comment_created_at": "2026-01-16T19:18:41+00:00",
+        "comment_author": "badlogic",
+        "comment_body": "Let's not make this a nested propert. quietStartup on Settings is fine.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2699938331",
+        "repo_full_name": "earendil-works/pi",
+        "pr_number": 777,
+        "pr_file": "packages/coding-agent/src/core/settings-manager.ts",
+        "discussion_id": "2699688706",
+        "commented_code": "@@ -47,6 +47,10 @@ export interface ThinkingBudgetsSettings {\n \thigh?: number;\n }\n \n+export interface StartupSettings {",
+        "comment_created_at": "2026-01-16T20:53:21+00:00",
+        "comment_author": "ribelo",
+        "comment_body": "Done. It was nested because I initially added a flag to hide every little thing separately. That didn't make much sense, so I ended up with just one flag and a nested struct :upside_down_face: ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2664472105",
+    "pr_number": 492,
+    "pr_file": "packages/coding-agent/src/core/sdk.ts",
+    "created_at": "2026-01-06T10:38:06+00:00",
+    "commented_code": "const promptTemplates = options.promptTemplates ?? discoverPromptTemplates(cwd, agentDir);\n \ttime(\"discoverPromptTemplates\");\n \n+\t// Create convertToLlm wrapper that filters images if blockImages is enabled\n+\tconst convertToLlmWithBlockImages = blockImages",
+    "repo_full_name": "earendil-works/pi",
+    "discussion_comments": [
+      {
+        "comment_id": "2664472105",
+        "repo_full_name": "earendil-works/pi",
+        "pr_number": 492,
+        "pr_file": "packages/coding-agent/src/core/sdk.ts",
+        "discussion_id": "2664472105",
+        "commented_code": "@@ -605,14 +607,39 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}\n \tconst promptTemplates = options.promptTemplates ?? discoverPromptTemplates(cwd, agentDir);\n \ttime(\"discoverPromptTemplates\");\n \n+\t// Create convertToLlm wrapper that filters images if blockImages is enabled\n+\tconst convertToLlmWithBlockImages = blockImages",
+        "comment_created_at": "2026-01-06T10:38:06+00:00",
+        "comment_author": "badlogic",
+        "comment_body": "The idea to have a custom convertToLlm is right, the implementation is wrong. createAgentSession is called once per session. If the settings.json has blockImages:true, then images will always be filtered for the remainder of the session, even if the user changes the setting mid session via /settings. This needs to evaluate sessionmanager.getBlockImages() and only filter, if that's true.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

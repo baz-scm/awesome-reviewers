@@ -1,0 +1,358 @@
+[
+  {
+    "discussion_id": "3577554336",
+    "pr_number": 43233,
+    "pr_file": "cron/scheduler.py",
+    "created_at": "2026-07-14T09:14:50+00:00",
+    "commented_code": "_inactivity_timeout = True\n                         break\n         except Exception:\n-            _cron_pool.shutdown(wait=False, cancel_futures=True)\n+            _cron_pool.shutdown(wait=True, cancel_futures=True)\n             raise\n         finally:\n-            _cron_pool.shutdown(wait=False, cancel_futures=True)\n+            _cron_pool.shutdown(wait=True, cancel_futures=True)",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3577554336",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 43233,
+        "pr_file": "cron/scheduler.py",
+        "discussion_id": "3577554336",
+        "commented_code": "@@ -3176,10 +3202,10 @@ def _heartbeat_run_claim_if_due():\n                         _inactivity_timeout = True\n                         break\n         except Exception:\n-            _cron_pool.shutdown(wait=False, cancel_futures=True)\n+            _cron_pool.shutdown(wait=True, cancel_futures=True)\n             raise\n         finally:\n-            _cron_pool.shutdown(wait=False, cancel_futures=True)\n+            _cron_pool.shutdown(wait=True, cancel_futures=True)",
+        "comment_created_at": "2026-07-14T09:14:50+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "This `wait=True` runs before the `_inactivity_timeout` branch calls `agent.interrupt()`. If the future is the hung operation the watchdog detected, shutdown blocks here indefinitely; retain a non-blocking or bounded cleanup path so the interrupt can run.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3610794889",
+    "pr_number": 67550,
+    "pr_file": "cli.py",
+    "created_at": "2026-07-19T15:05:03+00:00",
+    "commented_code": "daemon=True,\n                 ).start()\n             else:\n+                # If continuous mode is active, the hotkey disarms it\n+                # even during STT or agent processing, so the loop\n+                # doesn't auto-restart on the next cycle.\n+                if cli_ref._voice_continuous:\n+                    with cli_ref._voice_lock:\n+                        cli_ref._voice_continuous = False\n+                    if not cli_ref._voice_tts_done.is_set():\n+                        try:\n+                            from tools.voice_mode import stop_playback",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3610794889",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 67550,
+        "pr_file": "cli.py",
+        "discussion_id": "3610794889",
+        "commented_code": "@@ -13693,6 +13693,22 @@ def handle_voice_record(event):\n                     daemon=True,\n                 ).start()\n             else:\n+                # If continuous mode is active, the hotkey disarms it\n+                # even during STT or agent processing, so the loop\n+                # doesn't auto-restart on the next cycle.\n+                if cli_ref._voice_continuous:\n+                    with cli_ref._voice_lock:\n+                        cli_ref._voice_continuous = False\n+                    if not cli_ref._voice_tts_done.is_set():\n+                        try:\n+                            from tools.voice_mode import stop_playback",
+        "comment_created_at": "2026-07-19T15:05:03+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "This wakes a post-turn restart worker that may already be blocked in `self._voice_tts_done.wait()`; that worker subsequently calls `_voice_start_recording()` without rechecking `_voice_continuous`. Add a cancellation check at the final automatic-start boundary, otherwise a hotkey press during TTS can still restart capture.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3575945950",
+    "pr_number": 40592,
+    "pr_file": "gateway/platforms/feishu.py",
+    "created_at": "2026-07-14T04:06:01+00:00",
+    "commented_code": "metadata: Optional[Dict[str, Any]] = None,\n         **kwargs,\n     ) -> SendResult:\n-        \"\"\"Send audio to Feishu as a file attachment plus optional caption.\"\"\"\n-        return await self._send_uploaded_file_message(\n-            chat_id=chat_id,\n-            file_path=audio_path,\n-            reply_to=reply_to,\n-            metadata=metadata,\n-            caption=caption,\n-            outbound_message_type=\"audio\",\n-        )\n+        \"\"\"Send audio to Feishu as a native voice bubble.\n+\n+        Converts non-Opus/Ogg audio to Opus (16 kHz mono) so Feishu renders\n+        it as a voice bubble rather than a file attachment.  Files that are\n+        already Opus/Ogg are sent as-is.\n+        \"\"\"\n+        if not os.path.exists(audio_path):\n+            return SendResult(success=False, error=f\"Audio file not found: {audio_path}\")\n+\n+        ext = Path(audio_path).suffix.lower()\n+        _temp_files: List[str] = []\n+\n+        try:\n+            if ext not in _FEISHU_OPUS_UPLOAD_EXTENSIONS:\n+                import subprocess as _subprocess\n+                import tempfile as _tempfile\n+                import uuid as _uuid\n+\n+                opus_path = os.path.join(\n+                    _tempfile.gettempdir(), \"hermes_voice\",\n+                    f\"voice_{_uuid.uuid4().hex[:12]}.opus\",\n+                )\n+                os.makedirs(os.path.dirname(opus_path), exist_ok=True)\n+\n+                _result = _subprocess.run(",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3575945950",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 40592,
+        "pr_file": "gateway/platforms/feishu.py",
+        "discussion_id": "3575945950",
+        "commented_code": "@@ -2045,15 +2045,61 @@ async def send_voice(\n         metadata: Optional[Dict[str, Any]] = None,\n         **kwargs,\n     ) -> SendResult:\n-        \"\"\"Send audio to Feishu as a file attachment plus optional caption.\"\"\"\n-        return await self._send_uploaded_file_message(\n-            chat_id=chat_id,\n-            file_path=audio_path,\n-            reply_to=reply_to,\n-            metadata=metadata,\n-            caption=caption,\n-            outbound_message_type=\"audio\",\n-        )\n+        \"\"\"Send audio to Feishu as a native voice bubble.\n+\n+        Converts non-Opus/Ogg audio to Opus (16 kHz mono) so Feishu renders\n+        it as a voice bubble rather than a file attachment.  Files that are\n+        already Opus/Ogg are sent as-is.\n+        \"\"\"\n+        if not os.path.exists(audio_path):\n+            return SendResult(success=False, error=f\"Audio file not found: {audio_path}\")\n+\n+        ext = Path(audio_path).suffix.lower()\n+        _temp_files: List[str] = []\n+\n+        try:\n+            if ext not in _FEISHU_OPUS_UPLOAD_EXTENSIONS:\n+                import subprocess as _subprocess\n+                import tempfile as _tempfile\n+                import uuid as _uuid\n+\n+                opus_path = os.path.join(\n+                    _tempfile.gettempdir(), \"hermes_voice\",\n+                    f\"voice_{_uuid.uuid4().hex[:12]}.opus\",\n+                )\n+                os.makedirs(os.path.dirname(opus_path), exist_ok=True)\n+\n+                _result = _subprocess.run(",
+        "comment_created_at": "2026-07-14T04:06:01+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "`send_voice` is async, but this synchronous `subprocess.run()` can block the adapter event loop for its full 60-second timeout. Please run conversion off-loop (for example via `asyncio.to_thread`) before awaiting the upload.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3575211761",
+    "pr_number": 37804,
+    "pr_file": "plugins/platforms/feishu/adapter.py",
+    "created_at": "2026-07-14T00:23:56+00:00",
+    "commented_code": "file_path=display_name,\n             requested_message_type=outbound_message_type,\n         )\n+        upload_duration_ms = (\n+            self._probe_audio_duration_ms(file_path)",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3575211761",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 37804,
+        "pr_file": "plugins/platforms/feishu/adapter.py",
+        "discussion_id": "3575211761",
+        "commented_code": "@@ -4500,12 +4502,18 @@ async def _send_uploaded_file_message(\n             file_path=display_name,\n             requested_message_type=outbound_message_type,\n         )\n+        upload_duration_ms = (\n+            self._probe_audio_duration_ms(file_path)",
+        "comment_created_at": "2026-07-14T00:23:56+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "This synchronous probe runs `subprocess.run(..., timeout=10)` on the gateway event loop. Please await the adapter's existing `_run_blocking(self._probe_audio_duration_ms, file_path)` (or an equivalent nonblocking call), and ensure the probe still supplies a positive duration when ffmpeg is unavailable.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3585492558",
+    "pr_number": 54488,
+    "pr_file": "plugins/platforms/matrix/adapter.py",
+    "created_at": "2026-07-15T08:01:36+00:00",
+    "commented_code": "fname = file_name or p.name",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3585492558",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 54488,
+        "pr_file": "plugins/platforms/matrix/adapter.py",
+        "discussion_id": "3585492558",
+        "commented_code": "@@ -2165,9 +2262,19 @@ async def _send_local_file(\n         fname = file_name or p.name",
+        "comment_created_at": "2026-07-15T08:01:36+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "`_matrix_voice_metadata_for_file()` may synchronously run ffprobe for 10s and ffmpeg for 15s. Calling it in this async method blocks the Matrix event loop; await it through `asyncio.to_thread(...)` instead.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3589448982",
+    "pr_number": 58539,
+    "pr_file": "tools/wake_word.py",
+    "created_at": "2026-07-15T17:31:26+00:00",
+    "commented_code": "+\"\"\"Wake-word (\"Hey Hermes\") detection \u2014 hands-free session trigger.\n+\n+A lightweight, always-on hotword listener that fires a callback when a wake\n+phrase is spoken \u2014 the \"Hey Siri\" / \"Alexa\" pattern. Shared by the CLI, TUI, and\n+desktop GUI (one of them owns it, gated by ``wake_surface_enabled``): say the\n+wake word, Hermes opens a fresh session and captures voice via the existing\n+pipeline, then answers.\n+\n+Two engines, both fully on-device (no audio leaves the machine for detection):\n+\n+* **openwakeword** (default, free, no API key) \u2014 loads a pretrained or custom\n+  ONNX model. Ships with ``hey_jarvis``, ``alexa``, ``hey_mycroft``, \u2026 ; point\n+  ``wake_word.openwakeword.model`` at a custom ``.onnx`` to detect a real\n+  \"hey hermes\" (training guide in the wake-word docs).\n+* **porcupine** (premium) \u2014 Picovoice's engine. Needs ``PORCUPINE_ACCESS_KEY``;\n+  supports built-in keywords and custom ``.ppn`` files from the Picovoice\n+  Console.\n+\n+Audio capture reuses the same 16 kHz mono int16 ``sounddevice`` path as voice\n+mode. The detector runs on its own daemon thread; callers ``pause()`` it while a\n+voice turn holds the microphone and ``resume()`` it once the system is idle\n+again (two input streams on one device is unreliable cross-platform).\n+\n+Nothing here mutates agent context or the prompt cache \u2014 on wake we hand a plain\n+string to the caller, exactly like a voice transcript.\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import logging\n+import os\n+import threading\n+import time\n+from typing import Any, Callable, Dict, Optional\n+\n+logger = logging.getLogger(__name__)\n+\n+# 16 kHz mono int16 \u2014 Whisper-native and what both engines expect.\n+SAMPLE_RATE = 16000\n+\n+# Minimum gap between two consecutive wake fires, so one \"hey hermes\" can't\n+# retrigger across several frames while the caller is still reacting.\n+_FIRE_COOLDOWN_SECONDS = 2.0\n+\n+\n+# ---------------------------------------------------------------------------\n+# Config\n+# ---------------------------------------------------------------------------\n+\n+_DEFAULTS: Dict[str, Any] = {\n+    \"enabled\": False,\n+    \"surface\": \"auto\",\n+    \"provider\": \"openwakeword\",\n+    \"phrase\": \"hey jarvis\",\n+    \"sensitivity\": 0.5,\n+    \"start_new_session\": True,\n+}\n+\n+\n+def load_wake_word_config() -> Dict[str, Any]:\n+    \"\"\"Return the ``wake_word`` config section, shape-guarded to a dict.\"\"\"\n+    try:\n+        from hermes_cli.config import load_config\n+\n+        cfg = load_config().get(\"wake_word\")\n+    except Exception:\n+        cfg = None\n+    return cfg if isinstance(cfg, dict) else {}\n+\n+\n+def _get(cfg: Dict[str, Any], key: str) -> Any:\n+    val = cfg.get(key, _DEFAULTS.get(key))\n+    return _DEFAULTS.get(key) if val is None else val\n+\n+\n+def _dict_section(cfg: Dict[str, Any], key: str) -> Dict[str, Any]:\n+    val = cfg.get(key)\n+    return val if isinstance(val, dict) else {}\n+\n+\n+def _provider(cfg: Dict[str, Any]) -> str:\n+    return str(_get(cfg, \"provider\")).strip().lower() or \"openwakeword\"\n+\n+\n+def _sensitivity(cfg: Dict[str, Any]) -> float:\n+    raw = _get(cfg, \"sensitivity\")\n+    try:\n+        s = float(raw)\n+    except (TypeError, ValueError):\n+        s = 0.5\n+    return min(max(s, 0.0), 1.0)\n+\n+\n+def wake_phrase(cfg: Optional[Dict[str, Any]] = None) -> str:\n+    \"\"\"Human-facing wake phrase label (purely cosmetic; engine keys detection).\"\"\"\n+    cfg = cfg if cfg is not None else load_wake_word_config()\n+    return str(_get(cfg, \"phrase\")) or \"hey jarvis\"\n+\n+\n+def wake_surface_enabled(surface: str, cfg: Optional[Dict[str, Any]] = None) -> bool:\n+    \"\"\"Should ``surface`` (``cli`` / ``tui`` / ``gui``) host the listener?\n+\n+    True when the wake word is enabled and the configured ``surface`` is either\n+    ``auto`` or this exact surface \u2014 the single gate every surface consults so\n+    only one place owns the wake word and the new session it opens.\n+    \"\"\"",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3589448982",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 58539,
+        "pr_file": "tools/wake_word.py",
+        "discussion_id": "3589448982",
+        "commented_code": "@@ -0,0 +1,471 @@\n+\"\"\"Wake-word (\"Hey Hermes\") detection \u2014 hands-free session trigger.\n+\n+A lightweight, always-on hotword listener that fires a callback when a wake\n+phrase is spoken \u2014 the \"Hey Siri\" / \"Alexa\" pattern. Shared by the CLI, TUI, and\n+desktop GUI (one of them owns it, gated by ``wake_surface_enabled``): say the\n+wake word, Hermes opens a fresh session and captures voice via the existing\n+pipeline, then answers.\n+\n+Two engines, both fully on-device (no audio leaves the machine for detection):\n+\n+* **openwakeword** (default, free, no API key) \u2014 loads a pretrained or custom\n+  ONNX model. Ships with ``hey_jarvis``, ``alexa``, ``hey_mycroft``, \u2026 ; point\n+  ``wake_word.openwakeword.model`` at a custom ``.onnx`` to detect a real\n+  \"hey hermes\" (training guide in the wake-word docs).\n+* **porcupine** (premium) \u2014 Picovoice's engine. Needs ``PORCUPINE_ACCESS_KEY``;\n+  supports built-in keywords and custom ``.ppn`` files from the Picovoice\n+  Console.\n+\n+Audio capture reuses the same 16 kHz mono int16 ``sounddevice`` path as voice\n+mode. The detector runs on its own daemon thread; callers ``pause()`` it while a\n+voice turn holds the microphone and ``resume()`` it once the system is idle\n+again (two input streams on one device is unreliable cross-platform).\n+\n+Nothing here mutates agent context or the prompt cache \u2014 on wake we hand a plain\n+string to the caller, exactly like a voice transcript.\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import logging\n+import os\n+import threading\n+import time\n+from typing import Any, Callable, Dict, Optional\n+\n+logger = logging.getLogger(__name__)\n+\n+# 16 kHz mono int16 \u2014 Whisper-native and what both engines expect.\n+SAMPLE_RATE = 16000\n+\n+# Minimum gap between two consecutive wake fires, so one \"hey hermes\" can't\n+# retrigger across several frames while the caller is still reacting.\n+_FIRE_COOLDOWN_SECONDS = 2.0\n+\n+\n+# ---------------------------------------------------------------------------\n+# Config\n+# ---------------------------------------------------------------------------\n+\n+_DEFAULTS: Dict[str, Any] = {\n+    \"enabled\": False,\n+    \"surface\": \"auto\",\n+    \"provider\": \"openwakeword\",\n+    \"phrase\": \"hey jarvis\",\n+    \"sensitivity\": 0.5,\n+    \"start_new_session\": True,\n+}\n+\n+\n+def load_wake_word_config() -> Dict[str, Any]:\n+    \"\"\"Return the ``wake_word`` config section, shape-guarded to a dict.\"\"\"\n+    try:\n+        from hermes_cli.config import load_config\n+\n+        cfg = load_config().get(\"wake_word\")\n+    except Exception:\n+        cfg = None\n+    return cfg if isinstance(cfg, dict) else {}\n+\n+\n+def _get(cfg: Dict[str, Any], key: str) -> Any:\n+    val = cfg.get(key, _DEFAULTS.get(key))\n+    return _DEFAULTS.get(key) if val is None else val\n+\n+\n+def _dict_section(cfg: Dict[str, Any], key: str) -> Dict[str, Any]:\n+    val = cfg.get(key)\n+    return val if isinstance(val, dict) else {}\n+\n+\n+def _provider(cfg: Dict[str, Any]) -> str:\n+    return str(_get(cfg, \"provider\")).strip().lower() or \"openwakeword\"\n+\n+\n+def _sensitivity(cfg: Dict[str, Any]) -> float:\n+    raw = _get(cfg, \"sensitivity\")\n+    try:\n+        s = float(raw)\n+    except (TypeError, ValueError):\n+        s = 0.5\n+    return min(max(s, 0.0), 1.0)\n+\n+\n+def wake_phrase(cfg: Optional[Dict[str, Any]] = None) -> str:\n+    \"\"\"Human-facing wake phrase label (purely cosmetic; engine keys detection).\"\"\"\n+    cfg = cfg if cfg is not None else load_wake_word_config()\n+    return str(_get(cfg, \"phrase\")) or \"hey jarvis\"\n+\n+\n+def wake_surface_enabled(surface: str, cfg: Optional[Dict[str, Any]] = None) -> bool:\n+    \"\"\"Should ``surface`` (``cli`` / ``tui`` / ``gui``) host the listener?\n+\n+    True when the wake word is enabled and the configured ``surface`` is either\n+    ``auto`` or this exact surface \u2014 the single gate every surface consults so\n+    only one place owns the wake word and the new session it opens.\n+    \"\"\"",
+        "comment_created_at": "2026-07-15T17:31:26+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "`auto` currently authorizes every surface, but both the TUI and desktop call `wake.start`; the gateway keeps only one mutable transport/callback, so the last caller steals event delivery. Make this an exclusive owner claim (and release it on disconnect/stop) rather than a permissive gate.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3590682789",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 58539,
+        "pr_file": "tools/wake_word.py",
+        "discussion_id": "3589448982",
+        "commented_code": "@@ -0,0 +1,471 @@\n+\"\"\"Wake-word (\"Hey Hermes\") detection \u2014 hands-free session trigger.\n+\n+A lightweight, always-on hotword listener that fires a callback when a wake\n+phrase is spoken \u2014 the \"Hey Siri\" / \"Alexa\" pattern. Shared by the CLI, TUI, and\n+desktop GUI (one of them owns it, gated by ``wake_surface_enabled``): say the\n+wake word, Hermes opens a fresh session and captures voice via the existing\n+pipeline, then answers.\n+\n+Two engines, both fully on-device (no audio leaves the machine for detection):\n+\n+* **openwakeword** (default, free, no API key) \u2014 loads a pretrained or custom\n+  ONNX model. Ships with ``hey_jarvis``, ``alexa``, ``hey_mycroft``, \u2026 ; point\n+  ``wake_word.openwakeword.model`` at a custom ``.onnx`` to detect a real\n+  \"hey hermes\" (training guide in the wake-word docs).\n+* **porcupine** (premium) \u2014 Picovoice's engine. Needs ``PORCUPINE_ACCESS_KEY``;\n+  supports built-in keywords and custom ``.ppn`` files from the Picovoice\n+  Console.\n+\n+Audio capture reuses the same 16 kHz mono int16 ``sounddevice`` path as voice\n+mode. The detector runs on its own daemon thread; callers ``pause()`` it while a\n+voice turn holds the microphone and ``resume()`` it once the system is idle\n+again (two input streams on one device is unreliable cross-platform).\n+\n+Nothing here mutates agent context or the prompt cache \u2014 on wake we hand a plain\n+string to the caller, exactly like a voice transcript.\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import logging\n+import os\n+import threading\n+import time\n+from typing import Any, Callable, Dict, Optional\n+\n+logger = logging.getLogger(__name__)\n+\n+# 16 kHz mono int16 \u2014 Whisper-native and what both engines expect.\n+SAMPLE_RATE = 16000\n+\n+# Minimum gap between two consecutive wake fires, so one \"hey hermes\" can't\n+# retrigger across several frames while the caller is still reacting.\n+_FIRE_COOLDOWN_SECONDS = 2.0\n+\n+\n+# ---------------------------------------------------------------------------\n+# Config\n+# ---------------------------------------------------------------------------\n+\n+_DEFAULTS: Dict[str, Any] = {\n+    \"enabled\": False,\n+    \"surface\": \"auto\",\n+    \"provider\": \"openwakeword\",\n+    \"phrase\": \"hey jarvis\",\n+    \"sensitivity\": 0.5,\n+    \"start_new_session\": True,\n+}\n+\n+\n+def load_wake_word_config() -> Dict[str, Any]:\n+    \"\"\"Return the ``wake_word`` config section, shape-guarded to a dict.\"\"\"\n+    try:\n+        from hermes_cli.config import load_config\n+\n+        cfg = load_config().get(\"wake_word\")\n+    except Exception:\n+        cfg = None\n+    return cfg if isinstance(cfg, dict) else {}\n+\n+\n+def _get(cfg: Dict[str, Any], key: str) -> Any:\n+    val = cfg.get(key, _DEFAULTS.get(key))\n+    return _DEFAULTS.get(key) if val is None else val\n+\n+\n+def _dict_section(cfg: Dict[str, Any], key: str) -> Dict[str, Any]:\n+    val = cfg.get(key)\n+    return val if isinstance(val, dict) else {}\n+\n+\n+def _provider(cfg: Dict[str, Any]) -> str:\n+    return str(_get(cfg, \"provider\")).strip().lower() or \"openwakeword\"\n+\n+\n+def _sensitivity(cfg: Dict[str, Any]) -> float:\n+    raw = _get(cfg, \"sensitivity\")\n+    try:\n+        s = float(raw)\n+    except (TypeError, ValueError):\n+        s = 0.5\n+    return min(max(s, 0.0), 1.0)\n+\n+\n+def wake_phrase(cfg: Optional[Dict[str, Any]] = None) -> str:\n+    \"\"\"Human-facing wake phrase label (purely cosmetic; engine keys detection).\"\"\"\n+    cfg = cfg if cfg is not None else load_wake_word_config()\n+    return str(_get(cfg, \"phrase\")) or \"hey jarvis\"\n+\n+\n+def wake_surface_enabled(surface: str, cfg: Optional[Dict[str, Any]] = None) -> bool:\n+    \"\"\"Should ``surface`` (``cli`` / ``tui`` / ``gui``) host the listener?\n+\n+    True when the wake word is enabled and the configured ``surface`` is either\n+    ``auto`` or this exact surface \u2014 the single gate every surface consults so\n+    only one place owns the wake word and the new session it opens.\n+    \"\"\"",
+        "comment_created_at": "2026-07-15T20:55:00+00:00",
+        "comment_author": "omid3098",
+        "comment_body": "Addressed in updated head 695e844e7. The auto setting now uses sticky first-claimant ownership across the gateway and process singleton, backed by a stdlib cross-process microphone lock. Non-owners cannot replace callbacks, pause, stop, or steal delivery; disconnect and detector failures release the lease. Added competing-client, captured-transport, reclaim, websocket-disconnect, and process-exit coverage (349 affected Python tests pass).",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3591022296",
+    "pr_number": 60330,
+    "pr_file": "cron/scheduler.py",
+    "created_at": "2026-07-15T21:59:55+00:00",
+    "commented_code": "raise RuntimeError(f\"Cron job '{job_id}' blocked for safety: {err}\")\n \n \n+def _normalize_cron_session_mode(job: dict) -> str:\n+    \"\"\"Return the cron execution session mode for a stored job.\n+\n+    Backward-compatible default is ``fresh``: each tick gets its own visible\n+    run session. ``reuse`` keeps a stable cron-owned session per job. A\n+    ``target_session_id`` means the cron tick is an injected continuation of an\n+    existing user/profile session.\n+    \"\"\"\n+    if job.get(\"target_session_id\"):\n+        return \"target\"\n+    raw = str(job.get(\"session_mode\") or \"\").strip().lower()\n+    if not raw and job.get(\"session_reuse\") is True:\n+        raw = \"reuse\"\n+    aliases = {\n+        \"\": \"fresh\",\n+        \"new\": \"fresh\",\n+        \"fresh\": \"fresh\",\n+        \"isolated\": \"fresh\",\n+        \"reuse\": \"reuse\",\n+        \"reused\": \"reuse\",\n+        \"continue\": \"reuse\",\n+        \"continuation\": \"reuse\",\n+        \"target\": \"target\",\n+        \"inject\": \"target\",\n+        \"injected\": \"target\",\n+    }\n+    return aliases.get(raw, \"fresh\")\n+\n+\n+def _resolve_cron_execution_session(\n+    job: dict,\n+    session_db,\n+) -> tuple[str, Optional[list[dict]], bool]:\n+    \"\"\"Resolve ``(session_id, history, cron_owned)`` for a cron agent run.\"\"\"\n+    job_id = job[\"id\"]\n+    mode = _normalize_cron_session_mode(job)\n+    if mode == \"fresh\":\n+        return (\n+            f\"cron_{job_id}_{_hermes_now().strftime('%Y%m%d_%H%M%S')}\",\n+            None,\n+            True,\n+        )\n+\n+    if session_db is None:\n+        raise RuntimeError(\n+            f\"Cron job '{job_id}' requested session_mode={mode!r}, but the \"\n+            \"SQLite session store is unavailable.\"\n+        )\n+\n+    if mode == \"target\":\n+        requested = str(job.get(\"target_session_id\") or \"\").strip()\n+        if not requested:\n+            raise RuntimeError(\n+                f\"Cron job '{job_id}' has session_mode='target' but no target_session_id.\"\n+            )\n+        resolved = session_db.resolve_resume_session_id(requested)\n+        if not session_db.get_session(resolved):\n+            raise RuntimeError(\n+                f\"Cron job '{job_id}' target_session_id {requested!r} does not exist.\"\n+            )\n+        session_db.reopen_session(resolved)\n+        return resolved, session_db.get_messages_as_conversation(resolved), False",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3591022296",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 60330,
+        "pr_file": "cron/scheduler.py",
+        "discussion_id": "3591022296",
+        "commented_code": "@@ -2480,6 +2480,79 @@ def _guard_job_credential_exfil(job: dict) -> None:\n         raise RuntimeError(f\"Cron job '{job_id}' blocked for safety: {err}\")\n \n \n+def _normalize_cron_session_mode(job: dict) -> str:\n+    \"\"\"Return the cron execution session mode for a stored job.\n+\n+    Backward-compatible default is ``fresh``: each tick gets its own visible\n+    run session. ``reuse`` keeps a stable cron-owned session per job. A\n+    ``target_session_id`` means the cron tick is an injected continuation of an\n+    existing user/profile session.\n+    \"\"\"\n+    if job.get(\"target_session_id\"):\n+        return \"target\"\n+    raw = str(job.get(\"session_mode\") or \"\").strip().lower()\n+    if not raw and job.get(\"session_reuse\") is True:\n+        raw = \"reuse\"\n+    aliases = {\n+        \"\": \"fresh\",\n+        \"new\": \"fresh\",\n+        \"fresh\": \"fresh\",\n+        \"isolated\": \"fresh\",\n+        \"reuse\": \"reuse\",\n+        \"reused\": \"reuse\",\n+        \"continue\": \"reuse\",\n+        \"continuation\": \"reuse\",\n+        \"target\": \"target\",\n+        \"inject\": \"target\",\n+        \"injected\": \"target\",\n+    }\n+    return aliases.get(raw, \"fresh\")\n+\n+\n+def _resolve_cron_execution_session(\n+    job: dict,\n+    session_db,\n+) -> tuple[str, Optional[list[dict]], bool]:\n+    \"\"\"Resolve ``(session_id, history, cron_owned)`` for a cron agent run.\"\"\"\n+    job_id = job[\"id\"]\n+    mode = _normalize_cron_session_mode(job)\n+    if mode == \"fresh\":\n+        return (\n+            f\"cron_{job_id}_{_hermes_now().strftime('%Y%m%d_%H%M%S')}\",\n+            None,\n+            True,\n+        )\n+\n+    if session_db is None:\n+        raise RuntimeError(\n+            f\"Cron job '{job_id}' requested session_mode={mode!r}, but the \"\n+            \"SQLite session store is unavailable.\"\n+        )\n+\n+    if mode == \"target\":\n+        requested = str(job.get(\"target_session_id\") or \"\").strip()\n+        if not requested:\n+            raise RuntimeError(\n+                f\"Cron job '{job_id}' has session_mode='target' but no target_session_id.\"\n+            )\n+        resolved = session_db.resolve_resume_session_id(requested)\n+        if not session_db.get_session(resolved):\n+            raise RuntimeError(\n+                f\"Cron job '{job_id}' target_session_id {requested!r} does not exist.\"\n+            )\n+        session_db.reopen_session(resolved)\n+        return resolved, session_db.get_messages_as_conversation(resolved), False",
+        "comment_created_at": "2026-07-15T21:59:55+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "A transcript snapshot alone is not safe admission control: distinct cron jobs are dispatched in parallel, and each run immediately persists a new user turn. Add serialization by resolved session ID, including coordination with any active gateway turn, so two jobs cannot append competing turns to this target.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3609763586",
+    "pr_number": 67294,
+    "pr_file": "tui_gateway/server.py",
+    "created_at": "2026-07-19T03:55:23+00:00",
+    "commented_code": "return \"\"\n \n \n+def _session_pending_payload(sid: str) -> dict | None:\n+    \"\"\"Return the pending prompt payload for a session, if any.\n+\n+    The payload carries enough detail for the frontend to recreate the\n+    in-progress prompt overlay (clarify choices, approval command, etc.)",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3609763586",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 67294,
+        "pr_file": "tui_gateway/server.py",
+        "discussion_id": "3609763586",
+        "commented_code": "@@ -6311,6 +6311,32 @@ def _session_pending_kind(sid: str) -> str:\n     return \"\"\n \n \n+def _session_pending_payload(sid: str) -> dict | None:\n+    \"\"\"Return the pending prompt payload for a session, if any.\n+\n+    The payload carries enough detail for the frontend to recreate the\n+    in-progress prompt overlay (clarify choices, approval command, etc.)",
+        "comment_created_at": "2026-07-19T03:55:23+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "Please take `_prompt_lock` while snapshotting `_pending` and `_pending_prompt_payloads`. `_block()` mutates both maps under that lock (`tui_gateway/server.py:2277-2290`); a lock-protected single snapshot should also be reused for the waiting status so the status and payload cannot disagree.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3565034575",
+    "pr_number": 62856,
+    "pr_file": "tools/mcp_tool.py",
+    "created_at": "2026-07-11T21:06:05+00:00",
+    "commented_code": "logger.debug(\"No MCP servers configured\")\n         return []\n \n-    with _lock:\n-        new_server_names = [\n-            name\n-            for name, cfg in servers.items()\n-            if name not in _servers and _parse_boolish(cfg.get(\"enabled\", True), default=True)\n-        ]\n+    # Cross-process discovery guard (#62771)\n+    cookie = _try_acquire_mcp_discovery_lock()\n+    if cookie is None:\n+        logger.debug(\n+            \"Another process holds MCP discovery lock -- \"\n+            \"returning already-registered tools\"\n+        )\n+        return _existing_tool_names()",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3565034575",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 62856,
+        "pr_file": "tools/mcp_tool.py",
+        "discussion_id": "3565034575",
+        "commented_code": "@@ -5014,32 +5093,45 @@ def discover_mcp_tools() -> List[str]:\n         logger.debug(\"No MCP servers configured\")\n         return []\n \n-    with _lock:\n-        new_server_names = [\n-            name\n-            for name, cfg in servers.items()\n-            if name not in _servers and _parse_boolish(cfg.get(\"enabled\", True), default=True)\n-        ]\n+    # Cross-process discovery guard (#62771)\n+    cookie = _try_acquire_mcp_discovery_lock()\n+    if cookie is None:\n+        logger.debug(\n+            \"Another process holds MCP discovery lock -- \"\n+            \"returning already-registered tools\"\n+        )\n+        return _existing_tool_names()",
+        "comment_created_at": "2026-07-11T21:06:05+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "This is process-local state, not a cross-process discovery result. A fresh gateway/serve process has an empty `_servers` registry here and gateway startup only calls discovery once, so it will run without MCP tools. Please wait or reschedule its own local discovery after the holder releases the lock.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3565171092",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 62856,
+        "pr_file": "tools/mcp_tool.py",
+        "discussion_id": "3565034575",
+        "commented_code": "@@ -5014,32 +5093,45 @@ def discover_mcp_tools() -> List[str]:\n         logger.debug(\"No MCP servers configured\")\n         return []\n \n-    with _lock:\n-        new_server_names = [\n-            name\n-            for name, cfg in servers.items()\n-            if name not in _servers and _parse_boolish(cfg.get(\"enabled\", True), default=True)\n-        ]\n+    # Cross-process discovery guard (#62771)\n+    cookie = _try_acquire_mcp_discovery_lock()\n+    if cookie is None:\n+        logger.debug(\n+            \"Another process holds MCP discovery lock -- \"\n+            \"returning already-registered tools\"\n+        )\n+        return _existing_tool_names()",
+        "comment_created_at": "2026-07-11T22:44:38+00:00",
+        "comment_author": "AtakanGs",
+        "comment_body": "Thanks \u2014 agreed. Updated in `d773bce`.\r\n\r\nLock losers no longer return `_existing_tool_names()`. They now wait/retry with bounded backoff and then run their own local discovery after acquiring the lock. If the lock remains held after the retry window, discovery falls back to the previous unguarded behavior instead of returning an empty process-local registry.\r\n\r\nAdded focused coverage for the retry path and for ensuring the loser still runs local discovery.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3565034578",
+    "pr_number": 62856,
+    "pr_file": "tools/mcp_tool.py",
+    "created_at": "2026-07-11T21:06:05+00:00",
+    "commented_code": "# (``os.getpgid`` is POSIX-only).\n _stdio_pgids: Dict[int, int] = {}  # pid -> pgid\n \n+# ---------------------------------------------------------------------------\n+# Cross-process MCP discovery guard\n+# ---------------------------------------------------------------------------\n+# Advisory file lock that prevents N concurrent Hermes processes (e.g.\n+# gateway + CLI + TUI) from all running MCP discovery simultaneously.\n+# See issue #62771.\n+_LOCK_UNAVAILABLE: Any = object()  # sentinel: locking broken/unavailable\n+_MCP_DISCOVERY_LOCK_PATH: Optional[str] = None  # resolved lazily\n+\n+\n+class _LockCookie:\n+    \"\"\"Holds a cross-process file lock; release() drops it.\n+\n+    On Windows, the underlying file handle MUST stay alive while the lock\n+    is held (portalocker keeps the kernel lock on the fd).  We keep the\n+    file object in ``_fh`` and close it on release.\n+    \"\"\"\n+\n+    def __init__(self, fh: Any) -> None:\n+        self._fh = fh\n+\n+    def release(self) -> None:\n+        if self._fh is not None:\n+            try:\n+                import portalocker\n+                portalocker.unlock(self._fh)\n+            except Exception:\n+                pass\n+            try:\n+                self._fh.close()\n+            except Exception:\n+                pass\n+            self._fh = None\n+\n+\n+def _try_acquire_mcp_discovery_lock() -> Any:\n+    \"\"\"Try to acquire an exclusive cross-process lock for MCP discovery.\n+\n+    Returns\n+    -------\n+    _LockCookie\n+        Lock acquired successfully.\n+    None\n+        Another process holds the lock.\n+    _LOCK_UNAVAILABLE\n+        Locking mechanism is broken or unavailable -- caller should run\n+        discovery unguarded.\n+    \"\"\"\n+    global _MCP_DISCOVERY_LOCK_PATH\n+    try:\n+        from hermes_constants import get_hermes_home\n+        if _MCP_DISCOVERY_LOCK_PATH is None:\n+            _MCP_DISCOVERY_LOCK_PATH = str(\n+                get_hermes_home() / \".mcp-discovery.lock\"\n+            )\n+        lock_path = _MCP_DISCOVERY_LOCK_PATH\n+    except Exception:\n+        return _LOCK_UNAVAILABLE\n+\n+    try:\n+        import portalocker",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3565034578",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 62856,
+        "pr_file": "tools/mcp_tool.py",
+        "discussion_id": "3565034578",
+        "commented_code": "@@ -3472,6 +3472,85 @@ def _handle_session_expired_and_retry(\n # (``os.getpgid`` is POSIX-only).\n _stdio_pgids: Dict[int, int] = {}  # pid -> pgid\n \n+# ---------------------------------------------------------------------------\n+# Cross-process MCP discovery guard\n+# ---------------------------------------------------------------------------\n+# Advisory file lock that prevents N concurrent Hermes processes (e.g.\n+# gateway + CLI + TUI) from all running MCP discovery simultaneously.\n+# See issue #62771.\n+_LOCK_UNAVAILABLE: Any = object()  # sentinel: locking broken/unavailable\n+_MCP_DISCOVERY_LOCK_PATH: Optional[str] = None  # resolved lazily\n+\n+\n+class _LockCookie:\n+    \"\"\"Holds a cross-process file lock; release() drops it.\n+\n+    On Windows, the underlying file handle MUST stay alive while the lock\n+    is held (portalocker keeps the kernel lock on the fd).  We keep the\n+    file object in ``_fh`` and close it on release.\n+    \"\"\"\n+\n+    def __init__(self, fh: Any) -> None:\n+        self._fh = fh\n+\n+    def release(self) -> None:\n+        if self._fh is not None:\n+            try:\n+                import portalocker\n+                portalocker.unlock(self._fh)\n+            except Exception:\n+                pass\n+            try:\n+                self._fh.close()\n+            except Exception:\n+                pass\n+            self._fh = None\n+\n+\n+def _try_acquire_mcp_discovery_lock() -> Any:\n+    \"\"\"Try to acquire an exclusive cross-process lock for MCP discovery.\n+\n+    Returns\n+    -------\n+    _LockCookie\n+        Lock acquired successfully.\n+    None\n+        Another process holds the lock.\n+    _LOCK_UNAVAILABLE\n+        Locking mechanism is broken or unavailable -- caller should run\n+        discovery unguarded.\n+    \"\"\"\n+    global _MCP_DISCOVERY_LOCK_PATH\n+    try:\n+        from hermes_constants import get_hermes_home\n+        if _MCP_DISCOVERY_LOCK_PATH is None:\n+            _MCP_DISCOVERY_LOCK_PATH = str(\n+                get_hermes_home() / \".mcp-discovery.lock\"\n+            )\n+        lock_path = _MCP_DISCOVERY_LOCK_PATH\n+    except Exception:\n+        return _LOCK_UNAVAILABLE\n+\n+    try:\n+        import portalocker",
+        "comment_created_at": "2026-07-11T21:06:05+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "`portalocker` is not a direct cross-platform dependency: current `pyproject.toml` only brings it transitively through a `sys_platform == 'win32'` dependency. POSIX therefore takes the unguarded fallback. Please use a supported POSIX backend or explicitly scope and test platform behavior.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3565172033",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 62856,
+        "pr_file": "tools/mcp_tool.py",
+        "discussion_id": "3565034578",
+        "commented_code": "@@ -3472,6 +3472,85 @@ def _handle_session_expired_and_retry(\n # (``os.getpgid`` is POSIX-only).\n _stdio_pgids: Dict[int, int] = {}  # pid -> pgid\n \n+# ---------------------------------------------------------------------------\n+# Cross-process MCP discovery guard\n+# ---------------------------------------------------------------------------\n+# Advisory file lock that prevents N concurrent Hermes processes (e.g.\n+# gateway + CLI + TUI) from all running MCP discovery simultaneously.\n+# See issue #62771.\n+_LOCK_UNAVAILABLE: Any = object()  # sentinel: locking broken/unavailable\n+_MCP_DISCOVERY_LOCK_PATH: Optional[str] = None  # resolved lazily\n+\n+\n+class _LockCookie:\n+    \"\"\"Holds a cross-process file lock; release() drops it.\n+\n+    On Windows, the underlying file handle MUST stay alive while the lock\n+    is held (portalocker keeps the kernel lock on the fd).  We keep the\n+    file object in ``_fh`` and close it on release.\n+    \"\"\"\n+\n+    def __init__(self, fh: Any) -> None:\n+        self._fh = fh\n+\n+    def release(self) -> None:\n+        if self._fh is not None:\n+            try:\n+                import portalocker\n+                portalocker.unlock(self._fh)\n+            except Exception:\n+                pass\n+            try:\n+                self._fh.close()\n+            except Exception:\n+                pass\n+            self._fh = None\n+\n+\n+def _try_acquire_mcp_discovery_lock() -> Any:\n+    \"\"\"Try to acquire an exclusive cross-process lock for MCP discovery.\n+\n+    Returns\n+    -------\n+    _LockCookie\n+        Lock acquired successfully.\n+    None\n+        Another process holds the lock.\n+    _LOCK_UNAVAILABLE\n+        Locking mechanism is broken or unavailable -- caller should run\n+        discovery unguarded.\n+    \"\"\"\n+    global _MCP_DISCOVERY_LOCK_PATH\n+    try:\n+        from hermes_constants import get_hermes_home\n+        if _MCP_DISCOVERY_LOCK_PATH is None:\n+            _MCP_DISCOVERY_LOCK_PATH = str(\n+                get_hermes_home() / \".mcp-discovery.lock\"\n+            )\n+        lock_path = _MCP_DISCOVERY_LOCK_PATH\n+    except Exception:\n+        return _LOCK_UNAVAILABLE\n+\n+    try:\n+        import portalocker",
+        "comment_created_at": "2026-07-11T22:45:23+00:00",
+        "comment_author": "AtakanGs",
+        "comment_body": "Thanks \u2014 addressed in `d773bce`.\r\n\r\nThe guard now uses POSIX `fcntl.flock(..., LOCK_EX | LOCK_NB)` when available, and keeps the Windows `portalocker` path for Windows. The lock handle is kept alive in `_LockCookie` until release.\r\n\r\nAlso added POSIX coverage, including lock-held handling for `EACCES`, `EAGAIN`, and `EWOULDBLOCK`.\r\n\r\nFocused local lock tests:\r\n\r\n```text 9 passed, 212 deselected```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3570748650",
+    "pr_number": 31692,
+    "pr_file": "gateway/run.py",
+    "created_at": "2026-07-13T12:50:10+00:00",
+    "commented_code": "context_note = \"[System note: The user's session was automatically reset by the daily schedule. This is a fresh conversation with no prior context.]\"\n             else:\n                 context_note = \"[System note: The user's previous session expired due to inactivity. This is a fresh conversation with no prior context.]\"\n-            context_prompt = context_note + \"\n\n\" + context_prompt\n+\n+            handoff_note = None\n+            try:\n+                handoff_cfg = getattr(self.session_store.config, \"session_handoff\", None)\n+                handoff_mode = getattr(handoff_cfg, \"mode\", \"none\")\n+                parent_session_id = getattr(session_entry, \"parent_session_id\", None)\n+                if handoff_mode != \"none\" and parent_session_id:\n+                    parent_messages = self.session_store.load_transcript(parent_session_id)\n+                    summary_text = None\n+                    if handoff_mode == \"summary\":\n+                        try:\n+                            _handoff_user_config = _load_gateway_config()\n+                            _handoff_model, _handoff_runtime = self._resolve_session_agent_runtime(",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3570748650",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 31692,
+        "pr_file": "gateway/run.py",
+        "discussion_id": "3570748650",
+        "commented_code": "@@ -8115,7 +8119,51 @@ async def _handle_message_with_agent(self, event, source, _quick_key: str, run_g\n                 context_note = \"[System note: The user's session was automatically reset by the daily schedule. This is a fresh conversation with no prior context.]\"\n             else:\n                 context_note = \"[System note: The user's previous session expired due to inactivity. This is a fresh conversation with no prior context.]\"\n-            context_prompt = context_note + \"\\n\\n\" + context_prompt\n+\n+            handoff_note = None\n+            try:\n+                handoff_cfg = getattr(self.session_store.config, \"session_handoff\", None)\n+                handoff_mode = getattr(handoff_cfg, \"mode\", \"none\")\n+                parent_session_id = getattr(session_entry, \"parent_session_id\", None)\n+                if handoff_mode != \"none\" and parent_session_id:\n+                    parent_messages = self.session_store.load_transcript(parent_session_id)\n+                    summary_text = None\n+                    if handoff_mode == \"summary\":\n+                        try:\n+                            _handoff_user_config = _load_gateway_config()\n+                            _handoff_model, _handoff_runtime = self._resolve_session_agent_runtime(",
+        "comment_created_at": "2026-07-13T12:50:10+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "`generate_compaction_handoff_summary()` reaches synchronous `ContextCompressor._generate_summary()`, whose `call_llm()` is blocking. Offload this work (for example via `asyncio.to_thread`) so summary mode cannot stall the gateway event loop.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3655752999",
+    "pr_number": 71745,
+    "pr_file": "tools/browser_tool.py",
+    "created_at": "2026-07-27T09:02:47+00:00",
+    "commented_code": null,
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3655752999",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 71745,
+        "pr_file": "tools/browser_tool.py",
+        "discussion_id": "3655752999",
+        "commented_code": null,
+        "comment_created_at": "2026-07-27T09:02:47+00:00",
+        "comment_author": "drowchaeshew",
+        "comment_body": "Here, a small problem: consider this scenario: \n\n0. only a `new tab` in your browser;\n1. `browser_nagivate('https://www.example.com')`\n2. `browser_snapshot()`:  likley `_supervisor` (3121) is not None, which will bring the wrong frame tree info (e.g. `chrome-untrusted:new-tab-page/one-google-bar`) to `response`.\n\n------\n\n### Solution?\n\nQuick-fix: Use `_supervisor_page_matches_daemon()` & set `_supervisor` to None if not matches. (but this will permanently disable the merging logic, since nobody fix the wrong supervisor in `SUPERVISOR_REGISTRY`, the `_supervisor_page_matches_daemon()` will never returns True once split-brain happens). \n\nFix permanently: ... frankly speaking I have no idea. \n1. remove supervisor once and for all: too aggresive! \n2. find solution to synchonize the url between supervisor & daemon (really hard work...)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3667480189",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 71745,
+        "pr_file": "tools/browser_tool.py",
+        "discussion_id": "3655752999",
+        "commented_code": null,
+        "comment_created_at": "2026-07-28T16:41:02+00:00",
+        "comment_author": "chrisyoung2005",
+        "comment_body": "Agreed this is real \u2014 it's the snapshot-enrichment half of the same supervisor split-brain \u2014 but I'd argue it belongs with the supervisor re-attach work rather than this PR, which is scoped to the eval fast-path (where a wrong answer is returned *as the result*; the snapshot case pollutes auxiliary frame info merged onto an otherwise-correct daemon snapshot).\n\nYour analysis of the quick fix matches why I didn't gate the merge here: nothing ever re-attaches the supervisor to the right page today, so `if not _supervisor_page_matches_daemon(...): _supervisor = None` degrades \"sometimes wrong frame tree\" into \"permanently no dialog/frame merging after the first divergence\" \u2014 dialogs are the supervisor's most load-bearing duty, and a pending-dialog report is correct browser-wide even when the frame tree is stale.\n\nThe durable fix is synchronizing the supervisor with the daemon's target, which is the #32685 / #32950 / #71743 family \u2014 on #32950 I proposed a split-brain guard (daemon targetId \u2209 supervisor's `Target.getTargets` \u2192 warn/re-attach) that would fix eval, snapshot, and dialogs at the root. If maintainers prefer, I'm happy to file a follow-up issue for the snapshot-merge case specifically so it's tracked \u2014 this PR does leave `_supervisor_page_matches_daemon` + the new divergence mark importable by `browser_snapshot`, so a scoped follow-up (e.g. merge dialogs but drop `frame_tree` on mismatch) would be small.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3592641517",
+    "pr_number": 65003,
+    "pr_file": "gateway/platforms/api_server.py",
+    "created_at": "2026-07-16T04:28:47+00:00",
+    "commented_code": "MAX_CONTENT_LIST_SIZE = 1_000  # Max items when content is an array\n \n \n+class ThreadSafeAsyncQueue(asyncio.Queue):\n+    \"\"\"An ``asyncio.Queue`` that a non-loop thread can push into safely.\n+\n+    The SSE writers' streaming loops used to bridge a plain ``queue.Queue``\n+    into the event loop via ``await loop.run_in_executor(None, lambda:\n+    stream_q.get(timeout=0.5))`` inside a ``while True`` poll \u2014 a thread-pool\n+    round trip on every 0.5s tick even when idle, plus up to 500ms of tail\n+    latency between a delta landing in the queue and it reaching the\n+    response. ``run_conversation`` itself runs on a worker thread (via\n+    ``loop.run_in_executor``), so its ``stream_delta_callback`` closures\n+    (``_on_delta`` etc.) call ``put_threadsafe`` from off the loop thread;\n+    the consumer side just does a plain ``await queue.get()``/\n+    ``asyncio.wait_for(queue.get(), timeout=...)``, woken immediately by\n+    ``call_soon_threadsafe`` instead of polling.\n+    \"\"\"\n+\n+    def put_threadsafe(self, item, *, loop: asyncio.AbstractEventLoop = None) -> None:",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3592641517",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 65003,
+        "pr_file": "gateway/platforms/api_server.py",
+        "discussion_id": "3592641517",
+        "commented_code": "@@ -107,6 +107,32 @@ def _hermes_version() -> str:\n MAX_CONTENT_LIST_SIZE = 1_000  # Max items when content is an array\n \n \n+class ThreadSafeAsyncQueue(asyncio.Queue):\n+    \"\"\"An ``asyncio.Queue`` that a non-loop thread can push into safely.\n+\n+    The SSE writers' streaming loops used to bridge a plain ``queue.Queue``\n+    into the event loop via ``await loop.run_in_executor(None, lambda:\n+    stream_q.get(timeout=0.5))`` inside a ``while True`` poll \u2014 a thread-pool\n+    round trip on every 0.5s tick even when idle, plus up to 500ms of tail\n+    latency between a delta landing in the queue and it reaching the\n+    response. ``run_conversation`` itself runs on a worker thread (via\n+    ``loop.run_in_executor``), so its ``stream_delta_callback`` closures\n+    (``_on_delta`` etc.) call ``put_threadsafe`` from off the loop thread;\n+    the consumer side just does a plain ``await queue.get()``/\n+    ``asyncio.wait_for(queue.get(), timeout=...)``, woken immediately by\n+    ``call_soon_threadsafe`` instead of polling.\n+    \"\"\"\n+\n+    def put_threadsafe(self, item, *, loop: asyncio.AbstractEventLoop = None) -> None:",
+        "comment_created_at": "2026-07-16T04:28:47+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "Please add a regression test that invokes `put_threadsafe()` from a real worker thread and awaits `get()` on the owning loop. The converted fixtures only use same-loop `put_nowait()`, so they do not cover this new cross-thread boundary.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3580160701",
+    "pr_number": 46390,
+    "pr_file": "agent/auxiliary_client.py",
+    "created_at": "2026-07-14T15:03:46+00:00",
+    "commented_code": "total_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else None\n         deadline = time.monotonic() + float(total_timeout) if total_timeout else None\n         timed_out = threading.Event()\n+        timeout_cleanup_started = threading.Event()\n         timeout_timer: Optional[threading.Timer] = None\n \n         def _timeout_message() -> str:\n             return f\"Codex auxiliary Responses stream exceeded {float(total_timeout):.1f}s total timeout\"\n \n         def _close_client_on_timeout() -> None:\n             timed_out.set()",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3580160701",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 46390,
+        "pr_file": "agent/auxiliary_client.py",
+        "discussion_id": "3580160701",
+        "commented_code": "@@ -774,13 +774,17 @@ def create(self, **kwargs) -> Any:\n         total_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else None\n         deadline = time.monotonic() + float(total_timeout) if total_timeout else None\n         timed_out = threading.Event()\n+        timeout_cleanup_started = threading.Event()\n         timeout_timer: Optional[threading.Timer] = None\n \n         def _timeout_message() -> str:\n             return f\"Codex auxiliary Responses stream exceeded {float(total_timeout):.1f}s total timeout\"\n \n         def _close_client_on_timeout() -> None:\n             timed_out.set()",
+        "comment_created_at": "2026-07-14T15:03:46+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "`Event.is_set()` followed by `set()` is not atomic. `_close_client_on_timeout` can be entered concurrently by the Timer and `_check_cancelled`, so both threads can pass this check and close the client. Guard the ownership claim and close with a `threading.Lock` (and add a concurrent regression test).",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

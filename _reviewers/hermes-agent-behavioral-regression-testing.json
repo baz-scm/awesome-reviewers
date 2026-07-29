@@ -1,0 +1,248 @@
+[
+  {
+    "discussion_id": "3609116244",
+    "pr_number": 65431,
+    "pr_file": "tests/tools/test_voice_mode.py",
+    "created_at": "2026-07-18T20:14:43+00:00",
+    "commented_code": "return mock\n \n \n+class _FakeTime:\n+    \"\"\"Stand-in for the ``time`` module with a monotonic clock the test drives.\n+\n+    Silence detection compares ``time.monotonic()`` deltas against thresholds\n+    of a few dozen milliseconds.  Driving those deltas with real ``sleep()``\n+    calls only works when the platform clock is finer-grained than the margin\n+    the test leaves: ``time.monotonic()`` is ``GetTickCount64()`` (15.625 ms\n+    resolution) on Windows until CPython 3.13 moved it to\n+    ``QueryPerformanceCounter()``, so a 60 ms sleep can legitimately measure\n+    as 46 ms and land under a 50 ms threshold.  Advancing an explicit clock\n+    keeps the arithmetic exact on every platform.\n+\n+    Everything other than ``monotonic`` delegates to the real module, so\n+    ``time.sleep``/``time.strftime`` in the code under test keep working.\n+    \"\"\"\n+\n+    def __init__(self, real_time, start: float = 1000.0) -> None:\n+        self._real = real_time\n+        self._now = start\n+\n+    def monotonic(self) -> float:\n+        return self._now\n+\n+    def advance(self, seconds: float) -> None:\n+        self._now += seconds\n+\n+    def __getattr__(self, name):\n+        return getattr(self._real, name)\n+\n+\n+@pytest.fixture\n+def fake_clock(monkeypatch):",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3609116244",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 65431,
+        "pr_file": "tests/tools/test_voice_mode.py",
+        "discussion_id": "3609116244",
+        "commented_code": "@@ -68,6 +68,54 @@ def _fake_import_audio():\n     return mock\n \n \n+class _FakeTime:\n+    \"\"\"Stand-in for the ``time`` module with a monotonic clock the test drives.\n+\n+    Silence detection compares ``time.monotonic()`` deltas against thresholds\n+    of a few dozen milliseconds.  Driving those deltas with real ``sleep()``\n+    calls only works when the platform clock is finer-grained than the margin\n+    the test leaves: ``time.monotonic()`` is ``GetTickCount64()`` (15.625 ms\n+    resolution) on Windows until CPython 3.13 moved it to\n+    ``QueryPerformanceCounter()``, so a 60 ms sleep can legitimately measure\n+    as 46 ms and land under a 50 ms threshold.  Advancing an explicit clock\n+    keeps the arithmetic exact on every platform.\n+\n+    Everything other than ``monotonic`` delegates to the real module, so\n+    ``time.sleep``/``time.strftime`` in the code under test keep working.\n+    \"\"\"\n+\n+    def __init__(self, real_time, start: float = 1000.0) -> None:\n+        self._real = real_time\n+        self._now = start\n+\n+    def monotonic(self) -> float:\n+        return self._now\n+\n+    def advance(self, seconds: float) -> None:\n+        self._now += seconds\n+\n+    def __getattr__(self, name):\n+        return getattr(self._real, name)\n+\n+\n+@pytest.fixture\n+def fake_clock(monkeypatch):",
+        "comment_created_at": "2026-07-18T20:14:43+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "Please also use this fixture in `test_micro_pause_tolerance_during_speech`. That test still uses 50 ms, 50 ms, and 60 ms real sleeps against a 150 ms speech-duration gate before asserting `_has_spoken`, so it retains the same Windows clock-resolution dependency.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3610185936",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 65431,
+        "pr_file": "tests/tools/test_voice_mode.py",
+        "discussion_id": "3609116244",
+        "commented_code": "@@ -68,6 +68,54 @@ def _fake_import_audio():\n     return mock\n \n \n+class _FakeTime:\n+    \"\"\"Stand-in for the ``time`` module with a monotonic clock the test drives.\n+\n+    Silence detection compares ``time.monotonic()`` deltas against thresholds\n+    of a few dozen milliseconds.  Driving those deltas with real ``sleep()``\n+    calls only works when the platform clock is finer-grained than the margin\n+    the test leaves: ``time.monotonic()`` is ``GetTickCount64()`` (15.625 ms\n+    resolution) on Windows until CPython 3.13 moved it to\n+    ``QueryPerformanceCounter()``, so a 60 ms sleep can legitimately measure\n+    as 46 ms and land under a 50 ms threshold.  Advancing an explicit clock\n+    keeps the arithmetic exact on every platform.\n+\n+    Everything other than ``monotonic`` delegates to the real module, so\n+    ``time.sleep``/``time.strftime`` in the code under test keep working.\n+    \"\"\"\n+\n+    def __init__(self, real_time, start: float = 1000.0) -> None:\n+        self._real = real_time\n+        self._now = start\n+\n+    def monotonic(self) -> float:\n+        return self._now\n+\n+    def advance(self, seconds: float) -> None:\n+        self._now += seconds\n+\n+    def __getattr__(self, name):\n+        return getattr(self._real, name)\n+\n+\n+@pytest.fixture\n+def fake_clock(monkeypatch):",
+        "comment_created_at": "2026-07-19T08:21:25+00:00",
+        "comment_author": "Solitud1nem",
+        "comment_body": "Done in `1d676cccf` \u2014 `test_micro_pause_tolerance_during_speech` now takes the same fixture and advances the clock by its three existing intervals instead of sleeping.\r\n\r\nWorth recording why it wasn't in the original scope, since the reasoning cuts against the change and I'd rather it be on the record than look like an oversight: I measured that test before drawing the line, and it came back 0 failures in 40 runs on the box where the other two flaked. The reason is that its real margin isn't the 10 ms the nominal numbers suggest \u2014 on Windows `sleep()` rounds *up* to the timer tick, so `sleep(0.05)` actually costs about 62.5 ms and the three sleeps clear the 150 ms gate by roughly 37.5 ms, which is wider than the 15.625 ms `GetTickCount64()` quantum that made the other two flake.\r\n\r\nThat margin is an accident of sleep granularity rather than anything the test guarantees, though, so your call is the right one: it happens to survive on this platform pairing, and there's no reason to keep betting on that. Driving it from the explicit clock makes the timeline exact \u2014 0.05 + 0.05 + 0.06 against the 0.15 gate, with the dip at 0.05 staying under the 0.1 tolerance \u2014 and takes the real sleeping out of the suite as a side effect.\r\n\r\nMutation-checked the same way as the other two: widening the gate at `tools/voice_mode.py:561` fails the test, so it's still driving the assertion rather than passing on inertia.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3572515845",
+    "pr_number": 34522,
+    "pr_file": "tests/test_voice_max_recording_seconds.py",
+    "created_at": "2026-07-13T16:51:36+00:00",
+    "commented_code": "+\"\"\"Regression test: voice.max_recording_seconds is actually enforced.\n+\n+Before this fix, ``voice.max_recording_seconds`` was defined in the default\n+config (hermes_cli/config.py) and documented, but no code read it \u2014 the\n+AudioRecorder had no total-length cap, so the setting was dead config. This\n+test pins the enforcement contract on the recorder:\n+\n+* cap disabled (0 / unset) \u2192 never auto-stops on duration (previous behaviour),\n+* cap set to N>0 \u2192 auto-stop condition becomes true once elapsed >= N.\n+\"\"\"\n+from tools.voice_mode import AudioRecorder\n+\n+",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3572515845",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 34522,
+        "pr_file": "tests/test_voice_max_recording_seconds.py",
+        "discussion_id": "3572515845",
+        "commented_code": "@@ -0,0 +1,32 @@\n+\"\"\"Regression test: voice.max_recording_seconds is actually enforced.\n+\n+Before this fix, ``voice.max_recording_seconds`` was defined in the default\n+config (hermes_cli/config.py) and documented, but no code read it \u2014 the\n+AudioRecorder had no total-length cap, so the setting was dead config. This\n+test pins the enforcement contract on the recorder:\n+\n+* cap disabled (0 / unset) \u2192 never auto-stops on duration (previous behaviour),\n+* cap set to N>0 \u2192 auto-stop condition becomes true once elapsed >= N.\n+\"\"\"\n+from tools.voice_mode import AudioRecorder\n+\n+",
+        "comment_created_at": "2026-07-13T16:51:36+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "These tests exercise only the new private predicate. Please also drive the mocked `InputStream` callback past the cap and assert its one-shot callback fires, then cover the CLI config assignment; otherwise the wiring and real auto-stop path can regress while this test remains green.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3576725077",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 34522,
+        "pr_file": "tests/test_voice_max_recording_seconds.py",
+        "discussion_id": "3572515845",
+        "commented_code": "@@ -0,0 +1,32 @@\n+\"\"\"Regression test: voice.max_recording_seconds is actually enforced.\n+\n+Before this fix, ``voice.max_recording_seconds`` was defined in the default\n+config (hermes_cli/config.py) and documented, but no code read it \u2014 the\n+AudioRecorder had no total-length cap, so the setting was dead config. This\n+test pins the enforcement contract on the recorder:\n+\n+* cap disabled (0 / unset) \u2192 never auto-stops on duration (previous behaviour),\n+* cap set to N>0 \u2192 auto-stop condition becomes true once elapsed >= N.\n+\"\"\"\n+from tools.voice_mode import AudioRecorder\n+\n+",
+        "comment_created_at": "2026-07-14T07:04:54+00:00",
+        "comment_author": "Solitud1nem",
+        "comment_body": "Done in `30e66dc72` \u2014 the InputStream-callback test crosses the cap mid-speech (silence branch can't fire) and asserts the one-shot fires exactly once, and the CLI/TUI config assignment is pinned for the valid/zero/bool/garbage matrix. The predicate tests stay as the cheap first line.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3649593233",
+    "pr_number": 67835,
+    "pr_file": "tests/test_install_ps1_browser_stage.py",
+    "created_at": "2026-07-25T05:54:01+00:00",
+    "commented_code": "+\"\"\"Regression tests for the ``browser`` install stage in scripts/install.ps1.\n+\n+Sibling to PR #65701 (``fix(browser): browser tools unusable after Hermes\n+restart -- zombie daemon holds port``).  #65701 fixes a runtime *symptom* --\n+a zombie agent-browser daemon holding a TCP port after Hermes crashes/closes\n+on Windows.  While revalidating that fix on a Windows machine, the previous\n+session traced the *install-flow* root cause: the desktop Update button drives\n+``install.ps1`` per-stage via ``install.ps1 -Stage <name> -NonInteractive -Json``\n+(see ``apps/desktop/electron/bootstrap-runner.ts`` L779), iterating stages\n+emitted by ``install.ps1 -Manifest``.  Because ``$InstallStages`` had no\n+``browser`` entry, ``Install-AgentBrowser`` (the only function that runs\n+``npm install -g --prefix $HERMES_HOME\\\node \"agent-browser@^0.26.0\"`` -- L355)\n+was never invoked by the desktop-driven flow.  A Windows user installing or\n+updating Hermes purely via the desktop GUI therefore keeps falling through to\n+whatever ``agent-browser`` is on their bare PATH (commonly a stale NVM/Node\n+global install at v0.17.1, the version with the zombie bug).  The Linux/macOS\n+equivalent (``scripts/install.sh``'s ``ensure_browser()``) IS in the install\n+flow via ``ensure_mode`` (L2550-2600); the Windows gap was asymmetric.\n+\n+This PR adds a ``browser`` stage to ``$InstallStages`` and a thin\n+``Stage-Browser`` worker that delegates to the existing ``Install-AgentBrowser``\n+function (extend, don't duplicate).\n+\n+These tests are source-level by design:\n+\n+* ``install.ps1`` is Windows-only PowerShell; Linux CI cannot execute it.\n+* The existing ``tests/test_install_ps1_*.py`` family already pins install.ps1\n+  contracts via source-text parsing (see ``test_install_ps1_node_path_for_npm.py``).\n+* The structural assertions below let a CI plant that doesn't run PowerShell\n+  still verify the stage was added with the expected shape, ordering, and\n+  soft-skip-existence for an idempotent upgrade path.\n+\n+The Pester smoke suite at ``scripts/tests/test-install-ps1-stage-protocol.ps1``\n+gains a parallel ``-Manifest`` assertion enquiring that the ``browser`` stage\n+name is present; that's the runtime-side cross-check on Windows.\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import re\n+from pathlib import Path\n+\n+REPO_ROOT = Path(__file__).resolve().parent.parent\n+INSTALL_PS1 = REPO_ROOT / \"scripts\" / \"install.ps1\"\n+\n+\n+def _install_ps1() -> str:",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3649593233",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 67835,
+        "pr_file": "tests/test_install_ps1_browser_stage.py",
+        "discussion_id": "3649593233",
+        "commented_code": "@@ -0,0 +1,316 @@\n+\"\"\"Regression tests for the ``browser`` install stage in scripts/install.ps1.\n+\n+Sibling to PR #65701 (``fix(browser): browser tools unusable after Hermes\n+restart -- zombie daemon holds port``).  #65701 fixes a runtime *symptom* --\n+a zombie agent-browser daemon holding a TCP port after Hermes crashes/closes\n+on Windows.  While revalidating that fix on a Windows machine, the previous\n+session traced the *install-flow* root cause: the desktop Update button drives\n+``install.ps1`` per-stage via ``install.ps1 -Stage <name> -NonInteractive -Json``\n+(see ``apps/desktop/electron/bootstrap-runner.ts`` L779), iterating stages\n+emitted by ``install.ps1 -Manifest``.  Because ``$InstallStages`` had no\n+``browser`` entry, ``Install-AgentBrowser`` (the only function that runs\n+``npm install -g --prefix $HERMES_HOME\\\\node \"agent-browser@^0.26.0\"`` -- L355)\n+was never invoked by the desktop-driven flow.  A Windows user installing or\n+updating Hermes purely via the desktop GUI therefore keeps falling through to\n+whatever ``agent-browser`` is on their bare PATH (commonly a stale NVM/Node\n+global install at v0.17.1, the version with the zombie bug).  The Linux/macOS\n+equivalent (``scripts/install.sh``'s ``ensure_browser()``) IS in the install\n+flow via ``ensure_mode`` (L2550-2600); the Windows gap was asymmetric.\n+\n+This PR adds a ``browser`` stage to ``$InstallStages`` and a thin\n+``Stage-Browser`` worker that delegates to the existing ``Install-AgentBrowser``\n+function (extend, don't duplicate).\n+\n+These tests are source-level by design:\n+\n+* ``install.ps1`` is Windows-only PowerShell; Linux CI cannot execute it.\n+* The existing ``tests/test_install_ps1_*.py`` family already pins install.ps1\n+  contracts via source-text parsing (see ``test_install_ps1_node_path_for_npm.py``).\n+* The structural assertions below let a CI plant that doesn't run PowerShell\n+  still verify the stage was added with the expected shape, ordering, and\n+  soft-skip-existence for an idempotent upgrade path.\n+\n+The Pester smoke suite at ``scripts/tests/test-install-ps1-stage-protocol.ps1``\n+gains a parallel ``-Manifest`` assertion enquiring that the ``browser`` stage\n+name is present; that's the runtime-side cross-check on Windows.\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import re\n+from pathlib import Path\n+\n+REPO_ROOT = Path(__file__).resolve().parent.parent\n+INSTALL_PS1 = REPO_ROOT / \"scripts\" / \"install.ps1\"\n+\n+\n+def _install_ps1() -> str:",
+        "comment_created_at": "2026-07-25T05:54:01+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "Please replace this source-text/regex suite with a behavioral PowerShell fixture that executes `-Stage browser` against an isolated home and controlled npm. These assertions pin implementation shape and do not verify the stage JSON contract or the npm-failure behavior.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3668495237",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 67835,
+        "pr_file": "tests/test_install_ps1_browser_stage.py",
+        "discussion_id": "3649593233",
+        "commented_code": "@@ -0,0 +1,316 @@\n+\"\"\"Regression tests for the ``browser`` install stage in scripts/install.ps1.\n+\n+Sibling to PR #65701 (``fix(browser): browser tools unusable after Hermes\n+restart -- zombie daemon holds port``).  #65701 fixes a runtime *symptom* --\n+a zombie agent-browser daemon holding a TCP port after Hermes crashes/closes\n+on Windows.  While revalidating that fix on a Windows machine, the previous\n+session traced the *install-flow* root cause: the desktop Update button drives\n+``install.ps1`` per-stage via ``install.ps1 -Stage <name> -NonInteractive -Json``\n+(see ``apps/desktop/electron/bootstrap-runner.ts`` L779), iterating stages\n+emitted by ``install.ps1 -Manifest``.  Because ``$InstallStages`` had no\n+``browser`` entry, ``Install-AgentBrowser`` (the only function that runs\n+``npm install -g --prefix $HERMES_HOME\\\\node \"agent-browser@^0.26.0\"`` -- L355)\n+was never invoked by the desktop-driven flow.  A Windows user installing or\n+updating Hermes purely via the desktop GUI therefore keeps falling through to\n+whatever ``agent-browser`` is on their bare PATH (commonly a stale NVM/Node\n+global install at v0.17.1, the version with the zombie bug).  The Linux/macOS\n+equivalent (``scripts/install.sh``'s ``ensure_browser()``) IS in the install\n+flow via ``ensure_mode`` (L2550-2600); the Windows gap was asymmetric.\n+\n+This PR adds a ``browser`` stage to ``$InstallStages`` and a thin\n+``Stage-Browser`` worker that delegates to the existing ``Install-AgentBrowser``\n+function (extend, don't duplicate).\n+\n+These tests are source-level by design:\n+\n+* ``install.ps1`` is Windows-only PowerShell; Linux CI cannot execute it.\n+* The existing ``tests/test_install_ps1_*.py`` family already pins install.ps1\n+  contracts via source-text parsing (see ``test_install_ps1_node_path_for_npm.py``).\n+* The structural assertions below let a CI plant that doesn't run PowerShell\n+  still verify the stage was added with the expected shape, ordering, and\n+  soft-skip-existence for an idempotent upgrade path.\n+\n+The Pester smoke suite at ``scripts/tests/test-install-ps1-stage-protocol.ps1``\n+gains a parallel ``-Manifest`` assertion enquiring that the ``browser`` stage\n+name is present; that's the runtime-side cross-check on Windows.\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import re\n+from pathlib import Path\n+\n+REPO_ROOT = Path(__file__).resolve().parent.parent\n+INSTALL_PS1 = REPO_ROOT / \"scripts\" / \"install.ps1\"\n+\n+\n+def _install_ps1() -> str:",
+        "comment_created_at": "2026-07-28T19:14:01+00:00",
+        "comment_author": "LiteSoul",
+        "comment_body": "Resolved in `cc6c08e83` (amended from `4bb103263` \u2014 same logical content, rebased to incorporate the behavioral test rewrite): The source-text/regex suite has been replaced with behavioral PowerShell coverage in `scripts/tests/test-install-ps1-browser-stage.ps1`. The behavioral suite uses a `-Manifest` dot-source approach: it dot-sources `install.ps1 -Manifest` (which loads all functions then returns control via `exit 0` without running any stages), overrides `Test-Node` and `Install-AgentBrowser` in the same scope (last-definition-wins in PowerShell), then invokes `Stage-Browser` directly and inspects `$script:_StageSkippedReason`. This avoids all real side effects (no npm installs, no PATH writes, no child processes). 8 cases:\n\n- **Node missing** \u2192 `skipped=true` reason mentions Node\n- **disabled_toolsets block form** (`- browser`) \u2192 `skipped=true`, reason mentions config.yaml\n- **disabled_toolsets inline form** (`[browser, memory]`) \u2192 same\n- **complex config** (other agent/model keys before the list) \u2192 same\n- **browser NOT in disabled_toolsets** \u2192 stage proceeds, no skip reason\n- **no config.yaml** (fresh install) \u2192 stage proceeds, no skip reason\n- **npm install failure** \u2192 override `Install-AgentBrowser` to throw, assert `$_StageSkippedReason` is set with the error\n- **manifest shape** \u2192 browser stage present in `$InstallStages`, `category=install`, after node, before configure\n\nThe Python file (`tests/test_install_ps1_browser_stage.py`) is slimmed to 3 host-independent invariants that Linux CI can run without PowerShell:\n1. `browser` stage name exists in `$InstallStages` (structural existence, not shape)\n2. Stage-Browser contains a try/catch that converts npm failures to `_StageSkippedReason` (the npm-failure path also covered behaviorally by the Pester suite, but this invariant is the CI-feasible guard for Linux runners without PowerShell)\n3. install.ps1 stays pure ASCII (regression guard for #66994 / #67000)\n\nAll three focus on behavior contracts / invariants, not implementation shape \u2014 no regex assertions on field ordering or variable name presence.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3588831481",
+    "pr_number": 58047,
+    "pr_file": "tests/plugins/platforms/photon/test_spectrum_patch.py",
+    "created_at": "2026-07-15T15:59:37+00:00",
+    "commented_code": "def test_sidecar_applies_spectrum_patch_before_importing_sdk() -> None:\n     \"\"\"Existing installs should self-heal at runtime, not only during npm postinstall.\"\"\"\n-    index = Path(\"plugins/platforms/photon/sidecar/index.mjs\").read_text(encoding=\"utf-8\")\n+    index = Path(\"plugins/platforms/photon/sidecar/index.mjs\").read_text(\n+        encoding=\"utf-8\"\n+    )\n     assert \"import { patchSpectrumTs }\" in index\n     assert \"patchSpectrumTs();\" in index\n-    assert index.index(\"patchSpectrumTs();\") < index.index('await import(\"spectrum-ts\")')\n+    assert index.index(\"patchSpectrumTs();\") < index.index(\n+        'await import(\"spectrum-ts\")'\n+    )\n+\n+",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3588831481",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 58047,
+        "pr_file": "tests/plugins/platforms/photon/test_spectrum_patch.py",
+        "discussion_id": "3588831481",
+        "commented_code": "@@ -11,17 +12,36 @@\n \n def test_sidecar_applies_spectrum_patch_before_importing_sdk() -> None:\n     \"\"\"Existing installs should self-heal at runtime, not only during npm postinstall.\"\"\"\n-    index = Path(\"plugins/platforms/photon/sidecar/index.mjs\").read_text(encoding=\"utf-8\")\n+    index = Path(\"plugins/platforms/photon/sidecar/index.mjs\").read_text(\n+        encoding=\"utf-8\"\n+    )\n     assert \"import { patchSpectrumTs }\" in index\n     assert \"patchSpectrumTs();\" in index\n-    assert index.index(\"patchSpectrumTs();\") < index.index('await import(\"spectrum-ts\")')\n+    assert index.index(\"patchSpectrumTs();\") < index.index(\n+        'await import(\"spectrum-ts\")'\n+    )\n+\n+",
+        "comment_created_at": "2026-07-15T15:59:37+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "This regression test reads source text instead of exercising startup behavior. `AGENTS.md:1358-1375` bans source-code-reading tests; please replace it with an executable fixture that makes the patcher fail while spectrum-ts remains importable, then verifies the sidecar starts.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3590356328",
+    "pr_number": 59771,
+    "pr_file": "tests/plugins/platforms/photon/test_spectrum_patch.py",
+    "created_at": "2026-07-15T19:57:08+00:00",
+    "commented_code": "assert index.index(\"patchSpectrumTs();\") < index.index('await import(\"spectrum-ts\")')\n \n \n+def test_sidecar_can_start_spectrum_in_local_imessage_mode() -> None:\n+    \"\"\"PHOTON_LOCAL must select local macOS iMessage without project credentials.\"\"\"\n+    index = Path(\"plugins/platforms/photon/sidecar/index.mjs\").read_text(encoding=\"utf-8\")",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3590356328",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 59771,
+        "pr_file": "tests/plugins/platforms/photon/test_spectrum_patch.py",
+        "discussion_id": "3590356328",
+        "commented_code": "@@ -17,6 +17,15 @@ def test_sidecar_applies_spectrum_patch_before_importing_sdk() -> None:\n     assert index.index(\"patchSpectrumTs();\") < index.index('await import(\"spectrum-ts\")')\n \n \n+def test_sidecar_can_start_spectrum_in_local_imessage_mode() -> None:\n+    \"\"\"PHOTON_LOCAL must select local macOS iMessage without project credentials.\"\"\"\n+    index = Path(\"plugins/platforms/photon/sidecar/index.mjs\").read_text(encoding=\"utf-8\")",
+        "comment_created_at": "2026-07-15T19:57:08+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "This checks source text rather than behavior. `AGENTS.md:1358-1379` bans source-reading tests; please replace it with an executable isolated sidecar test that verifies the Spectrum call receives local mode and does not receive Cloud credentials.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3661260724",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 59771,
+        "pr_file": "tests/plugins/platforms/photon/test_spectrum_patch.py",
+        "discussion_id": "3590356328",
+        "commented_code": "@@ -17,6 +17,15 @@ def test_sidecar_applies_spectrum_patch_before_importing_sdk() -> None:\n     assert index.index(\"patchSpectrumTs();\") < index.index('await import(\"spectrum-ts\")')\n \n \n+def test_sidecar_can_start_spectrum_in_local_imessage_mode() -> None:\n+    \"\"\"PHOTON_LOCAL must select local macOS iMessage without project credentials.\"\"\"\n+    index = Path(\"plugins/platforms/photon/sidecar/index.mjs\").read_text(encoding=\"utf-8\")",
+        "comment_created_at": "2026-07-27T22:10:25+00:00",
+        "comment_author": "steveafrost",
+        "comment_body": "Addressed in d748a7c2d. The source-reading patch test was removed; local/cloud provider selection is now exercised through executable behavior tests in test_local_mode.py and test_spectrum_compat.py plus the real Spectrum 12.4 smoke harness. The canonical Photon guide and environment-variable reference now document PHOTON_LOCAL, macOS setup, permissions, and external-sidecar configuration.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3591836653",
+    "pr_number": 63677,
+    "pr_file": "tests/gateway/test_duplicate_reply_suppression.py",
+    "created_at": "2026-07-16T01:02:34+00:00",
+    "commented_code": ")\n \n \n+def test_transformed_final_callsite_requires_confirmed_fresh_delivery():\n+    \"\"\"Production must not treat a failed transformed edit as final delivery.\"\"\"\n+    src = inspect.getsource(GatewayRunner._run_agent_inner)",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3591836653",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 63677,
+        "pr_file": "tests/gateway/test_duplicate_reply_suppression.py",
+        "discussion_id": "3591836653",
+        "commented_code": "@@ -67,6 +69,17 @@ def _make_event(text=\"hello\", chat_id=\"c1\", user_id=\"u1\"):\n     )\n \n \n+def test_transformed_final_callsite_requires_confirmed_fresh_delivery():\n+    \"\"\"Production must not treat a failed transformed edit as final delivery.\"\"\"\n+    src = inspect.getsource(GatewayRunner._run_agent_inner)",
+        "comment_created_at": "2026-07-16T01:02:34+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "`inspect.getsource()` makes this a source-shape test, which AGENTS.md explicitly bans. Replace it with an integration test that drives the transformed-final path and observes confirmed delivery versus failure.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3590234294",
+    "pr_number": 59478,
+    "pr_file": "tests/gateway/test_auto_skill_platform_disabled.py",
+    "created_at": "2026-07-15T19:37:19+00:00",
+    "commented_code": "+\"\"\"Regression test: gateway auto-skill loading must respect the disabled-skill\n+gate (channel_skill_bindings / Telegram DM Topics).\n+\n+`_handle_message_with_agent`'s auto-skill block loads bound skills via\n+`_load_skill_payload` with a raw identifier \u2014 the same bypass class the\n+stacked (#58888) and bundle (#59156) invocation paths had: it skips\n+`get_skill_commands()`'s scan-time disabled filter, so an operator who\n+disables a skill for this platform (or globally) still had its full content\n+injected into every new session bound to that channel/topic.\n+\n+This is an AST invariant pin (mirrors\n+test_10710_auto_reset_evicts_cached_agent.py's approach) rather than a full\n+functional invocation, since `_handle_message_with_agent` requires a large\n+mocked harness (session store, adapters, hooks) unrelated to this check.\n+\"\"\"\n+from __future__ import annotations\n+\n+import ast\n+import inspect\n+\n+from gateway import run as gateway_run\n+\n+\n+def _calls(node: ast.AST) -> set[str]:\n+    \"\"\"Bare-name and attribute call targets invoked anywhere under ``node``.\"\"\"\n+    names: set[str] = set()\n+    for n in ast.walk(node):\n+        if not isinstance(n, ast.Call):\n+            continue\n+        if isinstance(n.func, ast.Attribute):\n+            names.add(n.func.attr)\n+        elif isinstance(n.func, ast.Name):\n+            names.add(n.func.id)\n+    return names\n+\n+\n+def _imported_disabled_check_name(node: ast.AST) -> str | None:\n+    \"\"\"Local bound name for ``agent.skill_utils.get_disabled_skill_names``\n+    imported anywhere under ``node`` (accounts for ``as`` aliasing).\"\"\"\n+    for sub in ast.walk(node):\n+        if isinstance(sub, ast.ImportFrom) and sub.module == \"agent.skill_utils\":\n+            for alias in sub.names:\n+                if alias.name == \"get_disabled_skill_names\":\n+                    return alias.asname or alias.name\n+    return None\n+\n+\n+def test_auto_skill_block_checks_disabled_gate():\n+    \"\"\"The auto-skill loading block in gateway/run.py must re-check\n+    get_disabled_skill_names() before injecting a bound skill's content,\n+    mirroring the stacked (#58888) and bundle (#59156) gates \u2014 otherwise a\n+    skill disabled for this platform (or globally) still auto-loads into\n+    every new session bound to it via channel_skill_bindings / DM Topics.\n+    \"\"\"\n+    tree = ast.parse(inspect.getsource(gateway_run))\n+",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3590234294",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 59478,
+        "pr_file": "tests/gateway/test_auto_skill_platform_disabled.py",
+        "discussion_id": "3590234294",
+        "commented_code": "@@ -0,0 +1,83 @@\n+\"\"\"Regression test: gateway auto-skill loading must respect the disabled-skill\n+gate (channel_skill_bindings / Telegram DM Topics).\n+\n+`_handle_message_with_agent`'s auto-skill block loads bound skills via\n+`_load_skill_payload` with a raw identifier \u2014 the same bypass class the\n+stacked (#58888) and bundle (#59156) invocation paths had: it skips\n+`get_skill_commands()`'s scan-time disabled filter, so an operator who\n+disables a skill for this platform (or globally) still had its full content\n+injected into every new session bound to that channel/topic.\n+\n+This is an AST invariant pin (mirrors\n+test_10710_auto_reset_evicts_cached_agent.py's approach) rather than a full\n+functional invocation, since `_handle_message_with_agent` requires a large\n+mocked harness (session store, adapters, hooks) unrelated to this check.\n+\"\"\"\n+from __future__ import annotations\n+\n+import ast\n+import inspect\n+\n+from gateway import run as gateway_run\n+\n+\n+def _calls(node: ast.AST) -> set[str]:\n+    \"\"\"Bare-name and attribute call targets invoked anywhere under ``node``.\"\"\"\n+    names: set[str] = set()\n+    for n in ast.walk(node):\n+        if not isinstance(n, ast.Call):\n+            continue\n+        if isinstance(n.func, ast.Attribute):\n+            names.add(n.func.attr)\n+        elif isinstance(n.func, ast.Name):\n+            names.add(n.func.id)\n+    return names\n+\n+\n+def _imported_disabled_check_name(node: ast.AST) -> str | None:\n+    \"\"\"Local bound name for ``agent.skill_utils.get_disabled_skill_names``\n+    imported anywhere under ``node`` (accounts for ``as`` aliasing).\"\"\"\n+    for sub in ast.walk(node):\n+        if isinstance(sub, ast.ImportFrom) and sub.module == \"agent.skill_utils\":\n+            for alias in sub.names:\n+                if alias.name == \"get_disabled_skill_names\":\n+                    return alias.asname or alias.name\n+    return None\n+\n+\n+def test_auto_skill_block_checks_disabled_gate():\n+    \"\"\"The auto-skill loading block in gateway/run.py must re-check\n+    get_disabled_skill_names() before injecting a bound skill's content,\n+    mirroring the stacked (#58888) and bundle (#59156) gates \u2014 otherwise a\n+    skill disabled for this platform (or globally) still auto-loads into\n+    every new session bound to it via channel_skill_bindings / DM Topics.\n+    \"\"\"\n+    tree = ast.parse(inspect.getsource(gateway_run))\n+",
+        "comment_created_at": "2026-07-15T19:37:19+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "Please replace this source/AST assertion with a behavioral gateway-path test. `AGENTS.md:1358-1411` explicitly bans tests that read production source because they pin implementation shape rather than proving that disabled auto-skill content is excluded from the emitted turn.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3569255943",
+    "pr_number": 29213,
+    "pr_file": "tests/tools/test_windows_native_support.py",
+    "created_at": "2026-07-13T08:50:38+00:00",
+    "commented_code": "assert 'if sys.platform == \"win32\":' in source\n         # Windows branch uses windows_detach_popen_kwargs\n         assert \"windows_detach_popen_kwargs\" in source\n+\n+\n+# ---------------------------------------------------------------------------\n+# LocalEnvironment Popen \u2014 Windows creationflags must not be passed twice\n+# Regression test for #28920: in 0.14.0, tools/environments/local.py passed\n+# ``creationflags=`` both explicitly AND via ``**_popen_kwargs``, causing\n+# ``TypeError: subprocess.Popen() got multiple values for keyword argument\n+# 'creationflags'`` for every tool invocation on Windows.\n+# ---------------------------------------------------------------------------\n+\n+\n+class TestLocalEnvironmentWindowsCreationFlagsNotDuplicated:\n+    \"\"\"tools/environments/local.py must pass ``creationflags`` exactly once\n+    when running under Windows, regardless of how the Windows branch is\n+    assembled (explicit kwarg vs. ``**_popen_kwargs`` spread).\"\"\"\n+\n+    def test_local_py_source_has_no_duplicate_creationflags(self):\n+        \"\"\"Source-level guard: inside the LocalEnvironment Popen call, the\n+        explicit ``creationflags=...`` line must not coexist with a\n+        ``**_popen_kwargs`` spread that also injects ``creationflags``.\"\"\"\n+        root = Path(__file__).resolve().parents[2]\n+        source = (root / \"tools\" / \"environments\" / \"local.py\").read_text(encoding=\"utf-8\")\n+        builds_kwargs_with_cf = (\n+            '_popen_kwargs = {\"creationflags\": windows_hide_flags()}' in source\n+        )",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3569255943",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 29213,
+        "pr_file": "tests/tools/test_windows_native_support.py",
+        "discussion_id": "3569255943",
+        "commented_code": "@@ -871,3 +871,66 @@ def test_gateway_run_update_has_windows_branch(self):\n         assert 'if sys.platform == \"win32\":' in source\n         # Windows branch uses windows_detach_popen_kwargs\n         assert \"windows_detach_popen_kwargs\" in source\n+\n+\n+# ---------------------------------------------------------------------------\n+# LocalEnvironment Popen \u2014 Windows creationflags must not be passed twice\n+# Regression test for #28920: in 0.14.0, tools/environments/local.py passed\n+# ``creationflags=`` both explicitly AND via ``**_popen_kwargs``, causing\n+# ``TypeError: subprocess.Popen() got multiple values for keyword argument\n+# 'creationflags'`` for every tool invocation on Windows.\n+# ---------------------------------------------------------------------------\n+\n+\n+class TestLocalEnvironmentWindowsCreationFlagsNotDuplicated:\n+    \"\"\"tools/environments/local.py must pass ``creationflags`` exactly once\n+    when running under Windows, regardless of how the Windows branch is\n+    assembled (explicit kwarg vs. ``**_popen_kwargs`` spread).\"\"\"\n+\n+    def test_local_py_source_has_no_duplicate_creationflags(self):\n+        \"\"\"Source-level guard: inside the LocalEnvironment Popen call, the\n+        explicit ``creationflags=...`` line must not coexist with a\n+        ``**_popen_kwargs`` spread that also injects ``creationflags``.\"\"\"\n+        root = Path(__file__).resolve().parents[2]\n+        source = (root / \"tools\" / \"environments\" / \"local.py\").read_text(encoding=\"utf-8\")\n+        builds_kwargs_with_cf = (\n+            '_popen_kwargs = {\"creationflags\": windows_hide_flags()}' in source\n+        )",
+        "comment_created_at": "2026-07-13T08:50:38+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "This file-global text check can fail if an unrelated future call legitimately uses this explicit `creationflags` form. Please remove the source-level guard and rely on the behavioral `_run_bash()` test below, which verifies the relevant call contract without freezing source layout.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3589156839",
+    "pr_number": 58420,
+    "pr_file": "tests/hermes_cli/test_kanban_dispatch_lock.py",
+    "created_at": "2026-07-15T16:45:30+00:00",
+    "commented_code": "assert held_a is True\n         with kb._dispatch_tick_lock(db_path) as held_b:\n             assert held_b is False, \"same-board lock must be exclusive\"\n+\n+\n+def test_held_lock_refreshes_mtime_for_external_watchdogs(conn, tmp_path):\n+    \"\"\"Each successful acquire must advance the lock file's mtime so external\n+    watchdogs (e.g. ``kanban_dispatcher_watchdog.py``) can detect a stuck\n+    dispatcher by mtime-freeze instead of false-positive every TTL.\n+\n+    Regression guard for the post-#50331 follow-up: the original implementation\n+    opened the lock with ``\"a+b\"`` and never wrote to it, so mtime was set only\n+    on first open and froze forever \u2014 making every long-lived dispatcher look\n+    stale to a naive mtime-based watchdog. The fix refreshes mtime inside the\n+    critical section, after flock succeeds.\n+    \"\"\"\n+    import os\n+    import time\n+\n+    db_path = kb.kanban_db_path(board=\"default\")\n+    lock_path = db_path.with_name(db_path.name + \".dispatch.lock\")\n+\n+    mtimes: list[float] = []\n+    # Five sequential acquire/release cycles must yield five distinct mtimes.\n+    # Sleep > filesystem mtime resolution (1s on most filesystems) \u2014 but\n+    # ext4/APFS sub-second resolution supports distinguishing 0.2s gaps.\n+    for _ in range(5):\n+        with kb._dispatch_tick_lock(db_path) as held:\n+            assert held is True\n+            assert lock_path.exists(), \"lock file must be created on acquire\"\n+            mtimes.append(lock_path.stat().st_mtime)\n+            time.sleep(0.2)",
+    "repo_full_name": "NousResearch/hermes-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3589156839",
+        "repo_full_name": "NousResearch/hermes-agent",
+        "pr_number": 58420,
+        "pr_file": "tests/hermes_cli/test_kanban_dispatch_lock.py",
+        "discussion_id": "3589156839",
+        "commented_code": "@@ -101,3 +101,70 @@ def test_reentrant_same_path_lock_is_exclusive(conn):\n         assert held_a is True\n         with kb._dispatch_tick_lock(db_path) as held_b:\n             assert held_b is False, \"same-board lock must be exclusive\"\n+\n+\n+def test_held_lock_refreshes_mtime_for_external_watchdogs(conn, tmp_path):\n+    \"\"\"Each successful acquire must advance the lock file's mtime so external\n+    watchdogs (e.g. ``kanban_dispatcher_watchdog.py``) can detect a stuck\n+    dispatcher by mtime-freeze instead of false-positive every TTL.\n+\n+    Regression guard for the post-#50331 follow-up: the original implementation\n+    opened the lock with ``\"a+b\"`` and never wrote to it, so mtime was set only\n+    on first open and froze forever \u2014 making every long-lived dispatcher look\n+    stale to a naive mtime-based watchdog. The fix refreshes mtime inside the\n+    critical section, after flock succeeds.\n+    \"\"\"\n+    import os\n+    import time\n+\n+    db_path = kb.kanban_db_path(board=\"default\")\n+    lock_path = db_path.with_name(db_path.name + \".dispatch.lock\")\n+\n+    mtimes: list[float] = []\n+    # Five sequential acquire/release cycles must yield five distinct mtimes.\n+    # Sleep > filesystem mtime resolution (1s on most filesystems) \u2014 but\n+    # ext4/APFS sub-second resolution supports distinguishing 0.2s gaps.\n+    for _ in range(5):\n+        with kb._dispatch_tick_lock(db_path) as held:\n+            assert held is True\n+            assert lock_path.exists(), \"lock file must be created on acquire\"\n+            mtimes.append(lock_path.stat().st_mtime)\n+            time.sleep(0.2)",
+        "comment_created_at": "2026-07-15T16:45:30+00:00",
+        "comment_author": "teknium1",
+        "comment_body": "This 0.2-second delay cannot guarantee a distinct `st_mtime` on filesystems with 1-second-or-coarser timestamp resolution, while line 134 requires five distinct values. Please use a deterministic stale-to-fresh assertion (explicitly backdate with `os.utime`, then acquire and assert it advanced) instead of timing sleeps.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

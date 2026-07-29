@@ -11,7 +11,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 32061
 ---
-
+{% raw %}
 When configuring behavior that needs to work across different execution contexts (CI workflows, manual runs, different build systems), prefer environment variables over command-line flags or hardcoded options. Environment variables provide broader compatibility and can be easily overridden without modifying scripts or commands.
 
 Additionally, ensure all environment variables are properly defined and have clear dependencies. Avoid referencing undefined variables or creating confusing variable chains.
@@ -33,3 +33,4 @@ env:
 ```
 
 This approach makes configuration more flexible and allows the same settings to work with different execution methods like `make allunit` or direct test execution.
+{% endraw %}

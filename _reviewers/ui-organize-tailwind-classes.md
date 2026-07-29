@@ -10,7 +10,7 @@ language: TSX
 comments_count: 7
 repository_stars: 90568
 ---
-
+{% raw %}
 Structure your Tailwind CSS classes for readability and maintainability. Instead of long chains of conditional classes with `&&` operators, use object syntax with clear naming patterns. This improves code readability and makes maintenance significantly easier.
 
 **Instead of this:**
@@ -42,3 +42,4 @@ Additional recommendations:
 - Maintain consistent class ordering, with structural classes first, followed by visual styles
 
 These practices make your code more maintainable, easier to review, and better for internationalization.
+{% endraw %}

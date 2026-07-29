@@ -8,7 +8,7 @@ language: Yaml
 comments_count: 4
 repository_stars: 69139
 ---
-
+{% raw %}
 Structure CI workflows to minimize execution time and resource usage through strategic job organization, caching, and elimination of redundant operations.
 
 Key optimization strategies:
@@ -71,3 +71,4 @@ jobs:
 ```
 
 This approach reduces total CI time from sequential execution to parallel execution, with all checks completing in under 30 seconds instead of several minutes.
+{% endraw %}

@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 3
 repository_stars: 26407
 ---
-
+{% raw %}
 When your code depends on GitHub (or other remote) APIs, pagination and per-item mutations are often the dominant performance cost. Structure workflows/scripts to avoid redundant full scans and to prevent N+1 API patterns unless the workload is provably small.
 
 Apply this standard:
@@ -47,3 +47,4 @@ Example pattern (avoid re-paginating; pass `comment_id` forward):
 ```
 
 This reduces execution time, API usage, and flakiness from rate limits—especially across repeated rounds or high-comment PRs.
+{% endraw %}

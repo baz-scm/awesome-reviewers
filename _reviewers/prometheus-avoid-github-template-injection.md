@@ -11,7 +11,7 @@ language: Yaml
 comments_count: 1
 repository_stars: 59616
 ---
-
+{% raw %}
 Avoid using GitHub workflow template expressions `${{ }}` directly in shell commands within `run:` steps, as this can lead to template injection vulnerabilities. Untrusted input like branch names, PR titles, or commit messages can be crafted to execute arbitrary code since GitHub template expansion happens before workflow execution.
 
 Instead, pass GitHub context values through environment variables and use shell variable expansion `${...}` to access them safely. This ensures the values are treated as literal strings rather than executable code.
@@ -29,3 +29,4 @@ Secure alternative:
 ```
 
 This pattern is especially critical for workflows that can be triggered by external contributors or when processing any user-controllable input from GitHub context variables.
+{% endraw %}

@@ -9,7 +9,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 3379
 ---
-
+{% raw %}
 Ensure all configuration dependencies and environment variables are explicitly defined rather than relying on implicit behavior or assumptions. This prevents issues from version drift, missing definitions, or unclear dependencies.
 
 For dependency management, use package manager overrides or explicit version pinning when implicit version ranges could cause compatibility issues:
@@ -30,3 +30,4 @@ env:
 ```
 
 This approach prevents scenarios where dependencies unexpectedly update ("vitest doesn't pin to vite 5.0 so it can easily get updated to 6 when you're not looking") or where required environment variables are referenced but not properly defined ("we also need to make sure it's defined").
+{% endraw %}

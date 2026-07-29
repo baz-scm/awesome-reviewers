@@ -10,7 +10,7 @@ language: TSX
 comments_count: 2
 repository_stars: 23369
 ---
-
+{% raw %}
 Inline objects and functions created within render methods are recreated on every render, causing unnecessary re-renders of child components when passed as props. This impacts performance by triggering component updates even when the actual functionality hasn't changed.
 
 To optimize performance, extract inline objects and functions using memoization techniques:
@@ -37,3 +37,4 @@ const tableLocale = useMemo(() => ({
 ```
 
 This practice prevents unnecessary child component re-renders and improves overall application performance.
+{% endraw %}

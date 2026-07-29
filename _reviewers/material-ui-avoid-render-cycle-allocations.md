@@ -9,7 +9,7 @@ language: JavaScript
 comments_count: 4
 repository_stars: 96063
 ---
-
+{% raw %}
 Creating new objects, arrays, or functions inside a component's render cycle causes unnecessary allocations on every render, which can degrade performance, especially in frequently-rendered components.
 
 For non-derived values that don't depend on props or state:
@@ -39,3 +39,4 @@ function Component() {
 For values derived from props or state, use appropriate memoization with `useMemo` and `useCallback` with correct dependency arrays.
 
 Additionally, when working with DOM updates, prefer direct manipulation of CSS variables over context-driven updates when it provides a performance benefit.
+{% endraw %}

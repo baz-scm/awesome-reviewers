@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 3
 repository_stars: 32864
 ---
-
+{% raw %}
 Hardcoded configuration values scattered throughout codebases create maintenance burdens and increase the risk of inconsistency. Define configuration values (like versions, paths, and feature flags) in a single location and reference them elsewhere.
 
 For build systems and CI workflows:
@@ -39,3 +39,4 @@ jobs:
 ```
 
 This approach makes version updates simpler, reduces errors from inconsistent values, and makes configuration more maintainable. For complex configurations, consider creating a dedicated configuration module that can be imported by other components of the system.
+{% endraw %}

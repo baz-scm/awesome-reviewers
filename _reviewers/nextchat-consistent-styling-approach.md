@@ -11,7 +11,7 @@ language: TSX
 comments_count: 2
 repository_stars: 85721
 ---
-
+{% raw %}
 Maintain consistency in styling approaches within components and across the codebase. Avoid mixing className and inline styles in the same component - choose one approach and stick with it throughout the component. When working with reusable UI library components, keep them generic by using className for styling rather than adding component-specific inline styles that could pollute the library's interface.
 
 For example, instead of mixing approaches:
@@ -40,3 +40,4 @@ Use a consistent approach with className:
 ```
 
 This improves maintainability, keeps styling logic centralized in CSS files, and maintains clean separation between UI library components and application-specific styling.
+{% endraw %}

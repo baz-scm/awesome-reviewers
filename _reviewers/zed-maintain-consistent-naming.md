@@ -11,7 +11,7 @@ language: Other
 comments_count: 3
 repository_stars: 62119
 ---
-
+{% raw %}
 Ensure naming follows consistent patterns throughout the codebase in both style and structure:
 
 1. Use agreed-upon case style for identifiers (e.g., snake_case for functions):
@@ -33,3 +33,4 @@ Ensure naming follows consistent patterns throughout the codebase in both style 
 ```
 
 This consistency improves code readability, makes the codebase more predictable, and reduces cognitive load when writing or reviewing code.
+{% endraw %}

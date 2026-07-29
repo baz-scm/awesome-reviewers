@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 3
 repository_stars: 65138
 ---
-
+{% raw %}
 Ensure configuration values are consistent and properly coordinated across all related files (docker-compose, .env files, initialization scripts, workflows, etc.). Verify that port mappings, environment variables, and tokens don't conflict between files, and provide fallback configurations for critical settings.
 
 Key practices:
@@ -20,7 +20,6 @@ Key practices:
 - Test configuration changes locally to catch startup issues early
 
 Example from discussions:
-{% raw %}
 ```yaml
 # Bad: Port conflict
 ports:
@@ -30,9 +29,7 @@ ports:
 ports:
   - '${CASDOOR_PORT}:${CASDOOR_PORT}'
 ```
-{% endraw %}
 
-{% raw %}
 ```yaml
 # Bad: No fallback
 target_repo_token: ${{ secrets.PAT_FOR_SYNC }}

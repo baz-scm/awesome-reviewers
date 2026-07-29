@@ -9,7 +9,7 @@ language: Yaml
 comments_count: 7
 repository_stars: 74261
 ---
-
+{% raw %}
 When building or modifying CI/CD GitHub Actions workflows, structure them as an explicit DAG of artifact-driven jobs and guard execution to prevent fork/irrelevant-context failures.
 
 **Standards**
@@ -63,3 +63,4 @@ jobs:
 ```
 
 Applying these rules prevents cascading failures on forks, makes workflow behavior predictable, and improves reliability of release automation by validating what you produce before you publish it.
+{% endraw %}

@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 123178
 ---
-
+{% raw %}
 Ensure configuration values use the correct data format expected by target systems and avoid duplication by sourcing from authoritative locations when possible. Mismatched formats can cause runtime failures, while duplicated configurations create maintenance overhead and inconsistency risks.
 
 When configuring external tools or actions, verify the expected input format:
@@ -31,3 +31,4 @@ MAC_DEPLOYMENT_TARGET: "10.15"
 ```
 
 Always validate configuration formats against documentation and test with actual usage to prevent integration issues.
+{% endraw %}

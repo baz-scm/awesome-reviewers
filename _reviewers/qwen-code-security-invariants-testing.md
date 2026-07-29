@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 14
 repository_stars: 26407
 ---
-
+{% raw %}
 Treat CI/workflow security like production security code: define explicit invariants, enforce them defensively, and lock them with executable regression tests—especially in workflows that run in privileged contexts (e.g., pull_request_target) or execute untrusted PR code.
 
 Apply these rules:
@@ -73,3 +73,4 @@ esac
 ```
 
 Run the above as a checklist for every security-critical workflow change: if you can’t test the invariant, you don’t truly have one.
+{% endraw %}

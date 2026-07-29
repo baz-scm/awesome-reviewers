@@ -9,7 +9,7 @@ language: Other
 comments_count: 2
 repository_stars: 44898
 ---
-
+{% raw %}
 When creating plugin outlets or extension points, avoid exposing entire component instances, controllers, or large objects. Instead, pass explicit, minimal arguments that represent only the data and actions that plugins actually need.
 
 Exposing entire objects makes them part of the public API, making future refactoring difficult and creating tight coupling between internal implementation and external consumers.
@@ -51,3 +51,4 @@ Exposing entire objects makes them part of the public API, making future refacto
 ```
 
 This approach creates stable, documented interfaces that can evolve independently of internal implementation changes.
+{% endraw %}

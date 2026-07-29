@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 1
 repository_stars: 45532
 ---
-
+{% raw %}
 Always apply the principle of least privilege when configuring access tokens for CI/CD workflows and other automated processes. Use fine-grained tokens or permissions that grant only the minimum necessary access required for the specific operations. 
 
 For example, if a GitHub workflow only needs to trigger actions in a specific repository, limit the token's scope to just that repository and only the "Actions (Read and write)" permission:
@@ -28,3 +28,4 @@ For example, if a GitHub workflow only needs to trigger actions in a specific re
 ```
 
 This reduces the security risk if tokens are ever compromised by limiting the potential impact of a security breach. When using service accounts or tokens in any context, document the exact permissions granted and regularly audit them to ensure they remain appropriate.
+{% endraw %}

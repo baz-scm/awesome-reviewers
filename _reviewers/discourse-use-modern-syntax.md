@@ -11,7 +11,7 @@ language: Other
 comments_count: 5
 repository_stars: 44898
 ---
-
+{% raw %}
 Adopt modern JavaScript and Ember syntax patterns instead of legacy approaches to improve code readability and maintainability.
 
 Key modern patterns to use:
@@ -59,3 +59,4 @@ const lastWord = words.at(-1);
 ```
 
 These modern syntax patterns are now well-supported and provide cleaner, more expressive code that aligns with current JavaScript and Ember best practices.
+{% endraw %}

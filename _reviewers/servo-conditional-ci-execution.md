@@ -8,7 +8,7 @@ language: Yaml
 comments_count: 5
 repository_stars: 32962
 ---
-
+{% raw %}
 Use appropriate conditional statements in CI workflows to ensure steps execute under the right circumstances and handle different environments gracefully.
 
 Key practices:
@@ -35,3 +35,4 @@ Example from the discussions:
 ```
 
 This approach prevents workflow failures due to missing infrastructure, ensures proper cleanup, and optimizes resource usage by skipping unnecessary steps on different runner types.
+{% endraw %}

@@ -10,7 +10,7 @@ language: Html
 comments_count: 2
 repository_stars: 57769
 ---
-
+{% raw %}
 Systematically organize HTML elements by adding appropriate accessibility attributes (aria-label, role) to improve code structure and semantic clarity. Place accessibility attributes immediately after class attributes for consistent code organization and enhanced readability.
 
 When working with semantic HTML elements like headings and images, ensure each element includes descriptive accessibility attributes that clearly identify their purpose and content. This creates more organized, self-documenting code that follows accessibility best practices.
@@ -27,3 +27,4 @@ Example:
 ```
 
 This approach ensures consistent attribute organization while making the code more accessible and maintainable.
+{% endraw %}

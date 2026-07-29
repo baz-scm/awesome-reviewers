@@ -9,7 +9,7 @@ language: Markdown
 comments_count: 4
 repository_stars: 83580
 ---
-
+{% raw %}
 Ensure all code examples are complete, functional, and accurately demonstrate the intended concepts. Code examples should include all necessary imports, variable declarations, and interactive elements to be self-contained and runnable.
 
 Key requirements:
@@ -40,3 +40,4 @@ Example of a complete code example:
 ```
 
 This approach helps developers understand the full context and makes examples immediately usable for learning and testing.
+{% endraw %}

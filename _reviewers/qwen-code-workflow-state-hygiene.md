@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 11
 repository_stars: 26407
 ---
-
+{% raw %}
 CI/CD workflows should enforce *state invariants* across steps, runs, and runners: later steps must only execute when earlier phases truly produced a valid outcome, and all per-run state must be cleaned/flushed and permission-safe—especially on persistent self-hosted runners.
 
 Apply these rules:
@@ -55,3 +55,4 @@ chmod -R u+rwX "$GITHUB_WORKSPACE" || true
 - Ensure that `concurrency.group` logic matches the job’s runnable triggers; otherwise one command (e.g., `/verify`) can displace another (e.g., `/triage`).
 
 If your workflow cannot be proven under: (a) cancellations, (b) persistent runner reuse, (c) cache misses, and (d) permission/mode changes, it’s a CI reliability issue—fix it with the invariants above before merging.
+{% endraw %}

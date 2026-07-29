@@ -9,7 +9,7 @@ language: Markdown
 comments_count: 7
 repository_stars: 68825
 ---
-
+{% raw %}
 Ensure documentation adheres to established style guidelines and technical standards:
 
 1. **Use proper terminology and formatting:**
@@ -42,3 +42,4 @@ Ensure documentation adheres to established style guidelines and technical stand
    - Don't mention removed options in documentation
    - Provide clear alternatives for deprecated functionality
    - Add breaking change notices when documenting removed features
+{% endraw %}

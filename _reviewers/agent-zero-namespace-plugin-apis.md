@@ -12,7 +12,7 @@ language: Python
 comments_count: 4
 repository_stars: 17612
 ---
-
+{% raw %}
 When exposing data to the client, treat shared/global values and plugin routes as explicit API surface:
 
 1) Don’t publish global client/window state by sprinkling ad-hoc dictionaries into multiple unrelated API handlers. Instead, use one centralized mechanism:
@@ -38,3 +38,4 @@ Example (route mounting concept):
 # core router bootstrap
 register_routes(prefix=f"/plugins/{plugin_name}", handlers=plugin_handlers)
 ```
+{% endraw %}

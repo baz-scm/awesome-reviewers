@@ -10,7 +10,7 @@ language: Other
 comments_count: 2
 repository_stars: 37192
 ---
-
+{% raw %}
 Configuration values should provide sensible defaults while remaining adaptable to different environments and deployment contexts. Use conditional assignment and guards to handle variations in runtime environments, deployment tools, and system configurations.
 
 For build configurations, use conditional assignment to allow environment-specific overrides:
@@ -30,3 +30,4 @@ For template configurations, add guards around optional values that may not be a
 ```
 
 This approach ensures configurations work reliably across different deployment methods (helm install, helm template, istioctl) and system environments without requiring manual intervention or causing failures when optional values are missing.
+{% endraw %}

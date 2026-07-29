@@ -9,7 +9,7 @@ language: TSX
 comments_count: 1
 repository_stars: 2582
 ---
-
+{% raw %}
 When generating and inserting HTML or CSS as raw strings, treat it as untrusted input and avoid direct injection into the DOM. Constructing <style> tags or innerHTML from dynamic values can enable XSS if any part of those values is attacker-controlled.
 
 Guidance:
@@ -36,3 +36,4 @@ const safe = DOMPurify.sanitize(styles, {ALLOWED_TAGS: ['style'], ALLOWED_ATTR: 
 return <style dangerouslySetInnerHTML={{ __html: safe }} />; // include comment why injection is necessary
 
 Why this matters: Unescaped or unsanitized content inserted into the DOM can enable XSS or CSS injections. Using safe APIs, validation, or vetted sanitization prevents class of security vulnerabilities and makes intent explicit during code review.
+{% endraw %}

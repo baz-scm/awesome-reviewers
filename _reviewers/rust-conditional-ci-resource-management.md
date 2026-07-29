@@ -9,7 +9,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 105254
 ---
-
+{% raw %}
 Configure CI workflows to intelligently manage system resources through conditional execution rather than duplicating steps. Use matrix variables or job conditions to determine when resource-intensive operations should run.
 
 For resource monitoring tasks (like disk usage checks), define a condition that prevents redundant execution:
@@ -34,3 +34,4 @@ runners:
 ```
 
 This approach keeps workflows maintainable by avoiding duplicative steps, makes resource constraints visible, and ensures consistent behavior across different execution environments.
+{% endraw %}

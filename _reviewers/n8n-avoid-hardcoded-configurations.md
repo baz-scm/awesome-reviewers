@@ -9,7 +9,7 @@ language: Other
 comments_count: 2
 repository_stars: 122978
 ---
-
+{% raw %}
 Never hardcode environment-specific values or feature states directly in your code. Instead, use environment variables, configuration files, or feature flag systems to manage these values dynamically.
 
 For environment URLs:
@@ -33,3 +33,4 @@ For feature flags and UI components:
 ```
 
 Hardcoded configurations are difficult to maintain, lead to environment-specific bugs, and can result in misleading UI elements for users. Always retrieve configuration values from the appropriate source at runtime to ensure your application behaves correctly across all environments and user scenarios.
+{% endraw %}

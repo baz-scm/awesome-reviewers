@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 6
 repository_stars: 24377
 ---
-
+{% raw %}
 Maintain consistent dependency management practices across CI workflows to ensure reliable builds and tests. Use the same tool (e.g., UV, PDM) throughout workflows and specify Python versions explicitly. Avoid redundant dependency specifications when dependencies are already included in other groups.
 
 Example:
@@ -25,3 +25,4 @@ Example:
 ```
 
 When installing dependencies, verify that you're not specifying extras that are already included in other groups. Keep tool configurations as close as possible to the upstream project's CI when working with third-party integrations.
+{% endraw %}

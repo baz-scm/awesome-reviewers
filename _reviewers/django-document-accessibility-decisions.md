@@ -10,7 +10,7 @@ language: Html
 comments_count: 3
 repository_stars: 84182
 ---
-
+{% raw %}
 When implementing HTML templates, add clear comments documenting accessibility-related decisions. Explain the purpose of semantic HTML elements, ARIA attributes, and screen reader considerations. This ensures that future developers understand the rationale behind these choices and preserves accessibility during code modifications.
 
 For example:
@@ -18,7 +18,7 @@ For example:
 <!-- Using <nav> with aria-labelledby provides better semantic structure for screen readers -->
 <!-- Visually hidden heading allows screen reader navigation via headers while remaining invisible -->
 <nav class="paginator" aria-labelledby="pagination">
-    <h2 id="pagination" class="visually-hidden">{%raw%}{% blocktranslate with name=opts.verbose_name %}Pagination {{ name }} entries{% endblocktranslate %}{%endraw%}</h2>
+    <h2 id="pagination" class="visually-hidden">{% blocktranslate with name=opts.verbose_name %}Pagination {{ name }} entries{% endblocktranslate %}</h2>
     <!-- Pagination content... -->
 </nav>
 
@@ -30,3 +30,4 @@ For example:
 ```
 
 This documentation practice helps maintain accessibility standards by explaining design choices, translation considerations, and how both visual and screen reader users will experience the interface.
+{% endraw %}

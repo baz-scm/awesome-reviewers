@@ -10,7 +10,7 @@ language: Markdown
 comments_count: 1
 repository_stars: 136312
 ---
-
+{% raw %}
 Don’t trust “sandboxed” templating when any part of template text (or dangerous expressions) can be influenced by an untrusted party. For security-sensitive code, assume Jinja2 (and similar template engines) is dangerous with untrusted inputs and enforce strict trust boundaries.
 
 Apply this rule:
@@ -36,3 +36,4 @@ def render_welcome(template_id: str, user_name: str) -> str:
     return tmpl.render(name=user_name)
 ```
 If your system needs to accept user-provided templates, require additional hardening and security review rather than assuming Jinja2 sandboxing is sufficient.
+{% endraw %}

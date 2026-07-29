@@ -14,7 +14,7 @@ language: Yaml
 comments_count: 12
 repository_stars: 220912
 ---
-
+{% raw %}
 All CI workflows must be syntactically valid, reliably triggered, and logically non-redundant.
 
 Apply these rules:
@@ -39,3 +39,4 @@ Example (pin comment matches intent):
 ```
 Example (sanity on triggers):
 - Only ignore files/directories if they truly contain no executable/code paths required for CI, and only reference branches that exist in the repository.
+{% endraw %}

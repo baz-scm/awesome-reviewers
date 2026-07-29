@@ -12,7 +12,7 @@ language: Yaml
 comments_count: 4
 repository_stars: 8267
 ---
-
+{% raw %}
 Control GitHub Actions workflow execution to avoid infinite loops and unnecessary builds. Implement these practices:
 
 1. **Add `paths-ignore` filters** for generated files that might trigger the workflow again:
@@ -56,3 +56,4 @@ on:
 ```
 
 These practices ensure your workflows run only when needed and operate on the correct code, preventing wasteful CI resources and confusing version history.
+{% endraw %}

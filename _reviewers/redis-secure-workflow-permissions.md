@@ -13,7 +13,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 74261
 ---
-
+{% raw %}
 Apply two security practices to GitHub Actions workflows:
 
 1) Enforce least privilege
@@ -45,3 +45,4 @@ jobs:
           # ./utils/releasetools/01_create_tarball.sh "${RELEASE_TAG}"
 ```
 This reduces blast radius (least privilege) and mitigates shell-injection risk when dynamic workflow outputs are consumed by bash.
+{% endraw %}

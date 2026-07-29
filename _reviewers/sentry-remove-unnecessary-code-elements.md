@@ -13,7 +13,7 @@ language: TSX
 comments_count: 5
 repository_stars: 41297
 ---
-
+{% raw %}
 Keep code clean and maintainable by removing unnecessary elements. This includes:
 
 1. Omit type annotations when TypeScript can infer them:
@@ -52,3 +52,4 @@ const StyledLoadingIndicator = styled(LoadingIndicator)`
 ```
 
 Following these practices improves code readability and maintains consistent patterns across the codebase.
+{% endraw %}

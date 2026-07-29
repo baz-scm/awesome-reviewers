@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 3
 repository_stars: 15064
 ---
-
+{% raw %}
 Design configurations that work consistently across different environments without requiring environment-specific modifications. Configurations should be parameterized and adaptable to various deployment contexts (development, production, air-gapped environments).
 
 Key practices:
@@ -42,3 +42,4 @@ imageOptions:
   - source: internal  # For air-gapped environments
   - source: external  # For internet-connected environments
 ```
+{% endraw %}

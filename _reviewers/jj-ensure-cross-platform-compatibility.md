@@ -9,7 +9,7 @@ language: Toml
 comments_count: 2
 repository_stars: 21171
 ---
-
+{% raw %}
 When creating configuration files and build tasks, prioritize cross-platform compatibility by avoiding shell-specific syntax and considering how tools discover their configuration files across different environments.
 
 Key considerations:
@@ -31,3 +31,4 @@ run = "uv run codespell"
 ```
 
 This approach ensures your development environment works consistently for all team members regardless of their operating system, reducing setup friction and debugging time spent on platform-specific issues.
+{% endraw %}

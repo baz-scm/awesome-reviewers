@@ -10,7 +10,7 @@ language: TSX
 comments_count: 4
 repository_stars: 23369
 ---
-
+{% raw %}
 Move all inline styles to dedicated CSS/SCSS files to improve maintainability, consistency, and separation of concerns. Inline styles make components harder to maintain, reduce reusability, and violate the principle of separating presentation from logic.
 
 Instead of using inline styles:
@@ -65,3 +65,4 @@ Create proper CSS classes:
 ```
 
 This approach enables better theming, easier maintenance, improved performance through CSS caching, and cleaner component code that focuses on logic rather than presentation details.
+{% endraw %}

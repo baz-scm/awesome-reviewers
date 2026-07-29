@@ -12,7 +12,7 @@ language: Yaml
 comments_count: 4
 repository_stars: 122978
 ---
-
+{% raw %}
 When working with GitHub Actions workflows, follow these configuration best practices:
 
 1. **Boolean inputs comparison**: GitHub Actions boolean inputs are actually strings. Always use string comparison with quotes:
@@ -45,3 +45,4 @@ branch: 'chore/openapi-sync-${{ github.run_id }}-${{ github.run_attempt }}'
 ```
 
 These practices improve security, reliability, and maintainability of workflow configurations.
+{% endraw %}

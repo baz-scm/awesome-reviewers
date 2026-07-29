@@ -11,7 +11,7 @@ language: TSX
 comments_count: 6
 repository_stars: 26407
 ---
-
+{% raw %}
 When building React “action slot” containers (inline vs overflow menus, responsive headers, hold/click controls), enforce these invariants:
 
 1) **Preserve host mount semantics**
@@ -66,3 +66,4 @@ function OverflowMenu({ children }: { children: React.ReactNode }) {
 ```
 
 Applying these rules prevents: duplicated subscriptions (double mount), broken menu roles/keyboard behavior (raw children), invalid DOM prop application to Fragments, click-proxy failures from missing prop forwarding, and interaction bugs from DOM identity changes during state transitions.
+{% endraw %}

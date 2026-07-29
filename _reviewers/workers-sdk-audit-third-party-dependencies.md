@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 1
 repository_stars: 3379
 ---
-
+{% raw %}
 Before using third-party actions, libraries, or dependencies that require access to sensitive data (tokens, secrets, credentials), conduct a thorough security audit. Third-party code, especially when source is obfuscated or built/compiled, poses significant security risks when granted access to sensitive resources.
 
 Key evaluation steps:
@@ -33,3 +33,4 @@ Example from GitHub Actions:
 ```
 
 When in doubt, prioritize security over convenience by maintaining direct control over code that accesses sensitive resources.
+{% endraw %}

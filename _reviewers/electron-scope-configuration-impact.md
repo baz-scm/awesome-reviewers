@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 117644
 ---
-
+{% raw %}
 When implementing configuration settings, carefully consider and limit their scope to prevent unintended broad impact across systems or workflows. Configuration changes should be targeted and controlled rather than applied globally when only specific contexts require them.
 
 For example, instead of enabling debugging for all pipelines:
@@ -35,3 +35,4 @@ if (labels.length >= 5) {
 ```
 
 This approach ensures configuration changes remain predictable and don't inadvertently affect unrelated parts of the system.
+{% endraw %}

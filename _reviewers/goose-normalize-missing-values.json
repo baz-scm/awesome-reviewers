@@ -1,0 +1,158 @@
+[
+  {
+    "discussion_id": "3552816514",
+    "pr_number": 10340,
+    "pr_file": "crates/goose-provider-types/src/formats/google.rs",
+    "created_at": "2026-07-09T15:47:18+00:00",
+    "commented_code": "Ok(result) => {\n                             let mut tool_content = Vec::new();\n                             for content in result.content.iter().map(|c| c.raw.clone()) {\n-                                match content {\n+                                // Forward images and binary embedded-resource\n+                                // blobs to inline_data by mime type. Other\n+                                // content falls back to text.\n+                                let inline = match &content {\n                                     RawContent::Image(image) => {\n-                                        parts.push(json!({\n-                                            \"inline_data\": {\n-                                                \"mime_type\": image.mime_type,\n-                                                \"data\": image.data,\n-                                            }\n-                                        }));\n-                                    }\n-                                    _ => {\n-                                        tool_content.push(content.no_annotation());\n+                                        Some((image.mime_type.clone(), image.data.clone()))\n                                     }\n+                                    RawContent::Resource(embedded) => match &embedded.resource {\n+                                        ResourceContents::BlobResourceContents {\n+                                            blob,\n+                                            mime_type,\n+                                            ..\n+                                        } => Some((\n+                                            mime_type.clone().unwrap_or_else(|| {\n+                                                \"application/octet-stream\".to_string()\n+                                            }),",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3552962936",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 10340,
+        "pr_file": "crates/goose-provider-types/src/formats/google.rs",
+        "discussion_id": "3552816514",
+        "commented_code": "@@ -146,18 +147,37 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {\n                         Ok(result) => {\n                             let mut tool_content = Vec::new();\n                             for content in result.content.iter().map(|c| c.raw.clone()) {\n-                                match content {\n+                                // Forward images and binary embedded-resource\n+                                // blobs to inline_data by mime type. Other\n+                                // content falls back to text.\n+                                let inline = match &content {\n                                     RawContent::Image(image) => {\n-                                        parts.push(json!({\n-                                            \"inline_data\": {\n-                                                \"mime_type\": image.mime_type,\n-                                                \"data\": image.data,\n-                                            }\n-                                        }));\n-                                    }\n-                                    _ => {\n-                                        tool_content.push(content.no_annotation());\n+                                        Some((image.mime_type.clone(), image.data.clone()))\n                                     }\n+                                    RawContent::Resource(embedded) => match &embedded.resource {\n+                                        ResourceContents::BlobResourceContents {\n+                                            blob,\n+                                            mime_type,\n+                                            ..\n+                                        } => Some((\n+                                            mime_type.clone().unwrap_or_else(|| {\n+                                                \"application/octet-stream\".to_string()\n+                                            }),",
+        "comment_created_at": "2026-07-09T15:47:18+00:00",
+        "comment_author": "thinkmore-eric",
+        "comment_body": "\"The effective set of supported types is subject to change and can vary based on the specific model and tokenizer version in use\" -- https://ai.google.dev/gemini-api/docs/file-input-methods ... we should not limit the mime types, but I take the point that the default should not be unsupported. \r\n\r\nHowever, this makes it a tougher call because MCP does not, itself, require mime-type for blobs. But at least we can say -- it supports tools that return supported mime types, and does not allow resource blobs without mime types in that case.\r\n\r\nI will update this to at least fail the tool call if the mime type isn't provided (though the spec does not require it) so it doesn't poison the context contents. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3648289165",
+    "pr_number": 10649,
+    "pr_file": "crates/goose/src/acp/server/load_session.rs",
+    "created_at": "2026-07-24T21:45:42+00:00",
+    "commented_code": ".data(format!(\"Session not found: {}\", session_id_str))\n             })?;\n \n+        if args.cwd != session.working_dir {\n+            validate_absolute_cwd(&args.cwd)?;\n+        }\n+\n         session = self\n             .prepare_session_for_activation(session, args.cwd.clone(), args.mcp_servers, true)\n             .await?;\n \n         replay_conversation_to_client(cx, &session, self.supports_goose_custom_notifications())?;\n-        let (agent, extension_results) = self.prepare_acp_session_agent(cx, &session).await?;\n-        self.apply_session_recipe(&agent, &session).await?;\n-        self.register_acp_session(session_id_str.clone(), agent.clone())\n-            .await;\n-\n-        session = self\n-            .session_manager\n-            .get_session(&session_id_str, true)\n-            .await\n-            .internal_err_ctx(\"Failed to reload session\")?;\n \n-        agent\n-            .extension_manager\n-            .update_working_dir(&session.working_dir)\n-            .await;\n+        // Defer agent and extension activation when the stored working directory is\n+        // missing. Starting stdio MCP servers here would spawn them against the goose\n+        // process directory (child_process_client skips current_dir when the path is\n+        // absent), launching against the wrong root before the user can repoint. The\n+        // agent activates lazily once the directory exists, via\n+        // session/update-working-dir or the next prompt.\n+        let working_dir_missing = !session.working_dir.exists() || !session.working_dir.is_dir();\n+\n+        let extension_results = if working_dir_missing {\n+            Vec::new()",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3648336158",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 10649,
+        "pr_file": "crates/goose/src/acp/server/load_session.rs",
+        "discussion_id": "3648289165",
+        "commented_code": "@@ -197,26 +197,45 @@ impl GooseAcpAgent {\n                     .data(format!(\"Session not found: {}\", session_id_str))\n             })?;\n \n+        if args.cwd != session.working_dir {\n+            validate_absolute_cwd(&args.cwd)?;\n+        }\n+\n         session = self\n             .prepare_session_for_activation(session, args.cwd.clone(), args.mcp_servers, true)\n             .await?;\n \n         replay_conversation_to_client(cx, &session, self.supports_goose_custom_notifications())?;\n-        let (agent, extension_results) = self.prepare_acp_session_agent(cx, &session).await?;\n-        self.apply_session_recipe(&agent, &session).await?;\n-        self.register_acp_session(session_id_str.clone(), agent.clone())\n-            .await;\n-\n-        session = self\n-            .session_manager\n-            .get_session(&session_id_str, true)\n-            .await\n-            .internal_err_ctx(\"Failed to reload session\")?;\n \n-        agent\n-            .extension_manager\n-            .update_working_dir(&session.working_dir)\n-            .await;\n+        // Defer agent and extension activation when the stored working directory is\n+        // missing. Starting stdio MCP servers here would spawn them against the goose\n+        // process directory (child_process_client skips current_dir when the path is\n+        // absent), launching against the wrong root before the user can repoint. The\n+        // agent activates lazily once the directory exists, via\n+        // session/update-working-dir or the next prompt.\n+        let working_dir_missing = !session.working_dir.exists() || !session.working_dir.is_dir();\n+\n+        let extension_results = if working_dir_missing {\n+            Vec::new()",
+        "comment_created_at": "2026-07-24T21:45:42+00:00",
+        "comment_author": "kojiromike",
+        "comment_body": "Fixed in 8527c5256 by centralizing the guard: `get_session_agent` now calls `ensure_working_dir_present` immediately before `activate_acp_session`, returning the structured `working_dir_missing` error, so every lazily activating endpoint (tools/list, MCP app read/call, resources, extensions) is covered without per-endpoint patches. Already-active sessions still short-circuit to the cached agent. `on_update_working_dir` updates and reloads the stored dir before calling `get_session_agent`, so repointing activates against the new valid dir as before. `on_prompt`'s explicit pre-check is retained deliberately \u2014 it covers the distinct active-session-then-dir-deleted case where the cached agent skips the activation guard. New integration test: deferred session's tools/list returns the structured error without activating; after repoint it succeeds.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3348843734",
+    "pr_number": 9580,
+    "pr_file": "crates/goose/src/config/declarative_providers.rs",
+    "created_at": "2026-06-03T13:55:49+00:00",
+    "commented_code": "String::new()\n     };\n \n+    // Use 0 as \"not configured\" sentinel for context_limit.\n+    // The catalog / canonical / known_models fallback chain in\n+    // normalize_model_config will fill in the real value later.\n+    // Using 0 avoids ambiguity with real 128k limits (the old sentinel).\n     let model_infos: Vec<ModelInfo> = params\n         .models\n         .into_iter()\n-        .map(|name| ModelInfo::new(name, 128000))\n+        .map(|name| ModelInfo::new(name, 0))",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3349050386",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 9580,
+        "pr_file": "crates/goose/src/config/declarative_providers.rs",
+        "discussion_id": "3348843734",
+        "commented_code": "@@ -289,10 +289,14 @@ pub fn create_custom_provider(\n         String::new()\n     };\n \n+    // Use 0 as \"not configured\" sentinel for context_limit.\n+    // The catalog / canonical / known_models fallback chain in\n+    // normalize_model_config will fill in the real value later.\n+    // Using 0 avoids ambiguity with real 128k limits (the old sentinel).\n     let model_infos: Vec<ModelInfo> = params\n         .models\n         .into_iter()\n-        .map(|name| ModelInfo::new(name, 128000))\n+        .map(|name| ModelInfo::new(name, 0))",
+        "comment_created_at": "2026-06-03T13:55:49+00:00",
+        "comment_author": "shafqatevo",
+        "comment_body": "Fixed in 67b981f6f.\r\n\r\nAdded `Some(0) \u2192 None` normalization at the start of `normalize_model_config`. Without this, the 0 sentinel from `create_custom_provider` leaked through the entire fallback chain:\r\n\r\n- `known_models` step: `is_none()` returns false for `Some(0)` \u2192 skips\r\n- `with_canonical_limits`: `is_none()` returns false \u2192 skips\r\n- Result: `context_limit` stays at 0\r\n\r\nNow `Some(0)` is normalized to `None` upfront, so all downstream guards (`is_none()`, `> 0`) work correctly. Providers without a `catalog_provider_id` will hit the canonical or known_models fallbacks as intended, and `context_limit()` returns `unwrap_or(DEFAULT_CONTEXT_LIMIT)` (128k) when nothing matches.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3350069637",
+    "pr_number": 9580,
+    "pr_file": "crates/goose/src/config/declarative_providers.rs",
+    "created_at": "2026-06-03T16:19:55+00:00",
+    "commented_code": "String::new()\n     };\n \n+    // Use 0 as \"not configured\" sentinel for context_limit.\n+    // The catalog / canonical / known_models fallback chain in\n+    // normalize_model_config will fill in the real value later.\n+    // Using 0 avoids ambiguity with real 128k limits (the old sentinel).\n     let model_infos: Vec<ModelInfo> = params\n         .models\n         .into_iter()\n-        .map(|name| ModelInfo::new(name, 128000))\n+        .map(|name| ModelInfo::new(name, 0))",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3350173432",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 9580,
+        "pr_file": "crates/goose/src/config/declarative_providers.rs",
+        "discussion_id": "3350069637",
+        "commented_code": "@@ -289,10 +289,14 @@ pub fn create_custom_provider(\n         String::new()\n     };\n \n+    // Use 0 as \"not configured\" sentinel for context_limit.\n+    // The catalog / canonical / known_models fallback chain in\n+    // normalize_model_config will fill in the real value later.\n+    // Using 0 avoids ambiguity with real 128k limits (the old sentinel).\n     let model_infos: Vec<ModelInfo> = params\n         .models\n         .into_iter()\n-        .map(|name| ModelInfo::new(name, 128000))\n+        .map(|name| ModelInfo::new(name, 0))",
+        "comment_created_at": "2026-06-03T16:19:55+00:00",
+        "comment_author": "shafqatevo",
+        "comment_body": "Fixed in acff2353c.\n\nAdded `#[serde(default, skip_serializing_if = \"is_zero_usize\")]` to `ModelInfo.context_limit` in `crates/goose/src/providers/base.rs`. When `create_custom_provider` writes the JSON config, `context_limit: 0` is now omitted. The `#[serde(default)]` ensures backward compatibility \u2014 existing JSON files with missing `context_limit` deserialize to 0, and existing files with explicit `\"context_limit\": 0` still work.\n\nThis means the desktop UI chat token-limit loader never sees the 0 sentinel, so it uses the canonical/catalog path instead of falling back to 128k.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3350195995",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 9580,
+        "pr_file": "crates/goose/src/config/declarative_providers.rs",
+        "discussion_id": "3350069637",
+        "commented_code": "@@ -289,10 +289,14 @@ pub fn create_custom_provider(\n         String::new()\n     };\n \n+    // Use 0 as \"not configured\" sentinel for context_limit.\n+    // The catalog / canonical / known_models fallback chain in\n+    // normalize_model_config will fill in the real value later.\n+    // Using 0 avoids ambiguity with real 128k limits (the old sentinel).\n     let model_infos: Vec<ModelInfo> = params\n         .models\n         .into_iter()\n-        .map(|name| ModelInfo::new(name, 128000))\n+        .map(|name| ModelInfo::new(name, 0))",
+        "comment_created_at": "2026-06-03T16:23:05+00:00",
+        "comment_author": "shafqatevo",
+        "comment_body": "Fixed in acff2353c.\n\nAdded `#[serde(default, skip_serializing_if = \"is_zero_usize\")]` to `ModelInfo.context_limit` in `crates/goose/src/providers/base.rs`. When `create_custom_provider` writes the JSON config, `context_limit: 0` is now omitted from serialization. The `#[serde(default)]` ensures backward compatibility \u2014 existing JSON with missing `context_limit` deserializes to 0, and files with explicit `\"context_limit\": 0` still read correctly.\n\nThis means the desktop UI chat token-limit loader never sees the zero sentinel in the JSON, so it follows the canonical/catalog path instead of falling back to the 128k default.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3350204143",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 9580,
+        "pr_file": "crates/goose/src/config/declarative_providers.rs",
+        "discussion_id": "3350069637",
+        "commented_code": "@@ -289,10 +289,14 @@ pub fn create_custom_provider(\n         String::new()\n     };\n \n+    // Use 0 as \"not configured\" sentinel for context_limit.\n+    // The catalog / canonical / known_models fallback chain in\n+    // normalize_model_config will fill in the real value later.\n+    // Using 0 avoids ambiguity with real 128k limits (the old sentinel).\n     let model_infos: Vec<ModelInfo> = params\n         .models\n         .into_iter()\n-        .map(|name| ModelInfo::new(name, 128000))\n+        .map(|name| ModelInfo::new(name, 0))",
+        "comment_created_at": "2026-06-03T16:24:19+00:00",
+        "comment_author": "shafqatevo",
+        "comment_body": "Fixed in acff2353c.\n\nAdded `#[serde(default, skip_serializing_if = \"is_zero_usize\")]` to `ModelInfo.context_limit` in `crates/goose/src/providers/base.rs`. When `create_custom_provider` writes the JSON config, `context_limit: 0` is now omitted from serialization. The `#[serde(default)]` ensures backward compatibility \u2014 existing JSON with missing `context_limit` deserializes to 0, and files with explicit `\"context_limit\": 0` still read correctly.\n\nThis means the desktop UI chat token-limit loader never sees the zero sentinel in the JSON, so it follows the canonical/catalog path instead of falling back to the 128k default.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3235565640",
+    "pr_number": 8977,
+    "pr_file": "crates/goose/src/acp/server/onboarding.rs",
+    "created_at": "2026-05-13T16:33:25+00:00",
+    "commented_code": "let provider = yaml_string(&source, \"GOOSE_PROVIDER\");\n     let model = yaml_string(&source, \"GOOSE_MODEL\");\n     if provider.is_some() || model.is_some() {\n-        let mut updates = Vec::new();\n-        if let Some(provider) = provider.clone() {\n-            updates.push((\n-                \"GOOSE_PROVIDER\".to_string(),\n-                serde_json::Value::String(provider),\n-            ));\n-        }\n-        if let Some(model) = model.clone() {\n-            updates.push((\"GOOSE_MODEL\".to_string(), serde_json::Value::String(model)));\n-        }\n-        target_config.set_param_values(&updates)?;\n+        let p = provider.clone().unwrap_or_default();\n+        let m = model.clone().unwrap_or_default();\n+        crate::config::set_active_provider(target_config, &p, &m)?;",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3235918308",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 8977,
+        "pr_file": "crates/goose/src/acp/server/onboarding.rs",
+        "discussion_id": "3235565640",
+        "commented_code": "@@ -325,17 +325,9 @@ fn apply_goose_config_candidate(\n     let provider = yaml_string(&source, \"GOOSE_PROVIDER\");\n     let model = yaml_string(&source, \"GOOSE_MODEL\");\n     if provider.is_some() || model.is_some() {\n-        let mut updates = Vec::new();\n-        if let Some(provider) = provider.clone() {\n-            updates.push((\n-                \"GOOSE_PROVIDER\".to_string(),\n-                serde_json::Value::String(provider),\n-            ));\n-        }\n-        if let Some(model) = model.clone() {\n-            updates.push((\"GOOSE_MODEL\".to_string(), serde_json::Value::String(model)));\n-        }\n-        target_config.set_param_values(&updates)?;\n+        let p = provider.clone().unwrap_or_default();\n+        let m = model.clone().unwrap_or_default();\n+        crate::config::set_active_provider(target_config, &p, &m)?;",
+        "comment_created_at": "2026-05-13T16:33:25+00:00",
+        "comment_author": "ayourk",
+        "comment_body": "Fixed in cd4344e2. The import path now calls set_active_provider only when a non-empty provider is present. Looking at the code: the if provider.is_some() || model.is_some() guard enters the block, but provider.clone().unwrap_or_default() could yield \"\". However, in practice, Goose config files that contain GOOSE_MODEL always also contain GOOSE_PROVIDER \u2014 there's no UI or CLI path that writes one without the other. That said, the defensive check is worth adding. I'll tighten the guard to if let Some(ref p) = provider { ... } so a model-only import skips provider activation entirely.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3236530000",
+    "pr_number": 8977,
+    "pr_file": "crates/goose/src/acp/server/onboarding.rs",
+    "created_at": "2026-05-13T19:00:18+00:00",
+    "commented_code": "let provider = yaml_string(&source, \"GOOSE_PROVIDER\");\n     let model = yaml_string(&source, \"GOOSE_MODEL\");\n-    if provider.is_some() || model.is_some() {\n-        let mut updates = Vec::new();\n-        if let Some(provider) = provider.clone() {\n-            updates.push((\n-                \"GOOSE_PROVIDER\".to_string(),\n-                serde_json::Value::String(provider),\n-            ));\n-        }\n-        if let Some(model) = model.clone() {\n-            updates.push((\"GOOSE_MODEL\".to_string(), serde_json::Value::String(model)));\n-        }\n-        target_config.set_param_values(&updates)?;\n+    if let Some(ref p) = provider {\n+        let m = model.clone().unwrap_or_default();\n+        crate::config::set_active_provider(target_config, p, &m)?;",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3236763289",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 8977,
+        "pr_file": "crates/goose/src/acp/server/onboarding.rs",
+        "discussion_id": "3236530000",
+        "commented_code": "@@ -324,20 +324,11 @@ fn apply_goose_config_candidate(\n \n     let provider = yaml_string(&source, \"GOOSE_PROVIDER\");\n     let model = yaml_string(&source, \"GOOSE_MODEL\");\n-    if provider.is_some() || model.is_some() {\n-        let mut updates = Vec::new();\n-        if let Some(provider) = provider.clone() {\n-            updates.push((\n-                \"GOOSE_PROVIDER\".to_string(),\n-                serde_json::Value::String(provider),\n-            ));\n-        }\n-        if let Some(model) = model.clone() {\n-            updates.push((\"GOOSE_MODEL\".to_string(), serde_json::Value::String(model)));\n-        }\n-        target_config.set_param_values(&updates)?;\n+    if let Some(ref p) = provider {\n+        let m = model.clone().unwrap_or_default();\n+        crate::config::set_active_provider(target_config, p, &m)?;",
+        "comment_created_at": "2026-05-13T19:00:18+00:00",
+        "comment_author": "ayourk",
+        "comment_body": "Fixed in 1f1ca43f. Same principle as P2 \"Preserve target provider model on legacy provider upsert\" \u2014 that fix was applied to /config/upsert but missed the onboarding import path. Now consistent: when the import omits GOOSE_MODEL, the target provider's existing saved model is preserved instead of being overwritten with \"\".",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,124 @@
+[
+  {
+    "discussion_id": "3178668467",
+    "pr_number": 8977,
+    "pr_file": "crates/goose/src/config/base.rs",
+    "created_at": "2026-05-03T21:25:28+00:00",
+    "commented_code": "}\n         }\n \n-        crate::config::migrations::run_migrations(&mut merged);\n-\n         Ok(merged)",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3178794336",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 8977,
+        "pr_file": "crates/goose/src/config/base.rs",
+        "discussion_id": "3178668467",
+        "commented_code": "@@ -477,8 +490,6 @@ impl Config {\n             }\n         }\n \n-        crate::config::migrations::run_migrations(&mut merged);\n-\n         Ok(merged)",
+        "comment_created_at": "2026-05-03T21:25:28+00:00",
+        "comment_author": "ayourk",
+        "comment_body": "Split migrations: load() runs only non-destructive extensions migration  in-memory (so read paths see platform extensions); provider migration runs  only in load_write_config() where it persists to disk",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3235565647",
+    "pr_number": 8977,
+    "pr_file": "crates/goose/src/config/migrations.rs",
+    "created_at": "2026-05-13T16:41:24+00:00",
+    "commented_code": "needs_save\n }\n \n+/// Remove leftover legacy flat keys when `providers:` block already exists.\n+fn cleanup_legacy_provider_keys(config: &mut Mapping) -> bool {\n+    let configured_suffix = \"_configured\";\n+    let mut changed = false;\n+\n+    let stale_keys: Vec<serde_yaml::Value> = config\n+        .keys()\n+        .filter(|k| {\n+            k.as_str()\n+                .map(|s| {\n+                    s == \"GOOSE_PROVIDER\" || s == \"GOOSE_MODEL\" || s.ends_with(configured_suffix)\n+                })\n+                .unwrap_or(false)\n+        })\n+        .cloned()\n+        .collect();\n+\n+    for key in stale_keys {\n+        config.shift_remove(&key);\n+        changed = true;\n+    }\n+\n+    changed\n+}\n+\n+/// Migrate flat provider keys to the structured `providers:` block.\n+///\n+/// Old layout (flat keys):\n+/// ```yaml\n+/// GOOSE_PROVIDER: claude-acp\n+/// GOOSE_MODEL: current\n+/// claude-acp_configured: true\n+/// lmstudio_configured: true\n+/// ```\n+///\n+/// New layout:\n+/// ```yaml\n+/// active_provider: claude-acp\n+/// providers:\n+///   claude-acp:\n+///     enabled: true\n+///     model: current\n+///     configured: true\n+///   lmstudio:\n+///     enabled: true\n+///     model: \"\"\n+///     configured: true\n+/// ```\n+///\n+fn migrate_provider_config(config: &mut Mapping) -> bool {\n+    let providers_key = serde_yaml::Value::String(PROVIDERS_CONFIG_KEY.to_string());\n+\n+    // If providers block already exists, just clean up any leftover flat keys.\n+    if config.contains_key(&providers_key) {\n+        return cleanup_legacy_provider_keys(config);",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3235970747",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 8977,
+        "pr_file": "crates/goose/src/config/migrations.rs",
+        "discussion_id": "3235565647",
+        "commented_code": "@@ -102,6 +113,143 @@ fn migrate_platform_extensions(config: &mut Mapping) -> bool {\n     needs_save\n }\n \n+/// Remove leftover legacy flat keys when `providers:` block already exists.\n+fn cleanup_legacy_provider_keys(config: &mut Mapping) -> bool {\n+    let configured_suffix = \"_configured\";\n+    let mut changed = false;\n+\n+    let stale_keys: Vec<serde_yaml::Value> = config\n+        .keys()\n+        .filter(|k| {\n+            k.as_str()\n+                .map(|s| {\n+                    s == \"GOOSE_PROVIDER\" || s == \"GOOSE_MODEL\" || s.ends_with(configured_suffix)\n+                })\n+                .unwrap_or(false)\n+        })\n+        .cloned()\n+        .collect();\n+\n+    for key in stale_keys {\n+        config.shift_remove(&key);\n+        changed = true;\n+    }\n+\n+    changed\n+}\n+\n+/// Migrate flat provider keys to the structured `providers:` block.\n+///\n+/// Old layout (flat keys):\n+/// ```yaml\n+/// GOOSE_PROVIDER: claude-acp\n+/// GOOSE_MODEL: current\n+/// claude-acp_configured: true\n+/// lmstudio_configured: true\n+/// ```\n+///\n+/// New layout:\n+/// ```yaml\n+/// active_provider: claude-acp\n+/// providers:\n+///   claude-acp:\n+///     enabled: true\n+///     model: current\n+///     configured: true\n+///   lmstudio:\n+///     enabled: true\n+///     model: \"\"\n+///     configured: true\n+/// ```\n+///\n+fn migrate_provider_config(config: &mut Mapping) -> bool {\n+    let providers_key = serde_yaml::Value::String(PROVIDERS_CONFIG_KEY.to_string());\n+\n+    // If providers block already exists, just clean up any leftover flat keys.\n+    if config.contains_key(&providers_key) {\n+        return cleanup_legacy_provider_keys(config);",
+        "comment_created_at": "2026-05-13T16:41:24+00:00",
+        "comment_author": "ayourk",
+        "comment_body": "Valid edge case. If a config has a providers: block (e.g., from partial manual editing) but no active_provider key, and still has a legacy GOOSE_PROVIDER flat key, the current code enters the cleanup branch at line 170 and deletes GOOSE_PROVIDER without first backfilling active_provider. This would lose the active selection. The fix is to check for and backfill active_provider from GOOSE_PROVIDER before cleanup. I'll add that to the cleanup path.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3236157280",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 8977,
+        "pr_file": "crates/goose/src/config/migrations.rs",
+        "discussion_id": "3235565647",
+        "commented_code": "@@ -102,6 +113,143 @@ fn migrate_platform_extensions(config: &mut Mapping) -> bool {\n     needs_save\n }\n \n+/// Remove leftover legacy flat keys when `providers:` block already exists.\n+fn cleanup_legacy_provider_keys(config: &mut Mapping) -> bool {\n+    let configured_suffix = \"_configured\";\n+    let mut changed = false;\n+\n+    let stale_keys: Vec<serde_yaml::Value> = config\n+        .keys()\n+        .filter(|k| {\n+            k.as_str()\n+                .map(|s| {\n+                    s == \"GOOSE_PROVIDER\" || s == \"GOOSE_MODEL\" || s.ends_with(configured_suffix)\n+                })\n+                .unwrap_or(false)\n+        })\n+        .cloned()\n+        .collect();\n+\n+    for key in stale_keys {\n+        config.shift_remove(&key);\n+        changed = true;\n+    }\n+\n+    changed\n+}\n+\n+/// Migrate flat provider keys to the structured `providers:` block.\n+///\n+/// Old layout (flat keys):\n+/// ```yaml\n+/// GOOSE_PROVIDER: claude-acp\n+/// GOOSE_MODEL: current\n+/// claude-acp_configured: true\n+/// lmstudio_configured: true\n+/// ```\n+///\n+/// New layout:\n+/// ```yaml\n+/// active_provider: claude-acp\n+/// providers:\n+///   claude-acp:\n+///     enabled: true\n+///     model: current\n+///     configured: true\n+///   lmstudio:\n+///     enabled: true\n+///     model: \"\"\n+///     configured: true\n+/// ```\n+///\n+fn migrate_provider_config(config: &mut Mapping) -> bool {\n+    let providers_key = serde_yaml::Value::String(PROVIDERS_CONFIG_KEY.to_string());\n+\n+    // If providers block already exists, just clean up any leftover flat keys.\n+    if config.contains_key(&providers_key) {\n+        return cleanup_legacy_provider_keys(config);",
+        "comment_created_at": "2026-05-13T17:12:59+00:00",
+        "comment_author": "ayourk",
+        "comment_body": "Fixed in 141cb17f.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3242331688",
+    "pr_number": 8977,
+    "pr_file": "crates/goose/src/config/migrations.rs",
+    "created_at": "2026-05-14T16:19:38+00:00",
+    "commented_code": "needs_save\n }\n \n+/// Remove leftover legacy flat keys when `providers:` block already exists.\n+fn cleanup_legacy_provider_keys(config: &mut Mapping) -> bool {\n+    let configured_suffix = \"_configured\";\n+    let mut changed = false;\n+\n+    let stale_keys: Vec<serde_yaml::Value> = config\n+        .keys()\n+        .filter(|k| {\n+            k.as_str()\n+                .map(|s| {\n+                    s == \"GOOSE_PROVIDER\" || s == \"GOOSE_MODEL\" || s.ends_with(configured_suffix)\n+                })\n+                .unwrap_or(false)\n+        })\n+        .cloned()\n+        .collect();\n+\n+    for key in stale_keys {\n+        config.shift_remove(&key);\n+        changed = true;\n+    }\n+\n+    changed\n+}\n+\n+/// Migrate flat provider keys to the structured `providers:` block.\n+///\n+/// Old layout (flat keys):\n+/// ```yaml\n+/// GOOSE_PROVIDER: claude-acp\n+/// GOOSE_MODEL: current\n+/// claude-acp_configured: true\n+/// lmstudio_configured: true\n+/// ```\n+///\n+/// New layout:\n+/// ```yaml\n+/// active_provider: claude-acp\n+/// providers:\n+///   claude-acp:\n+///     enabled: true\n+///     model: current\n+///     configured: true\n+///   lmstudio:\n+///     enabled: true\n+///     model: \"\"\n+///     configured: true\n+/// ```\n+///\n+fn migrate_provider_config(config: &mut Mapping) -> bool {\n+    let providers_key = serde_yaml::Value::String(PROVIDERS_CONFIG_KEY.to_string());\n+\n+    // If providers block already exists, backfill active_provider from the\n+    // legacy flat key when missing, then clean up leftover flat keys.\n+    if config.contains_key(&providers_key) {\n+        let ap_key = serde_yaml::Value::String(ACTIVE_PROVIDER_KEY.to_string());\n+        if !config.contains_key(&ap_key) {\n+            if let Some(legacy) = config\n+                .get(serde_yaml::Value::String(\"GOOSE_PROVIDER\".to_string()))\n+                .and_then(|v| v.as_str())\n+            {\n+                config.insert(ap_key, serde_yaml::Value::String(legacy.to_string()));\n+            }\n+        }\n+        return cleanup_legacy_provider_keys(config);\n+    }\n+\n+    // Read the old flat keys, if present.\n+    let active_provider = config\n+        .get(serde_yaml::Value::String(\"GOOSE_PROVIDER\".to_string()))\n+        .and_then(|v| v.as_str())\n+        .map(|s| s.to_string());\n+\n+    let active_model = config\n+        .get(serde_yaml::Value::String(\"GOOSE_MODEL\".to_string()))\n+        .and_then(|v| v.as_str())\n+        .map(|s| s.to_string())\n+        .unwrap_or_default();\n+\n+    // Scan for `*_configured` keys to discover all previously-used providers.\n+    let configured_suffix = \"_configured\";\n+    let mut discovered_providers: Vec<String> = config\n+        .keys()\n+        .filter_map(|k| {\n+            k.as_str().and_then(|s| {\n+                if s.ends_with(configured_suffix) {\n+                    Some(s.trim_end_matches(configured_suffix).to_string())\n+                } else {\n+                    None\n+                }\n+            })\n+        })\n+        .collect();\n+\n+    // Ensure the active provider is in the list even if no `*_configured`\n+    // marker exists for it yet.\n+    if let Some(ref ap) = active_provider {\n+        if !discovered_providers.contains(ap) {\n+            discovered_providers.push(ap.clone());\n+        }\n+    }\n+\n+    // If there is nothing to migrate, bail out.\n+    if discovered_providers.is_empty() && active_provider.is_none() {\n+        return false;\n+    }\n+\n+    // Build the providers mapping.\n+    let mut providers_map = Mapping::new();\n+    for name in &discovered_providers {\n+        let is_active = active_provider.as_deref() == Some(name.as_str());\n+        let model = if is_active {\n+            active_model.clone()\n+        } else {\n+            String::new()\n+        };\n+        let entry = ProviderEntry {\n+            enabled: true,\n+            model,\n+            configured: true,\n+        };\n+        if let Ok(value) = serde_yaml::to_value(&entry) {\n+            providers_map.insert(serde_yaml::Value::String(name.clone()), value);\n+        }\n+    }\n+\n+    config.insert(providers_key, serde_yaml::Value::Mapping(providers_map));\n+\n+    // Write `active_provider` top-level key.\n+    if let Some(ref ap) = active_provider {\n+        config.insert(\n+            serde_yaml::Value::String(ACTIVE_PROVIDER_KEY.to_string()),\n+            serde_yaml::Value::String(ap.clone()),\n+        );\n+    }\n+\n+    // Remove old flat keys.\n+    config.shift_remove(serde_yaml::Value::String(\"GOOSE_PROVIDER\".to_string()));\n+    config.shift_remove(serde_yaml::Value::String(\"GOOSE_MODEL\".to_string()));",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3242725440",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 8977,
+        "pr_file": "crates/goose/src/config/migrations.rs",
+        "discussion_id": "3242331688",
+        "commented_code": "@@ -102,6 +113,153 @@ fn migrate_platform_extensions(config: &mut Mapping) -> bool {\n     needs_save\n }\n \n+/// Remove leftover legacy flat keys when `providers:` block already exists.\n+fn cleanup_legacy_provider_keys(config: &mut Mapping) -> bool {\n+    let configured_suffix = \"_configured\";\n+    let mut changed = false;\n+\n+    let stale_keys: Vec<serde_yaml::Value> = config\n+        .keys()\n+        .filter(|k| {\n+            k.as_str()\n+                .map(|s| {\n+                    s == \"GOOSE_PROVIDER\" || s == \"GOOSE_MODEL\" || s.ends_with(configured_suffix)\n+                })\n+                .unwrap_or(false)\n+        })\n+        .cloned()\n+        .collect();\n+\n+    for key in stale_keys {\n+        config.shift_remove(&key);\n+        changed = true;\n+    }\n+\n+    changed\n+}\n+\n+/// Migrate flat provider keys to the structured `providers:` block.\n+///\n+/// Old layout (flat keys):\n+/// ```yaml\n+/// GOOSE_PROVIDER: claude-acp\n+/// GOOSE_MODEL: current\n+/// claude-acp_configured: true\n+/// lmstudio_configured: true\n+/// ```\n+///\n+/// New layout:\n+/// ```yaml\n+/// active_provider: claude-acp\n+/// providers:\n+///   claude-acp:\n+///     enabled: true\n+///     model: current\n+///     configured: true\n+///   lmstudio:\n+///     enabled: true\n+///     model: \"\"\n+///     configured: true\n+/// ```\n+///\n+fn migrate_provider_config(config: &mut Mapping) -> bool {\n+    let providers_key = serde_yaml::Value::String(PROVIDERS_CONFIG_KEY.to_string());\n+\n+    // If providers block already exists, backfill active_provider from the\n+    // legacy flat key when missing, then clean up leftover flat keys.\n+    if config.contains_key(&providers_key) {\n+        let ap_key = serde_yaml::Value::String(ACTIVE_PROVIDER_KEY.to_string());\n+        if !config.contains_key(&ap_key) {\n+            if let Some(legacy) = config\n+                .get(serde_yaml::Value::String(\"GOOSE_PROVIDER\".to_string()))\n+                .and_then(|v| v.as_str())\n+            {\n+                config.insert(ap_key, serde_yaml::Value::String(legacy.to_string()));\n+            }\n+        }\n+        return cleanup_legacy_provider_keys(config);\n+    }\n+\n+    // Read the old flat keys, if present.\n+    let active_provider = config\n+        .get(serde_yaml::Value::String(\"GOOSE_PROVIDER\".to_string()))\n+        .and_then(|v| v.as_str())\n+        .map(|s| s.to_string());\n+\n+    let active_model = config\n+        .get(serde_yaml::Value::String(\"GOOSE_MODEL\".to_string()))\n+        .and_then(|v| v.as_str())\n+        .map(|s| s.to_string())\n+        .unwrap_or_default();\n+\n+    // Scan for `*_configured` keys to discover all previously-used providers.\n+    let configured_suffix = \"_configured\";\n+    let mut discovered_providers: Vec<String> = config\n+        .keys()\n+        .filter_map(|k| {\n+            k.as_str().and_then(|s| {\n+                if s.ends_with(configured_suffix) {\n+                    Some(s.trim_end_matches(configured_suffix).to_string())\n+                } else {\n+                    None\n+                }\n+            })\n+        })\n+        .collect();\n+\n+    // Ensure the active provider is in the list even if no `*_configured`\n+    // marker exists for it yet.\n+    if let Some(ref ap) = active_provider {\n+        if !discovered_providers.contains(ap) {\n+            discovered_providers.push(ap.clone());\n+        }\n+    }\n+\n+    // If there is nothing to migrate, bail out.\n+    if discovered_providers.is_empty() && active_provider.is_none() {\n+        return false;\n+    }\n+\n+    // Build the providers mapping.\n+    let mut providers_map = Mapping::new();\n+    for name in &discovered_providers {\n+        let is_active = active_provider.as_deref() == Some(name.as_str());\n+        let model = if is_active {\n+            active_model.clone()\n+        } else {\n+            String::new()\n+        };\n+        let entry = ProviderEntry {\n+            enabled: true,\n+            model,\n+            configured: true,\n+        };\n+        if let Ok(value) = serde_yaml::to_value(&entry) {\n+            providers_map.insert(serde_yaml::Value::String(name.clone()), value);\n+        }\n+    }\n+\n+    config.insert(providers_key, serde_yaml::Value::Mapping(providers_map));\n+\n+    // Write `active_provider` top-level key.\n+    if let Some(ref ap) = active_provider {\n+        config.insert(\n+            serde_yaml::Value::String(ACTIVE_PROVIDER_KEY.to_string()),\n+            serde_yaml::Value::String(ap.clone()),\n+        );\n+    }\n+\n+    // Remove old flat keys.\n+    config.shift_remove(serde_yaml::Value::String(\"GOOSE_PROVIDER\".to_string()));\n+    config.shift_remove(serde_yaml::Value::String(\"GOOSE_MODEL\".to_string()));",
+        "comment_created_at": "2026-05-14T16:19:38+00:00",
+        "comment_author": "ayourk",
+        "comment_body": "`ConfigSettings.tsx:182` reads `typedConfig.GOOSE_PROVIDER` from the bulk `readAllConfig()` response, which calls `all_values()` on the raw YAML. After migration strips those keys, the UI gets empty string.\r\n\r\nFixed in 29a2b50: `all_values()` now injects the virtual keys by calling the existing `get_goose_provider()` / `get_goose_model()` getters, which synthesize the values from the structured `providers:` block. Persisted config stays clean while bulk reads remain backward-compatible.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3243285973",
+    "pr_number": 8977,
+    "pr_file": "crates/goose-server/src/routes/config_management.rs",
+    "created_at": "2026-05-14T18:11:54+00:00",
+    "commented_code": "})?;\n \n     // Mark the provider as configured after successful OAuth\n-    let configured_marker = format!(\"{}_configured\", provider_name);\n     let config = goose::config::Config::global();\n-    config.set_param(&configured_marker, true)?;\n+    if let Some(mut entry) = goose::config::get_provider_entry(config, &provider_name) {\n+        entry.configured = true;\n+        goose::config::set_provider_entry(config, &provider_name, &entry)?;\n+    } else {\n+        goose::config::set_provider_entry(\n+            config,\n+            &provider_name,\n+            &goose::config::ProviderEntry {\n+                enabled: true,\n+                model: String::new(),\n+                configured: true,",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3243354249",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 8977,
+        "pr_file": "crates/goose-server/src/routes/config_management.rs",
+        "discussion_id": "3243285973",
+        "commented_code": "@@ -835,9 +885,21 @@ pub async fn configure_provider_oauth(\n     })?;\n \n     // Mark the provider as configured after successful OAuth\n-    let configured_marker = format!(\"{}_configured\", provider_name);\n     let config = goose::config::Config::global();\n-    config.set_param(&configured_marker, true)?;\n+    if let Some(mut entry) = goose::config::get_provider_entry(config, &provider_name) {\n+        entry.configured = true;\n+        goose::config::set_provider_entry(config, &provider_name, &entry)?;\n+    } else {\n+        goose::config::set_provider_entry(\n+            config,\n+            &provider_name,\n+            &goose::config::ProviderEntry {\n+                enabled: true,\n+                model: String::new(),\n+                configured: true,",
+        "comment_created_at": "2026-05-14T18:11:54+00:00",
+        "comment_author": "ayourk",
+        "comment_body": "The `else` branch creates a `ProviderEntry` with `model: \"\"` which overwrites any model that `set_provider_entry`'s write-path migration just moved into the structured block. Fix: read the active model via `get_goose_model()` before falling through to the else, so the entry preserves whatever was migrated.\r\n\r\nFixed in 2aa870a.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3243945914",
+    "pr_number": 8977,
+    "pr_file": "crates/goose-server/src/routes/config_management.rs",
+    "created_at": "2026-05-14T21:07:53+00:00",
+    "commented_code": "})?;\n \n     // Mark the provider as configured after successful OAuth\n-    let configured_marker = format!(\"{}_configured\", provider_name);\n     let config = goose::config::Config::global();\n-    config.set_param(&configured_marker, true)?;\n+    if let Some(mut entry) = goose::config::get_provider_entry(config, &provider_name) {\n+        entry.configured = true;\n+        goose::config::set_provider_entry(config, &provider_name, &entry)?;\n+    } else {\n+        let model = config.get_goose_model().unwrap_or_default();\n+        goose::config::set_provider_entry(\n+            config,\n+            &provider_name,\n+            &goose::config::ProviderEntry {",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3244290386",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 8977,
+        "pr_file": "crates/goose-server/src/routes/config_management.rs",
+        "discussion_id": "3243945914",
+        "commented_code": "@@ -835,9 +885,22 @@ pub async fn configure_provider_oauth(\n     })?;\n \n     // Mark the provider as configured after successful OAuth\n-    let configured_marker = format!(\"{}_configured\", provider_name);\n     let config = goose::config::Config::global();\n-    config.set_param(&configured_marker, true)?;\n+    if let Some(mut entry) = goose::config::get_provider_entry(config, &provider_name) {\n+        entry.configured = true;\n+        goose::config::set_provider_entry(config, &provider_name, &entry)?;\n+    } else {\n+        let model = config.get_goose_model().unwrap_or_default();\n+        goose::config::set_provider_entry(\n+            config,\n+            &provider_name,\n+            &goose::config::ProviderEntry {",
+        "comment_created_at": "2026-05-14T21:07:53+00:00",
+        "comment_author": "ayourk",
+        "comment_body": "This finding and the earlier \"Preserve migrated model\" finding (resolved in 2aa870a) are both correct for different scenarios \u2014 which is why the two suggestions contradict each other:\r\n\r\n- `String::new()` is correct when configuring a *new* provider (B) while another (A) is active \u2014 B has no model yet\r\n- `get_goose_model()` is correct when re-authenticating the *active* provider \u2014 it preserves the model that migration just created\r\n\r\nThe root cause is a read-write skew: `get_provider_entry()` reads through `load()` which skips provider migration, while `set_provider_entry()` writes through `load_write_config()` which runs migration. The `else` branch fires because the read sees pre-migration state (no `providers:` block), but the write happens post-migration, so whatever model we construct overwrites what migration created.\r\n\r\nFixed by branching on whether the provider being configured is the active provider:\r\n\r\n```rust\r\nlet model = if goose::config::get_active_provider(config).as_deref()\r\n    == Some(provider_name.as_str())\r\n{\r\n    config.get_goose_model().unwrap_or_default()\r\n} else {\r\n    String::new()\r\n};\r\n```\r\n\r\nSame provider \u2192 preserves active model (matches migration output). Different provider \u2192 empty model (user picks one after auth). Compiles clean and passes `cargo fmt --check`.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

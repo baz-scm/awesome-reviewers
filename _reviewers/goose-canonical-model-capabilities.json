@@ -1,0 +1,178 @@
+[
+  {
+    "discussion_id": "3395790234",
+    "pr_number": 9743,
+    "pr_file": "crates/goose/src/providers/formats/anthropic.rs",
+    "created_at": "2026-06-11T12:24:41+00:00",
+    "commented_code": "}\n }\n \n-pub fn supports_adaptive_thinking(model_name: &str) -> bool {\n-    let lower = model_name.to_lowercase();\n-    lower.contains(\"claude-opus-4-6\") || lower.contains(\"claude-sonnet-4-6\")\n+fn canonical_thinking_mode(provider_name: &str, model_name: &str) -> Option<ThinkingMode> {\n+    crate::providers::canonical::maybe_get_canonical_model(provider_name, model_name)\n+        .and_then(|model| model.thinking_mode)\n+}\n+\n+fn canonical_reasoning(provider_name: &str, model_config: &ModelConfig) -> Option<bool> {\n+    crate::providers::canonical::maybe_get_canonical_model(provider_name, &model_config.model_name)\n+        .and_then(|model| model.reasoning)\n+}\n+\n+pub fn model_supports_temperature(provider_name: &str, model_config: &ModelConfig) -> bool {\n+    crate::providers::canonical::maybe_get_canonical_model(provider_name, &model_config.model_name)\n+        .and_then(|model| model.temperature)\n+        .unwrap_or(true)\n }\n \n pub fn thinking_type(model_config: &ModelConfig) -> ThinkingType {\n-    let model_lower = model_config.model_name.to_lowercase();\n-    if !model_lower.contains(\"claude\") {\n+    thinking_type_for_provider(\"anthropic\", model_config)\n+}\n+\n+pub fn thinking_type_for_provider(provider_name: &str, model_config: &ModelConfig) -> ThinkingType {\n+    let mode = canonical_thinking_mode(provider_name, &model_config.model_name);\n+    let reasoning = model_config\n+        .reasoning\n+        .or_else(|| canonical_reasoning(provider_name, model_config));\n+\n+    if reasoning != Some(true) {\n         return ThinkingType::Disabled;",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3395796084",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 9743,
+        "pr_file": "crates/goose/src/providers/formats/anthropic.rs",
+        "discussion_id": "3395790234",
+        "commented_code": "@@ -68,27 +69,52 @@ impl AnthropicFormatOptions {\n     }\n }\n \n-pub fn supports_adaptive_thinking(model_name: &str) -> bool {\n-    let lower = model_name.to_lowercase();\n-    lower.contains(\"claude-opus-4-6\") || lower.contains(\"claude-sonnet-4-6\")\n+fn canonical_thinking_mode(provider_name: &str, model_name: &str) -> Option<ThinkingMode> {\n+    crate::providers::canonical::maybe_get_canonical_model(provider_name, model_name)\n+        .and_then(|model| model.thinking_mode)\n+}\n+\n+fn canonical_reasoning(provider_name: &str, model_config: &ModelConfig) -> Option<bool> {\n+    crate::providers::canonical::maybe_get_canonical_model(provider_name, &model_config.model_name)\n+        .and_then(|model| model.reasoning)\n+}\n+\n+pub fn model_supports_temperature(provider_name: &str, model_config: &ModelConfig) -> bool {\n+    crate::providers::canonical::maybe_get_canonical_model(provider_name, &model_config.model_name)\n+        .and_then(|model| model.temperature)\n+        .unwrap_or(true)\n }\n \n pub fn thinking_type(model_config: &ModelConfig) -> ThinkingType {\n-    let model_lower = model_config.model_name.to_lowercase();\n-    if !model_lower.contains(\"claude\") {\n+    thinking_type_for_provider(\"anthropic\", model_config)\n+}\n+\n+pub fn thinking_type_for_provider(provider_name: &str, model_config: &ModelConfig) -> ThinkingType {\n+    let mode = canonical_thinking_mode(provider_name, &model_config.model_name);\n+    let reasoning = model_config\n+        .reasoning\n+        .or_else(|| canonical_reasoning(provider_name, model_config));\n+\n+    if reasoning != Some(true) {\n         return ThinkingType::Disabled;",
+        "comment_created_at": "2026-06-11T12:24:41+00:00",
+        "comment_author": "jh-block",
+        "comment_body": "Part of the point here is to remove brittle name-based heuristics; all we have to do is re-run canonical generation when new models are released.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3352672180",
+    "pr_number": 9580,
+    "pr_file": "crates/goose/src/model.rs",
+    "created_at": "2026-06-04T00:31:12+00:00",
+    "commented_code": "self\n     }\n \n+    /// Try resolving `context_limit` from canonical model data using a\n+    /// `catalog_provider_id` (e.g. \"openrouter\", \"xiaomi-token-plan-sgp\")\n+    /// as the provider key.\n+    ///\n+    /// Called *before* `with_canonical_limits` so the user-configured catalog\n+    /// takes priority over the inference path that matches by model name\n+    /// alone (e.g. `anthropic/claude-sonnet-4` \u2192 Anthropic).\n+    ///\n+    /// Overrides the current `context_limit` when it is unset **or** equals\n+    /// the `0` sentinel from `create_custom_provider`.  A different positive\n+    /// value means the user or config explicitly set a limit (e.g. via\n+    /// `GOOSE_CONTEXT_LIMIT`) and is preserved.  Stale picker values are\n+    /// corrected at the source \u2014 `get_provider_models` and\n+    /// `resolve_provider_model_info` now apply the catalog lookup before\n+    /// returning model info to the desktop UI.\n+    pub fn with_catalog_provider_fallback(mut self, catalog_provider_id: &str) -> Self {\n+        let canonical = crate::providers::canonical::maybe_get_canonical_model(\n+            catalog_provider_id,\n+            &self.model_name,\n+        );\n+\n+        if let Some(canonical) = canonical {\n+            // Override when context_limit is unset or is the 0 sentinel\n+            // from create_custom_provider.  A positive value means the\n+            // user explicitly set a limit (e.g. GOOSE_CONTEXT_LIMIT) \u2014\n+            // preserve it.  Stale picker values are now corrected at the\n+            // source by get_provider_models / resolve_provider_model_info.\n+            if self.context_limit.is_none() || self.context_limit == Some(0) {\n+                self.context_limit = Some(canonical.limit.context);\n+            }\n+            if self.max_tokens.is_none() {\n+                self.max_tokens = canonical\n+                    .limit\n+                    .output\n+                    .filter(|&output| output < canonical.limit.context)\n+                    .map(|output| output as i32);",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3352714117",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 9580,
+        "pr_file": "crates/goose/src/model.rs",
+        "discussion_id": "3352672180",
+        "commented_code": "@@ -252,6 +252,51 @@ impl ModelConfig {\n         self\n     }\n \n+    /// Try resolving `context_limit` from canonical model data using a\n+    /// `catalog_provider_id` (e.g. \"openrouter\", \"xiaomi-token-plan-sgp\")\n+    /// as the provider key.\n+    ///\n+    /// Called *before* `with_canonical_limits` so the user-configured catalog\n+    /// takes priority over the inference path that matches by model name\n+    /// alone (e.g. `anthropic/claude-sonnet-4` \u2192 Anthropic).\n+    ///\n+    /// Overrides the current `context_limit` when it is unset **or** equals\n+    /// the `0` sentinel from `create_custom_provider`.  A different positive\n+    /// value means the user or config explicitly set a limit (e.g. via\n+    /// `GOOSE_CONTEXT_LIMIT`) and is preserved.  Stale picker values are\n+    /// corrected at the source \u2014 `get_provider_models` and\n+    /// `resolve_provider_model_info` now apply the catalog lookup before\n+    /// returning model info to the desktop UI.\n+    pub fn with_catalog_provider_fallback(mut self, catalog_provider_id: &str) -> Self {\n+        let canonical = crate::providers::canonical::maybe_get_canonical_model(\n+            catalog_provider_id,\n+            &self.model_name,\n+        );\n+\n+        if let Some(canonical) = canonical {\n+            // Override when context_limit is unset or is the 0 sentinel\n+            // from create_custom_provider.  A positive value means the\n+            // user explicitly set a limit (e.g. GOOSE_CONTEXT_LIMIT) \u2014\n+            // preserve it.  Stale picker values are now corrected at the\n+            // source by get_provider_models / resolve_provider_model_info.\n+            if self.context_limit.is_none() || self.context_limit == Some(0) {\n+                self.context_limit = Some(canonical.limit.context);\n+            }\n+            if self.max_tokens.is_none() {\n+                self.max_tokens = canonical\n+                    .limit\n+                    .output\n+                    .filter(|&output| output < canonical.limit.context)\n+                    .map(|output| output as i32);",
+        "comment_created_at": "2026-06-04T00:31:12+00:00",
+        "comment_author": "shafqatevo",
+        "comment_body": "Fixed in 37e0a3446.\n\nThe \\`max_tokens\\` filter in \\`with_catalog_provider_fallback\\` now compares against the effective \\`self.context_limit\\` (which may be a lower user override like GOOSE_CONTEXT_LIMIT=65536) instead of the raw \\`canonical.limit.context\\` (the catalog's 1M). This prevents a 65k window from requesting 131k output tokens.\n\nAdded a unit test \\`catalog_output_tokens_capped_to_effective_context\\` that verifies max_tokens is capped to the effective context when the user sets a lower limit.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3350342711",
+    "pr_number": 9580,
+    "pr_file": "crates/goose-server/src/routes/config_management.rs",
+    "created_at": "2026-06-03T18:25:19+00:00",
+    "commented_code": "let models_result = provider.fetch_recommended_model_info().await;\n \n     match models_result {\n-        Ok(models) => Ok(Json(models)),\n+        Ok(mut models) => {\n+            // When catalog_provider_id is set, override each model's\n+            // context_limit with the catalog value.  The provider's\n+            // fetch_recommended_model_info uses the raw custom name, so\n+            // budgets can be stale (e.g. 128k for Xiaomi, 200k for\n+            // OpenRouter/Anthropic).\n+            if let Some(ref catalog_id) = metadata.catalog_provider_id {\n+                for info in &mut models {\n+                    if let Some(canonical) = goose::providers::canonical::maybe_get_canonical_model(\n+                        catalog_id, &info.name,\n+                    ) {\n+                        info.context_limit = canonical.limit.context;",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3350921018",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 9580,
+        "pr_file": "crates/goose-server/src/routes/config_management.rs",
+        "discussion_id": "3350342711",
+        "commented_code": "@@ -943,7 +943,23 @@ pub async fn get_provider_models(\n     let models_result = provider.fetch_recommended_model_info().await;\n \n     match models_result {\n-        Ok(models) => Ok(Json(models)),\n+        Ok(mut models) => {\n+            // When catalog_provider_id is set, override each model's\n+            // context_limit with the catalog value.  The provider's\n+            // fetch_recommended_model_info uses the raw custom name, so\n+            // budgets can be stale (e.g. 128k for Xiaomi, 200k for\n+            // OpenRouter/Anthropic).\n+            if let Some(ref catalog_id) = metadata.catalog_provider_id {\n+                for info in &mut models {\n+                    if let Some(canonical) = goose::providers::canonical::maybe_get_canonical_model(\n+                        catalog_id, &info.name,\n+                    ) {\n+                        info.context_limit = canonical.limit.context;",
+        "comment_created_at": "2026-06-03T18:25:19+00:00",
+        "comment_author": "shafqatevo",
+        "comment_body": "Good catch \u2014 fixed in e85599e79.\n\n`get_provider_models` now checks `metadata.known_models` for each model **before** falling back to the catalog lookup.  If the provider's JSON config has an explicit per-model `context_limit` (e.g. capping `anthropic/claude-sonnet-4` at 256k), that value is returned to the desktop picker instead of the catalog default.  The picker sends the correct value back through `updateAgentProvider`, and `normalize_model_config` honors it as an explicit override.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3558294654",
+    "pr_number": 10345,
+    "pr_file": "crates/goose-provider-types/src/formats/openai.rs",
+    "created_at": "2026-07-10T11:05:10+00:00",
+    "commented_code": "re.is_match(model_name)\n }\n \n+/// True for xAI Grok models that perform server-side reasoning and therefore\n+/// reject the `temperature` parameter (similar to OpenAI o-series / gpt-5).\n+///\n+/// This is **not** the same as [`is_openai_responses_model`] \u2014 xAI uses the\n+/// standard Chat Completions API, not the Responses API, so the system role,\n+/// `max_tokens` key, and other Responses-API quirks do not apply.  The only\n+/// shared behaviour is that `temperature` must be omitted.\n+pub fn is_xai_reasoning_model(model_name: &str) -> bool {\n+    let lower = model_name.to_ascii_lowercase();\n+    if lower.starts_with(\"grok-3-mini\") {\n+        return true;\n+    }\n+    // grok-4+ (including dotted variants like grok-4.5) are reasoning models,\n+    // except for explicit non-reasoning variants.\n+    if lower.starts_with(\"grok-4\") {\n+        return !lower.contains(\"non-reasoning\") && !lower.contains(\"non_reasoning\");",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3558397652",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 10345,
+        "pr_file": "crates/goose-provider-types/src/formats/openai.rs",
+        "discussion_id": "3558294654",
+        "commented_code": "@@ -1502,6 +1507,40 @@ pub fn is_openai_responses_model(model_name: &str) -> bool {\n     re.is_match(model_name)\n }\n \n+/// True for xAI Grok models that perform server-side reasoning and therefore\n+/// reject the `temperature` parameter (similar to OpenAI o-series / gpt-5).\n+///\n+/// This is **not** the same as [`is_openai_responses_model`] \u2014 xAI uses the\n+/// standard Chat Completions API, not the Responses API, so the system role,\n+/// `max_tokens` key, and other Responses-API quirks do not apply.  The only\n+/// shared behaviour is that `temperature` must be omitted.\n+pub fn is_xai_reasoning_model(model_name: &str) -> bool {\n+    let lower = model_name.to_ascii_lowercase();\n+    if lower.starts_with(\"grok-3-mini\") {\n+        return true;\n+    }\n+    // grok-4+ (including dotted variants like grok-4.5) are reasoning models,\n+    // except for explicit non-reasoning variants.\n+    if lower.starts_with(\"grok-4\") {\n+        return !lower.contains(\"non-reasoning\") && !lower.contains(\"non_reasoning\");",
+        "comment_created_at": "2026-07-10T11:05:10+00:00",
+        "comment_author": "vincenzopalazzo",
+        "comment_body": "**Fixed in `e6877279015`.** Good catch -- split `supports_xai_reasoning_effort` from `is_xai_reasoning_model`.\n\nTemperature omit stays broad for reasoning Grok, but `reasoning_effort` is now allowlisted to `grok-4.5*` / `grok-4.3*` / `grok-3-mini*`. Classic `grok-4` / `grok-4-1-fast` / `grok-4.20` no longer receive the parameter. Added payload tests for those exclusions.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3364554679",
+    "pr_number": 9620,
+    "pr_file": "crates/goose/src/agents/agent.rs",
+    "created_at": "2026-06-05T18:45:08+00:00",
+    "commented_code": "messages_to_add.push(thinking_msg);\n                                 }\n \n-                                // Collect reasoning content to attach to tool request messages\n-                                let reasoning_content: Vec<MessageContent> = response.content.iter()\n-                                    .filter(|c| matches!(c, MessageContent::Thinking(_)))\n-                                    .cloned()\n-                                    .collect();\n+                                // Collect reasoning content to attach to tool request messages.\n+                                // Prefer thinking from the current response; fall back to the\n+                                // accumulated turn_thinking_content from earlier intermediate chunks.\n+                                let reasoning_content: Vec<MessageContent> = {\n+                                    let from_response: Vec<MessageContent> = response.content.iter()\n+                                        .filter(|c| matches!(c, MessageContent::Thinking(_)))\n+                                        .cloned()\n+                                        .collect();\n+                                    if from_response.is_empty() && !turn_thinking_content.is_empty() {\n+                                        turn_thinking_content.clone()",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3364693150",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 9620,
+        "pr_file": "crates/goose/src/agents/agent.rs",
+        "discussion_id": "3364554679",
+        "commented_code": "@@ -2055,11 +2084,20 @@ impl Agent {\n                                     messages_to_add.push(thinking_msg);\n                                 }\n \n-                                // Collect reasoning content to attach to tool request messages\n-                                let reasoning_content: Vec<MessageContent> = response.content.iter()\n-                                    .filter(|c| matches!(c, MessageContent::Thinking(_)))\n-                                    .cloned()\n-                                    .collect();\n+                                // Collect reasoning content to attach to tool request messages.\n+                                // Prefer thinking from the current response; fall back to the\n+                                // accumulated turn_thinking_content from earlier intermediate chunks.\n+                                let reasoning_content: Vec<MessageContent> = {\n+                                    let from_response: Vec<MessageContent> = response.content.iter()\n+                                        .filter(|c| matches!(c, MessageContent::Thinking(_)))\n+                                        .cloned()\n+                                        .collect();\n+                                    if from_response.is_empty() && !turn_thinking_content.is_empty() {\n+                                        turn_thinking_content.clone()",
+        "comment_created_at": "2026-06-05T18:45:08+00:00",
+        "comment_author": "shafqatevo",
+        "comment_body": "Addressed. The `turn_thinking_content` fallback on `reasoning_content` is intentional and necessary for OpenAI-compatible providers (DeepSeek, Kimi) where MOIM injections or other user messages can clear `pending_assistant_reasoning` between the thinking-only and tool-call messages in the same turn. Without this fallback, the tool-call message loses `reasoning_content` and DeepSeek returns 400.\n\nFor Anthropic, the concern about duplicate thinking blocks is valid but should be handled in `formats/anthropic.rs` (de-duplication at serialization time), not by removing the fallback which is critical for the OpenAI path. The Anthropic formatter already handles signed thinking blocks differently from the OpenAI formatter, so a formatter-level de-dup check is the right layer for this.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3552502270",
+    "pr_number": 10340,
+    "pr_file": "crates/goose-provider-types/src/formats/google.rs",
+    "created_at": "2026-07-09T15:18:33+00:00",
+    "commented_code": "Ok(result) => {\n                             let mut tool_content = Vec::new();\n                             for content in result.content.iter().map(|c| c.raw.clone()) {\n-                                match content {\n+                                // Forward images and binary embedded-resource\n+                                // blobs to inline_data by mime type. Other\n+                                // content falls back to text.\n+                                let inline = match &content {\n                                     RawContent::Image(image) => {\n-                                        parts.push(json!({\n-                                            \"inline_data\": {\n-                                                \"mime_type\": image.mime_type,\n-                                                \"data\": image.data,\n-                                            }\n-                                        }));\n-                                    }\n-                                    _ => {\n-                                        tool_content.push(content.no_annotation());\n+                                        Some((image.mime_type.clone(), image.data.clone()))\n                                     }\n+                                    RawContent::Resource(embedded) => match &embedded.resource {\n+                                        ResourceContents::BlobResourceContents {\n+                                            blob,\n+                                            mime_type,\n+                                            ..\n+                                        } => Some((\n+                                            mime_type.clone().unwrap_or_else(|| {\n+                                                \"application/octet-stream\".to_string()\n+                                            }),\n+                                            blob.clone(),\n+                                        )),\n+                                        _ => None,\n+                                    },\n+                                    _ => None,\n+                                };\n+                                if let Some((mime_type, data)) = inline {\n+                                    parts.push(json!({\n+                                        \"inline_data\": {\n+                                            \"mime_type\": mime_type,\n+                                            \"data\": data,\n+                                        }\n+                                    }));",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3552761534",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 10340,
+        "pr_file": "crates/goose-provider-types/src/formats/google.rs",
+        "discussion_id": "3552502270",
+        "commented_code": "@@ -146,18 +147,37 @@ pub fn format_messages(messages: &[Message]) -> Vec<Value> {\n                         Ok(result) => {\n                             let mut tool_content = Vec::new();\n                             for content in result.content.iter().map(|c| c.raw.clone()) {\n-                                match content {\n+                                // Forward images and binary embedded-resource\n+                                // blobs to inline_data by mime type. Other\n+                                // content falls back to text.\n+                                let inline = match &content {\n                                     RawContent::Image(image) => {\n-                                        parts.push(json!({\n-                                            \"inline_data\": {\n-                                                \"mime_type\": image.mime_type,\n-                                                \"data\": image.data,\n-                                            }\n-                                        }));\n-                                    }\n-                                    _ => {\n-                                        tool_content.push(content.no_annotation());\n+                                        Some((image.mime_type.clone(), image.data.clone()))\n                                     }\n+                                    RawContent::Resource(embedded) => match &embedded.resource {\n+                                        ResourceContents::BlobResourceContents {\n+                                            blob,\n+                                            mime_type,\n+                                            ..\n+                                        } => Some((\n+                                            mime_type.clone().unwrap_or_else(|| {\n+                                                \"application/octet-stream\".to_string()\n+                                            }),\n+                                            blob.clone(),\n+                                        )),\n+                                        _ => None,\n+                                    },\n+                                    _ => None,\n+                                };\n+                                if let Some((mime_type, data)) = inline {\n+                                    parts.push(json!({\n+                                        \"inline_data\": {\n+                                            \"mime_type\": mime_type,\n+                                            \"data\": data,\n+                                        }\n+                                    }));",
+        "comment_created_at": "2026-07-09T15:18:33+00:00",
+        "comment_author": "thinkmore-eric",
+        "comment_body": "Bad suggestion. It is not accurate to say the \"format requires\" it, and factually incorrect for pre 3.0 models (which are still production). Google models < 3 do not support nested blobs and would cause incompatibility with currently supported models. As written it is the most compatible way for Google models. In 6 months when all models support the new inline parts this could be improved, but check the docs for Google's 2.5 models (which are still active for a significant time). As is this avoids model-version branching complexity and still works fine.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3554516321",
+    "pr_number": 10354,
+    "pr_file": "crates/goose-provider-types/src/formats/google.rs",
+    "created_at": "2026-07-10T06:04:44+00:00",
+    "commented_code": ".get(\"promptTokenCount\")\n             .and_then(|v| v.as_u64())\n             .map(|v| v as i32);\n-        let output_tokens = usage_meta_data\n+        // `candidatesTokenCount` is the visible output; thinking models\n+        // (Gemini 2.5/3) report reasoning tokens separately in\n+        // `thoughtsTokenCount`, and per the API spec `totalTokenCount` =\n+        // prompt + thoughts + candidates. Fold thoughts into `output_tokens` so\n+        // the record reconciles (input + output == total) and cost, which\n+        // Google bills at the output rate, is correct -- matching the OpenAI\n+        // (completion_tokens includes reasoning) and Anthropic (output_tokens\n+        // includes thinking) adapters.\n+        let candidates_tokens = usage_meta_data\n             .get(\"candidatesTokenCount\")\n-            .and_then(|v| v.as_u64())\n-            .map(|v| v as i32);\n+            .and_then(|v| v.as_u64());\n+        let thoughts_tokens = usage_meta_data\n+            .get(\"thoughtsTokenCount\")\n+            .and_then(|v| v.as_u64());\n+        let output_tokens = match (candidates_tokens, thoughts_tokens) {\n+            (None, None) => None,\n+            (candidates, thoughts) => {\n+                Some((candidates.unwrap_or(0) + thoughts.unwrap_or(0)) as i32)",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3556717415",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 10354,
+        "pr_file": "crates/goose-provider-types/src/formats/google.rs",
+        "discussion_id": "3554516321",
+        "commented_code": "@@ -339,10 +339,26 @@ pub fn get_usage(data: &Value) -> Result<Usage> {\n             .get(\"promptTokenCount\")\n             .and_then(|v| v.as_u64())\n             .map(|v| v as i32);\n-        let output_tokens = usage_meta_data\n+        // `candidatesTokenCount` is the visible output; thinking models\n+        // (Gemini 2.5/3) report reasoning tokens separately in\n+        // `thoughtsTokenCount`, and per the API spec `totalTokenCount` =\n+        // prompt + thoughts + candidates. Fold thoughts into `output_tokens` so\n+        // the record reconciles (input + output == total) and cost, which\n+        // Google bills at the output rate, is correct -- matching the OpenAI\n+        // (completion_tokens includes reasoning) and Anthropic (output_tokens\n+        // includes thinking) adapters.\n+        let candidates_tokens = usage_meta_data\n             .get(\"candidatesTokenCount\")\n-            .and_then(|v| v.as_u64())\n-            .map(|v| v as i32);\n+            .and_then(|v| v.as_u64());\n+        let thoughts_tokens = usage_meta_data\n+            .get(\"thoughtsTokenCount\")\n+            .and_then(|v| v.as_u64());\n+        let output_tokens = match (candidates_tokens, thoughts_tokens) {\n+            (None, None) => None,\n+            (candidates, thoughts) => {\n+                Some((candidates.unwrap_or(0) + thoughts.unwrap_or(0)) as i32)",
+        "comment_created_at": "2026-07-10T06:04:44+00:00",
+        "comment_author": "AmirF194",
+        "comment_body": "Fair catch on the compaction path. A couple of things before narrowing this:\n\n`reply_parts.rs:583` reads `output_tokens` for every provider, and the OpenAI and Anthropic adapters already fold reasoning/thinking into it (openai.rs maps `output_tokens = completion_tokens`, which includes `reasoning_tokens`; anthropic.rs uses Anthropic's `output_tokens`, which already counts thinking). So an o-series or Claude-thinking `/compact` summary already records reasoning tokens as the new context size on that same line. This change brings Google in line with them rather than adding a Google-specific skew.\n\nMaking `output_tokens` candidate-only for Google would leave Gemini as the one provider whose `output_tokens` excludes reasoning, which reopens the divergence this fixes and also undercounts cost (Google bills thoughts at the output rate).\n\nThe underlying point (post-compaction context should count only the visible summary, not the discarded thinking) is real, but it's systemic: it affects every reasoning-capable provider, lives in `reply_parts.rs:583`, and would need a separate \"visible output\" figure that `Usage` doesn't carry today. Happy to open a separate issue for that if it's wanted; I'd keep this PR scoped to the parity fix.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3455125359",
+    "pr_number": 9925,
+    "pr_file": "crates/goose-providers/src/canonical/name_builder.rs",
+    "created_at": "2026-06-22T20:47:17+00:00",
+    "commented_code": "// If direct lookup failed, fall through to inference logic below\n     }\n \n+    // For meta-providers, the catalog may key native aliases under the meta-provider\n+    // itself (e.g. \"databricks/databricks-gpt-oss-120b\"). Try a direct lookup on the\n+    // mapped provider + full/normalized model id before falling back to inference.\n+    if is_meta_provider(provider) {\n+        if let Some(canonical) = registry.get(registry_provider, model) {\n+            return Some(canonical.id.clone());",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3455337084",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 9925,
+        "pr_file": "crates/goose-providers/src/canonical/name_builder.rs",
+        "discussion_id": "3455125359",
+        "commented_code": "@@ -88,6 +92,19 @@ pub fn map_to_canonical_model(\n         // If direct lookup failed, fall through to inference logic below\n     }\n \n+    // For meta-providers, the catalog may key native aliases under the meta-provider\n+    // itself (e.g. \"databricks/databricks-gpt-oss-120b\"). Try a direct lookup on the\n+    // mapped provider + full/normalized model id before falling back to inference.\n+    if is_meta_provider(provider) {\n+        if let Some(canonical) = registry.get(registry_provider, model) {\n+            return Some(canonical.id.clone());",
+        "comment_created_at": "2026-06-22T20:47:17+00:00",
+        "comment_author": "jedwards27",
+        "comment_body": "Good catch on the principle \u2014 that exact shadowing existed in `1f8345e` (this comment's commit), where the meta-provider direct lookup ran **before** inference. Fixed in `bcb4d6d`: the lookup is now a **post-inference fallback**, so `azure`/`gpt-4o` infers to `openai/gpt-4o` first and never reaches the direct lookup. Same for `databricks-claude-*` \u2192 `anthropic/*` (which also restores the adaptive-thinking metadata that the pre-inference version had regressed).\n\nThe fallback now only catches native aliases that *don't* infer back to a first-party provider \u2014 i.e. exactly the `databricks-gpt-oss-*` case this thread was opened for. Verified `map_to_canonical_model(\"azure\", \"gpt-4o\", ..) == openai/gpt-4o` and `(\"databricks\", \"databricks-gpt-oss-120b\") == databricks/databricks-gpt-oss-120b` on the current commit.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

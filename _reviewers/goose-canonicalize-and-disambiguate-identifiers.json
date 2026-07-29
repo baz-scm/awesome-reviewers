@@ -1,0 +1,124 @@
+[
+  {
+    "discussion_id": "3476020529",
+    "pr_number": 9658,
+    "pr_file": "crates/goose-cli/src/session/mod.rs",
+    "created_at": "2026-06-25T17:51:06+00:00",
+    "commented_code": "Ok(())\n     }\n \n+    /// Bare `/model` (no argument): present one searchable menu of models across\n+    /// every configured provider (local LM Studio, NVIDIA, etc.) and switch the\n+    /// live session to the chosen provider + model.\n+    async fn pick_and_switch_model(\n+        &self,\n+        current_provider_name: &str,\n+        current_model_config: &goose_providers::model::ModelConfig,\n+        current_model_name: &str,\n+    ) -> Result<()> {\n+        use std::time::Duration;\n+\n+        let _ = cliclack::log::info(format!(\n+            \"Current model: '{current_model_name}' (provider '{current_provider_name}'). Gathering models from your configured providers\u2026\"\n+        ));\n+\n+        let all = goose::providers::providers().await;\n+        let mut entries: Vec<(String, String, String)> = Vec::new();\n+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();\n+        let mut skipped: Vec<String> = Vec::new();\n+\n+        for (meta, ptype) in &all {\n+            let include = meta.name.as_str() == current_provider_name\n+                || goose::providers::check_provider_configured(meta, *ptype);\n+            if !include || !seen.insert(meta.name.clone()) {\n+                continue;\n+            }\n+\n+            let seed = if meta.default_model.trim().is_empty() {\n+                \"placeholder\".to_string()\n+            } else {\n+                meta.default_model.clone()\n+            };\n+            let model_config = match goose_providers::model::ModelConfig::new(&seed) {\n+                Ok(c) => c.with_canonical_limits(&meta.name),\n+                Err(_) => continue,\n+            };\n+            // Bound construction and listing under a single timeout. An ACP\n+            // provider's create() blocks on the adapter's initialize/newSession\n+            // handshake, so a hung adapter would otherwise stall the picker here,\n+            // before a timeout wrapped around fetch_supported_models() alone could\n+            // fire. A provider that errors, times out, or lists nothing is skipped.\n+            let provider_name = meta.name.clone();\n+            let listed = tokio::time::timeout(Duration::from_secs(15), async move {\n+                let temp_provider =\n+                    goose::providers::create(&provider_name, model_config, Vec::new()).await?;\n+                let models = temp_provider.fetch_supported_models().await?;\n+                Ok::<Vec<String>, anyhow::Error>(models)\n+            })\n+            .await;\n+\n+            match listed {\n+                Ok(Ok(models)) if !models.is_empty() => {\n+                    for m in models {\n+                        let mut label = format!(\"{}  \u25b8  {}\", meta.display_name, m);\n+                        if meta.name.as_str() == current_provider_name\n+                            && m.as_str() == current_model_name\n+                        {\n+                            label.push_str(\"  (current)\");\n+                        }\n+                        entries.push((label, meta.name.clone(), m));\n+                    }\n+                }\n+                Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {\n+                    skipped.push(meta.display_name.clone());\n+                }\n+            }\n+        }\n+\n+        if !skipped.is_empty() {\n+            let _ = cliclack::log::info(format!(\n+                \"Skipped {} provider(s) not available here: {}\",\n+                skipped.len(),\n+                skipped.join(\", \")\n+            ));\n+        }\n+\n+        if entries.is_empty() {\n+            output::render_error(\n+                \"No models available from any configured provider. Check that LM Studio is running or that provider keys are set.\",\n+            );\n+            return Ok(());\n+        }\n+\n+        entries.sort_by(|a, b| {\n+            let a_current = a.1.as_str() == current_provider_name;\n+            let b_current = b.1.as_str() == current_provider_name;\n+            b_current\n+                .cmp(&a_current)\n+                .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))\n+        });\n+\n+        let labels: Vec<String> = entries.iter().map(|(l, _, _)| l.clone()).collect();\n+        let chosen_label = match crate::commands::configure::interactive_model_search(&labels, None)\n+        {\n+            Ok(label) => label,\n+            // Esc / Ctrl-C in the picker: cancel the switch and return to the\n+            // session prompt rather than bubbling up and tearing down the TUI.\n+            Err(e) if is_prompt_cancel(&e) => {\n+                output::goose_mode_message(&format!(\n+                    \"Keeping current model '{current_model_name}'\"\n+                ));\n+                return Ok(());\n+            }\n+            Err(e) => return Err(e),\n+        };\n+\n+        let (_, chosen_provider, chosen_model) =\n+            match entries.into_iter().find(|(l, _, _)| l == &chosen_label) {",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3476475967",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 9658,
+        "pr_file": "crates/goose-cli/src/session/mod.rs",
+        "discussion_id": "3476020529",
+        "commented_code": "@@ -877,6 +884,178 @@ impl CliSession {\n         Ok(())\n     }\n \n+    /// Bare `/model` (no argument): present one searchable menu of models across\n+    /// every configured provider (local LM Studio, NVIDIA, etc.) and switch the\n+    /// live session to the chosen provider + model.\n+    async fn pick_and_switch_model(\n+        &self,\n+        current_provider_name: &str,\n+        current_model_config: &goose_providers::model::ModelConfig,\n+        current_model_name: &str,\n+    ) -> Result<()> {\n+        use std::time::Duration;\n+\n+        let _ = cliclack::log::info(format!(\n+            \"Current model: '{current_model_name}' (provider '{current_provider_name}'). Gathering models from your configured providers\u2026\"\n+        ));\n+\n+        let all = goose::providers::providers().await;\n+        let mut entries: Vec<(String, String, String)> = Vec::new();\n+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();\n+        let mut skipped: Vec<String> = Vec::new();\n+\n+        for (meta, ptype) in &all {\n+            let include = meta.name.as_str() == current_provider_name\n+                || goose::providers::check_provider_configured(meta, *ptype);\n+            if !include || !seen.insert(meta.name.clone()) {\n+                continue;\n+            }\n+\n+            let seed = if meta.default_model.trim().is_empty() {\n+                \"placeholder\".to_string()\n+            } else {\n+                meta.default_model.clone()\n+            };\n+            let model_config = match goose_providers::model::ModelConfig::new(&seed) {\n+                Ok(c) => c.with_canonical_limits(&meta.name),\n+                Err(_) => continue,\n+            };\n+            // Bound construction and listing under a single timeout. An ACP\n+            // provider's create() blocks on the adapter's initialize/newSession\n+            // handshake, so a hung adapter would otherwise stall the picker here,\n+            // before a timeout wrapped around fetch_supported_models() alone could\n+            // fire. A provider that errors, times out, or lists nothing is skipped.\n+            let provider_name = meta.name.clone();\n+            let listed = tokio::time::timeout(Duration::from_secs(15), async move {\n+                let temp_provider =\n+                    goose::providers::create(&provider_name, model_config, Vec::new()).await?;\n+                let models = temp_provider.fetch_supported_models().await?;\n+                Ok::<Vec<String>, anyhow::Error>(models)\n+            })\n+            .await;\n+\n+            match listed {\n+                Ok(Ok(models)) if !models.is_empty() => {\n+                    for m in models {\n+                        let mut label = format!(\"{}  \u25b8  {}\", meta.display_name, m);\n+                        if meta.name.as_str() == current_provider_name\n+                            && m.as_str() == current_model_name\n+                        {\n+                            label.push_str(\"  (current)\");\n+                        }\n+                        entries.push((label, meta.name.clone(), m));\n+                    }\n+                }\n+                Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {\n+                    skipped.push(meta.display_name.clone());\n+                }\n+            }\n+        }\n+\n+        if !skipped.is_empty() {\n+            let _ = cliclack::log::info(format!(\n+                \"Skipped {} provider(s) not available here: {}\",\n+                skipped.len(),\n+                skipped.join(\", \")\n+            ));\n+        }\n+\n+        if entries.is_empty() {\n+            output::render_error(\n+                \"No models available from any configured provider. Check that LM Studio is running or that provider keys are set.\",\n+            );\n+            return Ok(());\n+        }\n+\n+        entries.sort_by(|a, b| {\n+            let a_current = a.1.as_str() == current_provider_name;\n+            let b_current = b.1.as_str() == current_provider_name;\n+            b_current\n+                .cmp(&a_current)\n+                .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))\n+        });\n+\n+        let labels: Vec<String> = entries.iter().map(|(l, _, _)| l.clone()).collect();\n+        let chosen_label = match crate::commands::configure::interactive_model_search(&labels, None)\n+        {\n+            Ok(label) => label,\n+            // Esc / Ctrl-C in the picker: cancel the switch and return to the\n+            // session prompt rather than bubbling up and tearing down the TUI.\n+            Err(e) if is_prompt_cancel(&e) => {\n+                output::goose_mode_message(&format!(\n+                    \"Keeping current model '{current_model_name}'\"\n+                ));\n+                return Ok(());\n+            }\n+            Err(e) => return Err(e),\n+        };\n+\n+        let (_, chosen_provider, chosen_model) =\n+            match entries.into_iter().find(|(l, _, _)| l == &chosen_label) {",
+        "comment_created_at": "2026-06-25T17:51:06+00:00",
+        "comment_author": "jlmalone",
+        "comment_body": "Fixed in `0c9476567`. cliclack returns only the selected label, so two entries with the same display name and model id mapped back ambiguously and the lookup took the first. The picker now disambiguates any colliding label with the internal provider name before the menu is shown, so each row resolves to exactly one (provider, model). Non-colliding labels are unchanged.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3641666379",
+    "pr_number": 10659,
+    "pr_file": "crates/goose-provider-types/src/formats/openai.rs",
+    "created_at": "2026-07-23T22:04:48+00:00",
+    "commented_code": "}\n }\n \n+const MAX_FUNCTION_NAME_LENGTH: usize = 128;",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3641671614",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 10659,
+        "pr_file": "crates/goose-provider-types/src/formats/openai.rs",
+        "discussion_id": "3641666379",
+        "commented_code": "@@ -1577,16 +1577,21 @@ pub(crate) fn openai_reasoning_efforts_for_model(model_name: &str) -> &'static [\n     }\n }\n \n+const MAX_FUNCTION_NAME_LENGTH: usize = 128;",
+        "comment_created_at": "2026-07-23T22:04:48+00:00",
+        "comment_author": "morgmart",
+        "comment_body": "\ud83e\udd16 Thanks for flagging this. I\u2019m keeping 128 here because this PR targets Responses `input[].name` function-call replay, and the captured production 400 for that exact field says: `Expected a string with maximum length 128, but got ... 160`. The current OpenAI schema also defines `FunctionToolParam.name` with `maxLength: 128`; the 64-character limit on the linked page applies to other `name` fields such as structured response-format names, not this replayed function-call field. Since the shared helper already encodes the `[a-zA-Z0-9_-]` function-name contract, aligning it to the observed and schema-defined 128 limit is intentional.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3641829683",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 10659,
+        "pr_file": "crates/goose-provider-types/src/formats/openai.rs",
+        "discussion_id": "3641666379",
+        "commented_code": "@@ -1577,16 +1577,21 @@ pub(crate) fn openai_reasoning_efforts_for_model(model_name: &str) -> &'static [\n     }\n }\n \n+const MAX_FUNCTION_NAME_LENGTH: usize = 128;",
+        "comment_created_at": "2026-07-23T22:39:08+00:00",
+        "comment_author": "morgmart",
+        "comment_body": "\ud83e\udd16 Follow-up from the broader code review: I removed the 128-character limit from the shared inbound `is_valid_function_name` validator. That helper is also used by Google, Databricks, Ollama, and local inference, so applying an OpenAI-specific limit there could reject names those providers had advertised. The 128-character cap now remains only in outbound sanitization, and a regression assertion protects 129-character regex-valid inbound names. Full provider tests and Clippy pass on `45ec30c46`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3577545844",
+    "pr_number": 10345,
+    "pr_file": "crates/goose/src/providers/xai.rs",
+    "created_at": "2026-07-14T09:47:22+00:00",
+    "commented_code": "pub const XAI_KNOWN_MODELS: &[&str] = &[\n     \"grok-code-fast-1\",\n     \"grok-4-0709\",\n+    \"grok-4-latest\",",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3577839996",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 10345,
+        "pr_file": "crates/goose/src/providers/xai.rs",
+        "discussion_id": "3577545844",
+        "commented_code": "@@ -10,6 +10,12 @@ pub const XAI_DEFAULT_MODEL: &str = \"grok-code-fast-1\";\n pub const XAI_KNOWN_MODELS: &[&str] = &[\n     \"grok-code-fast-1\",\n     \"grok-4-0709\",\n+    \"grok-4-latest\",",
+        "comment_created_at": "2026-07-14T09:47:22+00:00",
+        "comment_author": "vincenzopalazzo",
+        "comment_body": "**Fixed in 55df4742.** Added canonical entry `x-ai/grok-4` (256k context). `strip_version_suffix` strips `-latest` and date suffixes, so both `grok-4-latest` and `grok-4-0709` resolve to this entry.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3425204829",
+    "pr_number": 9794,
+    "pr_file": "crates/goose/src/providers/formats/bedrock.rs",
+    "created_at": "2026-06-17T16:05:51+00:00",
+    "commented_code": "use serde_json::Value;\n \n use crate::conversation::message::{Message, MessageContent};\n+use crate::model::ModelConfig;\n+use crate::providers::formats::anthropic::{\n+    adaptive_output_effort, thinking_budget_tokens, thinking_type_for_provider, ThinkingType,\n+    ANTHROPIC_PROVIDER_NAME,\n+};\n use goose_providers::conversation::token_usage::Usage;\n \n+pub fn bedrock_anthropic_thinking_fields(model_config: &ModelConfig) -> Option<Document> {\n+    let thinking_type = bedrock_anthropic_thinking_type(model_config);\n+    let thinking = match thinking_type {\n+        ThinkingType::Adaptive => Document::Object(HashMap::from([(\n+            \"type\".to_string(),\n+            Document::String(\"adaptive\".to_string()),\n+        )])),\n+        ThinkingType::Enabled => Document::Object(HashMap::from([\n+            (\"type\".to_string(), Document::String(\"enabled\".to_string())),\n+            (\n+                \"budget_tokens\".to_string(),\n+                Document::Number(Number::PosInt(thinking_budget_tokens(model_config) as u64)),\n+            ),\n+        ])),\n+        ThinkingType::Disabled => return None,\n+    };\n+\n+    let mut fields = HashMap::from([(\"thinking\".to_string(), thinking)]);\n+\n+    if thinking_type == ThinkingType::Adaptive {\n+        fields.insert(\n+            \"output_config\".to_string(),\n+            Document::Object(HashMap::from([(\n+                \"effort\".to_string(),\n+                Document::String(adaptive_output_effort(model_config).to_string()),\n+            )])),\n+        );\n+    }\n+\n+    Some(Document::Object(fields))\n+}\n+\n+fn bedrock_anthropic_thinking_type(model_config: &ModelConfig) -> ThinkingType {\n+    let Some((_, anthropic_model)) = model_config.model_name.rsplit_once(\"anthropic.\") else {\n+        return ThinkingType::Disabled;\n+    };\n+\n+    let anthropic_config = ModelConfig {\n+        model_name: anthropic_model.to_string(),",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3429673581",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 9794,
+        "pr_file": "crates/goose/src/providers/formats/bedrock.rs",
+        "discussion_id": "3425204829",
+        "commented_code": "@@ -15,8 +15,58 @@ use rmcp::model::{\n use serde_json::Value;\n \n use crate::conversation::message::{Message, MessageContent};\n+use crate::model::ModelConfig;\n+use crate::providers::formats::anthropic::{\n+    adaptive_output_effort, thinking_budget_tokens, thinking_type_for_provider, ThinkingType,\n+    ANTHROPIC_PROVIDER_NAME,\n+};\n use goose_providers::conversation::token_usage::Usage;\n \n+pub fn bedrock_anthropic_thinking_fields(model_config: &ModelConfig) -> Option<Document> {\n+    let thinking_type = bedrock_anthropic_thinking_type(model_config);\n+    let thinking = match thinking_type {\n+        ThinkingType::Adaptive => Document::Object(HashMap::from([(\n+            \"type\".to_string(),\n+            Document::String(\"adaptive\".to_string()),\n+        )])),\n+        ThinkingType::Enabled => Document::Object(HashMap::from([\n+            (\"type\".to_string(), Document::String(\"enabled\".to_string())),\n+            (\n+                \"budget_tokens\".to_string(),\n+                Document::Number(Number::PosInt(thinking_budget_tokens(model_config) as u64)),\n+            ),\n+        ])),\n+        ThinkingType::Disabled => return None,\n+    };\n+\n+    let mut fields = HashMap::from([(\"thinking\".to_string(), thinking)]);\n+\n+    if thinking_type == ThinkingType::Adaptive {\n+        fields.insert(\n+            \"output_config\".to_string(),\n+            Document::Object(HashMap::from([(\n+                \"effort\".to_string(),\n+                Document::String(adaptive_output_effort(model_config).to_string()),\n+            )])),\n+        );\n+    }\n+\n+    Some(Document::Object(fields))\n+}\n+\n+fn bedrock_anthropic_thinking_type(model_config: &ModelConfig) -> ThinkingType {\n+    let Some((_, anthropic_model)) = model_config.model_name.rsplit_once(\"anthropic.\") else {\n+        return ThinkingType::Disabled;\n+    };\n+\n+    let anthropic_config = ModelConfig {\n+        model_name: anthropic_model.to_string(),",
+        "comment_created_at": "2026-06-17T16:05:51+00:00",
+        "comment_author": "DOsinga",
+        "comment_body": "Fixed in e9720ab. Real Bedrock ids like `us.anthropic.claude-opus-4-1-20250805-v1:0` were not resolving in the canonical Anthropic registry because the trailing `-v1:0` suffix prevented strip_version_suffix from dropping the date stamp, so adaptive-only models fell through to enabled. We now strip the Bedrock `-vN(:M)?` suffix before the lookup, and added a regression test (test_bedrock_anthropic_thinking_fields_adaptive_with_version_suffix) using a realistic versioned id that fails without the fix.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3396791299",
+    "pr_number": 9743,
+    "pr_file": "crates/goose/src/providers/formats/databricks.rs",
+    "created_at": "2026-06-11T14:38:06+00:00",
+    "commented_code": "messages: &[Message],\n     tools: &[Tool],\n     image_format: &ImageFormat,\n+) -> anyhow::Result<Value, Error> {\n+    create_request_for_provider(\n+        \"databricks\",",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3396791299",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 9743,
+        "pr_file": "crates/goose/src/providers/formats/databricks.rs",
+        "discussion_id": "3396791299",
+        "commented_code": "@@ -585,6 +592,24 @@ pub fn create_request(\n     messages: &[Message],\n     tools: &[Tool],\n     image_format: &ImageFormat,\n+) -> anyhow::Result<Value, Error> {\n+    create_request_for_provider(\n+        \"databricks\",",
+        "comment_created_at": "2026-06-11T14:38:06+00:00",
+        "comment_author": "DOsinga",
+        "comment_body": "shouldn't this also use DATABRICKS_PROVIDER_NAME (same for anthropic)",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

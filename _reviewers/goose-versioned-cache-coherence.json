@@ -1,0 +1,68 @@
+[
+  {
+    "discussion_id": "3626043815",
+    "pr_number": 10459,
+    "pr_file": "crates/goose/src/agents/agent.rs",
+    "created_at": "2026-07-22T22:32:25+00:00",
+    "commented_code": "}\n                 can_drain_pending_steers = true;\n \n+                // A server may have emitted `notifications/tools/list_changed`\n+                // during this iteration (e.g. a tool call that unlocks new tools),\n+                // invalidating the shared tool cache. Detect that via the version\n+                // counter so the loop re-lists and offers the updated tool set on\n+                // the next iteration of this same reply.\n+                let current_tools_cache_version = self.extension_manager.tools_cache_version();\n+                if current_tools_cache_version != tools_cache_version {\n+                    tools_cache_version = current_tools_cache_version;\n+                    tools_updated = true;",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3634257716",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 10459,
+        "pr_file": "crates/goose/src/agents/agent.rs",
+        "discussion_id": "3626043815",
+        "commented_code": "@@ -2657,6 +2664,17 @@ impl Agent {\n                 }\n                 can_drain_pending_steers = true;\n \n+                // A server may have emitted `notifications/tools/list_changed`\n+                // during this iteration (e.g. a tool call that unlocks new tools),\n+                // invalidating the shared tool cache. Detect that via the version\n+                // counter so the loop re-lists and offers the updated tool set on\n+                // the next iteration of this same reply.\n+                let current_tools_cache_version = self.extension_manager.tools_cache_version();\n+                if current_tools_cache_version != tools_cache_version {\n+                    tools_cache_version = current_tools_cache_version;\n+                    tools_updated = true;",
+        "comment_created_at": "2026-07-22T22:32:25+00:00",
+        "comment_author": "arohou",
+        "comment_body": "Good catch \u2014 fixed in `3d9d9f7`.\r\n\r\nAll three reply-loop refresh paths (runtime extension-enable, directory hints, and the `tools/list_changed` version check added in this PR) rebuild `system_prompt` via `prepare_tools_and_prompt`, which doesn't include the project addendum. The initial prompt appended it, but the next provider turn after a refresh ran without it. Added a `with_project_addendum` helper and re-append it after each refresh (and for the initial prompt), so project instructions survive a mid-reply refresh.\r\n\r\nThis was actually latent on the two pre-existing refresh paths as well, so the fix covers all of them, not just the new one.\r\n\r\nHappy to add a project-scoped reply-loop regression test if you'd like \u2014 I held off to keep the diff focused, but it's easy to add.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3644295779",
+    "pr_number": 10459,
+    "pr_file": "crates/goose/src/agents/agent.rs",
+    "created_at": "2026-07-26T07:01:59+00:00",
+    "commented_code": "model_config,\n         } = context;\n \n-        if let Some(project_addendum) = self.load_project_instructions(&session).await {\n-            system_prompt = format!(\"{system_prompt}\n\n{project_addendum}\");\n-        }\n+        // Snapshot of the tool-cache version that `tools` above was built from.\n+        // If a server emits `notifications/tools/list_changed` mid-reply, the\n+        // ExtensionManager cache is invalidated and this counter bumps; the reply\n+        // loop polls it below to re-list tools so the change reaches the model on\n+        // the next iteration of the *same* reply, not only on the next one.\n+        let mut tools_cache_version = self.extension_manager.tools_cache_version();",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3651968621",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 10459,
+        "pr_file": "crates/goose/src/agents/agent.rs",
+        "discussion_id": "3644295779",
+        "commented_code": "@@ -1863,9 +1874,14 @@ impl Agent {\n             model_config,\n         } = context;\n \n-        if let Some(project_addendum) = self.load_project_instructions(&session).await {\n-            system_prompt = format!(\"{system_prompt}\\n\\n{project_addendum}\");\n-        }\n+        // Snapshot of the tool-cache version that `tools` above was built from.\n+        // If a server emits `notifications/tools/list_changed` mid-reply, the\n+        // ExtensionManager cache is invalidated and this counter bumps; the reply\n+        // loop polls it below to re-list tools so the change reaches the model on\n+        // the next iteration of the *same* reply, not only on the next one.\n+        let mut tools_cache_version = self.extension_manager.tools_cache_version();",
+        "comment_created_at": "2026-07-26T07:01:59+00:00",
+        "comment_author": "arohou",
+        "comment_body": "Fixed in `84da77b`, and this time structurally rather than as another point-fix.\r\n\r\nRoot cause across this and the previous couple of comments: the reply loop kept a tool-cache *version* baseline **separately** from its `tools` vector and read the two at different points, so they could drift \u2014 including the window you flagged, where a `list_changed` handled while `prepare_reply_context` was still building `tools` got recorded as \"already consumed\" by the later baseline read.\r\n\r\nThe fix makes the version **travel with the tools** so they can't be captured out of sync:\r\n- `tools_cache` now stores `(version, tools)`; `get_all_tools_cached` returns the version the returned tools were built from (stored version on a cache hit, `version_before` on a refetch).\r\n- surfaced via `get_prefixed_tools_with_version` / `list_tools_with_version` (the existing `get_prefixed_tools` / `list_tools` stay as version-dropping wrappers, so other callers are untouched), threaded through `prepare_tools_and_prompt` and `ReplyContext`.\r\n- the reply loop takes its baseline from the version returned *alongside* the tools at every build/rebuild site, and no longer reads the counter separately.\r\n\r\nSo now `baseline == version-of-tools` by construction \u2014 the baseline can't drift ahead of the tools it's paired with, which closes this window and the class behind it. Added a unit test locking in the \"get_all_tools_cached returns the tools' version\" contract.\r\n\r\nThe only remaining gap is the inherent async-delivery race (a notification whose detached handler hasn't run yet) \u2014 caught on a later turn, never loses a tool, as discussed earlier.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3651972894",
+    "pr_number": 10459,
+    "pr_file": "crates/goose/src/agents/extension_manager.rs",
+    "created_at": "2026-07-26T20:55:49+00:00",
+    "commented_code": "}\n \n     async fn invalidate_tools_cache_and_bump_version(&self) {\n-        self.tools_cache_version.fetch_add(1, Ordering::SeqCst);\n+        // Clear the cache before bumping the version so observers of the new\n+        // version never see the stale cache.\n         *self.tools_cache.lock().await = None;\n+        self.tools_cache_version.fetch_add(1, Ordering::SeqCst);",
+    "repo_full_name": "aaif-goose/goose",
+    "discussion_comments": [
+      {
+        "comment_id": "3653414577",
+        "repo_full_name": "aaif-goose/goose",
+        "pr_number": 10459,
+        "pr_file": "crates/goose/src/agents/extension_manager.rs",
+        "discussion_id": "3651972894",
+        "commented_code": "@@ -1384,8 +1436,19 @@ impl ExtensionManager {\n     }\n \n     async fn invalidate_tools_cache_and_bump_version(&self) {\n-        self.tools_cache_version.fetch_add(1, Ordering::SeqCst);\n+        // Clear the cache before bumping the version so observers of the new\n+        // version never see the stale cache.\n         *self.tools_cache.lock().await = None;\n+        self.tools_cache_version.fetch_add(1, Ordering::SeqCst);",
+        "comment_created_at": "2026-07-26T20:55:49+00:00",
+        "comment_author": "arohou",
+        "comment_body": "Fixed in `96bc692`. This one was a regression from the earlier clear-then-bump reorder: clearing the cache released the lock before the `fetch_add`, so a `get_all_tools_cached` write-back finishing a fetch could grab the lock in that gap, see the not-yet-bumped version (guard passes) and an empty cache, and repopulate `Some((old_version, stale_tools))`. The bump then stranded a stale entry the version poll can't evict.\r\n\r\nFix: hold the cache lock across **both** the bump and the clear, so a write-back runs either fully before invalidation (its entry is then cleared) or fully after (its `version_after == version_before` guard fails and it doesn't cache). The \"observer of the new version sees a cleared cache\" property is preserved.\r\n\r\nThe remaining gap is still only the inherent async-delivery race (a notification whose detached handler hasn't run yet), which is caught on a later turn and never loses a tool.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

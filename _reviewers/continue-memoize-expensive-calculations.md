@@ -9,7 +9,7 @@ language: TSX
 comments_count: 3
 repository_stars: 27819
 ---
-
+{% raw %}
 Cache computation results in React components to prevent unnecessary recalculations during re-renders, which can significantly impact application performance. Apply these optimization techniques in three key areas:
 
 1. **Redux selectors**: Ensure selectors return stable references or use memoization libraries like reselect:
@@ -56,3 +56,4 @@ const fontSize = useFontSize();
 ```
 
 When implementing these optimizations, focus on functions that perform expensive calculations or create new object references, especially those called frequently during renders or within loops.
+{% endraw %}

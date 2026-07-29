@@ -10,7 +10,7 @@ language: Json
 comments_count: 2
 repository_stars: 40858
 ---
-
+{% raw %}
 When providing translations for user interface elements and documentation, prioritize natural and idiomatic expressions in the target language rather than literal translations. Consider the grammatical rules and cultural context of each language to ensure the translated text sounds native to users.
 
 Follow these best practices:
@@ -37,3 +37,4 @@ Example:
 ```
 
 This approach makes the documentation and UI more intuitive and accessible to international users, improving the overall user experience across different language contexts.
+{% endraw %}

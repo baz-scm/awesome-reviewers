@@ -9,7 +9,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 11590
 ---
-
+{% raw %}
 Remove unnecessary approval gates, custom tokens, and restrictive conditions in CI/CD workflows when existing security measures are sufficient. Over-restrictive workflows create friction without meaningful security benefits.
 
 For example, avoid adding approval requirements when contributor workflows already require approval:
@@ -29,3 +29,4 @@ Similarly, use built-in tokens when appropriate instead of custom secrets:
 ```
 
 Evaluate each workflow condition to ensure it adds genuine security value rather than just creating additional steps.
+{% endraw %}

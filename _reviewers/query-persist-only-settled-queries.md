@@ -9,7 +9,7 @@ language: Markdown
 comments_count: 4
 repository_stars: 49380
 ---
-
+{% raw %}
 When using async/concurrent flows (streaming, dehydration/rehydration, optimistic updates), ensure you never persist “in-flight” async state and you always return promises from async callbacks.
 
 1) Don’t persist promises during streaming/dehydration
@@ -40,3 +40,4 @@ useMutation({
 Practical checklist:
 - Any persistence/dehydration layer: allow only resolved/errored (settled) query results to be stored.
 - Any callback that triggers async operations: return the promise so downstream orchestration/lifecycle expectations remain correct.
+{% endraw %}

@@ -9,13 +9,12 @@ language: Markdown
 comments_count: 4
 repository_stars: 14036
 ---
-
+{% raw %}
 When implementing algorithms with numerical libraries like ND4J, always prefer the most direct and type-safe API methods over older patterns. This improves code clarity, prevents subtle bugs, and often leads to better performance.
 
 Key practices:
 1. Use `createFromArray` instead of `create` for array initialization, as it has clear overloads for all primitive types:
 ```java
-{% raw %}
 // Preferred:
 double arr_2d[][] = {{1.0,2.0,3.0},{4.0,5.0,6.0}};
 INDArray x_2d = Nd4j.createFromArray(arr_2d);
@@ -24,7 +23,6 @@ INDArray x_2d = Nd4j.createFromArray(arr_2d);
 double[] flat = ArrayUtil.flattenDoubleArray(myDoubleArray);
 int[] shape = {rows, cols};
 INDArray myArr = Nd4j.create(flat, shape, 'c');
-{% endraw %}
 ```
 
 2. Prefer direct parameter methods over shape arrays for common operations:
@@ -51,3 +49,4 @@ INDArray result = x.add(y);
 ```
 
 Following these practices leads to more efficient algorithm implementations with fewer errors and better maintainability.
+{% endraw %}

@@ -10,7 +10,7 @@ language: TSX
 comments_count: 3
 repository_stars: 37732
 ---
-
+{% raw %}
 Design components to be configurable through props rather than relying on external context like URL paths or modifying shared UI components directly. This approach improves reusability, maintainability, and reduces coupling between components and their usage contexts.
 
 Key principles:
@@ -36,3 +36,4 @@ Example of good composition:
 ```
 
 This pattern makes components more predictable, testable, and easier to refactor when requirements change.
+{% endraw %}

@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 3
 repository_stars: 91345
 ---
-
+{% raw %}
 Design CI/CD workflows with reusability and clear naming conventions from the start. Use meaningful prefixes that reflect the conceptual purpose (like "trunk" for trunk-based development), and consider future extraction into standalone, parameterized actions when similar functionality might be needed across repositories.
 
 For workflow implementation:
@@ -49,3 +49,4 @@ jobs:
 ```
 
 This approach makes workflows more maintainable and enables cross-repository sharing of common CI/CD patterns.
+{% endraw %}

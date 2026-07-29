@@ -11,7 +11,7 @@ language: Yaml
 comments_count: 3
 repository_stars: 26407
 ---
-
+{% raw %}
 Ensure workflow configuration (env vars, inputs, config lists) has a single authoritative definition and a clearly documented consumer.
 
 Apply this when editing GitHub Actions/workflow configs or config-driven automation:
@@ -36,3 +36,4 @@ Example (pattern): derive the maintainer list once and reuse it, instead of dupl
     node apply.mjs --maintainers "$MAINTAINERS"
 ```
 This prevents drift, makes changes predictable, and avoids confusing behavior caused by precedence/overrides or unused settings.
+{% endraw %}

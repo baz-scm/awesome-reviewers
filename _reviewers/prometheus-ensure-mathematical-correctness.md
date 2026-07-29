@@ -10,7 +10,7 @@ language: Other
 comments_count: 4
 repository_stars: 59616
 ---
-
+{% raw %}
 When implementing or testing algorithms, ensure mathematical relationships and constraints are maintained throughout the computation. Test data should have plausible values that reflect real-world mathematical relationships, and algorithmic edge cases should be carefully handled to prevent mathematical inconsistencies.
 
 Key areas to focus on:
@@ -31,3 +31,4 @@ h_test {{schema:0 count:34 sum:170 buckets:[2 4 8 16]}}
 ```
 
 This approach helps ensure algorithms behave correctly under various mathematical conditions and produce results that maintain expected mathematical properties.
+{% endraw %}

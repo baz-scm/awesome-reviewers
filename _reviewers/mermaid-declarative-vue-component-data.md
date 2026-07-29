@@ -13,7 +13,7 @@ language: Other
 comments_count: 3
 repository_stars: 87952
 ---
-
+{% raw %}
 In Vue SFCs, keep templates declarative and driven by explicit data.
 
 **Rules**
@@ -79,3 +79,4 @@ const isVisible = ref(false);
 ```
 
 This improves maintainability (template changes don’t silently break styling order) and makes behavior more testable and reviewable.
+{% endraw %}

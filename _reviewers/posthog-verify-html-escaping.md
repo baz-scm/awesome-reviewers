@@ -10,7 +10,7 @@ language: Html
 comments_count: 1
 repository_stars: 28460
 ---
-
+{% raw %}
 Always verify that user-controlled content in templates is properly HTML-escaped to prevent XSS attacks. Don't just assume framework defaults are working - actively test with potentially malicious input to confirm that HTML tags are rendered as text rather than executed.
 
 When displaying dynamic content in templates, test with HTML payloads like `<img src=x />` or `<script>alert('xss')</script>` to ensure they appear as literal text. For Django templates, confirm that the standard `{{ variable }}` syntax properly escapes HTML characters, converting `<` to `&lt;`, `>` to `&gt;`, etc.
@@ -26,3 +26,4 @@ Example verification:
 ```
 
 This practice helps catch cases where unsafe rendering methods might be accidentally used or where framework protections might not apply.
+{% endraw %}

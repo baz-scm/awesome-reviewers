@@ -9,7 +9,7 @@ language: TSX
 comments_count: 3
 repository_stars: 17288
 ---
-
+{% raw %}
 Always sanitize user-generated or externally sourced content before rendering it to prevent Cross-Site Scripting (XSS) vulnerabilities. Never use `dangerouslySetInnerHTML` with unsanitized content.
 
 When handling user input or external data:
@@ -48,3 +48,4 @@ const renderImage = (imageUrl: string) => {
   return <img src={sanitizedUrl} alt="User content" />;
 };
 ```
+{% endraw %}

@@ -9,12 +9,11 @@ language: TSX
 comments_count: 3
 repository_stars: 96063
 ---
-
+{% raw %}
 Always use design system tokens (theme values, breakpoints, spacing units) instead of hard-coded values. This ensures consistency across the codebase and makes maintenance easier when design changes are needed.
 
 Bad:
 ```tsx
-{% raw %}
 <Grid sx={{ 
   width: '44px',
   fontWeight: 'bold',
@@ -22,12 +21,10 @@ Bad:
     // ...
   }
 }} />
-{% endraw %}
 ```
 
 Good:
 ```tsx
-{% raw %}
 <Grid sx={{ 
   width: theme.spacing(5.5), // or appropriate token
   fontWeight: theme.typography.fontWeightBold,
@@ -35,7 +32,6 @@ Good:
     // ...
   }
 }} />
-{% endraw %}
 ```
 
 This practice:
@@ -43,3 +39,4 @@ This practice:
 - Simplifies theme customization
 - Makes responsive design more maintainable
 - Reduces the need for magic numbers in the code
+{% endraw %}

@@ -9,7 +9,7 @@ language: Markdown
 comments_count: 6
 repository_stars: 27518
 ---
-
+{% raw %}
 Configure CI pipelines to use appropriately scoped access tokens based on branch protection status. Use read-write tokens only for protected branches (branches that don't allow direct push) and read-only tokens for all other branches and environments.
 
 Read-write tokens allow full cache access but should be restricted to trusted environments to prevent cache poisoning. Read-only tokens allow reading from the shared primary cache and writing to branch-specific isolated caches, providing cache benefits while maintaining security.
@@ -30,3 +30,4 @@ jobs:
 ```
 
 This approach prevents unauthorized cache modifications while maintaining the performance benefits of remote caching across all CI runs.
+{% endraw %}

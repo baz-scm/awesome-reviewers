@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 48299
 ---
-
+{% raw %}
 Environment variables in CI/CD workflows should be organized consistently using structured `env` sections rather than inline declarations, and should account for platform-specific requirements. This improves maintainability, readability, and prevents environment-related failures across different operating systems.
 
 Use the `env` field at the step or job level instead of inline variable assignments:
@@ -37,3 +37,4 @@ run: |
 ```
 
 This approach centralizes environment configuration, makes dependencies explicit, and prevents platform-specific failures in automated workflows.
+{% endraw %}

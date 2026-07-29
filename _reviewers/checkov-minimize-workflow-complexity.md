@@ -13,7 +13,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 7668
 ---
-
+{% raw %}
 Keep GitHub Actions workflows efficient and maintainable by eliminating redundant configurations and ensuring comprehensive test coverage:
 
 1. **Avoid redundant environment variables** - Use the minimum number of variables needed to achieve your workflow goals. When one variable can be derived from another, don't store both.
@@ -53,3 +53,4 @@ strategy:
 ```
 
 Keeping workflows streamlined improves maintainability, reduces debugging time, and makes your CI processes more reliable.
+{% endraw %}

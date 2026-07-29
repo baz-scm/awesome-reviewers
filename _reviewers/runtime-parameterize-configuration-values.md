@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 3
 repository_stars: 16578
 ---
-
+{% raw %}
 Extract hard-coded configuration values into variables, parameters, or templates to improve reusability and simplify maintenance. When the same value is used in multiple places or might need to change in the future, define it once and reference it throughout your configuration files.
 
 Examples:
@@ -35,3 +35,4 @@ jobParameters:
 ```
 
 This practice reduces duplication, centralizes configuration management, and makes future updates more efficient and less error-prone.
+{% endraw %}

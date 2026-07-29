@@ -12,7 +12,7 @@ language: Json
 comments_count: 7
 repository_stars: 17288
 ---
-
+{% raw %}
 Ensure all localization strings maintain consistent formatting patterns within each locale file. This includes:
 
 1. **Terminal punctuation**: All similar messages should consistently end with appropriate punctuation marks for the locale (periods in English/French, "।" in Hindi, etc.).
@@ -44,3 +44,4 @@ Example (correct):
 ```
 
 Consistent formatting makes localization files more maintainable and ensures a uniform appearance throughout the application.
+{% endraw %}

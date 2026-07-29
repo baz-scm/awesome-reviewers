@@ -11,7 +11,7 @@ language: Yaml
 comments_count: 5
 repository_stars: 44168
 ---
-
+{% raw %}
 Use GitHub Actions native features and follow best practices to create maintainable, secure, and reliable CI workflows:
 
 1. **Use working-directory instead of manual cd commands**
@@ -63,3 +63,4 @@ Use GitHub Actions native features and follow best practices to create maintaina
    ```
 
 These practices improve workflow reliability, security, and maintainability while making troubleshooting easier.
+{% endraw %}

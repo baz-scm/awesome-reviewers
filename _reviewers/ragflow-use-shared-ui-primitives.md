@@ -15,7 +15,7 @@ language: TSX
 comments_count: 6
 repository_stars: 80174
 ---
-
+{% raw %}
 When building UI, follow the project’s existing design-system components and tokens instead of creating bespoke patterns.
 
 **Standards**
@@ -61,3 +61,4 @@ export function CreateSpaceDialog(props: {
 ```
 
 Applying these keeps UI consistent, reduces duplicated styling/behavior, improves readability, and makes future theme/UI updates cheaper.
+{% endraw %}

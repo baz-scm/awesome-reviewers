@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 1
 repository_stars: 5002
 ---
-
+{% raw %}
 Always prefer the built-in GITHUB_TOKEN, explicitly document why it’s needed, and grant it only the minimum permissions required. For third‑party actions that call the GitHub API, pin them and justify token usage in the workflow so reviewers can verify scope and intent.
 
 Why: automatic tokens are safer than adding shared secrets; minimizing permissions reduces blast radius if an action is compromised; pinning and documenting lets reviewers assess supply‑chain risk.
@@ -46,3 +46,4 @@ Checklist for reviewers:
 - Could pull_request be used instead of pull_request_target to reduce risk?
 
 References: [0]
+{% endraw %}

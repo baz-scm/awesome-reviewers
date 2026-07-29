@@ -9,7 +9,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 57769
 ---
-
+{% raw %}
 Review CI/CD workflow configurations for both performance optimizations and accuracy in conditional logic. This includes minimizing resource usage where possible and ensuring all conditional statements use correct values.
 
 For performance, avoid fetching unnecessary git history by using minimal fetch depth:
@@ -26,3 +26,4 @@ if: ${{github.event_name == 'push' || github.repository == 'nuxt/nuxt'}}  # Corr
 ```
 
 These optimizations reduce build times, minimize resource consumption, and prevent workflow failures due to incorrect conditions.
+{% endraw %}

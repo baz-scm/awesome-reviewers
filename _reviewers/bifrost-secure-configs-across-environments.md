@@ -9,7 +9,7 @@ language: Yaml
 comments_count: 4
 repository_stars: 6862
 ---
-
+{% raw %}
 When making security-related changes, ensure the configuration is (1) least-privilege/scoped, (2) actually enforced by the platform, and (3) consistent across code/docs.
 
 Apply this standard:
@@ -32,3 +32,4 @@ Example (scope secrets to test jobs):
 env:
   # GITHUB_COPILOT_TOKEN: ${{ secrets.GITHUB_COPILOT_TOKEN }}  # keep out of release jobs
 ```
+{% endraw %}

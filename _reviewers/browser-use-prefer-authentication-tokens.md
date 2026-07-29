@@ -11,7 +11,7 @@ language: Yaml
 comments_count: 1
 repository_stars: 69139
 ---
-
+{% raw %}
 When configuring authentication in CI/CD workflows, prefer using tokens over passwords for enhanced security. Tokens can be scoped with specific permissions, rotated more easily, and provide better audit trails compared to passwords. This is particularly important for service-to-service authentication where credentials are stored as secrets.
 
 For Docker Hub authentication in GitHub Actions, use a personal access token instead of your account password:
@@ -25,3 +25,4 @@ For Docker Hub authentication in GitHub Actions, use a personal access token ins
 ```
 
 Even when official documentation shows password usage, prioritize token-based authentication as it follows security best practices and reduces the risk of credential compromise.
+{% endraw %}

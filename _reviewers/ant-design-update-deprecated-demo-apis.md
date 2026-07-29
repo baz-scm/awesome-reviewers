@@ -9,7 +9,7 @@ language: Other
 comments_count: 4
 repository_stars: 95882
 ---
-
+{% raw %}
 Documentation, demos, and example code should always use current, non-deprecated APIs instead of showing deprecation warnings. When APIs are deprecated, update all demo code and examples to use the recommended replacement APIs immediately.
 
 This prevents users from copying outdated code that generates warnings and ensures documentation serves as a reliable guide for current best practices. If deprecated API compatibility testing is needed, limit it to dedicated test files rather than user-facing examples.
@@ -24,3 +24,4 @@ Example of what to avoid:
 ```
 
 When you see deprecation warnings in demo snapshots, update the demo source code to use the current API rather than accepting the warning as expected output.
+{% endraw %}

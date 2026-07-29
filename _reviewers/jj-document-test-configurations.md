@@ -9,7 +9,7 @@ language: Toml
 comments_count: 2
 repository_stars: 21171
 ---
-
+{% raw %}
 When modifying test configurations or tooling settings, provide clear explanations of what the changes actually do and why specific options were chosen. Test configuration changes can be confusing without proper context.
 
 For commit messages, explain the current behavior and what's being changed:
@@ -33,3 +33,4 @@ env.NEXTEST_STATUS_LEVEL="slow"
 ```
 
 This prevents confusion about what configuration changes actually accomplish and helps future maintainers understand the reasoning behind specific test tool settings.
+{% endraw %}

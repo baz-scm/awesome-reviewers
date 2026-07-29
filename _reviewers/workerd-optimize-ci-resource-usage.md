@@ -11,7 +11,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 6989
 ---
-
+{% raw %}
 Design CI workflows to maximize resource efficiency by reusing build artifacts across jobs whenever possible, while carefully evaluating when separate builds are truly necessary. Before creating duplicate build jobs, assess whether different compilation flags or configurations genuinely require separate builds, or if the same artifacts can be reused with additional steps.
 
 Consider these strategies:
@@ -33,3 +33,4 @@ Example from workflow optimization:
 ```
 
 This approach reduces CI costs, improves pipeline efficiency, and minimizes resource waste while ensuring all build requirements are met.
+{% endraw %}

@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 3379
 ---
-
+{% raw %}
 CI workflows should be idempotent and handle cleanup automatically to avoid manual intervention and ensure reliable execution. When designing workflows that create resources, branches, or temporary artifacts, always include cleanup steps that can run safely multiple times.
 
 Key practices:
@@ -28,3 +28,4 @@ Example from workflow design:
 ```
 
 This prevents scenarios where workflows fail on subsequent runs due to existing branches, resources, or conflicts, eliminating the need for manual cleanup and ensuring consistent behavior across executions.
+{% endraw %}

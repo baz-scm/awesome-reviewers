@@ -9,7 +9,7 @@ language: Other
 comments_count: 6
 repository_stars: 122978
 ---
-
+{% raw %}
 Always sanitize dynamic content before rendering to prevent XSS and injection attacks. This includes HTML content, CSS styles, and executable scripts. Use appropriate sanitization methods based on content type:
 
 1. For HTML content:
@@ -44,3 +44,4 @@ return DOMPurify.sanitize(props.content.html, {
 - Implement proper sandboxing for user-provided code
 
 Never trust user input or third-party content. Always validate and sanitize before rendering.
+{% endraw %}

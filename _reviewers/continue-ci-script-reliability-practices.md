@@ -13,7 +13,7 @@ language: Yaml
 comments_count: 7
 repository_stars: 27819
 ---
-
+{% raw %}
 Ensure CI/CD workflows maintain reliability by following these practices:
 
 1. **Use explicit script paths** - Always use explicit paths when invoking scripts (e.g., `./build.ps1` for PowerShell or `./build.sh` for bash) rather than relying on implicit path resolution. This ensures the runner can locate and execute scripts regardless of the current working directory.
@@ -47,3 +47,4 @@ Ensure CI/CD workflows maintain reliability by following these practices:
    ```
 
 These practices will prevent common CI/CD failures and improve workflow reliability across different environments and contributor scenarios.
+{% endraw %}

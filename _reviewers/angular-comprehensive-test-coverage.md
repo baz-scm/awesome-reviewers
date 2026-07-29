@@ -9,7 +9,7 @@ language: TypeScript
 comments_count: 9
 repository_stars: 98611
 ---
-
+{% raw %}
 Ensure test suites provide comprehensive coverage by including edge cases, different input scenarios, and all code paths. Tests should cover not just the happy path, but also boundary conditions, error cases, and various input combinations.
 
 When writing tests, consider these coverage areas:
@@ -41,3 +41,4 @@ it('should handle component inputs vs attributes', () => {
 ```
 
 Missing test coverage often indicates incomplete understanding of the feature's behavior and can lead to regressions. Comprehensive testing builds confidence in code changes and helps catch issues before they reach production.
+{% endraw %}

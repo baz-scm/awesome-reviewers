@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 3
 repository_stars: 42967
 ---
-
+{% raw %}
 Add explanatory comments to configuration files that clarify the reasoning behind non-obvious choices, feature exclusions, conditional logic, and environment-specific settings. This helps future maintainers understand why certain configurations exist and prevents accidental modifications.
 
 Key areas requiring documentation:
@@ -32,3 +32,4 @@ env:
 ```
 
 This practice prevents confusion about configuration intent and reduces the likelihood of breaking changes when configurations are modified.
+{% endraw %}

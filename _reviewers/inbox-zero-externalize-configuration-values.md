@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 3
 repository_stars: 8267
 ---
-
+{% raw %}
 Configuration files should not contain hardcoded values for usernames, credentials, hostnames, or environment-specific settings. Instead, use environment variables, templated values, or dynamic references that can adapt to different deployment contexts.
 
 This approach improves:
@@ -34,3 +34,4 @@ For Docker and CI/CD configurations:
 ```
 
 For sensitive values, consider using secrets management systems for production environments. For local development, provide `.env.example` files as templates that developers can copy to create their own `.env` files, which should be excluded from version control.
+{% endraw %}

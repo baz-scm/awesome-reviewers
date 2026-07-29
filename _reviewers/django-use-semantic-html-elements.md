@@ -10,7 +10,7 @@ language: Html
 comments_count: 5
 repository_stars: 84182
 ---
-
+{% raw %}
 Structure HTML templates using semantically appropriate elements rather than generic containers. Replace non-semantic elements like `<div>` and `<p>` with more meaningful elements such as `<nav>`, `<ol>`, `<ul>`, and include proper accessibility attributes like `aria-labelledby` and `aria-current`.
 
 Example:
@@ -42,3 +42,4 @@ Example:
 ```
 
 This improves code organization and readability while enhancing accessibility for users with assistive technologies. Proper semantic structure also makes templates more maintainable as the code's purpose is clearer to other developers.
+{% endraw %}

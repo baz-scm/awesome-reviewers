@@ -9,7 +9,7 @@ language: Markdown
 comments_count: 5
 repository_stars: 96063
 ---
-
+{% raw %}
 When integrating Material UI with other styling solutions like Tailwind CSS v4, proper configuration of CSS layers is essential to ensure correct style precedence and override behavior.
 
 Follow these framework-specific steps to enable and configure CSS layers:
@@ -65,3 +65,4 @@ Follow these framework-specific steps to enable and configure CSS layers:
    ```
 
 Always ensure that the `mui` layer comes before the `utilities` layer so that utility classes can properly override Material UI styles without using the `!important` directive.
+{% endraw %}

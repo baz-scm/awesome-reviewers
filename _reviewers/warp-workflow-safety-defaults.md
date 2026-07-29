@@ -9,7 +9,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 56893
 ---
-
+{% raw %}
 When authoring CI/CD workflows, make configuration choices that (1) match the actual capabilities required by downstream steps and (2) use conservative, contributor-safe defaults for automated cleanup.
 
 - If any step needs historical git data (e.g., `git blame`, changelog generation, diffing across tags/commits), ensure the checkout includes sufficient history (commonly full history via `fetch-depth: 0`) and don’t remove it without verifying the dependency.
@@ -28,3 +28,4 @@ Example (conservative stale closure):
 const LABEL = 'needs-info';
 const BUSINESS_DAYS = 10; // ~1–2 weeks; adjust only with a strong reason
 ```
+{% endraw %}

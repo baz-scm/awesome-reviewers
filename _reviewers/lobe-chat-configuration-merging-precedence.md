@@ -10,7 +10,7 @@ language: TSX
 comments_count: 3
 repository_stars: 65138
 ---
-
+{% raw %}
 When merging configuration objects, always preserve existing values and follow clear precedence rules to avoid unintentionally overriding settings. Use spread operators carefully and ensure the merge logic is implemented at the appropriate layer (preferably in action/store layer rather than component level).
 
 **Key principles:**
@@ -21,7 +21,6 @@ When merging configuration objects, always preserve existing values and follow c
 **Examples:**
 
 ❌ **Problematic merging** - overwrites existing footerAction:
-{% raw %}
 ```tsx
 appearance={{
   ...appearance,
@@ -31,10 +30,8 @@ appearance={{
   }
 }}
 ```
-{% endraw %}
 
 ✅ **Proper conditional merging**:
-{% raw %}
 ```tsx
 appearance={{
   ...appearance,
@@ -44,7 +41,6 @@ appearance={{
   }
 }}
 ```
-{% endraw %}
 
 ❌ **Component-level merging**:
 ```tsx
@@ -67,3 +63,4 @@ updatePluginSettings: (id, updates) => {
 ```
 
 This approach ensures configuration integrity and prevents accidental loss of user preferences or system settings.
+{% endraw %}

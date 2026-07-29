@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 14953
 ---
-
+{% raw %}
 When writing CI/CD workflow configurations, always use explicit and precise conditions, paths, and selectors to ensure that actions only execute when necessary and operate on the exact intended targets. This prevents wasted compute resources, unintended side effects, and improves workflow reliability.
 
 For file paths in artifact uploads or processing steps, specify exact patterns instead of entire directories:
@@ -32,3 +32,4 @@ if: ${{ toJson(matrix.containers) != '[]' && (inputs.run_single_functional_test 
 ```
 
 This practice reduces CI resource usage, prevents accidental inclusion of unwanted files in artifacts, and makes debugging workflow issues significantly easier.
+{% endraw %}

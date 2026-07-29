@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 19109
 ---
-
+{% raw %}
 Avoid using CI platform-specific features in workflows to prevent vendor lock-in and ensure portability. Instead of relying on GitHub Actions artifacts, Docker Hub registries, or other platform-specific storage mechanisms, use cloud-agnostic alternatives like S3 for artifact storage and transfer between jobs.
 
 This approach ensures that workflows can be easily migrated between different CI platforms (GitHub Actions, GitLab CI, Jenkins, etc.) without requiring significant rewrites. It also provides better control over retention policies, access permissions, and integration with existing infrastructure.
@@ -33,3 +33,4 @@ Preferred approach:
 ```
 
 Additionally, consider consolidating sequential jobs to eliminate the need for intermediate artifact storage altogether, as this reduces both platform dependency and improves workflow efficiency.
+{% endraw %}

@@ -11,7 +11,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 19109
 ---
-
+{% raw %}
 Avoid hardcoded values in configuration files and templates. Make settings parameterizable with sensible defaults to accommodate different environments and use cases. Even when you're unsure if a setting needs to be configurable, err on the side of flexibility - most users will stick with defaults, but those who need customization will appreciate the option.
 
 Example of problematic hardcoded configuration:
@@ -29,3 +29,4 @@ discovery_interval: {{ .Values.discoveryInterval | default "10m" }}
 ```
 
 This approach ensures configurations work across different environments while maintaining reasonable defaults for common scenarios. As one reviewer noted: "Hard to think of a default that is good for everyone" - parameterization solves this by letting each deployment choose what works best.
+{% endraw %}

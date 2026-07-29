@@ -11,7 +11,7 @@ language: Yaml
 comments_count: 1
 repository_stars: 67300
 ---
-
+{% raw %}
 Always pin third-party GitHub Actions to specific commit hashes rather than semantic version tags (like `@v1`). This prevents automatic execution of potentially malicious code if the maintainer updates the tag. Additionally, minimize permission scopes for any tokens used in workflows, and consider replacing third-party actions with direct implementations when feasible.
 
 Example - Instead of:
@@ -36,3 +36,4 @@ Even better, consider replacing with native functionality:
       https://api.github.com/repos/owner/repo/dispatches \
       -d '{"event_type":"build_application"}'
 ```
+{% endraw %}

@@ -10,7 +10,7 @@ language: Other
 comments_count: 2
 repository_stars: 40858
 ---
-
+{% raw %}
 Access configurations through documented abstraction layers rather than bypassing them with direct database or low-level access. For example, in Airflow, XCom operations should be performed through the Task Context using `get_current_context()` rather than directly accessing the database model:
 
 ```python
@@ -27,7 +27,6 @@ def my_task(**context):
 
 For version-dependent configurations, use explicit version comparison functions (like `semverCompare` in Helm) rather than hard-coding version assumptions:
 
-{% raw %}
 ```yaml
 # Good practice (Helm example)
 {{- if and (semverCompare "<3.0.0" .Values.airflowVersion) (or .Values.webserver.webserverConfig .Values.webserver.webserverConfigConfigMapName) }}

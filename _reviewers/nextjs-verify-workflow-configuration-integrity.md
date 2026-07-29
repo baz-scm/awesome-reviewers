@@ -7,7 +7,7 @@ language: "Yaml"
 comments_count: 3
 repository_stars: 133000
 ---
-
+{% raw %}
 Carefully review GitHub Actions workflow configurations to prevent subtle errors that can cause CI/CD pipeline failures or unexpected behavior:
 
 1. Ensure correct syntax in workflow triggers, especially avoiding nested quotes in branch names:
@@ -41,3 +41,4 @@ if: ${{ always() && needs.deploy-target.outputs.value != '' }}
 # More robust handling of skipped jobs
 if: ${{ always() && needs.deploy-target.result != 'skipped' }}
 ```
+{% endraw %}

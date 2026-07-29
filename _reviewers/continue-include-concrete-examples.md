@@ -10,7 +10,7 @@ language: Markdown
 comments_count: 3
 repository_stars: 27819
 ---
-
+{% raw %}
 Technical documentation should always include concrete, working examples that demonstrate the described concepts in action. Examples clarify abstract ideas, illustrate correct usage patterns, and provide templates users can adapt to their needs.
 
 When writing documentation:
@@ -35,3 +35,4 @@ promptTemplates:
 ```
 
 Examples make documentation more effective by transforming abstract concepts into concrete implementations that users can understand and adapt to their specific needs.
+{% endraw %}

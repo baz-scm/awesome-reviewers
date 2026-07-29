@@ -11,7 +11,7 @@ language: Yaml
 comments_count: 5
 repository_stars: 60322
 ---
-
+{% raw %}
 Design CI/CD workflows to be efficient, consistent, and purposeful across all environments. When writing or modifying pipeline scripts:
 
 1. Batch related operations to minimize redundant commands and improve performance
@@ -42,3 +42,4 @@ For build caching strategies, be intentional about clean vs. incremental builds:
   with:
     key: docker-cargo-caches-${{ matrix.platform }}-${{ hashFiles('Dockerfile', 'crates/**', 'Cargo.toml', 'Cargo.lock') }}
 ```
+{% endraw %}

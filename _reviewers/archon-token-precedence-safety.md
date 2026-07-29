@@ -9,7 +9,7 @@ language: Yaml
 comments_count: 1
 repository_stars: 21089
 ---
-
+{% raw %}
 When multiple authentication tokens are supported (e.g., generic GitHub tokens vs Copilot-specific tokens), enforce a deterministic, documented precedence and require explicit opt-in for fallback behavior.
 
 Apply this to CI/workflows and any code that selects credentials:
@@ -31,3 +31,4 @@ env:
 ```
 
 This prevents accidental use of the wrong credentials, reduces risk of unexpected permissions, and makes security-sensitive behavior consistent across environments.
+{% endraw %}

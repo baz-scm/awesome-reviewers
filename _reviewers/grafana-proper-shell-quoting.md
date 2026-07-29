@@ -8,7 +8,7 @@ language: Yaml
 comments_count: 5
 repository_stars: 68825
 ---
-
+{% raw %}
 Always use proper quoting in shell scripts (especially GitHub Actions workflows) to prevent word splitting, globbing, and ensure correct variable expansion:
 
 1. Use double quotes around variable expansions and command substitutions to prevent word splitting:
@@ -39,3 +39,4 @@ Always use proper quoting in shell scripts (especially GitHub Actions workflows)
    ```
 
 These practices prevent common shell scripting errors that tools like shellcheck will flag (SC2046, SC2016, SC2086), resulting in more robust and predictable scripts.
+{% endraw %}

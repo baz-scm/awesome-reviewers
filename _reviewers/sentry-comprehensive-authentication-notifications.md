@@ -10,7 +10,7 @@ language: Html
 comments_count: 1
 repository_stars: 41297
 ---
-
+{% raw %}
 Authentication notifications must include specific context about the triggering action, clear instructions for legitimate use, expiration details, and explicit steps to take if the action was unauthorized. This enhances security by helping users identify potential account compromises and take appropriate action.
 
 Example:
@@ -27,3 +27,4 @@ Rather than the less secure alternative:
 <p>{{code}}</p>
 <p>If you weren't expecting this email, please ignore it.</p>
 ```
+{% endraw %}

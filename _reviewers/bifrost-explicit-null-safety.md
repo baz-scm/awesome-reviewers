@@ -8,7 +8,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 6862
 ---
-
+{% raw %}
 When templating, explicitly distinguish three states: **missing**, **explicit false**, and **null**. Relying on truthiness can silently drop intended configuration.
 
 **Apply two patterns:**
@@ -44,3 +44,4 @@ securityContext:
 **Rule of thumb:**
 - If `false` must be honored → **check `hasKey`**.
 - If a value must be removed from rendered YAML → **override with `null`** and verify with `helm template`.
+{% endraw %}

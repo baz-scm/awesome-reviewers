@@ -10,7 +10,7 @@ language: TSX
 comments_count: 3
 repository_stars: 48299
 ---
-
+{% raw %}
 Always use CSS custom properties (CSS variables) for colors and include proper accessibility attributes instead of hard-coded values. This ensures consistency with the design system and improves accessibility for users with visual impairments or different theme preferences.
 
 **Color Usage:**
@@ -48,3 +48,4 @@ Include appropriate ARIA labels and roles for interactive elements:
 ```
 
 This approach helps users with visual impairments, supports different VS Code themes, and maintains consistency across the application interface.
+{% endraw %}

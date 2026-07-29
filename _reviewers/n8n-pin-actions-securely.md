@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 3
 repository_stars: 122978
 ---
-
+{% raw %}
 Always pin GitHub Actions to specific commit hashes rather than version tags to prevent supply chain attacks and ensure build reproducibility. This practice ensures that your workflow remains stable and secure even if the action's version tag is compromised or modified.
 
 For example, use:
@@ -45,3 +45,4 @@ Additionally:
     node-version: 20.x
     enable-caching: true
 ```
+{% endraw %}

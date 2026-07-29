@@ -14,7 +14,7 @@ language: Other
 comments_count: 8
 repository_stars: 87952
 ---
-
+{% raw %}
 Code should be readable and consistent: avoid inline “magic” expressions, prefer named values/helpers, and use uniform style primitives.
 
 Apply:
@@ -34,3 +34,4 @@ Apply:
 - Keep syntax and typing consistent (e.g., avoid unnecessary token quoting in grammars; align TS/ref typings across related structures).
 - In scripts, use safe quoting/argument handling consistently (prefer arrays + `"${args[@]}"` for pass-through arguments).
 - Remove unused grammar/lexer states or keep only what’s actively used; maintain logical rule ordering where it improves scanability.
+{% endraw %}

@@ -9,7 +9,7 @@ language: Other
 comments_count: 3
 repository_stars: 28115
 ---
-
+{% raw %}
 Always provide clear documentation and implementation for caching strategies, including key generation, invalidation policies, and default behaviors. When implementing caching:
 
 1. Choose appropriate cache keys that balance specificity and reusability:
@@ -34,3 +34,4 @@ Always provide clear documentation and implementation for caching strategies, in
    - Document which artifacts will be cached by default
 
 Proper cache strategy documentation prevents unexpected behavior, improves performance, and gives users control over how and where their data is cached.
+{% endraw %}

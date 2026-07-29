@@ -14,7 +14,7 @@ language: Yaml
 comments_count: 4
 repository_stars: 26407
 ---
-
+{% raw %}
 Design GitHub Actions concurrency so overlapping runs can’t corrupt multi-step outcomes.
 
 Rules:
@@ -65,3 +65,4 @@ C) Include kill-switch/qualifiers in both `if` and `concurrency.group` (conceptu
 - then the same condition must be reflected inside the `group:` expression so the same PR doesn’t share groups across modes.
 
 If you apply these principles, your concurrency design becomes correct under race conditions, feature toggles, and saturation—without relying on brittle scheduling assumptions.
+{% endraw %}

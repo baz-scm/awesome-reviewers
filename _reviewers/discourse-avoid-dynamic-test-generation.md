@@ -10,7 +10,7 @@ language: Other
 comments_count: 2
 repository_stars: 44898
 ---
-
+{% raw %}
 Avoid using loops (forEach, for, etc.) to dynamically generate tests from arrays or objects, as this pattern makes debugging significantly harder. When a test fails, it's difficult to set breakpoints on specific cases or identify which iteration caused the failure.
 
 Instead, use one of these approaches:
@@ -48,3 +48,4 @@ test("autocompletes hex codes", async function (assert) {
 ```
 
 Both approaches allow developers to easily debug specific test cases, set targeted breakpoints, and understand test failures more quickly. Choose individual tests when cases are complex or unrelated, and single tests with multiple assertions when testing variations of the same behavior.
+{% endraw %}

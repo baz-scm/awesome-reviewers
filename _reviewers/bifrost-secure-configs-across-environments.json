@@ -1,0 +1,90 @@
+[
+  {
+    "discussion_id": "2933339478",
+    "pr_number": 2054,
+    "pr_file": ".github/workflows/release-pipeline.yml",
+    "created_at": "2026-03-13T21:45:35+00:00",
+    "commented_code": "REPLICATE_API_KEY: ${{ secrets.REPLICATE_API_KEY }}\n           REPLICATE_OWNER: ${{ secrets.REPLICATE_OWNER }}\n           RUNWAY_API_KEY : ${{ secrets.RUNWAY_API_KEY }}\n+          GITHUB_COPILOT_TOKEN: ${{ secrets.GITHUB_COPILOT_TOKEN }}",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "2933913329",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 2054,
+        "pr_file": ".github/workflows/release-pipeline.yml",
+        "discussion_id": "2933339478",
+        "commented_code": "@@ -640,6 +640,7 @@ jobs:\n           REPLICATE_API_KEY: ${{ secrets.REPLICATE_API_KEY }}\n           REPLICATE_OWNER: ${{ secrets.REPLICATE_OWNER }}\n           RUNWAY_API_KEY : ${{ secrets.RUNWAY_API_KEY }}\n+          GITHUB_COPILOT_TOKEN: ${{ secrets.GITHUB_COPILOT_TOKEN }}",
+        "comment_created_at": "2026-03-13T21:45:35+00:00",
+        "comment_author": "mainaksarcar",
+        "comment_body": "Fixed in 43e5297c \u2014 removed `GITHUB_COPILOT_TOKEN` from the `env` blocks of all four release jobs (`core-release`, `framework-release`, `plugins-release`, `bifrost-http-release`). The token is retained only in the PR test jobs where Copilot integration tests actually run.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3522273660",
+    "pr_number": 4902,
+    "pr_file": "helm-charts/bifrost/values.yaml",
+    "created_at": "2026-07-04T00:33:33+00:00",
+    "commented_code": "podAnnotations: {}\n podLabels: {}\n \n-podSecurityContext:\n-  fsGroup: 1000\n-  runAsUser: 1000\n-  runAsNonRoot: true\n+podSecurityContext: {}",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3522291229",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4902,
+        "pr_file": "helm-charts/bifrost/values.yaml",
+        "discussion_id": "3522273660",
+        "commented_code": "@@ -57,18 +57,14 @@ deploymentLabels: {}\n podAnnotations: {}\n podLabels: {}\n \n-podSecurityContext:\n-  fsGroup: 1000\n-  runAsUser: 1000\n-  runAsNonRoot: true\n+podSecurityContext: {}",
+        "comment_created_at": "2026-07-04T00:33:33+00:00",
+        "comment_author": "eyeveil",
+        "comment_body": "Good catch \u2014 restored the pod-level default to `podSecurityContext: {fsGroup: 1000, runAsNonRoot: true}` so vanilla k8s still chowns freshly provisioned PVCs on restrictive storage classes. `runAsUser` stays removed (image `USER` applies; OpenShift SCC assigns its own UID). Added a values.yaml comment: on OpenShift restricted-v2, set `podSecurityContext: {}` \u2014 the image now supports arbitrary UIDs with group 0, no custom SCC needed. The CI template check now forbids only a pinned `runAsUser`, allowing `fsGroup`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3523881098",
+    "pr_number": 4902,
+    "pr_file": "helm-charts/bifrost/values.yaml",
+    "created_at": "2026-07-04T21:32:18+00:00",
+    "commented_code": "podAnnotations: {}\n podLabels: {}\n \n+# Pod-level security context. Defaults chown freshly provisioned PVCs (fsGroup)\n+# and forbid running as root, which vanilla Kubernetes needs for restrictive\n+# storage classes. On OpenShift (restricted-v2), set `podSecurityContext.fsGroup: null`\n+# (Helm merges maps, so `{}` would keep this default) \u2014 the image supports\n+# arbitrary UIDs with group 0, so no custom SCC is needed.\n podSecurityContext:\n   fsGroup: 1000\n-  runAsUser: 1000\n   runAsNonRoot: true",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3523881098",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4902,
+        "pr_file": "helm-charts/bifrost/values.yaml",
+        "discussion_id": "3523881098",
+        "commented_code": "@@ -57,9 +57,13 @@ deploymentLabels: {}\n podAnnotations: {}\n podLabels: {}\n \n+# Pod-level security context. Defaults chown freshly provisioned PVCs (fsGroup)\n+# and forbid running as root, which vanilla Kubernetes needs for restrictive\n+# storage classes. On OpenShift (restricted-v2), set `podSecurityContext.fsGroup: null`\n+# (Helm merges maps, so `{}` would keep this default) \u2014 the image supports\n+# arbitrary UIDs with group 0, so no custom SCC is needed.\n podSecurityContext:\n   fsGroup: 1000\n-  runAsUser: 1000\n   runAsNonRoot: true",
+        "comment_created_at": "2026-07-04T21:32:18+00:00",
+        "comment_author": "akshaydeo",
+        "comment_body": "**#1 Critical (CONFIRMED): default install breaks on vanilla Kubernetes.**\n\nWith `runAsUser: 1000` removed, the effective security context is `runAsNonRoot: true` with no numeric UID, and the default image (`docker.io/maximhq/bifrost`, built from `transports/Dockerfile`) declares a non-numeric `USER appuser`. Kubelet's `verifyRunAsNonRoot` cannot verify a named user, so the container is rejected:\n\n```\nCreateContainerConfigError: container has runAsNonRoot and image has\nnon-numeric user (appuser), cannot verify user is non-root\n```\n\nEvery default `helm install` on non-OpenShift clusters (EKS/GKE/kind) hits this. `Dockerfile.redhat` already uses `USER 1001` for exactly this reason (its own comment: \"Red Hat Preflight expects a numeric USER instruction\").\n\nSuggested fix in `transports/Dockerfile` and `Dockerfile.local` (OpenShift ignores the image USER, so this does not affect the arbitrary-UID goal):\n\n```dockerfile\nUSER 1000:0\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3435131217",
+    "pr_number": 4522,
+    "pr_file": "docs/openapi/schemas/management/config.yaml",
+    "created_at": "2026-06-18T12:14:03+00:00",
+    "commented_code": "type: boolean\n           additionalProperties: false\n       description: >\n-        Public base URL for OAuth callbacks and discovery metadata when Bifrost runs behind a\n-        reverse proxy. Overrides the host derived from the incoming request. Supports env var\n-        syntax (\"env.MY_VAR\"). Configurable via UI, API, or config.json.\n+        Public base URL Bifrost uses as the redirect_uri when acting as an OAuth client to\n+        upstream MCP servers (Notion, Jira, etc.). Set when Bifrost's callback endpoint is\n+        reached via a different URL than its server-side metadata. Supports env var syntax\n+        (\"env.MY_VAR\").\n+    mcp_server_auth_mode:\n+      type: string\n+      enum: [headers, both, oauth]\n+      default: headers\n+      description: >\n+        How /mcp authenticates inbound MCP clients. 'headers' (default): VK/api-key/session\n+        headers only, discovery disabled. 'both': accepts header credentials and Bifrost-issued\n+        JWTs, discovery enabled. 'oauth': Bifrost JWTs only \u2014 disables VK/header MCP access.\n+    oauth2_server_config:\n+      type: object\n+      description: >\n+        OAuth2 authorization server settings for /mcp. Only relevant when mcp_server_auth_mode\n+        is 'both' or 'oauth'.\n+      properties:\n+        issuer_url:\n+          oneOf:\n+            - type: string\n+              description: Plain URL or env var reference (e.g. \"env.MY_VAR\")\n+            - type: object\n+              properties:\n+                value:\n+                  type: string\n+                env_var:\n+                  type: string\n+                from_env:\n+                  type: boolean\n+              additionalProperties: false\n+          description: >\n+            Stable public URL advertised as the OAuth2 AS issuer in discovery documents and the\n+            JWT iss claim. Required for multi-host deployments; single-host can omit it (falls\n+            back to the request Host header). Supports env var syntax (\"env.MY_VAR\").\n+        auth_code_ttl:\n+          type: integer\n+          minimum: 1\n+          default: 600\n+          description: Lifetime of the single-use authorization code in seconds (default 600).",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3435663717",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4522,
+        "pr_file": "docs/openapi/schemas/management/config.yaml",
+        "discussion_id": "3435131217",
+        "commented_code": "@@ -105,9 +105,52 @@ ClientConfig:\n               type: boolean\n           additionalProperties: false\n       description: >\n-        Public base URL for OAuth callbacks and discovery metadata when Bifrost runs behind a\n-        reverse proxy. Overrides the host derived from the incoming request. Supports env var\n-        syntax (\"env.MY_VAR\"). Configurable via UI, API, or config.json.\n+        Public base URL Bifrost uses as the redirect_uri when acting as an OAuth client to\n+        upstream MCP servers (Notion, Jira, etc.). Set when Bifrost's callback endpoint is\n+        reached via a different URL than its server-side metadata. Supports env var syntax\n+        (\"env.MY_VAR\").\n+    mcp_server_auth_mode:\n+      type: string\n+      enum: [headers, both, oauth]\n+      default: headers\n+      description: >\n+        How /mcp authenticates inbound MCP clients. 'headers' (default): VK/api-key/session\n+        headers only, discovery disabled. 'both': accepts header credentials and Bifrost-issued\n+        JWTs, discovery enabled. 'oauth': Bifrost JWTs only \u2014 disables VK/header MCP access.\n+    oauth2_server_config:\n+      type: object\n+      description: >\n+        OAuth2 authorization server settings for /mcp. Only relevant when mcp_server_auth_mode\n+        is 'both' or 'oauth'.\n+      properties:\n+        issuer_url:\n+          oneOf:\n+            - type: string\n+              description: Plain URL or env var reference (e.g. \"env.MY_VAR\")\n+            - type: object\n+              properties:\n+                value:\n+                  type: string\n+                env_var:\n+                  type: string\n+                from_env:\n+                  type: boolean\n+              additionalProperties: false\n+          description: >\n+            Stable public URL advertised as the OAuth2 AS issuer in discovery documents and the\n+            JWT iss claim. Required for multi-host deployments; single-host can omit it (falls\n+            back to the request Host header). Supports env var syntax (\"env.MY_VAR\").\n+        auth_code_ttl:\n+          type: integer\n+          minimum: 1\n+          default: 600\n+          description: Lifetime of the single-use authorization code in seconds (default 600).",
+        "comment_created_at": "2026-06-18T12:14:03+00:00",
+        "comment_author": "Pratham-Mishra04",
+        "comment_body": "This doc field documents the *current* code default (`DefaultAuthCodeTTL = 600` in `oauth2_server.go`), so lowering it here in isolation would make the docs drift from the schema \u2014 it's a code-default decision rather than a docs change.\n\nOn the security point: the authorization code is single-use and protected by mandatory S256 PKCE, so an intercepted code is not redeemable without the matching `code_verifier` \u2014 interception alone is insufficient regardless of the window. We're keeping the doc accurate to the shipped default for now; tightening `DefaultAuthCodeTTL` toward the 60\u2013120s norm is a reasonable follow-up tracked on the code side.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

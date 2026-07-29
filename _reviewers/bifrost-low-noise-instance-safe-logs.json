@@ -1,0 +1,158 @@
+[
+  {
+    "discussion_id": "3393715315",
+    "pr_number": 4275,
+    "pr_file": "transports/bifrost-http/integrations/router.go",
+    "created_at": "2026-06-11T06:17:55+00:00",
+    "commented_code": "}()\n }\n \n+func transportPluginLogsFromFastHTTP(ctx *fasthttp.RequestCtx) []schemas.PluginLogEntry {\n+\tif ctx == nil {\n+\t\treturn nil\n+\t}\n+\tlogs, ok := ctx.UserValue(schemas.BifrostContextKeyTransportPluginLogs).([]schemas.PluginLogEntry)",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3393715315",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4275,
+        "pr_file": "transports/bifrost-http/integrations/router.go",
+        "discussion_id": "3393715315",
+        "commented_code": "@@ -2805,6 +2805,17 @@ func (g *GenericRouter) handleStreaming(ctx *fasthttp.RequestCtx, bifrostCtx *sc\n \t}()\n }\n \n+func transportPluginLogsFromFastHTTP(ctx *fasthttp.RequestCtx) []schemas.PluginLogEntry {\n+\tif ctx == nil {\n+\t\treturn nil\n+\t}\n+\tlogs, ok := ctx.UserValue(schemas.BifrostContextKeyTransportPluginLogs).([]schemas.PluginLogEntry)",
+        "comment_created_at": "2026-06-11T06:17:55+00:00",
+        "comment_author": "akshaydeo",
+        "comment_body": "The issue is correct but this is not an acceptable implementation. The idea/guideline is to not to bloat context at any cost. Can you refer how we do it in integrations.go and probably think of a better implementation here?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3393943267",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4275,
+        "pr_file": "transports/bifrost-http/integrations/router.go",
+        "discussion_id": "3393715315",
+        "commented_code": "@@ -2805,6 +2805,17 @@ func (g *GenericRouter) handleStreaming(ctx *fasthttp.RequestCtx, bifrostCtx *sc\n \t}()\n }\n \n+func transportPluginLogsFromFastHTTP(ctx *fasthttp.RequestCtx) []schemas.PluginLogEntry {\n+\tif ctx == nil {\n+\t\treturn nil\n+\t}\n+\tlogs, ok := ctx.UserValue(schemas.BifrostContextKeyTransportPluginLogs).([]schemas.PluginLogEntry)",
+        "comment_created_at": "2026-06-11T07:06:25+00:00",
+        "comment_author": "qixiangyang",
+        "comment_body": "Thanks for the pointer. I updated the implementation to follow the existing streaming pattern used by the handlers: integration streaming now pre-allocates `BifrostContextKeyTransportPostHookCompleter`, lets `TransportInterceptorMiddleware` publish the post-hook completer into that slot, and passes the logs returned by that completer into the trace completer after the stream drains. This removes the `transportPluginLogsFromFastHTTP` helper and no longer reads transport plugin logs back from `fasthttp` context.\n\nI also applied the same path to passthrough streaming, which was still calling `traceCompleter(nil)`, and updated the regression test to exercise the completer-slot flow instead of seeding logs directly on the context.\n\nTested with:\n\n```sh\nGOWORK=/private/tmp/bifrost-streamlogs-work/go.work go test ./bifrost-http/integrations -run 'TestHandleStreamingRetainsTransportPluginLogs' -count=1\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3584636072",
+    "pr_number": 5223,
+    "pr_file": "core/bifrost.go",
+    "created_at": "2026-07-15T05:32:40+00:00",
+    "commented_code": "config.Logger = NewDefaultLogger(schemas.LogLevelInfo)\n \t}\n \tproviderUtils.SetLogger(config.Logger)\n+\tschemas.SetFallbackWarningHook(config.Logger.Warn)",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3584700721",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 5223,
+        "pr_file": "core/bifrost.go",
+        "discussion_id": "3584636072",
+        "commented_code": "@@ -223,6 +223,7 @@ func Init(ctx context.Context, config schemas.BifrostConfig) (*Bifrost, error) {\n \t\tconfig.Logger = NewDefaultLogger(schemas.LogLevelInfo)\n \t}\n \tproviderUtils.SetLogger(config.Logger)\n+\tschemas.SetFallbackWarningHook(config.Logger.Warn)",
+        "comment_created_at": "2026-07-15T05:32:40+00:00",
+        "comment_author": "Shaik-Sirajuddin",
+        "comment_body": "Fixed \u2014 removed the process-global `FallbackWarningHook`/`Init()`-wiring entirely and threaded each provider's own instance-bound `logger` field directly into `ToChatRequest` instead, so warnings are always attributed to the correct Bifrost instance. To preserve the exported zero-argument call shape for existing Go SDK consumers (per a follow-up codex review), `logger` is variadic/optional rather than a required new parameter. Verified: `go build ./...`, `go vet ./...`, and `go test ./schemas/... ./providers/...` all clean across every touched package.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3596426961",
+    "pr_number": 5300,
+    "pr_file": "framework/logstore/postgres.go",
+    "created_at": "2026-07-17T13:59:41+00:00",
+    "commented_code": "logger.Info(\"logstore: runtime connection pool ready\")\n \td := &RDBLogStore{db: db, logger: logger}\n \n-\t// Run all index builds sequentially in a single goroutine to prevent\n-\t// deadlocks from concurrent CREATE INDEX CONCURRENTLY on the same table.\n-\t// Each function is idempotent and acquires its own advisory lock for\n-\t// cross-node serialization. Running in a goroutine avoids blocking pod startup.\n-\tgo func() {\n+\t// Run all index builds sequentially to prevent deadlocks from concurrent\n+\t// CREATE INDEX CONCURRENTLY on the same table. Each function is idempotent\n+\t// and the advisory lock serializes builds across cluster nodes.\n+\trunIndexMaintenance := func() {\n \t\tif db.Dialector.Name() != \"postgres\" {\n \t\t\treturn\n \t\t}\n \t\t// Acquire advisory lock to serialize GIN index builds across cluster nodes.\n \t\tlock, err := acquireIndexLock(context.Background(), db, logger)\n \t\tif err != nil {\n \t\t\t// Lock is taken by another node, so we will skip the index build\n+\t\t\tlogger.Warn(fmt.Sprintf(\"logstore: skipping index maintenance, could not acquire index lock: %s\", err))",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3603704758",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 5300,
+        "pr_file": "framework/logstore/postgres.go",
+        "discussion_id": "3596426961",
+        "commented_code": "@@ -153,18 +154,18 @@ func newPostgresLogStore(ctx context.Context, config *PostgresConfig, logger sch\n \tlogger.Info(\"logstore: runtime connection pool ready\")\n \td := &RDBLogStore{db: db, logger: logger}\n \n-\t// Run all index builds sequentially in a single goroutine to prevent\n-\t// deadlocks from concurrent CREATE INDEX CONCURRENTLY on the same table.\n-\t// Each function is idempotent and acquires its own advisory lock for\n-\t// cross-node serialization. Running in a goroutine avoids blocking pod startup.\n-\tgo func() {\n+\t// Run all index builds sequentially to prevent deadlocks from concurrent\n+\t// CREATE INDEX CONCURRENTLY on the same table. Each function is idempotent\n+\t// and the advisory lock serializes builds across cluster nodes.\n+\trunIndexMaintenance := func() {\n \t\tif db.Dialector.Name() != \"postgres\" {\n \t\t\treturn\n \t\t}\n \t\t// Acquire advisory lock to serialize GIN index builds across cluster nodes.\n \t\tlock, err := acquireIndexLock(context.Background(), db, logger)\n \t\tif err != nil {\n \t\t\t// Lock is taken by another node, so we will skip the index build\n+\t\t\tlogger.Warn(fmt.Sprintf(\"logstore: skipping index maintenance, could not acquire index lock: %s\", err))",
+        "comment_created_at": "2026-07-17T13:59:41+00:00",
+        "comment_author": "hugochinchilla",
+        "comment_body": "Fixed in 313be8173 \u2014 all `logger.Warn`/`Info(fmt.Sprintf(...))` calls in this closure and in `resolveMatViewRefreshInterval` now pass format args directly (`%v` for errors). Kept the dialector check: it predates this PR, is mirrored in the matview boot closure, and removing harmless defensive code is out of scope here.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2937456819",
+    "pr_number": 2054,
+    "pr_file": "transports/bifrost-http/handlers/copilot.go",
+    "created_at": "2026-03-17T18:24:29+00:00",
+    "commented_code": "+// Package handlers provides HTTP request handlers for the Bifrost HTTP transport.\n+// This file contains the Copilot GitHub OAuth device code flow endpoints.\n+package handlers\n+\n+import (\n+\t\"crypto/tls\"\n+\t\"encoding/json\"\n+\t\"fmt\"\n+\t\"io\"\n+\t\"net/http\"\n+\t\"net/url\"\n+\t\"os\"\n+\t\"strings\"\n+\t\"time\"\n+\n+\t\"github.com/fasthttp/router\"\n+\t\"github.com/maximhq/bifrost/core/schemas\"\n+\t\"github.com/maximhq/bifrost/transports/bifrost-http/lib\"\n+\t\"github.com/valyala/fasthttp\"\n+)\n+\n+const (\n+\t// defaultGithubClientID is the GitHub OAuth client ID from the VS Code\n+\t// Copilot extension. The Copilot API is not officially documented, so this\n+\t// ID is required for the device-code flow. Override for a custom GitHub\n+\t// OAuth app via the BIFROST_GITHUB_CLIENT_ID environment variable.\n+\tdefaultGithubClientID = \"Iv1.b507a08c87ecfe98\"\n+\n+\t// GitHub OAuth endpoints for device code flow\n+\tgithubDeviceCodeURL  = \"https://github.com/login/device/code\"\n+\tgithubAccessTokenURL = \"https://github.com/login/oauth/access_token\"\n+)\n+\n+// githubClientID returns the effective OAuth client ID: env var if set, otherwise the default.\n+func githubClientID() string {\n+\tif id := os.Getenv(\"BIFROST_GITHUB_CLIENT_ID\"); id != \"\" {\n+\t\treturn id\n+\t}\n+\treturn defaultGithubClientID\n+}\n+\n+// CopilotHandler manages Copilot-specific HTTP requests like device code flow\n+type CopilotHandler struct {\n+\thttpClient     *http.Client\n+\tdeviceCodeURL  string // GitHub device code endpoint; overridable in tests\n+\taccessTokenURL string // GitHub access token endpoint; overridable in tests\n+}\n+\n+// maxOAuthResponseBytes caps the body read from GitHub OAuth responses to prevent memory exhaustion.\n+const maxOAuthResponseBytes = 64 * 1024\n+\n+// NewCopilotHandler creates a new Copilot handler instance.\n+// The provided config is used to configure outbound HTTP proxy settings for the OAuth device flow.\n+func NewCopilotHandler(config *lib.Config) *CopilotHandler {\n+\treturn &CopilotHandler{\n+\t\thttpClient:     buildOAuthHTTPClient(config),\n+\t\tdeviceCodeURL:  githubDeviceCodeURL,\n+\t\taccessTokenURL: githubAccessTokenURL,\n+\t}\n+}\n+\n+// buildOAuthHTTPClient builds an http.Client for GitHub OAuth calls, applying proxy\n+// settings from the Bifrost config when present.\n+func buildOAuthHTTPClient(config *lib.Config) *http.Client {\n+\tif config == nil || config.ProxyConfig == nil || !config.ProxyConfig.Enabled || config.ProxyConfig.URL == \"\" {\n+\t\treturn &http.Client{Timeout: 30 * time.Second}\n+\t}\n+\tpc := config.ProxyConfig\n+\trawURL := pc.URL\n+\tif pc.Username != \"\" {\n+\t\tif u, err := url.Parse(pc.URL); err == nil {\n+\t\t\tu.User = url.UserPassword(pc.Username, pc.Password)\n+\t\t\trawURL = u.String()\n+\t\t}\n+\t}\n+\tproxyURL, err := url.Parse(rawURL)\n+\tif err != nil {\n+\t\treturn &http.Client{Timeout: 30 * time.Second}\n+\t}\n+\ttr := &http.Transport{Proxy: http.ProxyURL(proxyURL)}\n+\tif pc.SkipTLSVerify {\n+\t\ttr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} // #nosec G402 \u2014 user-configured skip\n+\t}\n+\treturn &http.Client{Timeout: 30 * time.Second, Transport: tr}",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "2948737091",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 2054,
+        "pr_file": "transports/bifrost-http/handlers/copilot.go",
+        "discussion_id": "2937456819",
+        "commented_code": "@@ -0,0 +1,242 @@\n+// Package handlers provides HTTP request handlers for the Bifrost HTTP transport.\n+// This file contains the Copilot GitHub OAuth device code flow endpoints.\n+package handlers\n+\n+import (\n+\t\"crypto/tls\"\n+\t\"encoding/json\"\n+\t\"fmt\"\n+\t\"io\"\n+\t\"net/http\"\n+\t\"net/url\"\n+\t\"os\"\n+\t\"strings\"\n+\t\"time\"\n+\n+\t\"github.com/fasthttp/router\"\n+\t\"github.com/maximhq/bifrost/core/schemas\"\n+\t\"github.com/maximhq/bifrost/transports/bifrost-http/lib\"\n+\t\"github.com/valyala/fasthttp\"\n+)\n+\n+const (\n+\t// defaultGithubClientID is the GitHub OAuth client ID from the VS Code\n+\t// Copilot extension. The Copilot API is not officially documented, so this\n+\t// ID is required for the device-code flow. Override for a custom GitHub\n+\t// OAuth app via the BIFROST_GITHUB_CLIENT_ID environment variable.\n+\tdefaultGithubClientID = \"Iv1.b507a08c87ecfe98\"\n+\n+\t// GitHub OAuth endpoints for device code flow\n+\tgithubDeviceCodeURL  = \"https://github.com/login/device/code\"\n+\tgithubAccessTokenURL = \"https://github.com/login/oauth/access_token\"\n+)\n+\n+// githubClientID returns the effective OAuth client ID: env var if set, otherwise the default.\n+func githubClientID() string {\n+\tif id := os.Getenv(\"BIFROST_GITHUB_CLIENT_ID\"); id != \"\" {\n+\t\treturn id\n+\t}\n+\treturn defaultGithubClientID\n+}\n+\n+// CopilotHandler manages Copilot-specific HTTP requests like device code flow\n+type CopilotHandler struct {\n+\thttpClient     *http.Client\n+\tdeviceCodeURL  string // GitHub device code endpoint; overridable in tests\n+\taccessTokenURL string // GitHub access token endpoint; overridable in tests\n+}\n+\n+// maxOAuthResponseBytes caps the body read from GitHub OAuth responses to prevent memory exhaustion.\n+const maxOAuthResponseBytes = 64 * 1024\n+\n+// NewCopilotHandler creates a new Copilot handler instance.\n+// The provided config is used to configure outbound HTTP proxy settings for the OAuth device flow.\n+func NewCopilotHandler(config *lib.Config) *CopilotHandler {\n+\treturn &CopilotHandler{\n+\t\thttpClient:     buildOAuthHTTPClient(config),\n+\t\tdeviceCodeURL:  githubDeviceCodeURL,\n+\t\taccessTokenURL: githubAccessTokenURL,\n+\t}\n+}\n+\n+// buildOAuthHTTPClient builds an http.Client for GitHub OAuth calls, applying proxy\n+// settings from the Bifrost config when present.\n+func buildOAuthHTTPClient(config *lib.Config) *http.Client {\n+\tif config == nil || config.ProxyConfig == nil || !config.ProxyConfig.Enabled || config.ProxyConfig.URL == \"\" {\n+\t\treturn &http.Client{Timeout: 30 * time.Second}\n+\t}\n+\tpc := config.ProxyConfig\n+\trawURL := pc.URL\n+\tif pc.Username != \"\" {\n+\t\tif u, err := url.Parse(pc.URL); err == nil {\n+\t\t\tu.User = url.UserPassword(pc.Username, pc.Password)\n+\t\t\trawURL = u.String()\n+\t\t}\n+\t}\n+\tproxyURL, err := url.Parse(rawURL)\n+\tif err != nil {\n+\t\treturn &http.Client{Timeout: 30 * time.Second}\n+\t}\n+\ttr := &http.Transport{Proxy: http.ProxyURL(proxyURL)}\n+\tif pc.SkipTLSVerify {\n+\t\ttr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} // #nosec G402 \u2014 user-configured skip\n+\t}\n+\treturn &http.Client{Timeout: 30 * time.Second, Transport: tr}",
+        "comment_created_at": "2026-03-17T18:24:29+00:00",
+        "comment_author": "mainaksarcar",
+        "comment_body": "Fixed \u2014 added an explicit `logger.Warn` in `buildOAuthHTTPClient` when `url.Parse` fails, so the fallback to a direct HTTP client is surfaced in the logs rather than dropped silently.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3522276897",
+    "pr_number": 4903,
+    "pr_file": "plugins/semanticcache/main.go",
+    "created_at": "2026-07-04T00:29:36+00:00",
+    "commented_code": "embeddingToStore = nil\n \t}\n \n+\t// A store that requires vectors (Qdrant, Pinecone) rejects an empty-vector\n+\t// upsert (\"Expected some vectors\"). If embedding generation failed upstream\n+\t// (e.g. transient provider error, key resolution failure), skip the write\n+\t// rather than emit a broken point. cache_debug was already stamped above,\n+\t// so the miss stays observable.\n+\tif plugin.store.RequiresVectors() && len(embeddingToStore) == 0 {\n+\t\tplugin.logger.Warn(\"Skipping semantic cache write (namespace=%s, id=%s): store requires vectors but no embedding is available (embedding generation likely failed)\", plugin.config.VectorStoreNamespace, storageID)\n+\t\treturn res, nil, nil\n+\t}",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3522287021",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4903,
+        "pr_file": "plugins/semanticcache/main.go",
+        "discussion_id": "3522276897",
+        "commented_code": "@@ -603,6 +603,16 @@ func (plugin *Plugin) PostLLMHook(ctx *schemas.BifrostContext, res *schemas.Bifr\n \t\tembeddingToStore = nil\n \t}\n \n+\t// A store that requires vectors (Qdrant, Pinecone) rejects an empty-vector\n+\t// upsert (\"Expected some vectors\"). If embedding generation failed upstream\n+\t// (e.g. transient provider error, key resolution failure), skip the write\n+\t// rather than emit a broken point. cache_debug was already stamped above,\n+\t// so the miss stays observable.\n+\tif plugin.store.RequiresVectors() && len(embeddingToStore) == 0 {\n+\t\tplugin.logger.Warn(\"Skipping semantic cache write (namespace=%s, id=%s): store requires vectors but no embedding is available (embedding generation likely failed)\", plugin.config.VectorStoreNamespace, storageID)\n+\t\treturn res, nil, nil\n+\t}",
+        "comment_created_at": "2026-07-04T00:29:36+00:00",
+        "comment_author": "eyeveil",
+        "comment_body": "Fixed \u2014 the warning is now gated on `!isStream || isFinalChunk` (same convention as `stampCacheDebugForMiss`), so a streaming miss logs it once instead of per chunk. The early return still applies to every chunk.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3498183089",
+    "pr_number": 4708,
+    "pr_file": "plugins/governance/main.go",
+    "created_at": "2026-06-30T10:58:33+00:00",
+    "commented_code": "}\n \n \t\t\tresult := analyzer.Analyze(input)\n+\t\t\tif result == nil {\n+\t\t\t\tif p.logger != nil {\n+\t\t\t\t\tp.logger.Debug(\"[Governance] %s\", noComplexitySignalLog)\n+\t\t\t\t}\n+\t\t\t\tctx.AppendRoutingEngineLog(schemas.RoutingEngineRoutingRule, schemas.LogLevelInfo, noComplexitySignalLog)",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3498183089",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4708,
+        "pr_file": "plugins/governance/main.go",
+        "discussion_id": "3498183089",
+        "commented_code": "@@ -700,6 +702,13 @@ func (p *GovernancePlugin) applyRoutingRules(ctx *schemas.BifrostContext, req *s\n \t\t\t}\n \n \t\t\tresult := analyzer.Analyze(input)\n+\t\t\tif result == nil {\n+\t\t\t\tif p.logger != nil {\n+\t\t\t\t\tp.logger.Debug(\"[Governance] %s\", noComplexitySignalLog)\n+\t\t\t\t}\n+\t\t\t\tctx.AppendRoutingEngineLog(schemas.RoutingEngineRoutingRule, schemas.LogLevelInfo, noComplexitySignalLog)",
+        "comment_created_at": "2026-06-30T10:58:33+00:00",
+        "comment_author": "Pratham-Mishra04",
+        "comment_body": "lets make it debug. not info",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3498225555",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4708,
+        "pr_file": "plugins/governance/main.go",
+        "discussion_id": "3498183089",
+        "commented_code": "@@ -700,6 +702,13 @@ func (p *GovernancePlugin) applyRoutingRules(ctx *schemas.BifrostContext, req *s\n \t\t\t}\n \n \t\t\tresult := analyzer.Analyze(input)\n+\t\t\tif result == nil {\n+\t\t\t\tif p.logger != nil {\n+\t\t\t\t\tp.logger.Debug(\"[Governance] %s\", noComplexitySignalLog)\n+\t\t\t\t}\n+\t\t\t\tctx.AppendRoutingEngineLog(schemas.RoutingEngineRoutingRule, schemas.LogLevelInfo, noComplexitySignalLog)",
+        "comment_created_at": "2026-06-30T11:06:10+00:00",
+        "comment_author": "Madhuvod",
+        "comment_body": "considered",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

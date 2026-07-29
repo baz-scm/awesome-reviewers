@@ -1,0 +1,190 @@
+[
+  {
+    "discussion_id": "3523849524",
+    "pr_number": 4899,
+    "pr_file": "framework/streaming/accumulator.go",
+    "created_at": "2026-07-04T21:02:51+00:00",
+    "commented_code": "if accumulator.FirstChunkTimestamp.IsZero() {\n \t\taccumulator.FirstChunkTimestamp = chunk.Timestamp\n \t}\n+\tif isFinalChunk && chunk.StreamResponse != nil && chunk.ChunkIndex <= accumulator.MaxResponsesChunkIndex {",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3523849524",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4899,
+        "pr_file": "framework/streaming/accumulator.go",
+        "discussion_id": "3523849524",
+        "commented_code": "@@ -322,6 +324,15 @@ func (a *Accumulator) addResponsesStreamChunk(requestID string, chunk *Responses\n \tif accumulator.FirstChunkTimestamp.IsZero() {\n \t\taccumulator.FirstChunkTimestamp = chunk.Timestamp\n \t}\n+\tif isFinalChunk && chunk.StreamResponse != nil && chunk.ChunkIndex <= accumulator.MaxResponsesChunkIndex {",
+        "comment_created_at": "2026-07-04T21:02:51+00:00",
+        "comment_author": "akshaydeo",
+        "comment_body": "**CONFIRMED regression (blocking): duplicate delivery of a normal final chunk is double-appended.**\n\nOn a monotonic stream the terminal chunk arrives with the highest index N while `MaxResponsesChunkIndex == N-1`, so `chunk.ChunkIndex <= accumulator.MaxResponsesChunkIndex` is **false** on the first delivery and `TerminalResponseChunkIndex` is never seeded. When a second plugin delivers the same terminal chunk (logging and maxim both call `tracer.ProcessStreamingChunk` with the same final result: `plugins/logging/main.go:1082`, `plugins/maxim/main.go:587`), the condition `N <= N` is now true, `TerminalResponseChunkIndex` is still -1, so the else branch mints N+1 and the terminal chunk is stored a **second** time. Its `RawResponse` is then written twice into the persisted raw log (`responses.go:907-913`). Before this PR the seen-set deduped that second delivery.\n\nFix: reserve the terminal index **unconditionally** on the first `isFinalChunk` (exactly like the error path at `responses.go:948-957`), and only remap when it collides:\n\n```go\nif isFinalChunk && chunk.StreamResponse != nil {\n\tif accumulator.TerminalResponseChunkIndex >= 0 {\n\t\tchunk.ChunkIndex = accumulator.TerminalResponseChunkIndex\n\t} else {\n\t\tif chunk.ChunkIndex <= accumulator.MaxResponsesChunkIndex {\n\t\t\taccumulator.MaxResponsesChunkIndex++\n\t\t\tchunk.ChunkIndex = accumulator.MaxResponsesChunkIndex\n\t\t}\n\t\taccumulator.TerminalResponseChunkIndex = chunk.ChunkIndex\n\t}\n}\n```\n\nPlease also add a test for the monotonic case (terminal chunk has the highest index, delivered twice); the current test only covers the colliding-index case.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3641162562",
+    "pr_number": 5486,
+    "pr_file": "framework/logstore/matviews.go",
+    "created_at": "2026-07-23T22:57:02+00:00",
+    "commented_code": "}\n \n // getHistogramFromMatView returns time-bucketed request counts (total,\n-// success, error, cancelled) by re-aggregating hourly buckets from mv_logs_hourly.\n+// success, error, cancelled) by re-aggregating hourly buckets from\n+// mv_logs_hourly. Like getCountFromMatView, boundary display buckets are\n+// exact-range: only hour buckets fully contained in the window come from the\n+// matview; rows in the partial boundary hour(s) are re-bucketed from the raw\n+// table, so the first and last bars only count in-window rows, matching the\n+// raw histogram path (which applies exact timestamp predicates). Both halves\n+// are terminal-only, mirroring the raw path's status restriction.\n func (s *RDBLogStore) getHistogramFromMatView(ctx context.Context, filters SearchFilters, bucketSizeSeconds int64) (*HistogramResult, error) {\n-\tvar results []struct {\n+\ttype histAgg struct {\n \t\tBucketTimestamp int64 `gorm:\"column:bucket_timestamp\"`\n \t\tTotal           int64 `gorm:\"column:total\"`\n \t\tSuccess         int64 `gorm:\"column:success\"`\n \t\tErrorCount      int64 `gorm:\"column:error_count\"`\n \t\tCancelledCount  int64 `gorm:\"column:cancelled_count\"`\n \t}\n-\tq := s.ScopedDB(ctx).Table(\"mv_logs_hourly\")\n-\tq = s.applyMatViewFilters(q, filters)\n-\tif err := q.Select(fmt.Sprintf(`\n-\t\tCAST(FLOOR(EXTRACT(EPOCH FROM hour) / %d) * %d AS BIGINT) AS bucket_timestamp,\n-\t\tSUM(count) AS total,\n-\t\tSUM(success_count) AS success,\n-\t\tSUM(error_count) AS error_count,\n-\t\tSUM(cancelled_count) AS cancelled_count\n-\t`, bucketSizeSeconds, bucketSizeSeconds)).\n-\t\tGroup(\"bucket_timestamp\").\n-\t\tOrder(\"bucket_timestamp ASC\").\n-\t\tFind(&results).Error; err != nil {\n-\t\treturn nil, err\n+\n+\t// Time predicates are applied explicitly; strip them so the filter helpers\n+\t// only contribute dimension predicates.\n+\tdimFilters := filters\n+\tdimFilters.StartTime, dimFilters.EndTime = nil, nil\n+\n+\tacc := make(map[int64]*struct{ total, success, errCount, cancelledCount int64 })\n+\tmerge := func(rows []histAgg) {\n+\t\tfor _, r := range rows {\n+\t\t\tb, ok := acc[r.BucketTimestamp]\n+\t\t\tif !ok {\n+\t\t\t\tb = &struct{ total, success, errCount, cancelledCount int64 }{}\n+\t\t\t\tacc[r.BucketTimestamp] = b\n+\t\t\t}\n+\t\t\tb.total += r.Total\n+\t\t\tb.success += r.Success\n+\t\t\tb.errCount += r.ErrorCount\n+\t\t\tb.cancelledCount += r.CancelledCount\n+\t\t}\n \t}\n \n-\tresultMap := make(map[int64]*struct{ total, success, errCount, cancelledCount int64 }, len(results))\n-\tfor _, r := range results {\n-\t\tresultMap[r.BucketTimestamp] = &struct{ total, success, errCount, cancelledCount int64 }{r.Total, r.Success, r.ErrorCount, r.CancelledCount}\n+\trawBucketed := func(timePredicate string, timeArgs ...any) ([]histAgg, error) {\n+\t\tvar rows []histAgg\n+\t\tq := s.ScopedDB(ctx).Model(&Log{})\n+\t\tq = s.applyFilters(q, dimFilters)\n+\t\tq = q.Where(timePredicate, timeArgs...)\n+\t\tq = q.Where(\"status IN ?\", terminalLogStatuses)\n+\t\terr := q.Select(fmt.Sprintf(`\n+\t\t\t%s AS bucket_timestamp,\n+\t\t\tCOUNT(*) AS total,\n+\t\t\tSUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success,\n+\t\t\tSUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count,\n+\t\t\tSUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count\n+\t\t`, unixBucketExpr(\"postgres\", bucketSizeSeconds))).\n+\t\t\tGroup(\"bucket_timestamp\").\n+\t\t\tFind(&rows).Error\n+\t\treturn rows, err\n+\t}\n+\n+\tif isDegenerateHybridWindow(filters.StartTime, filters.EndTime) {\n+\t\t// Window too short for the interior/sliver split (reachable here:\n+\t\t// GetHistogram gates on canUseMatView, which has no window check).\n+\t\trows, err := rawBucketed(\"timestamp >= ? AND timestamp <= ?\", *filters.StartTime, *filters.EndTime)\n+\t\tif err != nil {\n+\t\t\treturn nil, err\n+\t\t}\n+\t\tmerge(rows)\n+\t} else {\n+\t\tvar results []histAgg\n+\t\tq := s.ScopedDB(ctx).Table(\"mv_logs_hourly\")\n+\t\tq = s.applyMatViewFilters(q, dimFilters)\n+\t\tq = applyInteriorBucketWindow(q, filters.StartTime, filters.EndTime)\n+\t\tif err := q.Select(fmt.Sprintf(`\n+\t\t\tCAST(FLOOR(EXTRACT(EPOCH FROM hour) / %d) * %d AS BIGINT) AS bucket_timestamp,\n+\t\t\tSUM(count) AS total,\n+\t\t\tSUM(success_count) AS success,\n+\t\t\tSUM(error_count) AS error_count,\n+\t\t\tSUM(cancelled_count) AS cancelled_count\n+\t\t`, bucketSizeSeconds, bucketSizeSeconds)).\n+\t\t\tGroup(\"bucket_timestamp\").\n+\t\t\tFind(&results).Error; err != nil {\n+\t\t\treturn nil, err\n+\t\t}\n+\t\tmerge(results)",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3641896480",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 5486,
+        "pr_file": "framework/logstore/matviews.go",
+        "discussion_id": "3641162562",
+        "commented_code": "@@ -1006,40 +1235,122 @@ func (s *RDBLogStore) getStatsFromMatView(ctx context.Context, filters SearchFil\n }\n \n // getHistogramFromMatView returns time-bucketed request counts (total,\n-// success, error, cancelled) by re-aggregating hourly buckets from mv_logs_hourly.\n+// success, error, cancelled) by re-aggregating hourly buckets from\n+// mv_logs_hourly. Like getCountFromMatView, boundary display buckets are\n+// exact-range: only hour buckets fully contained in the window come from the\n+// matview; rows in the partial boundary hour(s) are re-bucketed from the raw\n+// table, so the first and last bars only count in-window rows, matching the\n+// raw histogram path (which applies exact timestamp predicates). Both halves\n+// are terminal-only, mirroring the raw path's status restriction.\n func (s *RDBLogStore) getHistogramFromMatView(ctx context.Context, filters SearchFilters, bucketSizeSeconds int64) (*HistogramResult, error) {\n-\tvar results []struct {\n+\ttype histAgg struct {\n \t\tBucketTimestamp int64 `gorm:\"column:bucket_timestamp\"`\n \t\tTotal           int64 `gorm:\"column:total\"`\n \t\tSuccess         int64 `gorm:\"column:success\"`\n \t\tErrorCount      int64 `gorm:\"column:error_count\"`\n \t\tCancelledCount  int64 `gorm:\"column:cancelled_count\"`\n \t}\n-\tq := s.ScopedDB(ctx).Table(\"mv_logs_hourly\")\n-\tq = s.applyMatViewFilters(q, filters)\n-\tif err := q.Select(fmt.Sprintf(`\n-\t\tCAST(FLOOR(EXTRACT(EPOCH FROM hour) / %d) * %d AS BIGINT) AS bucket_timestamp,\n-\t\tSUM(count) AS total,\n-\t\tSUM(success_count) AS success,\n-\t\tSUM(error_count) AS error_count,\n-\t\tSUM(cancelled_count) AS cancelled_count\n-\t`, bucketSizeSeconds, bucketSizeSeconds)).\n-\t\tGroup(\"bucket_timestamp\").\n-\t\tOrder(\"bucket_timestamp ASC\").\n-\t\tFind(&results).Error; err != nil {\n-\t\treturn nil, err\n+\n+\t// Time predicates are applied explicitly; strip them so the filter helpers\n+\t// only contribute dimension predicates.\n+\tdimFilters := filters\n+\tdimFilters.StartTime, dimFilters.EndTime = nil, nil\n+\n+\tacc := make(map[int64]*struct{ total, success, errCount, cancelledCount int64 })\n+\tmerge := func(rows []histAgg) {\n+\t\tfor _, r := range rows {\n+\t\t\tb, ok := acc[r.BucketTimestamp]\n+\t\t\tif !ok {\n+\t\t\t\tb = &struct{ total, success, errCount, cancelledCount int64 }{}\n+\t\t\t\tacc[r.BucketTimestamp] = b\n+\t\t\t}\n+\t\t\tb.total += r.Total\n+\t\t\tb.success += r.Success\n+\t\t\tb.errCount += r.ErrorCount\n+\t\t\tb.cancelledCount += r.CancelledCount\n+\t\t}\n \t}\n \n-\tresultMap := make(map[int64]*struct{ total, success, errCount, cancelledCount int64 }, len(results))\n-\tfor _, r := range results {\n-\t\tresultMap[r.BucketTimestamp] = &struct{ total, success, errCount, cancelledCount int64 }{r.Total, r.Success, r.ErrorCount, r.CancelledCount}\n+\trawBucketed := func(timePredicate string, timeArgs ...any) ([]histAgg, error) {\n+\t\tvar rows []histAgg\n+\t\tq := s.ScopedDB(ctx).Model(&Log{})\n+\t\tq = s.applyFilters(q, dimFilters)\n+\t\tq = q.Where(timePredicate, timeArgs...)\n+\t\tq = q.Where(\"status IN ?\", terminalLogStatuses)\n+\t\terr := q.Select(fmt.Sprintf(`\n+\t\t\t%s AS bucket_timestamp,\n+\t\t\tCOUNT(*) AS total,\n+\t\t\tSUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success,\n+\t\t\tSUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count,\n+\t\t\tSUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count\n+\t\t`, unixBucketExpr(\"postgres\", bucketSizeSeconds))).\n+\t\t\tGroup(\"bucket_timestamp\").\n+\t\t\tFind(&rows).Error\n+\t\treturn rows, err\n+\t}\n+\n+\tif isDegenerateHybridWindow(filters.StartTime, filters.EndTime) {\n+\t\t// Window too short for the interior/sliver split (reachable here:\n+\t\t// GetHistogram gates on canUseMatView, which has no window check).\n+\t\trows, err := rawBucketed(\"timestamp >= ? AND timestamp <= ?\", *filters.StartTime, *filters.EndTime)\n+\t\tif err != nil {\n+\t\t\treturn nil, err\n+\t\t}\n+\t\tmerge(rows)\n+\t} else {\n+\t\tvar results []histAgg\n+\t\tq := s.ScopedDB(ctx).Table(\"mv_logs_hourly\")\n+\t\tq = s.applyMatViewFilters(q, dimFilters)\n+\t\tq = applyInteriorBucketWindow(q, filters.StartTime, filters.EndTime)\n+\t\tif err := q.Select(fmt.Sprintf(`\n+\t\t\tCAST(FLOOR(EXTRACT(EPOCH FROM hour) / %d) * %d AS BIGINT) AS bucket_timestamp,\n+\t\t\tSUM(count) AS total,\n+\t\t\tSUM(success_count) AS success,\n+\t\t\tSUM(error_count) AS error_count,\n+\t\t\tSUM(cancelled_count) AS cancelled_count\n+\t\t`, bucketSizeSeconds, bucketSizeSeconds)).\n+\t\t\tGroup(\"bucket_timestamp\").\n+\t\t\tFind(&results).Error; err != nil {\n+\t\t\treturn nil, err\n+\t\t}\n+\t\tmerge(results)",
+        "comment_created_at": "2026-07-23T22:57:02+00:00",
+        "comment_author": "akshaydeo",
+        "comment_body": "Fixed - all 13 matview histogram gates in framework/logstore/rdb.go now require `bucketSizeSeconds%3600 == 0` in addition to `>= 3600`, so non-hour-aligned bucket sizes (e.g. 5400) fall back to the raw-table path with exact timestamp predicates. See updated code.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3528826050",
+    "pr_number": 4943,
+    "pr_file": "core/providers/anthropic/chat.go",
+    "created_at": "2026-07-06T12:24:53+00:00",
+    "commented_code": "Reasoning: schemas.Ptr(thinkingText),\n \t\t\t\t\t\t\t\t\t\tReasoningDetails: []schemas.ChatReasoningDetails{\n \t\t\t\t\t\t\t\t\t\t\t{\n-\t\t\t\t\t\t\t\t\t\t\t\tIndex: 0,\n+\t\t\t\t\t\t\t\t\t\t\t\tIndex: state.reasoningDetailIndex(*chunk.Index),",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3528826050",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4943,
+        "pr_file": "core/providers/anthropic/chat.go",
+        "discussion_id": "3528826050",
+        "commented_code": "@@ -1349,7 +1421,7 @@ func (chunk *AnthropicStreamEvent) ToBifrostChatCompletionStream(ctx *schemas.Bi\n \t\t\t\t\t\t\t\t\t\tReasoning: schemas.Ptr(thinkingText),\n \t\t\t\t\t\t\t\t\t\tReasoningDetails: []schemas.ChatReasoningDetails{\n \t\t\t\t\t\t\t\t\t\t\t{\n-\t\t\t\t\t\t\t\t\t\t\t\tIndex: 0,\n+\t\t\t\t\t\t\t\t\t\t\t\tIndex: state.reasoningDetailIndex(*chunk.Index),",
+        "comment_created_at": "2026-07-06T12:24:53+00:00",
+        "comment_author": "R-droid101",
+        "comment_body": "Hey, what's the purpose for changing this?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3528922346",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4943,
+        "pr_file": "core/providers/anthropic/chat.go",
+        "discussion_id": "3528826050",
+        "commented_code": "@@ -1349,7 +1421,7 @@ func (chunk *AnthropicStreamEvent) ToBifrostChatCompletionStream(ctx *schemas.Bi\n \t\t\t\t\t\t\t\t\t\tReasoning: schemas.Ptr(thinkingText),\n \t\t\t\t\t\t\t\t\t\tReasoningDetails: []schemas.ChatReasoningDetails{\n \t\t\t\t\t\t\t\t\t\t\t{\n-\t\t\t\t\t\t\t\t\t\t\t\tIndex: 0,\n+\t\t\t\t\t\t\t\t\t\t\t\tIndex: state.reasoningDetailIndex(*chunk.Index),",
+        "comment_created_at": "2026-07-06T12:38:47+00:00",
+        "comment_author": "fus3r",
+        "comment_body": "reasoning_details get grouped by index downstream, the streaming accumulator does it and OpenRouter style clients do the same. These deltas hardcoded index 0, which was fine while thinking was the only reasoning emitter, but a redacted block in the same stream would now share index 0 with the visible thinking. The two get merged into a single detail typed reasoning.text that also carries data, and since request conversion only turns reasoning.encrypted details back into redacted_thinking blocks, the payload would be dropped again on replay. Per block indices keep the entries separate. Single reasoning block streams still emit index 0 like before, and TestToBifrostChatCompletionStream_MixedReasoningBlocksKeepDistinctIndices pins the mixed case.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3403278886",
+    "pr_number": 4345,
+    "pr_file": "core/providers/gemini/chat.go",
+    "created_at": "2026-06-15T07:58:57+00:00",
+    "commented_code": "return errorResp\n }\n+\n+// convertGroundingMetadataToChatAnnotations converts Gemini grounding metadata\n+// (Google Search results) into OpenAI-style url_citation annotations.\n+//\n+// Unlike emitAnnotationsFromGroundingSupports in responses.go which picks only\n+// index [0] per support, this function emits one annotation per (support, web\n+// chunk) pair, iterating ALL GroundingChunkIndices of each support.\n+//\n+// Segment indices from Gemini are byte offsets; OpenAI expects character offsets.\n+// This skew is a known pre-existing limitation shared with the Responses path and\n+// is left unresolved here.\n+//\n+// Falls back to bare web sources (no segment indices) when no usable supports are\n+// present.\n+func convertGroundingMetadataToChatAnnotations(metadata *GroundingMetadata) []schemas.ChatAssistantMessageAnnotation {\n+\tif metadata == nil {\n+\t\treturn nil\n+\t}\n+\n+\tvar annotations []schemas.ChatAssistantMessageAnnotation\n+\n+\tfor _, support := range metadata.GroundingSupports {\n+\t\tif support == nil || support.Segment == nil {\n+\t\t\tcontinue\n+\t\t}\n+\t\tfor _, chunkIdx := range support.GroundingChunkIndices {\n+\t\t\tif chunkIdx < 0 || int(chunkIdx) >= len(metadata.GroundingChunks) {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tchunk := metadata.GroundingChunks[chunkIdx]\n+\t\t\tif chunk == nil || chunk.Web == nil || chunk.Web.URI == \"\" {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tannotations = append(annotations, schemas.ChatAssistantMessageAnnotation{\n+\t\t\t\tType: \"url_citation\",\n+\t\t\t\tURLCitation: schemas.ChatAssistantMessageAnnotationCitation{\n+\t\t\t\t\tStartIndex: int(support.Segment.StartIndex),\n+\t\t\t\t\tEndIndex:   int(support.Segment.EndIndex),",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3411851377",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4345,
+        "pr_file": "core/providers/gemini/chat.go",
+        "discussion_id": "3403278886",
+        "commented_code": "@@ -580,3 +605,65 @@ func createErrorResponse(response *GenerateContentResponse, finishReason string,\n \n \treturn errorResp\n }\n+\n+// convertGroundingMetadataToChatAnnotations converts Gemini grounding metadata\n+// (Google Search results) into OpenAI-style url_citation annotations.\n+//\n+// Unlike emitAnnotationsFromGroundingSupports in responses.go which picks only\n+// index [0] per support, this function emits one annotation per (support, web\n+// chunk) pair, iterating ALL GroundingChunkIndices of each support.\n+//\n+// Segment indices from Gemini are byte offsets; OpenAI expects character offsets.\n+// This skew is a known pre-existing limitation shared with the Responses path and\n+// is left unresolved here.\n+//\n+// Falls back to bare web sources (no segment indices) when no usable supports are\n+// present.\n+func convertGroundingMetadataToChatAnnotations(metadata *GroundingMetadata) []schemas.ChatAssistantMessageAnnotation {\n+\tif metadata == nil {\n+\t\treturn nil\n+\t}\n+\n+\tvar annotations []schemas.ChatAssistantMessageAnnotation\n+\n+\tfor _, support := range metadata.GroundingSupports {\n+\t\tif support == nil || support.Segment == nil {\n+\t\t\tcontinue\n+\t\t}\n+\t\tfor _, chunkIdx := range support.GroundingChunkIndices {\n+\t\t\tif chunkIdx < 0 || int(chunkIdx) >= len(metadata.GroundingChunks) {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tchunk := metadata.GroundingChunks[chunkIdx]\n+\t\t\tif chunk == nil || chunk.Web == nil || chunk.Web.URI == \"\" {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tannotations = append(annotations, schemas.ChatAssistantMessageAnnotation{\n+\t\t\t\tType: \"url_citation\",\n+\t\t\t\tURLCitation: schemas.ChatAssistantMessageAnnotationCitation{\n+\t\t\t\t\tStartIndex: int(support.Segment.StartIndex),\n+\t\t\t\t\tEndIndex:   int(support.Segment.EndIndex),",
+        "comment_created_at": "2026-06-15T07:58:57+00:00",
+        "comment_author": "zckrs",
+        "comment_body": "Acknowledged. Gemini `Segment` indices are byte offsets while OpenAI `url_citation` expects character offsets, so spans skew for multi-byte UTF-8 content. This is a pre-existing limitation shared with the Responses path (`emitAnnotationsFromGroundingSupports` in `responses.go` passes the same byte offsets through) and is already documented in the helper doc comment (lines 616-618). Fixing it only here would diverge from the Responses path; a consistent rune-offset conversion across both paths is better as a dedicated follow-up. For ASCII content the indices are identical.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3403166495",
+    "pr_number": 4345,
+    "pr_file": "framework/streaming/chat.go",
+    "created_at": "2026-06-15T07:58:48+00:00",
+    "commented_code": "}\n \t}\n \n+\t// Deep copy Annotations slice\n+\tif len(original.Annotations) > 0 {\n+\t\tcopy.Annotations = append([]schemas.ChatAssistantMessageAnnotation(nil), original.Annotations...)\n+\t}",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3411850404",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4345,
+        "pr_file": "framework/streaming/chat.go",
+        "discussion_id": "3403166495",
+        "commented_code": "@@ -97,6 +97,11 @@ func deepCopyChatStreamDelta(original *schemas.ChatStreamResponseChoiceDelta) *s\n \t\t}\n \t}\n \n+\t// Deep copy Annotations slice\n+\tif len(original.Annotations) > 0 {\n+\t\tcopy.Annotations = append([]schemas.ChatAssistantMessageAnnotation(nil), original.Annotations...)\n+\t}",
+        "comment_created_at": "2026-06-15T07:58:48+00:00",
+        "comment_author": "zckrs",
+        "comment_body": "Fixed in 94e6d6e65. Added a `deepCopyChatAnnotations` helper that clones the `URLCitation.URL`, `Sources` and `Type` pointer fields per annotation, matching the existing `ReasoningDetails` deep-copy pattern. It is used in both `deepCopyChatStreamDelta` and the `buildCompleteMessageFromChatStreamChunks` accumulator, so the deep-copy ownership boundary is preserved.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3403278891",
+    "pr_number": 4345,
+    "pr_file": "plugins/jsonparser/utils.go",
+    "created_at": "2026-06-15T07:58:53+00:00",
+    "commented_code": "}\n \n \tresult := &schemas.ChatStreamResponseChoiceDelta{\n-\t\tRole:      original.Role,\n-\t\tReasoning: original.Reasoning, // Shallow copy\n-\t\tRefusal:   original.Refusal,   // Shallow copy\n-\t\tToolCalls: original.ToolCalls, // Shallow copy - we don't modify tool calls\n+\t\tRole:        original.Role,\n+\t\tReasoning:   original.Reasoning,   // Shallow copy\n+\t\tRefusal:     original.Refusal,     // Shallow copy\n+\t\tToolCalls:   original.ToolCalls,   // Shallow copy - we don't modify tool calls\n+\t\tAnnotations: original.Annotations, // Shallow copy",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3411851000",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 4345,
+        "pr_file": "plugins/jsonparser/utils.go",
+        "discussion_id": "3403278891",
+        "commented_code": "@@ -331,10 +331,11 @@ func (p *JsonParserPlugin) deepCopyChatStreamResponseChoiceDelta(original *schem\n \t}\n \n \tresult := &schemas.ChatStreamResponseChoiceDelta{\n-\t\tRole:      original.Role,\n-\t\tReasoning: original.Reasoning, // Shallow copy\n-\t\tRefusal:   original.Refusal,   // Shallow copy\n-\t\tToolCalls: original.ToolCalls, // Shallow copy - we don't modify tool calls\n+\t\tRole:        original.Role,\n+\t\tReasoning:   original.Reasoning,   // Shallow copy\n+\t\tRefusal:     original.Refusal,     // Shallow copy\n+\t\tToolCalls:   original.ToolCalls,   // Shallow copy - we don't modify tool calls\n+\t\tAnnotations: original.Annotations, // Shallow copy",
+        "comment_created_at": "2026-06-15T07:58:53+00:00",
+        "comment_author": "zckrs",
+        "comment_body": "Fixed in 94e6d6e65. `deepCopyChatStreamResponseChoiceDelta` now calls a package-level `deepCopyChatAnnotations` helper instead of aliasing `original.Annotations`. Role/Reasoning/Refusal/ToolCalls stay shallow on purpose since the plugin only mutates `Content`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3621314131",
+    "pr_number": 5408,
+    "pr_file": "core/schemas/responses.go",
+    "created_at": "2026-07-21T11:42:34+00:00",
+    "commented_code": "Description          *string                     `json:\"description,omitempty\"`\n \tStrict               *bool                       `json:\"strict,omitempty\"`\n \tAdditionalProperties *AdditionalPropertiesStruct `json:\"additionalProperties,omitempty\"`\n-\tProperties           *map[string]any             `json:\"properties,omitempty\"`\n+\tProperties           *OrderedMap                 `json:\"properties,omitempty\"`\n \tRequired             []string                    `json:\"required,omitempty\"`\n \tType                 *string                     `json:\"type,omitempty\"`\n \n \t// JSON Schema definition fields\n-\tDefs        *map[string]any `json:\"$defs,omitempty\"`       // JSON Schema draft 2019-09+ definitions\n-\tDefinitions *map[string]any `json:\"definitions,omitempty\"` // Legacy JSON Schema draft-07 definitions\n-\tRef         *string         `json:\"$ref,omitempty\"`        // Reference to definition\n+\tDefs        *OrderedMap `json:\"$defs,omitempty\"`       // JSON Schema draft 2019-09+ definitions\n+\tDefinitions *OrderedMap `json:\"definitions,omitempty\"` // Legacy JSON Schema draft-07 definitions\n+\tRef         *string     `json:\"$ref,omitempty\"`        // Reference to definition\n \n \t// Array schema fields\n-\tItems    *map[string]any `json:\"items,omitempty\"`    // Array element schema\n-\tMinItems *int64          `json:\"minItems,omitempty\"` // Minimum array length\n-\tMaxItems *int64          `json:\"maxItems,omitempty\"` // Maximum array length\n+\tItems    *OrderedMap `json:\"items,omitempty\"`    // Array element schema\n+\tMinItems *int64      `json:\"minItems,omitempty\"` // Minimum array length\n+\tMaxItems *int64      `json:\"maxItems,omitempty\"` // Maximum array length\n \n \t// Composition fields (union types)\n-\tAnyOf []map[string]any `json:\"anyOf,omitempty\"` // Union types (any of these schemas)\n-\tOneOf []map[string]any `json:\"oneOf,omitempty\"` // Exclusive union types (exactly one of these)\n-\tAllOf []map[string]any `json:\"allOf,omitempty\"` // Schema intersection (all of these)\n+\tAnyOf []OrderedMap `json:\"anyOf,omitempty\"` // Union types (any of these schemas)\n+\tOneOf []OrderedMap `json:\"oneOf,omitempty\"` // Exclusive union types (exactly one of these)\n+\tAllOf []OrderedMap `json:\"allOf,omitempty\"` // Schema intersection (all of these)",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3621779545",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 5408,
+        "pr_file": "core/schemas/responses.go",
+        "discussion_id": "3621314131",
+        "commented_code": "@@ -543,24 +543,24 @@ type ResponsesTextConfigFormatJSONSchema struct {\n \tDescription          *string                     `json:\"description,omitempty\"`\n \tStrict               *bool                       `json:\"strict,omitempty\"`\n \tAdditionalProperties *AdditionalPropertiesStruct `json:\"additionalProperties,omitempty\"`\n-\tProperties           *map[string]any             `json:\"properties,omitempty\"`\n+\tProperties           *OrderedMap                 `json:\"properties,omitempty\"`\n \tRequired             []string                    `json:\"required,omitempty\"`\n \tType                 *string                     `json:\"type,omitempty\"`\n \n \t// JSON Schema definition fields\n-\tDefs        *map[string]any `json:\"$defs,omitempty\"`       // JSON Schema draft 2019-09+ definitions\n-\tDefinitions *map[string]any `json:\"definitions,omitempty\"` // Legacy JSON Schema draft-07 definitions\n-\tRef         *string         `json:\"$ref,omitempty\"`        // Reference to definition\n+\tDefs        *OrderedMap `json:\"$defs,omitempty\"`       // JSON Schema draft 2019-09+ definitions\n+\tDefinitions *OrderedMap `json:\"definitions,omitempty\"` // Legacy JSON Schema draft-07 definitions\n+\tRef         *string     `json:\"$ref,omitempty\"`        // Reference to definition\n \n \t// Array schema fields\n-\tItems    *map[string]any `json:\"items,omitempty\"`    // Array element schema\n-\tMinItems *int64          `json:\"minItems,omitempty\"` // Minimum array length\n-\tMaxItems *int64          `json:\"maxItems,omitempty\"` // Maximum array length\n+\tItems    *OrderedMap `json:\"items,omitempty\"`    // Array element schema\n+\tMinItems *int64      `json:\"minItems,omitempty\"` // Minimum array length\n+\tMaxItems *int64      `json:\"maxItems,omitempty\"` // Maximum array length\n \n \t// Composition fields (union types)\n-\tAnyOf []map[string]any `json:\"anyOf,omitempty\"` // Union types (any of these schemas)\n-\tOneOf []map[string]any `json:\"oneOf,omitempty\"` // Exclusive union types (exactly one of these)\n-\tAllOf []map[string]any `json:\"allOf,omitempty\"` // Schema intersection (all of these)\n+\tAnyOf []OrderedMap `json:\"anyOf,omitempty\"` // Union types (any of these schemas)\n+\tOneOf []OrderedMap `json:\"oneOf,omitempty\"` // Exclusive union types (exactly one of these)\n+\tAllOf []OrderedMap `json:\"allOf,omitempty\"` // Schema intersection (all of these)",
+        "comment_created_at": "2026-07-21T11:42:34+00:00",
+        "comment_author": "akshaydeo",
+        "comment_body": "This is intentional. Key-order preservation is the point of this change: providers like OpenAI follow the literal key order of the structured-output schema, so decoding into plain Go maps (re-marshaled with sorted keys) degrades output quality. The JSON wire format is unchanged; only Go struct construction changes. Callers can migrate with `schemas.OrderedMapFromMap(...)` (sorted, deterministic) or `schemas.NewOrderedMapFromPairs(...)` (explicit order), mirroring the existing `ToolFunctionParameters` design. The source-compat break is documented in core/changelog.md.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3621742286",
+    "pr_number": 5408,
+    "pr_file": "core/schemas/mux_test.go",
+    "created_at": "2026-07-21T11:48:19+00:00",
+    "commented_code": "Name:        Ptr(\"CityInfo\"),\n \t\t\t\t\tDescription: Ptr(\"City schema\"),\n \t\t\t\t\tStrict:      Ptr(true),\n-\t\t\t\t\tJSONSchema:  &ResponsesTextConfigFormatJSONSchema{Schema: func() *any { v := any(schema); return &v }()},\n+\t\t\t\t\tJSONSchema:  &ResponsesTextConfigFormatJSONSchema{Schema: OrderedMapFromMap(schema)},",
+    "repo_full_name": "maximhq/bifrost",
+    "discussion_comments": [
+      {
+        "comment_id": "3621814706",
+        "repo_full_name": "maximhq/bifrost",
+        "pr_number": 5408,
+        "pr_file": "core/schemas/mux_test.go",
+        "discussion_id": "3621742286",
+        "commented_code": "@@ -988,7 +988,7 @@ func TestToChatRequest_TextFormat_JSONSchema(t *testing.T) {\n \t\t\t\t\tName:        Ptr(\"CityInfo\"),\n \t\t\t\t\tDescription: Ptr(\"City schema\"),\n \t\t\t\t\tStrict:      Ptr(true),\n-\t\t\t\t\tJSONSchema:  &ResponsesTextConfigFormatJSONSchema{Schema: func() *any { v := any(schema); return &v }()},\n+\t\t\t\t\tJSONSchema:  &ResponsesTextConfigFormatJSONSchema{Schema: OrderedMapFromMap(schema)},",
+        "comment_created_at": "2026-07-21T11:48:19+00:00",
+        "comment_author": "akshaydeo",
+        "comment_body": "Fixed - both fixtures now build their ordered maps with `NewOrderedMapFromPairs` in deliberately non-alphabetical key order (`type`/`required` and `zip`/`age`) and exact-match the serialized bytes, so a regression to sorted marshaling fails the tests. See updated code.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

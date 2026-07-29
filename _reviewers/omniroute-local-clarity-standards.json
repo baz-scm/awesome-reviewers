@@ -1,0 +1,200 @@
+[
+  {
+    "discussion_id": "3234477042",
+    "pr_number": 2223,
+    "pr_file": "open-sse/services/model.ts",
+    "created_at": "2026-05-13T13:12:15+00:00",
+    "commented_code": "// Get aliases (from object or function)\n   const aliases = typeof aliasesOrGetter === \"function\" ? await aliasesOrGetter() : aliasesOrGetter;\n \n+  // Local alias map (user-provided 2nd arg) wins over all cross-proxy /\n+  // provider inference paths. When the alias target is a slashful string like\n+  // \"openai/gpt-4o\", parse it directly as <provider>/<model> and return\n+  // immediately \u2014 before shouldTreatAsExactModelId() or cross-proxy inference\n+  // can misclassify the target (e.g. because bazaarlink catalogs it verbatim).\n+  if (aliases && parsed.model && typeof aliases[parsed.model] === \"string\") {\n+    const directTarget = aliases[parsed.model] as string;\n+    if (directTarget.includes(\"/\")) {\n+      const slashIdx = directTarget.indexOf(\"/\");\n+      const providerPart = directTarget.slice(0, slashIdx);\n+      const modelPart = directTarget.slice(slashIdx + 1);\n+      const provider = resolveProviderAlias(providerPart);\n+      const canonicalModel = resolveProviderModelAlias(provider, modelPart);\n+      return { provider, model: canonicalModel, extendedContext };\n+    }",
+    "repo_full_name": "diegosouzapw/OmniRoute",
+    "discussion_comments": [
+      {
+        "comment_id": "3234507255",
+        "repo_full_name": "diegosouzapw/OmniRoute",
+        "pr_number": 2223,
+        "pr_file": "open-sse/services/model.ts",
+        "discussion_id": "3234477042",
+        "commented_code": "@@ -446,6 +446,23 @@ export async function getModelInfoCore(modelStr, aliasesOrGetter) {\n   // Get aliases (from object or function)\n   const aliases = typeof aliasesOrGetter === \"function\" ? await aliasesOrGetter() : aliasesOrGetter;\n \n+  // Local alias map (user-provided 2nd arg) wins over all cross-proxy /\n+  // provider inference paths. When the alias target is a slashful string like\n+  // \"openai/gpt-4o\", parse it directly as <provider>/<model> and return\n+  // immediately \u2014 before shouldTreatAsExactModelId() or cross-proxy inference\n+  // can misclassify the target (e.g. because bazaarlink catalogs it verbatim).\n+  if (aliases && parsed.model && typeof aliases[parsed.model] === \"string\") {\n+    const directTarget = aliases[parsed.model] as string;\n+    if (directTarget.includes(\"/\")) {\n+      const slashIdx = directTarget.indexOf(\"/\");\n+      const providerPart = directTarget.slice(0, slashIdx);\n+      const modelPart = directTarget.slice(slashIdx + 1);\n+      const provider = resolveProviderAlias(providerPart);\n+      const canonicalModel = resolveProviderModelAlias(provider, modelPart);\n+      return { provider, model: canonicalModel, extendedContext };\n+    }",
+        "comment_created_at": "2026-05-13T13:12:15+00:00",
+        "comment_author": "NomenAK",
+        "comment_body": "Done in 03771416 \u2014 collapsed the includes(\"/\") + indexOf(\"/\") pair into a single indexOf with a -1 check, and dropped the redundant `as string` cast (typeof guard already narrows the type). Tests still pass. Thanks for the suggestion.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3163972685",
+    "pr_number": 1792,
+    "pr_file": "src/lib/providers/validation.ts",
+    "created_at": "2026-04-29T20:35:45+00:00",
+    "commented_code": "}\n }\n \n+async function validateChatGptWebProvider({ apiKey, providerSpecificData = {} }: any) {\n+  try {\n+    // Accept bare value, unchunked cookie, chunked (.0/.1) cookies, or full\n+    // \"Cookie: ...\" DevTools line. Pass through verbatim once recognised.\n+    let cookieHeader = String(apiKey || \"\").trim();\n+    if (/^cookie\\s*:\\s*/i.test(cookieHeader)) {\n+      cookieHeader = cookieHeader.replace(/^cookie\\s*:\\s*/i, \"\");\n+    }\n+    if (!/__Secure-next-auth\\.session-token(?:\\.\\d+)?\\s*=/.test(cookieHeader)) {\n+      cookieHeader = `__Secure-next-auth.session-token=${cookieHeader}`;\n+    }\n+\n+    // Use the TLS-impersonating client \u2014 Cloudflare on chatgpt.com pins\n+    // cf_clearance to JA3/JA4 + HTTP/2 SETTINGS, so plain Node fetch always\n+    // gets cf-mitigated: challenge regardless of cookies.\n+    const { tlsFetchChatGpt, TlsClientUnavailableError } =\n+      await import(\"@omniroute/open-sse/services/chatgptTlsClient.ts\");\n+\n+    let response;\n+    try {\n+      response = await tlsFetchChatGpt(\"https://chatgpt.com/api/auth/session\", {\n+        method: \"GET\",\n+        headers: applyCustomUserAgent(\n+          {\n+            Accept: \"application/json\",\n+            \"Accept-Language\": \"en-US,en;q=0.9\",\n+            \"Cache-Control\": \"no-cache\",\n+            Cookie: cookieHeader,\n+            Origin: \"https://chatgpt.com\",\n+            Pragma: \"no-cache\",\n+            Referer: \"https://chatgpt.com/\",\n+            \"Sec-Fetch-Dest\": \"empty\",\n+            \"Sec-Fetch-Mode\": \"cors\",\n+            \"Sec-Fetch-Site\": \"same-origin\",\n+            \"User-Agent\":\n+              \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0\",\n+          },\n+          providerSpecificData\n+        ),\n+        timeoutMs: 30_000,\n+      });",
+    "repo_full_name": "diegosouzapw/OmniRoute",
+    "discussion_comments": [
+      {
+        "comment_id": "3164004546",
+        "repo_full_name": "diegosouzapw/OmniRoute",
+        "pr_number": 1792,
+        "pr_file": "src/lib/providers/validation.ts",
+        "discussion_id": "3163972685",
+        "commented_code": "@@ -2409,6 +2409,114 @@ async function validateGrokWebProvider({ apiKey, providerSpecificData = {} }: an\n   }\n }\n \n+async function validateChatGptWebProvider({ apiKey, providerSpecificData = {} }: any) {\n+  try {\n+    // Accept bare value, unchunked cookie, chunked (.0/.1) cookies, or full\n+    // \"Cookie: ...\" DevTools line. Pass through verbatim once recognised.\n+    let cookieHeader = String(apiKey || \"\").trim();\n+    if (/^cookie\\s*:\\s*/i.test(cookieHeader)) {\n+      cookieHeader = cookieHeader.replace(/^cookie\\s*:\\s*/i, \"\");\n+    }\n+    if (!/__Secure-next-auth\\.session-token(?:\\.\\d+)?\\s*=/.test(cookieHeader)) {\n+      cookieHeader = `__Secure-next-auth.session-token=${cookieHeader}`;\n+    }\n+\n+    // Use the TLS-impersonating client \u2014 Cloudflare on chatgpt.com pins\n+    // cf_clearance to JA3/JA4 + HTTP/2 SETTINGS, so plain Node fetch always\n+    // gets cf-mitigated: challenge regardless of cookies.\n+    const { tlsFetchChatGpt, TlsClientUnavailableError } =\n+      await import(\"@omniroute/open-sse/services/chatgptTlsClient.ts\");\n+\n+    let response;\n+    try {\n+      response = await tlsFetchChatGpt(\"https://chatgpt.com/api/auth/session\", {\n+        method: \"GET\",\n+        headers: applyCustomUserAgent(\n+          {\n+            Accept: \"application/json\",\n+            \"Accept-Language\": \"en-US,en;q=0.9\",\n+            \"Cache-Control\": \"no-cache\",\n+            Cookie: cookieHeader,\n+            Origin: \"https://chatgpt.com\",\n+            Pragma: \"no-cache\",\n+            Referer: \"https://chatgpt.com/\",\n+            \"Sec-Fetch-Dest\": \"empty\",\n+            \"Sec-Fetch-Mode\": \"cors\",\n+            \"Sec-Fetch-Site\": \"same-origin\",\n+            \"User-Agent\":\n+              \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:150.0) Gecko/20100101 Firefox/150.0\",\n+          },\n+          providerSpecificData\n+        ),\n+        timeoutMs: 30_000,\n+      });",
+        "comment_created_at": "2026-04-29T20:35:45+00:00",
+        "comment_author": "payne0420",
+        "comment_body": "Thanks for the suggestion. The executor module legitimately uses these constants because it has many call sites. The validator function uses the URL once and the User-Agent once, so introducing module-scope constants for a single call site adds indirection without a real DRY benefit. If chatgpt.com changes its UA expectations, the executor's UA constant is the load-bearing one \u2014 the validator's UA only matters during account validation. Leaving as-is intentionally.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3089083446",
+    "pr_number": 1289,
+    "pr_file": "open-sse/executors/perplexity-web.ts",
+    "created_at": "2026-04-15T20:35:37+00:00",
+    "commented_code": "+/**\n+ * PerplexityWebExecutor \u2014 Perplexity Web Session Provider\n+ *\n+ * Routes requests through Perplexity's internal SSE API using a Pro/Max\n+ * subscription session cookie or JWT, translating between OpenAI chat\n+ * completions format and Perplexity's internal protocol.\n+ */\n+\n+import { BaseExecutor, type ExecuteInput } from \"./base.ts\";\n+\n+const PPLX_SSE_ENDPOINT = \"https://www.perplexity.ai/rest/sse/perplexity_ask\";\n+const PPLX_API_VERSION = \"2.18\";\n+const PPLX_USER_AGENT =\n+  \"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36\";\n+\n+const MODEL_MAP: Record<string, [string, string]> = {\n+  \"pplx-auto\": [\"concise\", \"pplx_pro\"],\n+  \"pplx-sonar\": [\"copilot\", \"experimental\"],\n+  \"pplx-gpt\": [\"copilot\", \"gpt54\"],\n+  \"pplx-gemini\": [\"copilot\", \"gemini31pro_high\"],\n+  \"pplx-sonnet\": [\"copilot\", \"claude46sonnet\"],\n+  \"pplx-opus\": [\"copilot\", \"claude46opus\"],\n+  \"pplx-nemotron\": [\"copilot\", \"nv_nemotron_3_super\"],\n+};\n+\n+const THINKING_MAP: Record<string, string> = {\n+  \"pplx-gpt\": \"gpt54_thinking\",\n+  \"pplx-sonnet\": \"claude46sonnetthinking\",\n+  \"pplx-opus\": \"claude46opusthinking\",\n+};\n+\n+const CITATION_RE = /\\[\\d+\\]/g;\n+const GROK_TAG_RE = /<grok:[^>]*>.*?<\\/grok:[^>]*>/gs;\n+const GROK_SELF_RE = /<grok:[^>]*\\/>/g;\n+const XML_DECL_RE = /<[?]xml[^?]*[?]>/g;\n+const SCRIPT_RE = /<script[^>]*>.*?<\\/script>/gs;\n+const SCRIPT_TAG_RE = /<\\/?script[^>]*>/g;\n+const RESPONSE_TAG_RE = /<\\/?response[^>]*>/g;\n+const MULTI_SPACE = / {2,}/g;\n+const MULTI_NL = /\n{3,}/g;\n+\n+// \u2500\u2500\u2500 Session continuity \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n+\n+const SESSION_MAX_AGE_MS = 3600_000;\n+const SESSION_MAX_ENTRIES = 200;\n+\n+interface SessionEntry {\n+  backendUuid: string;\n+  ts: number;\n+}\n+\n+const sessionCache = new Map<string, SessionEntry>();\n+\n+function sessionKey(history: Array<{ role: string; content: string }>): string {\n+  const parts = history.map((h) => `${h.role}:${h.content}`).join(\"\n\");\n+  let hash = 0x811c9dc5;\n+  for (let i = 0; i < parts.length; i++) {\n+    hash ^= parts.charCodeAt(i);\n+    hash = (hash * 0x01000193) >>> 0;\n+  }\n+  return hash.toString(16).padStart(8, \"0\");\n+}\n+\n+function sessionLookup(history: Array<{ role: string; content: string }>): string | null {\n+  if (history.length === 0) return null;\n+  const key = sessionKey(history);\n+  const entry = sessionCache.get(key);\n+  if (!entry) return null;\n+  if (Date.now() - entry.ts > SESSION_MAX_AGE_MS) {\n+    sessionCache.delete(key);\n+    return null;\n+  }\n+  return entry.backendUuid;\n+}\n+\n+function sessionStore(\n+  history: Array<{ role: string; content: string }>,\n+  currentMsg: string,\n+  responseText: string,\n+  backendUuid: string | null,\n+): void {\n+  if (!backendUuid) return;\n+  const full = [\n+    ...history,\n+    { role: \"user\", content: currentMsg },\n+    { role: \"assistant\", content: responseText },\n+  ];\n+  const key = sessionKey(full);\n+  sessionCache.set(key, { backendUuid, ts: Date.now() });\n+  if (sessionCache.size > SESSION_MAX_ENTRIES) {\n+    let oldestKey: string | null = null;\n+    let oldestTs = Infinity;\n+    for (const [k, v] of sessionCache) {\n+      if (v.ts < oldestTs) {\n+        oldestTs = v.ts;\n+        oldestKey = k;\n+      }\n+    }\n+    if (oldestKey) sessionCache.delete(oldestKey);\n+  }\n+}\n+\n+// \u2500\u2500\u2500 Helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n+\n+function cleanResponse(text: string, strip = true): string {\n+  let t = text;\n+  t = t.replace(XML_DECL_RE, \"\");\n+  t = t.replace(CITATION_RE, \"\");\n+  t = t.replace(GROK_TAG_RE, \"\");\n+  t = t.replace(GROK_SELF_RE, \"\");\n+  t = t.replace(RESPONSE_TAG_RE, \"\");\n+  t = t.replace(SCRIPT_RE, \"\");\n+  t = t.replace(SCRIPT_TAG_RE, \"\");\n+  if (strip) {\n+    t = t.replace(MULTI_SPACE, \" \");\n+    t = t.replace(MULTI_NL, \"\n\n\");\n+    t = t.trim();\n+  }",
+    "repo_full_name": "diegosouzapw/OmniRoute",
+    "discussion_comments": [
+      {
+        "comment_id": "3089208252",
+        "repo_full_name": "diegosouzapw/OmniRoute",
+        "pr_number": 1289,
+        "pr_file": "open-sse/executors/perplexity-web.ts",
+        "discussion_id": "3089083446",
+        "commented_code": "@@ -0,0 +1,831 @@\n+/**\n+ * PerplexityWebExecutor \u2014 Perplexity Web Session Provider\n+ *\n+ * Routes requests through Perplexity's internal SSE API using a Pro/Max\n+ * subscription session cookie or JWT, translating between OpenAI chat\n+ * completions format and Perplexity's internal protocol.\n+ */\n+\n+import { BaseExecutor, type ExecuteInput } from \"./base.ts\";\n+\n+const PPLX_SSE_ENDPOINT = \"https://www.perplexity.ai/rest/sse/perplexity_ask\";\n+const PPLX_API_VERSION = \"2.18\";\n+const PPLX_USER_AGENT =\n+  \"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36\";\n+\n+const MODEL_MAP: Record<string, [string, string]> = {\n+  \"pplx-auto\": [\"concise\", \"pplx_pro\"],\n+  \"pplx-sonar\": [\"copilot\", \"experimental\"],\n+  \"pplx-gpt\": [\"copilot\", \"gpt54\"],\n+  \"pplx-gemini\": [\"copilot\", \"gemini31pro_high\"],\n+  \"pplx-sonnet\": [\"copilot\", \"claude46sonnet\"],\n+  \"pplx-opus\": [\"copilot\", \"claude46opus\"],\n+  \"pplx-nemotron\": [\"copilot\", \"nv_nemotron_3_super\"],\n+};\n+\n+const THINKING_MAP: Record<string, string> = {\n+  \"pplx-gpt\": \"gpt54_thinking\",\n+  \"pplx-sonnet\": \"claude46sonnetthinking\",\n+  \"pplx-opus\": \"claude46opusthinking\",\n+};\n+\n+const CITATION_RE = /\\[\\d+\\]/g;\n+const GROK_TAG_RE = /<grok:[^>]*>.*?<\\/grok:[^>]*>/gs;\n+const GROK_SELF_RE = /<grok:[^>]*\\/>/g;\n+const XML_DECL_RE = /<[?]xml[^?]*[?]>/g;\n+const SCRIPT_RE = /<script[^>]*>.*?<\\/script>/gs;\n+const SCRIPT_TAG_RE = /<\\/?script[^>]*>/g;\n+const RESPONSE_TAG_RE = /<\\/?response[^>]*>/g;\n+const MULTI_SPACE = / {2,}/g;\n+const MULTI_NL = /\\n{3,}/g;\n+\n+// \u2500\u2500\u2500 Session continuity \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n+\n+const SESSION_MAX_AGE_MS = 3600_000;\n+const SESSION_MAX_ENTRIES = 200;\n+\n+interface SessionEntry {\n+  backendUuid: string;\n+  ts: number;\n+}\n+\n+const sessionCache = new Map<string, SessionEntry>();\n+\n+function sessionKey(history: Array<{ role: string; content: string }>): string {\n+  const parts = history.map((h) => `${h.role}:${h.content}`).join(\"\\n\");\n+  let hash = 0x811c9dc5;\n+  for (let i = 0; i < parts.length; i++) {\n+    hash ^= parts.charCodeAt(i);\n+    hash = (hash * 0x01000193) >>> 0;\n+  }\n+  return hash.toString(16).padStart(8, \"0\");\n+}\n+\n+function sessionLookup(history: Array<{ role: string; content: string }>): string | null {\n+  if (history.length === 0) return null;\n+  const key = sessionKey(history);\n+  const entry = sessionCache.get(key);\n+  if (!entry) return null;\n+  if (Date.now() - entry.ts > SESSION_MAX_AGE_MS) {\n+    sessionCache.delete(key);\n+    return null;\n+  }\n+  return entry.backendUuid;\n+}\n+\n+function sessionStore(\n+  history: Array<{ role: string; content: string }>,\n+  currentMsg: string,\n+  responseText: string,\n+  backendUuid: string | null,\n+): void {\n+  if (!backendUuid) return;\n+  const full = [\n+    ...history,\n+    { role: \"user\", content: currentMsg },\n+    { role: \"assistant\", content: responseText },\n+  ];\n+  const key = sessionKey(full);\n+  sessionCache.set(key, { backendUuid, ts: Date.now() });\n+  if (sessionCache.size > SESSION_MAX_ENTRIES) {\n+    let oldestKey: string | null = null;\n+    let oldestTs = Infinity;\n+    for (const [k, v] of sessionCache) {\n+      if (v.ts < oldestTs) {\n+        oldestTs = v.ts;\n+        oldestKey = k;\n+      }\n+    }\n+    if (oldestKey) sessionCache.delete(oldestKey);\n+  }\n+}\n+\n+// \u2500\u2500\u2500 Helpers \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n+\n+function cleanResponse(text: string, strip = true): string {\n+  let t = text;\n+  t = t.replace(XML_DECL_RE, \"\");\n+  t = t.replace(CITATION_RE, \"\");\n+  t = t.replace(GROK_TAG_RE, \"\");\n+  t = t.replace(GROK_SELF_RE, \"\");\n+  t = t.replace(RESPONSE_TAG_RE, \"\");\n+  t = t.replace(SCRIPT_RE, \"\");\n+  t = t.replace(SCRIPT_TAG_RE, \"\");\n+  if (strip) {\n+    t = t.replace(MULTI_SPACE, \" \");\n+    t = t.replace(MULTI_NL, \"\\n\\n\");\n+    t = t.trim();\n+  }",
+        "comment_created_at": "2026-04-15T20:35:37+00:00",
+        "comment_author": "RaviTharuma",
+        "comment_body": "Fixed \u2014 removed `MULTI_SPACE` and `MULTI_NL` replacements from `cleanResponse()`. Now only trims leading/trailing whitespace, preserving all markdown formatting (code blocks, tables, indentation). Good catch, this would have mangled code-heavy responses.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2942842053",
+    "pr_number": 418,
+    "pr_file": "open-sse/handlers/chatCore.ts",
+    "created_at": "2026-03-16T21:17:32+00:00",
+    "commented_code": "// Translate request (pass reqLogger for intermediate logging)\n   let translatedBody = body;\n+  const isClaudePassthrough = sourceFormat === FORMATS.CLAUDE && targetFormat === FORMATS.CLAUDE;\n   try {\n     if (nativeCodexPassthrough) {\n       translatedBody = { ...body, _nativeCodexPassthrough: true };\n       log?.debug?.(\"FORMAT\", \"native codex passthrough enabled\");\n+    } else if (isClaudePassthrough) {\n+      // Claude-to-Claude passthrough: forward body completely untouched.\n+      // No translation, no field stripping, no thinking normalization.\n+      // We are just a gateway -- do not interfere with the request in any way.\n+      translatedBody = body;",
+    "repo_full_name": "diegosouzapw/OmniRoute",
+    "discussion_comments": [
+      {
+        "comment_id": "2943024018",
+        "repo_full_name": "diegosouzapw/OmniRoute",
+        "pr_number": 418,
+        "pr_file": "open-sse/handlers/chatCore.ts",
+        "discussion_id": "2942842053",
+        "commented_code": "@@ -182,10 +182,17 @@ export async function handleChatCore({\n \n   // Translate request (pass reqLogger for intermediate logging)\n   let translatedBody = body;\n+  const isClaudePassthrough = sourceFormat === FORMATS.CLAUDE && targetFormat === FORMATS.CLAUDE;\n   try {\n     if (nativeCodexPassthrough) {\n       translatedBody = { ...body, _nativeCodexPassthrough: true };\n       log?.debug?.(\"FORMAT\", \"native codex passthrough enabled\");\n+    } else if (isClaudePassthrough) {\n+      // Claude-to-Claude passthrough: forward body completely untouched.\n+      // No translation, no field stripping, no thinking normalization.\n+      // We are just a gateway -- do not interfere with the request in any way.\n+      translatedBody = body;",
+        "comment_created_at": "2026-03-16T21:17:32+00:00",
+        "comment_author": "prakersh",
+        "comment_body": "The explicit assignment is intentional for readability \u2014 it makes the passthrough path symmetric with the other branches (`nativeCodexPassthrough` and the else branch). Now updated to `{ ...body }` to avoid mutation, which also makes the value differ from the initial `let translatedBody = body`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2941667757",
+    "pr_number": 408,
+    "pr_file": "src/app/api/providers/[id]/models/route.ts",
+    "created_at": "2026-03-16T16:58:38+00:00",
+    "commented_code": "authPrefix: \"Bearer \",\n     parseResponse: (data) => data.data || data.models || [],\n   },\n+  \"kilo-gateway\": {\n+    url: \"https://api.kilo.ai/api/gateway/models\",\n+    method: \"GET\",\n+    headers: { \"Content-Type\": \"application/json\" },\n+    authHeader: \"Authorization\",\n+    authPrefix: \"Bearer \",\n+    parseResponse: (data) => data.data || data.models || [],\n+  },",
+    "repo_full_name": "diegosouzapw/OmniRoute",
+    "discussion_comments": [
+      {
+        "comment_id": "2941695179",
+        "repo_full_name": "diegosouzapw/OmniRoute",
+        "pr_number": 408,
+        "pr_file": "src/app/api/providers/[id]/models/route.ts",
+        "discussion_id": "2941667757",
+        "commented_code": "@@ -263,6 +263,14 @@ const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> = {\n     authPrefix: \"Bearer \",\n     parseResponse: (data) => data.data || data.models || [],\n   },\n+  \"kilo-gateway\": {\n+    url: \"https://api.kilo.ai/api/gateway/models\",\n+    method: \"GET\",\n+    headers: { \"Content-Type\": \"application/json\" },\n+    authHeader: \"Authorization\",\n+    authPrefix: \"Bearer \",\n+    parseResponse: (data) => data.data || data.models || [],\n+  },",
+        "comment_created_at": "2026-03-16T16:58:38+00:00",
+        "comment_author": "Regis-RCR",
+        "comment_body": "Thanks for the suggestion! This duplication is intentional and follows the established pattern in this file \u2014 every provider entry in `PROVIDER_MODELS_CONFIG` is self-contained with its own explicit configuration. While a shared base config could reduce lines, it would create implicit coupling between providers that may evolve independently (different auth schemes, custom headers, unique parseResponse logic). The current approach makes each provider's config immediately readable without tracing through shared objects. This is consistent with how all 20+ existing entries are structured.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2940305701",
+    "pr_number": 404,
+    "pr_file": "src/app/api/providers/[id]/models/route.ts",
+    "created_at": "2026-03-16T13:20:30+00:00",
+    "commented_code": "authPrefix: \"Bearer \",\n     parseResponse: (data) => data.models || data.data || [],\n   },\n+  synthetic: {\n+    url: \"https://api.synthetic.new/openai/v1/models\",\n+    method: \"GET\",\n+    headers: { \"Content-Type\": \"application/json\" },\n+    authHeader: \"Authorization\",\n+    authPrefix: \"Bearer \",\n+    parseResponse: (data) => data.data || data.models || [],\n+  },",
+    "repo_full_name": "diegosouzapw/OmniRoute",
+    "discussion_comments": [
+      {
+        "comment_id": "2940340150",
+        "repo_full_name": "diegosouzapw/OmniRoute",
+        "pr_number": 404,
+        "pr_file": "src/app/api/providers/[id]/models/route.ts",
+        "discussion_id": "2940305701",
+        "commented_code": "@@ -255,6 +255,14 @@ const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> = {\n     authPrefix: \"Bearer \",\n     parseResponse: (data) => data.models || data.data || [],\n   },\n+  synthetic: {\n+    url: \"https://api.synthetic.new/openai/v1/models\",\n+    method: \"GET\",\n+    headers: { \"Content-Type\": \"application/json\" },\n+    authHeader: \"Authorization\",\n+    authPrefix: \"Bearer \",\n+    parseResponse: (data) => data.data || data.models || [],\n+  },",
+        "comment_created_at": "2026-03-16T13:20:30+00:00",
+        "comment_author": "Regis-RCR",
+        "comment_body": "Good suggestion. The duplication across OpenAI-compatible providers in this config map is pre-existing \u2014 this PR follows the established pattern. A `createOpenAIModelsConfig()` helper would be a worthwhile refactor, but is out of scope for this provider addition.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2939356387",
+    "pr_number": 400,
+    "pr_file": "open-sse/executors/default.ts",
+    "created_at": "2026-03-16T10:31:27+00:00",
+    "commented_code": "buildUrl(model, stream, urlIndex = 0, credentials = null) {\n     if (this.provider?.startsWith?.(\"openai-compatible-\")) {\n-      const baseUrl = credentials?.providerSpecificData?.baseUrl || \"https://api.openai.com/v1\";\n+      const psd = credentials?.providerSpecificData;\n+      const baseUrl = psd?.baseUrl || \"https://api.openai.com/v1\";\n       const normalized = baseUrl.replace(/\\/$/, \"\");\n+      const customPath = typeof psd?.chatPath === \"string\" && psd.chatPath ? psd.chatPath : null;\n+      if (customPath) return `${normalized}${customPath}`;\n       const path = this.provider.includes(\"responses\") ? \"/responses\" : \"/chat/completions\";\n       return `${normalized}${path}`;",
+    "repo_full_name": "diegosouzapw/OmniRoute",
+    "discussion_comments": [
+      {
+        "comment_id": "2939487567",
+        "repo_full_name": "diegosouzapw/OmniRoute",
+        "pr_number": 400,
+        "pr_file": "open-sse/executors/default.ts",
+        "discussion_id": "2939356387",
+        "commented_code": "@@ -9,15 +9,20 @@ export class DefaultExecutor extends BaseExecutor {\n \n   buildUrl(model, stream, urlIndex = 0, credentials = null) {\n     if (this.provider?.startsWith?.(\"openai-compatible-\")) {\n-      const baseUrl = credentials?.providerSpecificData?.baseUrl || \"https://api.openai.com/v1\";\n+      const psd = credentials?.providerSpecificData;\n+      const baseUrl = psd?.baseUrl || \"https://api.openai.com/v1\";\n       const normalized = baseUrl.replace(/\\/$/, \"\");\n+      const customPath = typeof psd?.chatPath === \"string\" && psd.chatPath ? psd.chatPath : null;\n+      if (customPath) return `${normalized}${customPath}`;\n       const path = this.provider.includes(\"responses\") ? \"/responses\" : \"/chat/completions\";\n       return `${normalized}${path}`;",
+        "comment_created_at": "2026-03-16T10:31:27+00:00",
+        "comment_author": "Regis-RCR",
+        "comment_body": "Valid observation. The duplication between `DefaultExecutor` and `BaseExecutor` is pre-existing \u2014 both already had separate openai-compatible handling before this PR. This PR only added `chatPath` support to both existing code paths.\n\nConsolidating the compatible-provider URL logic into a shared helper is a worthwhile refactor, but would change the executor inheritance structure and is better suited for a dedicated follow-up PR to keep this one focused.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2935825479",
+    "pr_number": 372,
+    "pr_file": "src/sse/services/auth.ts",
+    "created_at": "2026-03-14T21:16:12+00:00",
+    "commented_code": "export async function clearAccountError(connectionId: string, currentConnection: any) {",
+    "repo_full_name": "diegosouzapw/OmniRoute",
+    "discussion_comments": [
+      {
+        "comment_id": "2935837801",
+        "repo_full_name": "diegosouzapw/OmniRoute",
+        "pr_number": 372,
+        "pr_file": "src/sse/services/auth.ts",
+        "discussion_id": "2935825479",
+        "commented_code": "@@ -572,22 +579,33 @@ export async function markAccountUnavailable(\n export async function clearAccountError(connectionId: string, currentConnection: any) {",
+        "comment_created_at": "2026-03-14T21:16:12+00:00",
+        "comment_author": "kfiramar",
+        "comment_body": "Agreed on the type-safety point for the new recovery helpers. I addressed that in follow-up commit `8fd944c` by introducing a focused `RecoverableConnectionState` interface and updating the new helper signatures to use `Partial<...>` instead of `any`, while keeping the rest of the existing auth surface unchanged.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2935826952",
+    "pr_number": 372,
+    "pr_file": "src/sse/services/auth.ts",
+    "created_at": "2026-03-14T21:16:12+00:00",
+    "commented_code": "export async function clearAccountError(connectionId: string, currentConnection: any) {\n   // Only update if currently has error status\n   const hasError =\n-    currentConnection.testStatus === \"unavailable\" ||\n+    (currentConnection.testStatus && currentConnection.testStatus !== \"active\") ||\n     currentConnection.lastError ||\n-    currentConnection.rateLimitedUntil;\n+    currentConnection.rateLimitedUntil ||\n+    currentConnection.errorCode ||\n+    currentConnection.lastErrorType ||\n+    currentConnection.lastErrorSource;\n \n   if (!hasError) return; // Skip if already clean\n \n   await updateProviderConnection(connectionId, {\n     testStatus: \"active\",\n     lastError: null,\n     lastErrorAt: null,\n+    lastErrorType: null,\n+    lastErrorSource: null,\n+    errorCode: null,\n     rateLimitedUntil: null,\n     backoffLevel: 0,\n   });\n   log.info(\"AUTH\", `Account ${connectionId.slice(0, 8)} error cleared`);\n }\n \n+export async function clearRecoveredProviderState(credentials: any) {",
+    "repo_full_name": "diegosouzapw/OmniRoute",
+    "discussion_comments": [
+      {
+        "comment_id": "2935837802",
+        "repo_full_name": "diegosouzapw/OmniRoute",
+        "pr_number": 372,
+        "pr_file": "src/sse/services/auth.ts",
+        "discussion_id": "2935826952",
+        "commented_code": "@@ -572,22 +579,33 @@ export async function markAccountUnavailable(\n export async function clearAccountError(connectionId: string, currentConnection: any) {\n   // Only update if currently has error status\n   const hasError =\n-    currentConnection.testStatus === \"unavailable\" ||\n+    (currentConnection.testStatus && currentConnection.testStatus !== \"active\") ||\n     currentConnection.lastError ||\n-    currentConnection.rateLimitedUntil;\n+    currentConnection.rateLimitedUntil ||\n+    currentConnection.errorCode ||\n+    currentConnection.lastErrorType ||\n+    currentConnection.lastErrorSource;\n \n   if (!hasError) return; // Skip if already clean\n \n   await updateProviderConnection(connectionId, {\n     testStatus: \"active\",\n     lastError: null,\n     lastErrorAt: null,\n+    lastErrorType: null,\n+    lastErrorSource: null,\n+    errorCode: null,\n     rateLimitedUntil: null,\n     backoffLevel: 0,\n   });\n   log.info(\"AUTH\", `Account ${connectionId.slice(0, 8)} error cleared`);\n }\n \n+export async function clearRecoveredProviderState(credentials: any) {",
+        "comment_created_at": "2026-03-14T21:16:12+00:00",
+        "comment_author": "kfiramar",
+        "comment_body": "Agreed for the newly added recovery helper. I addressed this in follow-up commit `8fd944c` by replacing the new `any`-typed recovery helper parameter with a focused `RecoverableConnectionState` interface and `Partial<...>` signature.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

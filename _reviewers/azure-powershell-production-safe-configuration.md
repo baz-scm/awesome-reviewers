@@ -13,7 +13,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 4762
 ---
-
+{% raw %}
 When changing build/test/configuration files, ensure they are (1) platform-correct and (2) production-safe.
 
 Apply this standard:
@@ -44,3 +44,4 @@ options:
 Checklist before merging:
 - Are any env/path operations using OS-specific separators? If yes, switch to a platform-aware approach.
 - Are any debug/diagnostic flags enabled by default? If yes, disable or gate them for non-production only.
+{% endraw %}

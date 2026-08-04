@@ -1,0 +1,182 @@
+[
+  {
+    "discussion_id": "3061275830",
+    "pr_number": 2808,
+    "pr_file": "src/cloudwatch-applicationsignals-mcp-server/awslabs/cloudwatch_applicationsignals_mcp_server/aws_clients.py",
+    "created_at": "2026-04-09T23:50:29+00:00",
+    "commented_code": "# See the License for the specific language governing permissions and\n # limitations under the License.\n \n-\"\"\"CloudWatch Application Signals MCP Server - AWS client initialization.\"\"\"\n+\"\"\"CloudWatch Application Signals MCP Server - AWS client initialization.\n+\n+Supports two modes:\n+1. Default mode: Module-level singleton clients using AWS_PROFILE or the default credential chain.\n+2. Custom mode: Per-request clients via a pluggable factory, allowing consumers to override\n+   credentials and region. Set via set_client_factory() and set_region_override().\n+\"\"\"\n \n import boto3\n import os\n from . import __version__\n from botocore.config import Config\n from loguru import logger\n+from typing import Any, Callable, Dict, Optional\n \n \n-# Get AWS region from environment variable or use default\n-AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')\n-logger.debug(f'Using AWS region: {AWS_REGION}')\n+# Default AWS region from environment variable\n+_DEFAULT_REGION = os.environ.get('AWS_REGION', 'us-east-1')\n+logger.debug(f'Default AWS region: {_DEFAULT_REGION}')\n \n+# Backward-compatible export (static, does not reflect overrides)\n+AWS_REGION = _DEFAULT_REGION\n \n-def _initialize_aws_clients():\n-    \"\"\"Initialize AWS clients with proper configuration.\"\"\"\n-    # Add caller suffix if MCP_RUN_FROM is set\n+# ---------------------------------------------------------------------------\n+# Region override \u2014 allows consumers of this package to override the region\n+# at runtime. Falls back to _DEFAULT_REGION.\n+# ---------------------------------------------------------------------------\n+\n+_region_override: Optional[str] = None\n+\n+\n+def set_region_override(region: str) -> None:\n+    \"\"\"Override the AWS region for all subsequent get_region() calls.\"\"\"\n+    global _region_override\n+    _region_override = region\n+    logger.info(f'Region override set: {region}')",
+    "repo_full_name": "awslabs/mcp",
+    "discussion_comments": [
+      {
+        "comment_id": "3061275830",
+        "repo_full_name": "awslabs/mcp",
+        "pr_number": 2808,
+        "pr_file": "src/cloudwatch-applicationsignals-mcp-server/awslabs/cloudwatch_applicationsignals_mcp_server/aws_clients.py",
+        "discussion_id": "3061275830",
+        "commented_code": "@@ -12,109 +12,190 @@\n # See the License for the specific language governing permissions and\n # limitations under the License.\n \n-\"\"\"CloudWatch Application Signals MCP Server - AWS client initialization.\"\"\"\n+\"\"\"CloudWatch Application Signals MCP Server - AWS client initialization.\n+\n+Supports two modes:\n+1. Default mode: Module-level singleton clients using AWS_PROFILE or the default credential chain.\n+2. Custom mode: Per-request clients via a pluggable factory, allowing consumers to override\n+   credentials and region. Set via set_client_factory() and set_region_override().\n+\"\"\"\n \n import boto3\n import os\n from . import __version__\n from botocore.config import Config\n from loguru import logger\n+from typing import Any, Callable, Dict, Optional\n \n \n-# Get AWS region from environment variable or use default\n-AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')\n-logger.debug(f'Using AWS region: {AWS_REGION}')\n+# Default AWS region from environment variable\n+_DEFAULT_REGION = os.environ.get('AWS_REGION', 'us-east-1')\n+logger.debug(f'Default AWS region: {_DEFAULT_REGION}')\n \n+# Backward-compatible export (static, does not reflect overrides)\n+AWS_REGION = _DEFAULT_REGION\n \n-def _initialize_aws_clients():\n-    \"\"\"Initialize AWS clients with proper configuration.\"\"\"\n-    # Add caller suffix if MCP_RUN_FROM is set\n+# ---------------------------------------------------------------------------\n+# Region override \u2014 allows consumers of this package to override the region\n+# at runtime. Falls back to _DEFAULT_REGION.\n+# ---------------------------------------------------------------------------\n+\n+_region_override: Optional[str] = None\n+\n+\n+def set_region_override(region: str) -> None:\n+    \"\"\"Override the AWS region for all subsequent get_region() calls.\"\"\"\n+    global _region_override\n+    _region_override = region\n+    logger.info(f'Region override set: {region}')",
+        "comment_created_at": "2026-04-09T23:50:29+00:00",
+        "comment_author": "mxiamxia",
+        "comment_body": "**Semantic inconsistency:** In default mode (no custom factory), `set_region_override()` changes what `get_region()` returns, but `get_client()` still returns pre-built singleton clients that were created with `_DEFAULT_REGION` at module load time. This creates a mismatch:\n\n```python\nset_region_override('eu-west-1')\nregion = get_region()        # \u2192 'eu-west-1'\nclient = get_client('logs')  # \u2192 still connected to us-east-1!\n```\n\nA developer constructing ARNs or filter parameters with `get_region()` could easily send the API call to a different region via the client. This is a subtle bug source.\n\n**Possible fixes:**\n1. Require a custom factory before allowing region override (cleanest):\n```python\ndef set_region_override(region: str) -> None:\n    if _client_factory is None:\n        raise RuntimeError(\n            \"set_region_override() requires a custom client factory. \"\n            \"Call set_client_factory() first.\"\n        )\n    ...\n```\n2. Rebuild singleton clients when region changes (heavier)\n3. At minimum, document this limitation prominently in the docstring here",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3082203134",
+    "pr_number": 2924,
+    "pr_file": "src/cloudwatch-applicationsignals-mcp-server/awslabs/cloudwatch_applicationsignals_mcp_server/canary_utils.py",
+    "created_at": "2026-04-14T20:24:35+00:00",
+    "commented_code": "return {'error': f'Canary code analysis failed: {str(e)}'}\n \n \n+async def check_canaries_for_service(normalized_targets, unix_start, unix_end, region: str = 'us-east-1'):\n+    \"\"\"Check Synthetics canaries associated with audited services via list_service_dependents.\"\"\"\n+    try:\n+        canary_names = set()\n+        for target in normalized_targets:\n+            svc = (target.get('Data') or {}).get('Service') or {}\n+            key_attrs = {k: v for k, v in svc.items() if v}\n+            if not key_attrs.get('Name') or not key_attrs.get('Environment'):\n+                continue\n+            try:\n+                resp = applicationsignals_client.list_service_dependents(\n+                    StartTime=datetime.fromtimestamp(unix_start, tz=timezone.utc),",
+    "repo_full_name": "awslabs/mcp",
+    "discussion_comments": [
+      {
+        "comment_id": "3082203134",
+        "repo_full_name": "awslabs/mcp",
+        "pr_number": 2924,
+        "pr_file": "src/cloudwatch-applicationsignals-mcp-server/awslabs/cloudwatch_applicationsignals_mcp_server/canary_utils.py",
+        "discussion_id": "3082203134",
+        "commented_code": "@@ -890,6 +891,85 @@ async def get_canary_code(canary: dict, region: str = 'us-east-1') -> dict:\n         return {'error': f'Canary code analysis failed: {str(e)}'}\n \n \n+async def check_canaries_for_service(normalized_targets, unix_start, unix_end, region: str = 'us-east-1'):\n+    \"\"\"Check Synthetics canaries associated with audited services via list_service_dependents.\"\"\"\n+    try:\n+        canary_names = set()\n+        for target in normalized_targets:\n+            svc = (target.get('Data') or {}).get('Service') or {}\n+            key_attrs = {k: v for k, v in svc.items() if v}\n+            if not key_attrs.get('Name') or not key_attrs.get('Environment'):\n+                continue\n+            try:\n+                resp = applicationsignals_client.list_service_dependents(\n+                    StartTime=datetime.fromtimestamp(unix_start, tz=timezone.utc),",
+        "comment_created_at": "2026-04-14T20:24:35+00:00",
+        "comment_author": "syed-ahsan-ishtiaque",
+        "comment_body": "**Bug: `region` parameter ignored for canary discovery.**\n\nBoth `applicationsignals_client` (here) and `synthetics_client` (used for `get_canary_runs` below) are module-level singletons bound to `AWS_REGION`. The `region` parameter is only passed through to the `analyze_canary_failures` deep-dive call at the bottom of this function.\n\nThis means canary **discovery** and **status checks** always happen in the default region, even when `region` is explicitly passed as something else. Only the deep analysis for the worst canary respects it \u2014 creating a confusing split where half the function uses the right region and half doesn't.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3082748991",
+        "repo_full_name": "awslabs/mcp",
+        "pr_number": 2924,
+        "pr_file": "src/cloudwatch-applicationsignals-mcp-server/awslabs/cloudwatch_applicationsignals_mcp_server/canary_utils.py",
+        "discussion_id": "3082203134",
+        "commented_code": "@@ -890,6 +891,85 @@ async def get_canary_code(canary: dict, region: str = 'us-east-1') -> dict:\n         return {'error': f'Canary code analysis failed: {str(e)}'}\n \n \n+async def check_canaries_for_service(normalized_targets, unix_start, unix_end, region: str = 'us-east-1'):\n+    \"\"\"Check Synthetics canaries associated with audited services via list_service_dependents.\"\"\"\n+    try:\n+        canary_names = set()\n+        for target in normalized_targets:\n+            svc = (target.get('Data') or {}).get('Service') or {}\n+            key_attrs = {k: v for k, v in svc.items() if v}\n+            if not key_attrs.get('Name') or not key_attrs.get('Environment'):\n+                continue\n+            try:\n+                resp = applicationsignals_client.list_service_dependents(\n+                    StartTime=datetime.fromtimestamp(unix_start, tz=timezone.utc),",
+        "comment_created_at": "2026-04-14T22:00:32+00:00",
+        "comment_author": "yig-yi",
+        "comment_body": "The region is already being passed to clients https://github.com/awslabs/mcp/blob/main/src/cloudwatch-applicationsignals-mcp-server/awslabs/cloudwatch_applicationsignals_mcp_server/aws_clients.py#L82 \n\nWe don't really need it at each API level. Code reference: https://github.com/awslabs/mcp/blob/8f8460d377c692b27764daf20dfc3510706f98ca/src/cloudwatch-applicationsignals-mcp-server/awslabs/cloudwatch_applicationsignals_mcp_server/trace_tools.py#L649 ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3133582461",
+    "pr_number": 3268,
+    "pr_file": "src/cloudwatch-applicationsignals-mcp-server/awslabs/cloudwatch_applicationsignals_mcp_server/slo_tools.py",
+    "created_at": "2026-04-23T20:22:00+00:00",
+    "commented_code": "result += f'  ARN: {slo_arn}\n'\n             result += f'  Operation: {operation_name}\n'\n             result += f'  Created: {created_time}\n'\n+            result += f'  Console: {console_url_slo(slo_name, AWS_REGION)}\n'",
+    "repo_full_name": "awslabs/mcp",
+    "discussion_comments": [
+      {
+        "comment_id": "3133582461",
+        "repo_full_name": "awslabs/mcp",
+        "pr_number": 3268,
+        "pr_file": "src/cloudwatch-applicationsignals-mcp-server/awslabs/cloudwatch_applicationsignals_mcp_server/slo_tools.py",
+        "discussion_id": "3133582461",
+        "commented_code": "@@ -355,6 +356,7 @@ async def list_slos(\n             result += f'  ARN: {slo_arn}\\n'\n             result += f'  Operation: {operation_name}\\n'\n             result += f'  Created: {created_time}\\n'\n+            result += f'  Console: {console_url_slo(slo_name, AWS_REGION)}\\n'",
+        "comment_created_at": "2026-04-23T20:22:00+00:00",
+        "comment_author": "syed-ahsan-ishtiaque",
+        "comment_body": "**Bug (low): console URL uses module-global `AWS_REGION`, not the SLO's own region**\n\n`list_service_level_objectives` is called with `IncludeLinkedAccounts=True` by default (line 285). Linked-account SLOs are a separate account but, more importantly, SLO ARNs embed the region \u2014 and in multi-region setups the SLO may live in a region other than the one `AWS_REGION` points at. When that happens this URL sends the user to the wrong regional console (which will show \"SLO not found\" in that region).\n\nThe SLO's ARN is already in `slo.get('Arn')` \u2014 parse the region from it and use that:\n\n```python\ndef _region_from_arn(arn: str, fallback: str) -> str:\n    # arn:aws:application-signals:<region>:<account>:slo/<name>\n    try:\n        return arn.split(':')[3] or fallback\n    except (IndexError, AttributeError):\n        return fallback\n\nslo_region = _region_from_arn(slo_arn, AWS_REGION)\nresult += f'  Console: {console_url_slo(slo_name, slo_region)}\\n'\n```\n\nIf SLOs are always same-region with the caller in your deployments, fine to leave \u2014 just flag the limitation in the docstring.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3399525840",
+    "pr_number": 3801,
+    "pr_file": "src/cloudwatch-applicationsignals-mcp-server/awslabs/cloudwatch_applicationsignals_mcp_server/dynamic_instrumentation/aws_clients.py",
+    "created_at": "2026-06-11T22:21:47+00:00",
+    "commented_code": "+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\"\"\"boto3 client factory for the dynamic instrumentation feature.\n+\n+Loads the bundled private ``application-signals`` service model via a\n+scoped botocore data loader (no ``AWS_DATA_PATH`` env mutation), pins\n+the API version to ``2024-04-15``, and lazily caches the resulting\n+clients so MCP tools can reuse a single configured instance.\n+\"\"\"\n+\n+import boto3\n+import botocore.session\n+import os\n+from .. import __version__\n+from botocore.config import Config\n+from loguru import logger\n+from pathlib import Path\n+\n+\n+AWS_DATA_PATH = Path(__file__).parent / 'aws_data'\n+APPLICATION_SIGNALS_API_VERSION = '2024-04-15'\n+\n+\n+def _resolve_region() -> str:",
+    "repo_full_name": "awslabs/mcp",
+    "discussion_comments": [
+      {
+        "comment_id": "3399525840",
+        "repo_full_name": "awslabs/mcp",
+        "pr_number": 3801,
+        "pr_file": "src/cloudwatch-applicationsignals-mcp-server/awslabs/cloudwatch_applicationsignals_mcp_server/dynamic_instrumentation/aws_clients.py",
+        "discussion_id": "3399525840",
+        "commented_code": "@@ -0,0 +1,91 @@\n+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\"\"\"boto3 client factory for the dynamic instrumentation feature.\n+\n+Loads the bundled private ``application-signals`` service model via a\n+scoped botocore data loader (no ``AWS_DATA_PATH`` env mutation), pins\n+the API version to ``2024-04-15``, and lazily caches the resulting\n+clients so MCP tools can reuse a single configured instance.\n+\"\"\"\n+\n+import boto3\n+import botocore.session\n+import os\n+from .. import __version__\n+from botocore.config import Config\n+from loguru import logger\n+from pathlib import Path\n+\n+\n+AWS_DATA_PATH = Path(__file__).parent / 'aws_data'\n+APPLICATION_SIGNALS_API_VERSION = '2024-04-15'\n+\n+\n+def _resolve_region() -> str:",
+        "comment_created_at": "2026-06-11T22:21:47+00:00",
+        "comment_author": "vastin",
+        "comment_body": "The DI client resolves its region as `AWS_REGION` env \u2192 profile region \u2192\n`us-east-1`. But the snapshot tools use the **parent** package's `logs_client`,\nwhich only reads the `AWS_REGION` env var (defaulting to `us-east-1`) and ignores\nthe profile region.\n\n**Why it matters:** If someone sets only `AWS_PROFILE` (region in the profile)\nand no `AWS_REGION`, instrumentations are created in the profile region while\nsnapshot queries run in `us-east-1`. The breakpoint shows ACTIVE but snapshot\nsearches always come back empty \u2014 very hard to diagnose.\n\n**Fix:** Reuse the parent client factory so region resolution is identical across\nall tools.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3399835249",
+        "repo_full_name": "awslabs/mcp",
+        "pr_number": 3801,
+        "pr_file": "src/cloudwatch-applicationsignals-mcp-server/awslabs/cloudwatch_applicationsignals_mcp_server/dynamic_instrumentation/aws_clients.py",
+        "discussion_id": "3399525840",
+        "commented_code": "@@ -0,0 +1,91 @@\n+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.\n+#\n+# Licensed under the Apache License, Version 2.0 (the \"License\");\n+# you may not use this file except in compliance with the License.\n+# You may obtain a copy of the License at\n+#\n+#     http://www.apache.org/licenses/LICENSE-2.0\n+#\n+# Unless required by applicable law or agreed to in writing, software\n+# distributed under the License is distributed on an \"AS IS\" BASIS,\n+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+# See the License for the specific language governing permissions and\n+# limitations under the License.\n+\"\"\"boto3 client factory for the dynamic instrumentation feature.\n+\n+Loads the bundled private ``application-signals`` service model via a\n+scoped botocore data loader (no ``AWS_DATA_PATH`` env mutation), pins\n+the API version to ``2024-04-15``, and lazily caches the resulting\n+clients so MCP tools can reuse a single configured instance.\n+\"\"\"\n+\n+import boto3\n+import botocore.session\n+import os\n+from .. import __version__\n+from botocore.config import Config\n+from loguru import logger\n+from pathlib import Path\n+\n+\n+AWS_DATA_PATH = Path(__file__).parent / 'aws_data'\n+APPLICATION_SIGNALS_API_VERSION = '2024-04-15'\n+\n+\n+def _resolve_region() -> str:",
+        "comment_created_at": "2026-06-11T23:54:19+00:00",
+        "comment_author": "pxaws",
+        "comment_body": "Fixed in `8fe278a4`, though I went the opposite direction from \"reuse the parent factory\" \u2014 here's why. I traced the history: the parent's `AWS_REGION` env \u2192 `us-east-1` (ignoring profile region) is the **repo-wide convention** \u2014 it dates back to the earliest awslabs/mcp servers, and every sibling with a profile branch (lambda-tool, stepfunctions-tool, elasticache) does the same. DI's `_resolve_region` with the profile fallback is actually the **only** client in the repo that consults profile region \u2014 so DI is the outlier, not the parent.\n\nSo I aligned DI down to the convention: `_resolve_region` is now just `AWS_REGION` env, else `us-east-1`. Both clients in the package (app-signals + the parent's `logs_client`) now resolve region identically, which kills the split you described, without spreading a non-standard profile-aware path or touching the parent's blast radius. Trade-off: a profile-only user must set `AWS_REGION` \u2014 which is the documented norm everywhere else in the repo.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2851410225",
+    "pr_number": 2357,
+    "pr_file": "src/aws-api-mcp-server/awslabs/aws_api_mcp_server/core/aws/regions.py",
+    "created_at": "2026-02-25T07:47:37+00:00",
+    "commented_code": "'route53domains': 'us-east-1',\n     'sagemaker-geospatial': 'us-west-2',\n }\n+\n+\n+def get_active_regions() -> list[str]:\n+    account_client = boto3.client('account')",
+    "repo_full_name": "awslabs/mcp",
+    "discussion_comments": [
+      {
+        "comment_id": "2851410225",
+        "repo_full_name": "awslabs/mcp",
+        "pr_number": 2357,
+        "pr_file": "src/aws-api-mcp-server/awslabs/aws_api_mcp_server/core/aws/regions.py",
+        "discussion_id": "2851410225",
+        "commented_code": "@@ -26,3 +29,20 @@\n     'route53domains': 'us-east-1',\n     'sagemaker-geospatial': 'us-west-2',\n }\n+\n+\n+def get_active_regions() -> list[str]:\n+    account_client = boto3.client('account')",
+        "comment_created_at": "2026-02-25T07:47:37+00:00",
+        "comment_author": "arnewouters",
+        "comment_body": "This does not respect `AWS_API_MCP_PROFILE_NAME`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2852066006",
+        "repo_full_name": "awslabs/mcp",
+        "pr_number": 2357,
+        "pr_file": "src/aws-api-mcp-server/awslabs/aws_api_mcp_server/core/aws/regions.py",
+        "discussion_id": "2851410225",
+        "commented_code": "@@ -26,3 +29,20 @@\n     'route53domains': 'us-east-1',\n     'sagemaker-geospatial': 'us-west-2',\n }\n+\n+\n+def get_active_regions() -> list[str]:\n+    account_client = boto3.client('account')",
+        "comment_created_at": "2026-02-25T10:08:33+00:00",
+        "comment_author": "bariskurt",
+        "comment_body": "I added  profile_name parameter to the `get_active_regions` function.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2851415591",
+    "pr_number": 2357,
+    "pr_file": "src/aws-api-mcp-server/awslabs/aws_api_mcp_server/core/aws/service.py",
+    "created_at": "2026-02-25T07:49:06+00:00",
+    "commented_code": "args=context.get('args'),\n         parameters=context.get('parameters'),\n     )\n+\n+\n+def expand_regions_if_needed(cli_command: str) -> list[str]:\n+    if \"--region\" not in cli_command:\n+        return [cli_command]\n+    \n+    parts = cli_command.split()\n+    try:\n+        region_idx = parts.index(\"--region\")\n+        if region_idx + 1 == len(parts):\n+            raise CliParsingError(\"--region parameter requires a value\")\n+        region_value = parts[region_idx + 1]\n+        if region_value.startswith(\"--\"):\n+            raise CliParsingError(\"--region parameter requires a value\")\n+        if region_value == \"*\":\n+            base_command = \" \".join(parts[:region_idx] + parts[region_idx + 2:])\n+            try:\n+                regions = get_active_regions()",
+    "repo_full_name": "awslabs/mcp",
+    "discussion_comments": [
+      {
+        "comment_id": "2851415591",
+        "repo_full_name": "awslabs/mcp",
+        "pr_number": 2357,
+        "pr_file": "src/aws-api-mcp-server/awslabs/aws_api_mcp_server/core/aws/service.py",
+        "discussion_id": "2851415591",
+        "commented_code": "@@ -279,3 +280,27 @@ def _to_context(context: dict[str, Any] | None) -> ContextAPIModel | None:\n         args=context.get('args'),\n         parameters=context.get('parameters'),\n     )\n+\n+\n+def expand_regions_if_needed(cli_command: str) -> list[str]:\n+    if \"--region\" not in cli_command:\n+        return [cli_command]\n+    \n+    parts = cli_command.split()\n+    try:\n+        region_idx = parts.index(\"--region\")\n+        if region_idx + 1 == len(parts):\n+            raise CliParsingError(\"--region parameter requires a value\")\n+        region_value = parts[region_idx + 1]\n+        if region_value.startswith(\"--\"):\n+            raise CliParsingError(\"--region parameter requires a value\")\n+        if region_value == \"*\":\n+            base_command = \" \".join(parts[:region_idx] + parts[region_idx + 2:])\n+            try:\n+                regions = get_active_regions()",
+        "comment_created_at": "2026-02-25T07:49:06+00:00",
+        "comment_author": "arnewouters",
+        "comment_body": "We need to respect `--profile` here as well and fetch regions from that account",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2852067191",
+        "repo_full_name": "awslabs/mcp",
+        "pr_number": 2357,
+        "pr_file": "src/aws-api-mcp-server/awslabs/aws_api_mcp_server/core/aws/service.py",
+        "discussion_id": "2851415591",
+        "commented_code": "@@ -279,3 +280,27 @@ def _to_context(context: dict[str, Any] | None) -> ContextAPIModel | None:\n         args=context.get('args'),\n         parameters=context.get('parameters'),\n     )\n+\n+\n+def expand_regions_if_needed(cli_command: str) -> list[str]:\n+    if \"--region\" not in cli_command:\n+        return [cli_command]\n+    \n+    parts = cli_command.split()\n+    try:\n+        region_idx = parts.index(\"--region\")\n+        if region_idx + 1 == len(parts):\n+            raise CliParsingError(\"--region parameter requires a value\")\n+        region_value = parts[region_idx + 1]\n+        if region_value.startswith(\"--\"):\n+            raise CliParsingError(\"--region parameter requires a value\")\n+        if region_value == \"*\":\n+            base_command = \" \".join(parts[:region_idx] + parts[region_idx + 2:])\n+            try:\n+                regions = get_active_regions()",
+        "comment_created_at": "2026-02-25T10:08:44+00:00",
+        "comment_author": "bariskurt",
+        "comment_body": "Should be fixed by now.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

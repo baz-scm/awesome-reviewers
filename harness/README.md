@@ -115,10 +115,14 @@ paths, and `HOME`/`TMPDIR`, whose values are per-run by construction. Each of th
 two runs that should hit, so including any one would produce a cache with a permanent 0% hit rate —
 which looks exactly like a working cache until someone measures it.
 
-Three refusals worth knowing about:
+Four refusals worth knowing about:
 
 - A step declaring **no inputs cannot be cached**, and says so. Without inputs the key cannot observe
   the code, so the first result would be replayed forever.
+- A **container whose image digest cannot be resolved** cannot be cached either. Keying on the tag
+  would span every image that tag ever pointed at; keying on the *absence* of a digest is worse, since
+  `docker run` pulls the image and supplies the digest that was missing, so the next run computes a
+  different key from identical inputs. The digest is resolved once per process for the same reason.
 - One key addressing **two different input sets** raises, and never resolves by preferring a side.
 - A hit whose blobs have been evicted is a **miss**, not an empty result.
 

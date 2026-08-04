@@ -355,6 +355,13 @@ class ContainerSandbox(Sandbox):
     def __init__(self, image: str, runtime: str = "docker") -> None:
         self.image = image
         self.runtime = runtime
+        # Resolved at most once per process. `isolation()` is called per step and its
+        # result reaches the cache key, so re-probing would let the value move between
+        # two steps of one run — and running a step is itself capable of changing it,
+        # because a `docker run` on a missing image pulls it and thereby creates the
+        # digest that was absent a moment earlier.
+        self._digest: str | None = None
+        self._digest_resolved = False
 
     def available(self) -> tuple[bool, str]:
         if not shutil.which(self.runtime):
@@ -375,17 +382,26 @@ class ContainerSandbox(Sandbox):
 
         A tag is a mutable pointer. Keying a cache on `python:3.11-slim` means the
         cache silently spans two different toolchains the day the tag moves.
+
+        Memoized, and that is load-bearing rather than an optimisation: an unmemoized
+        probe returns None before the first `docker run` and a digest afterwards, so
+        two identical runs would compute two different keys and the cache would never
+        hit. Resolve once, report the same answer for the life of the process.
         """
-        probe = subprocess.run(  # noqa: S603
-            [self.runtime, "image", "inspect", "--format", "{{index .RepoDigests 0}}", self.image],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if probe.returncode != 0:
+        if self._digest_resolved:
+            return self._digest
+        self._digest_resolved = True
+        try:
+            probe = subprocess.run(  # noqa: S603
+                [self.runtime, "image", "inspect", "--format", "{{index .RepoDigests 0}}", self.image],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
             return None
-        value = probe.stdout.strip()
-        return value or None
+        self._digest = (probe.stdout.strip() or None) if probe.returncode == 0 else None
+        return self._digest
 
     def isolation(self, step: Step, limits: Limits) -> dict[str, Any]:
         return {

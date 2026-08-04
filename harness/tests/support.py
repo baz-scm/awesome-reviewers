@@ -132,6 +132,11 @@ class TempRepo(unittest.TestCase):
         self.corpus = write_corpus(self.root / "corpus")
         self.ws = Workspace.open(self.root, require=False)
         self.ws.root = self.root
+        # Pin the backend. With `auto`, the suite's results would depend on whether the
+        # host happens to have a container runtime — a caching test would silently
+        # become a test of Docker, and would pass or fail by accident. The container
+        # backend has its own tests; these exercise the pillars above it.
+        self.ws.config["execution"]["backend"] = "local"
         self.ws.initialize(corpus="corpus")
         # Reopen so the persisted config (including the corpus path) is what is read.
         self.ws = Workspace.open(self.root)

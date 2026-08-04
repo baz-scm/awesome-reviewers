@@ -9,13 +9,16 @@ persisted.
 from __future__ import annotations
 
 import os
+import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from awesome_harness.artifacts import EmptyArtifact, Store
 from awesome_harness.cache import limits_from_config
 from awesome_harness.errors import ExecutionError, StepTimeout, UsageError
 from awesome_harness.execution import (
+    ContainerSandbox,
     LocalSandbox,
     Limits,
     Output,
@@ -224,6 +227,40 @@ class TestOutputCollection(TempRepo):
     def test_an_optional_output_may_be_absent(self) -> None:
         step = Step(id="s", run=("true",), outputs=(Output(path="maybe.json", optional=True),))
         self.assertEqual(collect_outputs(step, self.work), [])
+
+
+class TestContainerIsolationIdentity(unittest.TestCase):
+    """The image digest must not move under a run.
+
+    An unmemoized probe answers None before the first `docker run` and a real digest
+    afterwards, because running the step pulls the image. Two identical runs would then
+    compute two different cache keys.
+    """
+
+    def test_the_digest_probe_runs_at_most_once(self) -> None:
+        sandbox = ContainerSandbox("example/img:tag")
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="example/img@sha256:abc\n", stderr="")
+        with mock.patch("awesome_harness.execution.subprocess.run", return_value=completed) as probe:
+            first = sandbox.image_digest()
+            second = sandbox.image_digest()
+        self.assertEqual(first, "example/img@sha256:abc")
+        self.assertEqual(second, first)
+        self.assertEqual(probe.call_count, 1, "the probe must be memoized, not merely fast")
+
+    def test_a_later_pull_cannot_change_the_answer(self) -> None:
+        sandbox = ContainerSandbox("example/img:tag")
+        absent = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="No such image")
+        pulled = subprocess.CompletedProcess(args=[], returncode=0, stdout="example/img@sha256:abc\n", stderr="")
+        with mock.patch("awesome_harness.execution.subprocess.run", side_effect=[absent, pulled]):
+            self.assertIsNone(sandbox.image_digest())
+            self.assertIsNone(sandbox.image_digest(), "a pull during the run must not move the identity")
+
+    def test_an_absent_runtime_resolves_to_none_rather_than_raising(self) -> None:
+        sandbox = ContainerSandbox("example/img:tag", runtime="definitely-not-a-runtime")
+        self.assertIsNone(sandbox.image_digest())
+        available, reason = sandbox.available()
+        self.assertFalse(available)
+        self.assertIn("not on PATH", reason)
 
 
 class TestBackendSelection(unittest.TestCase):

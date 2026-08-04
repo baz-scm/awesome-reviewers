@@ -145,6 +145,28 @@ class KeyInputs:
         return notes
 
 
+def isolation_keyable(isolation: dict[str, Any]) -> tuple[bool, str]:
+    """Can this isolation be keyed at all?
+
+    A container whose image digest could not be resolved is running on a toolchain the
+    harness cannot name. Keying on the tag instead would let the cache span every
+    image that tag ever pointed at; keying on the *absence* of a digest is worse still,
+    because a `docker run` pulls the image and so supplies the digest that was missing
+    — the next run computes a different key from identical inputs, and the cache reports
+    a permanent miss while looking like it works.
+
+    So the step is refused, in the same way and for the same reason as a step with no
+    declared inputs (aidlc-workflows-scoped-hash-based-idempotency: key by content, and
+    do not pretend to key what you cannot observe).
+    """
+    if isolation.get("backend") == "container" and not isolation.get("image_digest"):
+        return False, (
+            f"container image {isolation.get('unpinned_image') or isolation.get('image') or '?'} "
+            f"has no resolvable digest, so the toolchain cannot be keyed — pull or pin the image"
+        )
+    return True, "keyable"
+
+
 def isolation_identity(isolation: dict[str, Any]) -> dict[str, Any]:
     """The parts of the sandbox that change a step's result.
 
@@ -248,7 +270,7 @@ class Cache:
     # ---- keys ------------------------------------------------------------ #
 
     @staticmethod
-    def eligibility(step: Step) -> tuple[bool, str]:
+    def eligibility(step: Step, isolation: dict[str, Any] | None = None) -> tuple[bool, str]:
         if not step.cacheable:
             return False, "step declares cacheable: false"
         if not step.inputs:
@@ -257,6 +279,10 @@ class Cache:
             return False, "step declares no inputs, so its result cannot be keyed to content"
         if step.allow_network:
             return False, "step allows network access, so its result is not a function of its inputs"
+        if isolation is not None:
+            keyable, reason = isolation_keyable(isolation)
+            if not keyable:
+                return False, reason
         return True, "eligible"
 
     def key_inputs(
@@ -288,7 +314,7 @@ class Cache:
 
     def lookup(self, step: Step, key_inputs: KeyInputs) -> Lookup:
         key = key_inputs.key()
-        eligible, reason = self.eligibility(step)
+        eligible, reason = self.eligibility(step, key_inputs.isolation)
         if not self.enabled:
             return Lookup(key, None, False, "cache disabled")
         if not eligible:

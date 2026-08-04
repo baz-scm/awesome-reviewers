@@ -20,7 +20,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from awesome_harness.artifacts import EmptyArtifact, Manifest, Store
-from awesome_harness.cache import Cache, Entry, platform_identity
+from awesome_harness.cache import Cache, Entry, isolation_keyable, platform_identity
 from awesome_harness.digest import digest_file
 from awesome_harness.errors import CacheCollision, IntegrityError
 from awesome_harness.execution import Step
@@ -260,6 +260,34 @@ class TestCacheKeys(TempRepo):
         tagged = self._inputs(isolation={"backend": "container", "image": "python:3.11-slim"})
         self.assertIn("unpinned_image", tagged.isolation)
         self.assertNotIn("image_digest", tagged.isolation)
+
+    def test_container_without_a_resolvable_digest_is_not_cacheable(self) -> None:
+        # The failure this guards against: `docker run` on a missing image pulls it and
+        # supplies the digest that was absent, so run 1 and run 2 compute different keys
+        # from identical inputs and the cache misses forever while appearing to work.
+        eligible, reason = Cache.eligibility(
+            self.step, {"backend": "container", "unpinned_image": "python:3.11-slim"}
+        )
+        self.assertFalse(eligible)
+        self.assertIn("no resolvable digest", reason)
+
+    def test_container_with_a_resolved_digest_is_cacheable(self) -> None:
+        eligible, _ = Cache.eligibility(
+            self.step, {"backend": "container", "image_digest": "sha256:" + "a" * 64}
+        )
+        self.assertTrue(eligible)
+
+    def test_lookup_refuses_an_unkeyable_isolation(self) -> None:
+        lookup = self.cache.lookup(
+            self.step, self._inputs(isolation={"backend": "container", "image": "python:3.11-slim"})
+        )
+        self.assertFalse(lookup.eligible)
+        self.assertFalse(lookup.hit)
+        self.assertIn("no resolvable digest", lookup.reason)
+
+    def test_local_isolation_is_always_keyable(self) -> None:
+        keyable, _ = isolation_keyable({"backend": "local"})
+        self.assertTrue(keyable)
 
     def test_platform_identity_excludes_the_hostname(self) -> None:
         self.assertEqual(set(platform_identity()), {"system", "machine", "python"})

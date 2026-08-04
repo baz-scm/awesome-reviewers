@@ -27,6 +27,7 @@ Derived from the corpus:
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -157,6 +158,72 @@ def evaluate(
     return result
 
 
+# Topic relevance. A pack pins every instruction in the corpus, so the bundle has to
+# choose, and choosing by discussion volume alone hands a concurrency change a pile of
+# naming advice. These map observable features of a diff to the corpus's own topic
+# labels: the change tells us which expertise it needs.
+TOPIC_SIGNALS: tuple[tuple[str, str], ...] = (
+    # Tight on purpose. An earlier draft used `select\\w*` for Database and scored a
+    # harness diff at 5,940 — it was matching `selector` and `select_sandbox`. A signal
+    # that fires on unrelated identifiers does not merely add noise, it reorders the
+    # bundle around a topic the change has nothing to do with.
+    ("Concurrency", r"\basync def\b|\bawait |asyncio\.|threading\.|\bThreadPool|\bLock\(|"
+                    r"\bmutex\b|sync\.(?:Mutex|RWMutex|WaitGroup)|\bsemaphore\b|"
+                    r"concurrent\.futures|\brace condition\b|\bgoroutine\b"),
+    ("Error Handling", r"^\s*except\b|^\s*try:|\braise \w|\bthrow new\b|\bcatch\s*\(|"
+                       r"^\s*finally:|if err != nil|\.catch\("),
+    ("Security", r"\bauth\w*|\btokens?\b|\bsecrets?\b|\bpasswords?\b|\bcredentials?\b|"
+                 r"\bsanitiz\w+|\bprivileg\w+|\bencrypt\w*|\bsignatures?\b|\bpermissions?\b|"
+                 r"\binjection\b|\btraversal\b"),
+    ("Null Handling", r"\bis None\b|\bis not None\b|\bOptional\[|\bnull\b|\bnil\b|"
+                      r"\bundefined\b|\bnullable\b|\?\?"),
+    ("Configurations", r"os\.environ|\bgetenv\(|\bconfig\w*|\bsettings\b|\.env\b|"
+                       r"\bdefaults?\b|\btoml\b"),
+    ("Testing", r"\bdef test_|\bassert\w*\s|\bpytest\b|\bunittest\b|\bmock\w*|"
+                r"\bfixtures?\b|\bdescribe\(|\bexpect\("),
+    ("Logging", r"\blogger\b|\blogging\b|\blog\.\w+\(|console\.\w+\(|\bprint\("),
+    ("Performance Optimization", r"\bbenchmark\w*|\blatency\b|\bthroughput\b|\boptimi[sz]\w+|"
+                                 r"\bO\(n|\ballocat\w+|\bprofil\w+|\bhot path\b"),
+    ("Caching", r"\bcaches?\b|\bcached\b|\bcaching\b|\binvalidat\w+|\bTTL\b|\bmemoi?[sz]\w*"),
+    ("Networking", r"\bhttps?\b|requests\.\w+|\bsockets?\b|\btimeouts?\b|\bretr(?:y|ies)\b|"
+                   r"\burls?\b|\bendpoints?\b|\btls\b|\bssl\b"),
+    ("Database", r"session\.(?:query|scalar|scalars|execute|add|commit)\b|\bsqlalchemy\b|"
+                 r"\bcursor\.|\bINSERT INTO\b|\bSELECT\b[^\n]*\bFROM\b|\balembic\b|"
+                 r"\bselect\([A-Z]|\.where\(|\.filter_by\(|\btransactions?\b"),
+    ("API", r"\binterface \w+|\bexport (?:function|const|class|interface)|@app\.\w+|@router\.|"
+            r"\broutes?\b|\bendpoints?\b|\bbackwards? compat\w*"),
+    ("CI/CD", r"\bruns-on:|^\s*steps:|^\s*jobs:|\bworkflows?\b|\bpipelines?\b|\bDockerfile\b"),
+    ("Observability", r"\bmetrics?\b|\btraces?\b|\bspans?\b|\btelemetry\b|\binstrument\w+|"
+                      r"\bprometheus\b|\bopentelemetry\b"),
+    ("Migrations", r"\bmigrat\w+|\bschema_version\b|\bbackfill\b|\bdowngrade\b|\balembic\b"),
+    ("Documentation", r"\.(?:md|rst)\b|^\s*\"\"\"|\bdocstrings?\b|\bREADME\b"),
+)
+
+
+def change_topics(
+    files: Iterable[str], added: dict[str, list[tuple[int, str]]] | None = None
+) -> dict[str, int]:
+    """Topics the change is about, weighted by how much evidence there is for each.
+
+    Counts rather than a set, and the distinction matters. A large change touches every
+    topic at least once — gate a 47-file diff and all fifteen signals fire — so
+    membership alone stops discriminating exactly when the corpus is largest and the
+    ranking is needed most. Weighting by match count keeps the ordering meaningful at
+    any change size, and degrades to "no signal, fall back to specificity" rather than
+    to "everything is equally relevant".
+    """
+    haystack = " ".join(files)
+    if added:
+        for hunks in added.values():
+            haystack += "\n" + "\n".join(text for _, text in hunks)
+    weights: dict[str, int] = {}
+    for topic, pattern in TOPIC_SIGNALS:
+        hits = len(re.findall(pattern, haystack, re.IGNORECASE | re.MULTILINE))
+        if hits:
+            weights[topic] = hits
+    return weights
+
+
 def advisory_bundle(
     pack: Pack,
     corpus: Corpus,
@@ -164,32 +231,55 @@ def advisory_bundle(
     *,
     max_rules: int = MAX_CONTEXT_RULES,
     max_bytes: int = MAX_CONTEXT_BYTES,
+    added: dict[str, list[tuple[int, str]]] | None = None,
 ) -> tuple[str, list[str], list[str]]:
-    """Render the advisory instructions that apply to this change.
+    """Render the advisory instructions most relevant to this change.
 
-    Returns `(markdown, included_slugs, notes)`. Selection is by language selector
-    against the changed files, ranked by how specific the selector is: a rule that
-    matches only `**/*.py` is about the Python you just wrote, whereas one matching
-    `**` is general advice and yields to it when the budget is tight.
+    Returns `(markdown, included_slugs, notes)`. Ranked on three signals, in order:
+
+      1. does its language selector match a changed file, and how specifically — a
+         rule scoped to `**/*.py` is about the Python you just wrote, one scoped to
+         `**` is general advice and yields to it
+      2. does its topic match something the diff actually contains — a change full of
+         `await` and `Lock` should surface Concurrency instructions ahead of naming ones
+      3. discussion volume, as a tiebreak only
+
+    The pack holds the whole corpus. Without (2) the bundle would rank thousands of
+    instructions by popularity and deliver the same generic sixty every time.
     """
     files = list(changed_files)
     notes: list[str] = []
+    topics = change_topics(files, added)
     candidates = []
     for rule in pack.advisory_rules:
         matched = [f for f in files if matches_selector(f, rule.selector)]
         if not matched:
             continue
         general = rule.selector == ("**",)
-        candidates.append((1 if general else 0, -len(matched), rule.slug, rule))
+        candidates.append(
+            (
+                -topics.get(rule.topic, 0),    # topic evidence first, strongest first
+                1 if general else 0,           # then selector specificity
+                -len(matched),                 # then breadth of match within the change
+                rule.slug,
+                rule,
+            )
+        )
 
-    candidates.sort(key=lambda row: row[:3])
+    candidates.sort(key=lambda row: row[:4])
+    if topics:
+        leading = sorted(topics.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
+        notes.append(
+            "ranked for the topics this change shows most evidence of: "
+            + ", ".join(f"{name} ({count})" for name, count in leading)
+        )
     included: list[str] = []
     sections: list[str] = []
     size = 0
     dropped_for_count = 0
     dropped_for_size = 0
 
-    for _, _, _, rule in candidates:
+    for _, _, _, _, rule in candidates:
         if len(included) >= max_rules:
             dropped_for_count += 1
             continue

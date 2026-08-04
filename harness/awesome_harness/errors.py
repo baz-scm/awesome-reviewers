@@ -5,6 +5,13 @@ caller has to branch on *why* without parsing prose. Every error carries a stabl
 exit code, and the CLI never collapses them into 1.
 
 Derived from the corpus:
+  servo-validate-subprocess-errors-comprehensively (servo/servo) — do not rely on a
+      return code alone; some tools exit 0 having failed. The corollary for a tool
+      that is itself invoked by scripts is that its own codes must be specific.
+  azure-cli-actionable-error-propagation (Azure/azure-cli) — an error should tell the
+      caller what to do next, which is what `hint` is for.
+  opencode-ensure-proper-error-signaling (sst/opencode) — signal failure through the
+      channel the caller actually checks.
   aidlc-workflows-fail-loudly-degrade-safely  — a degraded path must be visible,
       never silently substituted for the thing that was asked for.
   aidlc-workflows-defensive-observable-error-handling — failures name the input

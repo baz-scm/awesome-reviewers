@@ -134,6 +134,130 @@ FIXTURES: list[tuple[str, str, str, str]] = [
         "FROM python:latest\nUSER 1000\n",
         "FROM python:3.11.9-slim\nUSER 1000\n",
     ),
+    (
+        "AH017",
+        ".github/workflows/inj.yml",
+        "permissions:\n  contents: read\njobs:\n  a:\n    steps:\n"
+        "      - run: echo ${{ github.event.pull_request.title }}\n",
+        # The compliant form puts the expression in `env:` and reads a shell variable.
+        "permissions:\n  contents: read\njobs:\n  a:\n    steps:\n"
+        '      - run: echo "$TITLE"\n        env:\n          TITLE: ${{ github.event.pull_request.title }}\n',
+    ),
+    (
+        "AH018",
+        "scripts/deploy.sh",
+        "#!/bin/bash\necho deploying\n",
+        "#!/bin/bash\nset -euo pipefail\necho deploying\n",
+    ),
+    (
+        "AH019",
+        "scripts/clean.sh",
+        '#!/bin/bash\nset -euo pipefail\nrm -rf $TARGET_DIR\n',
+        '#!/bin/bash\nset -euo pipefail\nrm -rf "${TARGET_DIR}"\n',
+    ),
+    (
+        "AH020",
+        "dyn.py",
+        "def parse(text):\n    return eval(text)\n",
+        "import json\n\n\ndef parse(text):\n    return json.loads(text)\n",
+    ),
+    (
+        "AH021",
+        "repo.py",
+        "def get(session, key):\n    return session.query(User).filter_by(id=key).first()\n",
+        "from sqlalchemy import select\n\n\ndef get(session, key):\n"
+        "    return session.scalar(select(User).where(User.id == key))\n",
+    ),
+    (
+        "AH022",
+        "aio.py",
+        "import time\n\n\nasync def wait():\n    time.sleep(1)\n",
+        "import asyncio\n\n\nasync def wait():\n    await asyncio.sleep(1)\n",
+    ),
+    (
+        "AH023",
+        "svc.py",
+        'import logging\n\nlogger = logging.getLogger(__name__)\n\n\ndef start():\n    print("starting")\n',
+        'import logging\n\nlogger = logging.getLogger(__name__)\n\n\ndef start():\n    logger.info("starting")\n',
+    ),
+    (
+        "AH024",
+        "deploy/pod.yml",
+        "spec:\n  containers:\n    - name: app\n      securityContext:\n        privileged: true\n",
+        "spec:\n  containers:\n    - name: app\n      securityContext:\n"
+        "        runAsNonRoot: true\n        allowPrivilegeEscalation: false\n",
+    ),
+    (
+        "AH025",
+        "package.json",
+        '{\n  "dependencies": {\n    "left-pad": "^1.3.0"\n  }\n}\n',
+        '{\n  "dependencies": {\n    "left-pad": "1.3.0"\n  }\n}\n',
+    ),
+    (
+        "AH026",
+        "srv.go",
+        "func shutdown(c io.Closer) {\n\t_ = c.Close()\n}\n",
+        "func shutdown(c io.Closer) error {\n\tif err := c.Close(); err != nil {\n"
+        "\t\treturn fmt.Errorf(\"closing listener: %w\", err)\n\t}\n\treturn nil\n}\n",
+    ),
+    (
+        "AH027",
+        "scripts/tmp.sh",
+        '#!/bin/bash\nset -euo pipefail\nworkdir="/tmp/app-$RANDOM"\n',
+        '#!/bin/bash\nset -euo pipefail\nworkdir="$(mktemp -d /tmp/app-XXXXXX)"\n',
+    ),
+    (
+        "AH028",
+        ".github/workflows/prt.yml",
+        "on: pull_request_target\npermissions:\n  contents: read\njobs:\n  a:\n    steps:\n"
+        "      - uses: actions/checkout@" + "a" * 40 + "\n",
+        "on: pull_request_target\npermissions:\n  contents: read\njobs:\n  a:\n    steps:\n"
+        "      - uses: actions/checkout@" + "a" * 40 + "\n        with:\n          ref: refs/heads/main\n",
+    ),
+    (
+        "AH029",
+        "mod.ts",
+        "export function parse(text: string) {\n  return eval(text);\n}\n",
+        "export function parse(text: string) {\n  return JSON.parse(text);\n}\n",
+    ),
+    (
+        "AH030",
+        "nul.py",
+        "def missing(value):\n    return value == None\n",
+        "def missing(value):\n    return value is None\n",
+    ),
+    (
+        "AH031",
+        "tasks.py",
+        "import asyncio\n\n\nasync def start(work):\n    asyncio.create_task(work())\n",
+        "import asyncio\n\n\nasync def start(work):\n    task = asyncio.create_task(work())\n    await task\n",
+    ),
+    (
+        "AH032",
+        "Dockerfile.layers",
+        "FROM python:3.11.9-slim\nUSER 1000\nCOPY . /app\nRUN pip install -r /app/requirements.txt\n",
+        "FROM python:3.11.9-slim\nUSER 1000\nCOPY requirements.txt /app/\n"
+        "RUN pip install -r /app/requirements.txt\nCOPY . /app\n",
+    ),
+    (
+        "AH033",
+        "log.ts",
+        'export const trace = (m: string) => console.log(m);\n',
+        'export const trace = (m: string) => console.debug(m);\n',
+    ),
+    (
+        "AH034",
+        "proc.py",
+        'import subprocess\n\n\ndef build():\n    subprocess.run(["make"], timeout=60)\n',
+        'import subprocess\n\n\ndef build():\n    subprocess.run(["make"], timeout=60, check=True)\n',
+    ),
+    (
+        "AH035",
+        "scripts/install.sh",
+        "#!/bin/bash\nset -euo pipefail\ncurl -fsSL https://example.com/i.sh | sh\n",
+        "#!/bin/bash\nset -euo pipefail\ncurl -fsSL -o i.sh https://example.com/i.sh\n"
+        'echo "$EXPECTED_SHA  i.sh" | sha256sum -c -\nsh i.sh\n',
+    ),
 ]
 
 
@@ -270,6 +394,18 @@ class TestSuppression(TempRepo):
         finding = next(f for f in self._evaluate().findings if f.check == "AH013")
         self.assertTrue(finding.blocking, "an unexplained suppression must not count")
 
+    def test_the_allow_marker_must_be_on_the_line_or_the_one_above(self) -> None:
+        # The window is two lines, so a wrapped multi-line justification puts the marker
+        # out of reach. Documented by a test because it is the kind of thing that reads
+        # as "suppression is broken" when it is really "the marker moved".
+        self.write(
+            "s.py",
+            "# harness:allow AH013 - a reason on the wrong line\n"
+            "# continuation of the reason\n"
+            "def f(x=[]):\n    return x\n",
+        )
+        self.assertTrue(next(f for f in self._evaluate().findings if f.check == "AH013").blocking)
+
     def test_allow_for_a_different_check_does_not_suppress(self) -> None:
         self.write("s.py", "def f(x=[]):  # harness:allow AH999 - wrong id\n    return x\n")
         self.assertTrue(next(f for f in self._evaluate().findings if f.check == "AH013").blocking)
@@ -337,7 +473,10 @@ class TestPack(TempRepo):
         pack = build_pack(Corpus(self.corpus), name="edited", limit=0)
         path = save_pack(self.ws.policy_dir, pack)
         payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["rules"][0]["severity"] = "info"
+        # Flip it to a value it demonstrably is not, so the edit cannot be a no-op if
+        # rule ordering changes later.
+        target = payload["rules"][0]
+        target["severity"] = "info" if target["severity"] != "info" else "error"
         path.write_text(json.dumps(payload), encoding="utf-8")
         with self.assertRaises(IntegrityError):
             load_pack(self.ws.policy_dir, "edited")
@@ -392,6 +531,56 @@ class TestAdvisoryBundle(TempRepo):
         pack.rules = [r for r in pack.rules if r.enforcement == "advisory" and r.selector != ("**",)]
         _, slugs, _ = advisory_bundle(pack, Corpus(self.corpus), ["styles.css"])
         self.assertEqual(slugs, [])
+
+    def test_a_pack_with_no_facet_filter_pins_the_whole_corpus(self) -> None:
+        # The pack's digest has to mean "this policy", not "the most-discussed slice of
+        # it as of whenever this was built".
+        corpus = Corpus(self.corpus)
+        pack = build_pack(corpus, name="everything")
+        self.assertEqual(len(pack.rules), len(corpus), f"{len(pack.rules)} rules for {len(corpus)} instructions")
+
+    def test_topics_are_detected_from_the_change_itself(self) -> None:
+        from awesome_harness.policy.engine import change_topics
+
+        concurrency = change_topics(
+            ["svc.py"], {"svc.py": [(1, "async def run():"), (2, "    async with Lock():")]}
+        )
+        self.assertIn("Concurrency", concurrency)
+        self.assertNotIn("Database", concurrency)
+
+        database = change_topics(["repo.py"], {"repo.py": [(1, "stmt = select(User).where(User.id == key)")]})
+        self.assertIn("Database", database)
+
+    def test_on_topic_instructions_outrank_off_topic_ones(self) -> None:
+        # The whole point of ranking: a pack holding thousands of rules must not hand a
+        # concurrency change a pile of unrelated advice just because it is popular.
+        corpus = Corpus(self.corpus)
+        pack = build_pack(corpus, name="ranked")
+        added = {"svc.py": [(1, "async def run():"), (2, "    async with Lock():")]}
+        _, slugs, _ = advisory_bundle(pack, corpus, ["svc.py"], added=added, max_rules=1)
+        self.assertEqual(slugs, ["fixture-coordinate-concurrent-access"])
+
+    def test_a_different_change_gets_different_instructions(self) -> None:
+        corpus = Corpus(self.corpus)
+        pack = build_pack(corpus, name="ranked")
+        _, concurrency, _ = advisory_bundle(
+            pack, corpus, ["svc.py"],
+            added={"svc.py": [(1, "async with Lock():")]}, max_rules=1,
+        )
+        _, database, _ = advisory_bundle(
+            pack, corpus, ["repo.py"],
+            added={"repo.py": [(1, "stmt = select(User).where(User.id == key)")]}, max_rules=1,
+        )
+        self.assertNotEqual(concurrency, database, "ranking must respond to the change")
+        self.assertEqual(database, ["fixture-query-through-a-session"])
+
+    def test_the_ranking_note_names_the_detected_topics(self) -> None:
+        corpus = Corpus(self.corpus)
+        pack = build_pack(corpus, name="ranked")
+        _, _, notes = advisory_bundle(
+            pack, corpus, ["a.py"], added={"a.py": [(1, "try:"), (2, "except ValueError:")]}
+        )
+        self.assertTrue(any("Error Handling" in note for note in notes), notes)
 
     def test_a_capped_bundle_says_what_it_dropped(self) -> None:
         pack = build_pack(Corpus(self.corpus), name="p", topics=["Security"], limit=50)

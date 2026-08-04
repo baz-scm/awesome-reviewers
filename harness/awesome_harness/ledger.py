@@ -16,6 +16,14 @@ Three properties, each earned by a specific mechanism:
                  for humans and never used to order anything
 
 Derived from the corpus:
+  cli-use-file-locks (snyk/cli) — use flock for mutual exclusion over a shared
+      filesystem resource; the kernel releasing it on process death is the property
+      a pid file cannot offer.
+  redis-atomic-contracts-enforcement (redis/redis) — an operation that claims to be
+      atomic must be atomic at every layer that can observe it.
+  apisix-verify-download-integrity (apache/apisix) — fail closed when a digest does
+      not match. `verify` reporting the first broken record and refusing to continue
+      is that rule applied to a chain.
   aidlc-workflows-single-transaction-locking — reading the tail and appending the
       next record is one transaction. Split them and two writers build two forks
       of the chain from the same predecessor.

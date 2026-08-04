@@ -138,6 +138,7 @@ class TestPathConfinement(unittest.TestCase):
         sibling = self.base.parent / "runner"
         sibling.mkdir()
         self.assertFalse(is_within(self.base, sibling))
+        # harness:allow AH005 - this line exists to show the forbidden prefix check giving the wrong answer
         self.assertTrue(str(sibling).startswith(str(self.base)))
 
     def test_traversal_is_rejected(self) -> None:

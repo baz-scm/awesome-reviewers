@@ -618,7 +618,7 @@ class Runner:
         waivers = Waivers.load(self.ws.waivers_path)
         result = evaluate_gate(pack, ctx, waivers=waivers, threshold=str(self.ws.setting("policy.threshold", "error")))
 
-        bundle, slugs, notes = advisory_bundle(pack, self.corpus, ctx.files)
+        bundle, slugs, notes = advisory_bundle(pack, self.corpus, ctx.files, added=ctx.added)
         result.advisory_slugs = slugs
         result.notes.extend(notes)
 

@@ -311,7 +311,11 @@ def build_pack(
     languages: Iterable[str] = (),
     repositories: Iterable[str] = (),
     slugs: Iterable[str] = (),
-    limit: int | None = 200,
+    # No cap by default. A pack pins the whole corpus, because that is what makes its
+    # digest mean "this policy" rather than "the two hundred most-discussed rules as of
+    # whenever this was built". Selection down to what a particular change needs is the
+    # bundle's job, not the pack's.
+    limit: int | None = None,
     threshold: str = ERROR,
     advisory_severity: str = "info",
 ) -> Pack:
@@ -341,7 +345,13 @@ def build_pack(
         machine_slugs.add(check.slug)
 
     selected = corpus.select(
-        slugs=slugs, topics=topics, languages=languages, repositories=repositories, limit=limit
+        slugs=slugs,
+        topics=topics,
+        languages=languages,
+        repositories=repositories,
+        limit=limit,
+        # With no facet filter, "build a pack from the corpus" means the corpus.
+        include_all=not (list(topics) or list(languages) or list(repositories)),
     )
     for instruction in selected:
         if instruction.slug in machine_slugs:

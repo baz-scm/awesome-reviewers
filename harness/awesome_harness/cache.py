@@ -23,6 +23,17 @@ one place the harness refuses to guess: a wrong `inputs` list is a stale build, 
 a stale build is indistinguishable from a correct one until it ships.
 
 Derived from the corpus:
+  comfyui-optimize-cache-key-design (comfyanonymous/ComfyUI) — keys must be
+      lightweight, hashable and deterministic, and must not carry large objects. A
+      key holding something unhashable makes every entry permanently dirty, which is
+      the same failure this module's `RUN_SCOPED_ENV` and `isolation_keyable` guards
+      prevent by a different route.
+  apisix-cache-validity-contracts (apache/apisix) — state what makes an entry valid,
+      and treat validity as a contract rather than a heuristic.
+  posthog-cache-invalidation-consistency (PostHog/posthog) — invalidation has to be
+      consistent with the key, or the cache is a correctness bug.
+  openai-python-cache-validity-and-bounds (openai/openai-python) — bound what a cache
+      may hold and for how long.
   aidlc-workflows-scoped-hash-based-idempotency — key by content, not identity;
       detect same-key conflicts and fail loudly rather than keeping the first; and
       scope completion signals to the current run window. That last part is why

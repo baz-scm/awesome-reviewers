@@ -127,7 +127,7 @@ def cmd_policy_build(args: argparse.Namespace) -> int:
         languages=args.language,
         repositories=args.repository,
         slugs=args.slug,
-        limit=args.limit,
+        limit=args.limit or None,
         threshold=args.threshold,
     )
     path = save_pack(ensure_dir(ws.policy_dir), pack)
@@ -230,7 +230,7 @@ def cmd_gate(args: argparse.Namespace) -> int:
     pack, ctx, result = _gate(ws, args)
     # Which advisory instructions apply is part of the gate's record even though it is
     # not part of its verdict: a reader needs to know what expertise was on offer.
-    _, slugs, notes = advisory_bundle(pack, Corpus(ws.corpus_path()), ctx.files)
+    _, slugs, notes = advisory_bundle(pack, Corpus(ws.corpus_path()), ctx.files, added=ctx.added)
     result.advisory_slugs = slugs
     result.notes.extend(notes)
     if args.json:
@@ -255,8 +255,9 @@ def cmd_context(args: argparse.Namespace) -> int:
     git = Git(ws.root)
     pack = load_pack(ws.policy_dir, args.pack or str(ws.setting("policy.pack", "default")))
     corpus = Corpus(ws.corpus_path())
-    files = git.changed_files(args.base)
-    bundle, slugs, notes = advisory_bundle(pack, corpus, files)
+    ctx = build_context(git, ws.root, args.base)
+    files = list(ctx.files)
+    bundle, slugs, notes = advisory_bundle(pack, corpus, files, added=ctx.added)
     if args.out:
         atomic_write_bytes(Path(args.out), bundle.encode("utf-8"))
         print(f"{len(slugs)} instruction(s) for {len(files)} changed file(s) -> {args.out}")
@@ -602,7 +603,8 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--language", action="append", default=[], help="corpus language, e.g. Python")
     build.add_argument("--repository", action="append", default=[], help="source repository, e.g. awslabs/aidlc-workflows")
     build.add_argument("--slug", action="append", default=[], help="include this instruction explicitly")
-    build.add_argument("--limit", type=int, default=200, help="cap on advisory rules (default 200)")
+    build.add_argument("--limit", type=int, default=0,
+                       help="cap advisory rules (0 = the whole corpus, which is the default)")
     build.add_argument("--threshold", default="error", choices=("info", "warning", "error"))
     build.set_defaults(func=cmd_policy_build)
 

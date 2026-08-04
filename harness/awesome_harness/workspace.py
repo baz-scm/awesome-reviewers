@@ -7,8 +7,16 @@ half-written file can be read back as a whole one. Both problems are solved here
 once, rather than in each pillar.
 
 Derived from the corpus:
+  cli-use-file-locks (snyk/cli) — when several processes touch the same filesystem
+      resource, use flock for mutual exclusion, and put the lock file in a
+      directory that already exists rather than inside the one being created.
+  clickhouse-consistent-mutex-protection (ClickHouse/ClickHouse) — one lock
+      discipline per piece of shared state, applied consistently.
   aidlc-workflows-single-transaction-locking — read-then-append is one
       transaction; take the lock around the pair, not around each half.
+  tradingagents-graceful-specific-error-handling (TauricResearch/TradingAgents) —
+      when writing persistence, avoid partial or corrupt files by writing to a temp
+      path and replacing. That instruction is `atomic_write_bytes` almost verbatim.
   aidlc-workflows-portable-configuration-standards — configuration is data in one
       documented file, not environment archaeology.
   aidlc-workflows-explicit-environment-contracts — the environment a step may see

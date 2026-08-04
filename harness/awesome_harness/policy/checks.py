@@ -231,6 +231,11 @@ def register(check: Check) -> Check:
 PY = ("**/*.py",)
 WORKFLOWS = (".github/workflows/*.yml", ".github/workflows/*.yaml")
 ANY_TEXT = ("**",)
+YAML = ("**/*.yml", "**/*.yaml")
+SHELL = ("**/*.sh", "**/*.bash", "**/*.zsh")
+DOCKER = ("**/Dockerfile", "**/Dockerfile.*", "**/*.dockerfile")
+WEB = ("**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs")
+GO = ("**/*.go",)
 
 register(Check(
     id="AH001",
@@ -357,7 +362,167 @@ register(Check(
     slug="lobe-chat-pin-docker-base-versions",
     summary="Pin base images to a digest or an exact version, never `latest`.",
     severity=WARNING,
-    selector=("**/Dockerfile", "**/Dockerfile.*", "**/*.dockerfile"),
+    selector=DOCKER,
+    engine=TEXT,
+))
+
+# --------------------------------------------------------------------------- #
+# Second cohort. Sourced by searching the whole corpus for rules a checker can
+# decide, rather than by reading one repository's instructions — so each of these
+# comes from a different project, and between them they reach Python, YAML,
+# Dockerfiles, shell, Go, TypeScript and package manifests.
+# --------------------------------------------------------------------------- #
+
+register(Check(
+    id="AH017",
+    slug="prometheus-avoid-github-template-injection",
+    summary="Never interpolate an attacker-controllable workflow expression into a `run:` script.",
+    severity=ERROR,
+    selector=WORKFLOWS,
+    engine=FILE,
+))
+register(Check(
+    id="AH018",
+    slug="claude-code-fail-fast-principle",
+    summary="Shell scripts need `set -euo pipefail`, or they continue past a failed command.",
+    severity=WARNING,
+    selector=SHELL,
+    engine=FILE,
+))
+register(Check(
+    id="AH019",
+    slug="airflow-quote-shell-variables",
+    summary="Quote shell variable expansions; unquoted ones word-split on spaces and vanish when empty.",
+    severity=WARNING,
+    selector=SHELL,
+    engine=TEXT,
+))
+register(Check(
+    id="AH020",
+    slug="mxnet-avoid-eval-function",
+    summary="eval and exec run arbitrary code; parse or convert explicitly instead.",
+    severity=ERROR,
+    selector=PY,
+    engine=PYTHON,
+))
+register(Check(
+    id="AH021",
+    slug="dify-sqlalchemy-20-patterns",
+    summary="Use select() rather than the legacy session.query() API.",
+    severity=INFO,
+    selector=PY,
+    engine=PYTHON,
+))
+register(Check(
+    id="AH022",
+    slug="fastapi-avoid-blocking-in-async",
+    summary="A blocking call inside `async def` stalls the whole event loop.",
+    severity=WARNING,
+    selector=PY,
+    engine=PYTHON,
+))
+register(Check(
+    id="AH023",
+    slug="serena-use-proper-logging-practices",
+    summary="Use the logger the module already imports, not print — print contaminates stdio.",
+    severity=INFO,
+    selector=PY,
+    engine=PYTHON,
+))
+register(Check(
+    id="AH024",
+    slug="kubeflow-enforce-least-privilege",
+    summary="No privileged containers, no privilege escalation, no uid 0.",
+    severity=ERROR,
+    selector=YAML,
+    engine=TEXT,
+))
+register(Check(
+    id="AH025",
+    slug="cli-pin-dependency-versions",
+    summary="Pin package.json dependencies exactly; a range resolves differently per environment.",
+    severity=WARNING,
+    selector=("**/package.json",),
+    engine=TEXT,
+))
+register(Check(
+    id="AH026",
+    slug="fiber-check-all-error-returns",
+    summary="Discarding an error with `_ =` turns a failure into silent corruption.",
+    severity=WARNING,
+    selector=GO,
+    engine=TEXT,
+))
+register(Check(
+    id="AH027",
+    slug="ghostty-secure-temporary-files",
+    summary="Build temporary paths with mktemp, not $RANDOM or a timestamp.",
+    severity=ERROR,
+    selector=SHELL,
+    engine=TEXT,
+))
+register(Check(
+    id="AH028",
+    slug="terraform-secure-checkout-configurations",
+    summary="A pull_request_target workflow must state the ref it checks out.",
+    severity=WARNING,
+    selector=WORKFLOWS,
+    engine=FILE,
+))
+register(Check(
+    id="AH029",
+    slug="yoga-avoid-eval-function",
+    summary="eval() executes arbitrary JavaScript; use JSON.parse or an explicit dispatch.",
+    severity=ERROR,
+    selector=WEB,
+    engine=TEXT,
+))
+register(Check(
+    id="AH030",
+    slug="heretic-handle-nullable-values",
+    summary="Compare to None with `is`, not `==` — equality can be overloaded.",
+    severity=WARNING,
+    selector=PY,
+    engine=PYTHON,
+))
+register(Check(
+    id="AH031",
+    slug="litellm-background-task-coordination",
+    summary="Keep a reference to a created task, or it can be garbage-collected mid-flight.",
+    severity=WARNING,
+    selector=PY,
+    engine=PYTHON,
+))
+register(Check(
+    id="AH032",
+    slug="celery-split-dependency-installs",
+    summary="Install dependencies before copying source, or every source edit reinstalls them.",
+    severity=INFO,
+    selector=DOCKER,
+    engine=FILE,
+))
+register(Check(
+    id="AH033",
+    slug="gemini-cli-use-appropriate-logging-levels",
+    summary="Use console.debug for developer output; console.log reaches the user.",
+    severity=INFO,
+    selector=WEB,
+    engine=TEXT,
+))
+register(Check(
+    id="AH034",
+    slug="servo-validate-subprocess-errors-comprehensively",
+    summary="A discarded subprocess result means the exit code was never examined.",
+    severity=WARNING,
+    selector=PY,
+    engine=PYTHON,
+))
+register(Check(
+    id="AH035",
+    slug="apisix-verify-download-integrity",
+    summary="Piping a download straight into a shell runs whatever the server sent, unverified.",
+    severity=ERROR,
+    selector=SHELL + DOCKER + YAML,
     engine=TEXT,
 ))
 
@@ -370,6 +535,11 @@ register(Check(
 # on an ordinary string is a legitimate operation, and flagging it made the check
 # noisy. `base_dir` still matches, via `dir`.
 _PATHISH = re.compile(r"path|dir|root|file|folder|cwd", re.IGNORECASE)
+# On the *prefix* side of a startswith, a name like `base` is strong evidence: in
+# `candidate.startswith(base)` the thing being compared against is a base directory
+# almost by definition. `prefix` is deliberately still absent — in a startswith call
+# every second argument is "the prefix", which says nothing about paths.
+_PREFIX_PATHISH = re.compile(r"path|dir|root|file|folder|cwd|base", re.IGNORECASE)
 
 # Calls that consume a value without disclosing it, so a secret passed through one is
 # not being logged. `repr` and `str` are deliberately absent — both print the value.
@@ -427,22 +597,23 @@ def _expression_name(node: ast.AST | None) -> str:
     return ""
 
 
-def _is_pathish(node: ast.AST | None) -> bool:
+def _is_pathish(node: ast.AST | None, pattern: re.Pattern[str] | None = None) -> bool:
     """Is this expression a path, judged by name?
 
     Sees through `str(...)` and `os.fspath(...)`, which is how a Path reaches a string
     comparison in the first place — and how the antipattern this check exists for
     usually looks: `str(candidate).startswith(str(base_dir))`.
     """
+    rx = pattern or _PATHISH
     if node is None:
         return False
     if isinstance(node, ast.Call):
         callee = _expression_name(node.func) or _root_name(node.func)
         if callee in ("str", "fspath", "abspath", "realpath", "normpath") and node.args:
-            return _is_pathish(node.args[0])
+            return _is_pathish(node.args[0], rx)
         return False
     name = _expression_name(node)
-    return bool(name and _PATHISH.search(name))
+    return bool(name and rx.search(name))
 
 
 def _is_url_like(node: ast.AST | None) -> bool:
@@ -489,6 +660,34 @@ class _Raw:
         self.evidence = evidence
 
 
+# Calls that block the calling thread. Inside `async def` they stall the event loop,
+# and therefore every other coroutine on it.
+_BLOCKING_IN_ASYNC = {
+    ("time", "sleep"): "time.sleep",
+    ("requests", "get"): "requests.get",
+    ("requests", "post"): "requests.post",
+    ("requests", "put"): "requests.put",
+    ("requests", "delete"): "requests.delete",
+    ("subprocess", "run"): "subprocess.run",
+    ("subprocess", "call"): "subprocess.call",
+    ("subprocess", "check_output"): "subprocess.check_output",
+    ("urllib", "urlopen"): "urlopen",
+    ("shutil", "copyfile"): "shutil.copyfile",
+    ("shutil", "rmtree"): "shutil.rmtree",
+    ("socket", "recv"): "socket.recv",
+}
+_BLOCKING_BUILTINS = {"open", "input"}
+
+# Go/other calls whose returned error must not be discarded — see AH026.
+_ERROR_RETURNING = frozenset(
+    {
+        "Close", "Write", "WriteString", "Flush", "Sync", "Unmarshal", "Marshal",
+        "Encode", "Decode", "Remove", "RemoveAll", "Mkdir", "MkdirAll", "Rename",
+        "Chmod", "Copy", "Scan", "Exec", "Commit", "Rollback", "Shutdown", "Serve",
+    }
+)
+
+
 class PythonAnalyzer(ast.NodeVisitor):
     """One walk per file, collecting every Python finding the pack might want."""
 
@@ -497,6 +696,18 @@ class PythonAnalyzer(ast.NodeVisitor):
         self.lines = source.splitlines()
         self.is_test = is_test
         self.out: list[_Raw] = []
+        # Depth of enclosing `async def`. A plain `def` nested inside one resets it,
+        # because code in there runs on a worker, not on the loop.
+        self._async_depth: list[bool] = []
+        # AH023 only fires in a module that already has a logger: `print` in a script
+        # with no logging is a deliberate choice, not an inconsistency.
+        self.has_logging = bool(
+            re.search(r"^\s*(?:import logging|from logging import|.*=\s*logging\.getLogger)", source, re.M)
+        )
+
+    @property
+    def in_async(self) -> bool:
+        return bool(self._async_depth) and self._async_depth[-1]
 
     def line_text(self, line: int) -> str:
         return self.lines[line - 1] if 1 <= line <= len(self.lines) else ""
@@ -533,16 +744,18 @@ class PythonAnalyzer(ast.NodeVisitor):
         # The rule is about *path* containment, so the check has to establish that a
         # path is what is being compared. Three independent signals, any of which is
         # enough, and none of which fires on `str(x).startswith("https://")`:
-        #   the receiver is named like a path            base_dir.startswith(...)
-        #   the receiver is str() around a path-named    str(run_folder).startswith(...)
-        #   the *prefix* is a path                       str(p).startswith(str(base_dir))
-        #   the prefix is an absolute path literal       p.startswith("/srv/")
+        #   the prefix is a path                       str(p).startswith(str(base_dir))
+        #   the prefix is an absolute path literal       p.startswith("/srv/data")
+        #
+        # The test is on the *prefix*, not the receiver. Requiring only a path-ish
+        # receiver fired on `path.startswith(EXCLUDED_PREFIXES)` — filtering a list of
+        # path prefixes, which is a different and correct operation — while the corpus's
+        # own example, `str(candidate).startswith(str(base_dir))`, carries its evidence
+        # entirely in the argument. What makes this the antipattern is that the thing
+        # being compared against is a directory.
         if attr == "startswith":
-            receiver = func.value if isinstance(func, ast.Attribute) else None
-            name = _expression_name(receiver)
-            wrapped_path = _is_pathish(receiver)
             first = node.args[0] if node.args else None
-            prefix_is_path = _is_pathish(first)
+            prefix_is_path = _is_pathish(first, _PREFIX_PATHISH)
             # A bare "/" is an absoluteness test, which is a different and legitimate
             # operation. Only a prefix naming an actual directory is containment.
             absolute_prefix = (
@@ -552,7 +765,7 @@ class PythonAnalyzer(ast.NodeVisitor):
                 and first.value.startswith("/")
                 and not first.value.startswith("//")
             )
-            if wrapped_path or prefix_is_path or absolute_prefix or (name and _PATHISH.search(name)):
+            if prefix_is_path or absolute_prefix:
                 self.emit(
                     "AH005",
                     node,
@@ -589,6 +802,74 @@ class PythonAnalyzer(ast.NodeVisitor):
                     self.emit("AH011", node, f"{leaked!r} looks like a secret and is being written to output")
                     break
 
+        # AH020 — eval/exec. `ast.literal_eval` is an Attribute and so never matches.
+        if isinstance(func, ast.Name) and func.id in ("eval", "exec"):
+            self.emit(
+                "AH020",
+                node,
+                f"{func.id}() executes whatever string it is given; use an explicit conversion, "
+                f"json.loads, or ast.literal_eval",
+            )
+
+        # AH021 — legacy SQLAlchemy query construction.
+        if attr == "query" and "session" in (_root_name(func) or "").lower():
+            self.emit("AH021", node, "session.query() is the 1.x API; use select() with where()")
+        elif attr == "query" and isinstance(func, ast.Attribute) and _expression_name(func.value) == "session":
+            self.emit("AH021", node, "session.query() is the 1.x API; use select() with where()")
+
+        # AH022 — a blocking call on the event loop.
+        if self.in_async:
+            blocking = _BLOCKING_IN_ASYNC.get((root, attr))
+            if blocking is None and isinstance(func, ast.Name) and func.id in _BLOCKING_BUILTINS:
+                blocking = func.id
+            if blocking:
+                self.emit(
+                    "AH022",
+                    node,
+                    f"{blocking} blocks the event loop inside an async function; await an async "
+                    f"equivalent or offload it to a thread",
+                )
+
+        # AH023 — print in a module that already has a logger.
+        if self.has_logging and isinstance(func, ast.Name) and func.id == "print":
+            self.emit("AH023", node, "this module configures a logger; print bypasses it and writes to stdout")
+
+        self.generic_visit(node)
+
+    # ---- statements ------------------------------------------------------ #
+
+    def visit_Expr(self, node: ast.Expr) -> None:  # noqa: N802
+        """Calls whose *result* is thrown away, where the result is the point."""
+        call = node.value
+        if isinstance(call, ast.Call):
+            func = call.func
+            attr = func.attr if isinstance(func, ast.Attribute) else ""
+            root = _root_name(func)
+            # AH031 — a task nobody holds can be collected before it finishes.
+            if attr == "create_task" or (isinstance(func, ast.Name) and func.id == "create_task"):
+                self.emit(
+                    "AH031",
+                    node,
+                    "the created task is not assigned anywhere, so it can be garbage-collected "
+                    "before it completes; keep a reference and await or cancel it",
+                )
+            # AH034 — a subprocess whose exit code is never looked at.
+            if root == "subprocess" and attr in ("run", "call") and not _has_keyword(call, "check"):
+                self.emit(
+                    "AH034",
+                    node,
+                    f"subprocess.{attr} result is discarded and check= is not set, so a non-zero "
+                    f"exit is silently ignored",
+                )
+        self.generic_visit(node)
+
+    def visit_Compare(self, node: ast.Compare) -> None:  # noqa: N802
+        # AH030 — equality against None. Exact, with no false positives available.
+        for op, comparator in zip(node.ops, node.comparators):
+            if isinstance(op, (ast.Eq, ast.NotEq)) and isinstance(comparator, ast.Constant) and comparator.value is None:
+                symbol = "==" if isinstance(op, ast.Eq) else "!="
+                self.emit("AH030", node, f"{symbol} None relies on __eq__; use `is None` / `is not None`")
+                break
         self.generic_visit(node)
 
     # ---- subscripts ------------------------------------------------------ #
@@ -657,11 +938,16 @@ class PythonAnalyzer(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
         self._check_defaults(node)
+        # A plain def nested in an async def is not on the loop.
+        self._async_depth.append(False)
         self.generic_visit(node)
+        self._async_depth.pop()
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
         self._check_defaults(node)
+        self._async_depth.append(True)
         self.generic_visit(node)
+        self._async_depth.pop()
 
     def visit_Assert(self, node: ast.Assert) -> None:  # noqa: N802
         if not self.is_test:
@@ -834,11 +1120,141 @@ def _check_requirement_pin(check: Check, path: str, line: int, text: str) -> Fin
     )
 
 
+_SPECIAL_SHELL_VARS = frozenset({"@", "*", "#", "?", "$", "!", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-", "_"})
+_SHELL_VAR_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*|[@*#?$!0-9_-])\}?")
+_HANDMADE_TEMP_RE = re.compile(r"(?:/tmp/|/var/tmp/)\S*(?:\$RANDOM|\$\$|\$\(date|\$\{RANDOM)")
+_PIPE_TO_SHELL_RE = re.compile(r"\b(?:curl|wget)\b[^|;]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b")
+_K8S_PRIVILEGE_RE = re.compile(
+    r"^\s*(?:-\s*)?(privileged|allowPrivilegeEscalation)\s*:\s*(?:true|yes)\s*$|^\s*(?:-\s*)?runAsUser\s*:\s*0\s*$"
+)
+_NPM_RANGE_RE = re.compile(r'"([^"]+)"\s*:\s*"([\^~><]|\*|latest|next|\d+\.x|\d+\.\d+\.x)')
+_GO_DISCARD_RE = re.compile(r"^\s*_(?:\s*,\s*_)*\s*=\s*(?:[\w.\[\]()]*\.)?([A-Z]\w*)\s*\(")
+_CONSOLE_LOG_RE = re.compile(r"\bconsole\.log\s*\(")
+_JS_EVAL_RE = re.compile(r"(?<![.\w])eval\s*\(")
+
+
+def _strip_single_quoted(text: str) -> str:
+    """Blank out single-quoted spans, where no expansion happens at all."""
+    return re.sub(r"'[^']*'", lambda m: " " * len(m.group(0)), text)
+
+
+def _double_quoted_spans(text: str) -> list[tuple[int, int]]:
+    return [(m.start(), m.end()) for m in re.finditer(r'"[^"]*"', text)]
+
+
+def _check_shell_quoting(check: Check, path: str, line: int, text: str) -> Finding | None:
+    stripped = text.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    # Contexts where word splitting does not occur, or where splitting is the point:
+    # [[ ]] and (( )) are not split, a bare assignment is not split, and `for x in $LIST`
+    # is usually deliberate. Flagging these is how a shell check earns its reputation.
+    if "[[" in text or "((" in text or re.match(r"^\s*(?:local\s+|export\s+|declare\s+)?[A-Za-z_]\w*=", stripped):
+        return None
+    if re.match(r"^\s*(?:for|case|in)\b", stripped):
+        return None
+    scan = _strip_single_quoted(text)
+    quoted = _double_quoted_spans(scan)
+    for match in _SHELL_VAR_RE.finditer(scan):
+        name = match.group(1)
+        if name in _SPECIAL_SHELL_VARS:
+            continue
+        if any(start <= match.start() and match.end() <= end for start, end in quoted):
+            continue
+        return make_finding(
+            check=check.id, slug=check.slug, severity=check.severity, path=path, line=line,
+            message=f"${name} is unquoted; it word-splits on spaces and disappears when empty",
+            evidence=text, title=check.summary,
+        )
+    return None
+
+
+def _check_handmade_temp(check: Check, path: str, line: int, text: str) -> Finding | None:
+    if not _HANDMADE_TEMP_RE.search(text):
+        return None
+    return make_finding(
+        check=check.id, slug=check.slug, severity=check.severity, path=path, line=line,
+        message="temporary path built from $RANDOM, $$ or a timestamp is predictable and racy; use mktemp",
+        evidence=text, title=check.summary,
+    )
+
+
+def _check_pipe_to_shell(check: Check, path: str, line: int, text: str) -> Finding | None:
+    if not _PIPE_TO_SHELL_RE.search(text):
+        return None
+    return make_finding(
+        check=check.id, slug=check.slug, severity=check.severity, path=path, line=line,
+        message="download piped straight into a shell; verify a checksum and fail closed on mismatch",
+        evidence=text, title=check.summary,
+    )
+
+
+def _check_k8s_privilege(check: Check, path: str, line: int, text: str) -> Finding | None:
+    if not _K8S_PRIVILEGE_RE.match(text):
+        return None
+    return make_finding(
+        check=check.id, slug=check.slug, severity=check.severity, path=path, line=line,
+        message="grants more privilege than a workload needs; set runAsNonRoot with a non-zero uid "
+                "and allowPrivilegeEscalation: false",
+        evidence=text, title=check.summary,
+    )
+
+
+def _check_npm_range(check: Check, path: str, line: int, text: str) -> Finding | None:
+    match = _NPM_RANGE_RE.search(text)
+    if not match or match.group(1) in ("name", "version", "description", "license", "main", "types"):
+        return None
+    return make_finding(
+        check=check.id, slug=check.slug, severity=check.severity, path=path, line=line,
+        message=f"{match.group(1)!r} uses a version range; pin it exactly (npm install --save-exact)",
+        evidence=text, title=check.summary,
+    )
+
+
+def _check_go_discarded_error(check: Check, path: str, line: int, text: str) -> Finding | None:
+    match = _GO_DISCARD_RE.match(text)
+    if not match or match.group(1) not in _ERROR_RETURNING:
+        return None
+    return make_finding(
+        check=check.id, slug=check.slug, severity=check.severity, path=path, line=line,
+        message=f"the error from {match.group(1)}() is discarded; check it or wrap it with context",
+        evidence=text, title=check.summary,
+    )
+
+
+def _check_console_log(check: Check, path: str, line: int, text: str) -> Finding | None:
+    if not _CONSOLE_LOG_RE.search(text):
+        return None
+    return make_finding(
+        check=check.id, slug=check.slug, severity=check.severity, path=path, line=line,
+        message="console.log reaches the user's output; use console.debug for developer detail",
+        evidence=text, title=check.summary,
+    )
+
+
+def _check_js_eval(check: Check, path: str, line: int, text: str) -> Finding | None:
+    if not _JS_EVAL_RE.search(text):
+        return None
+    return make_finding(
+        check=check.id, slug=check.slug, severity=check.severity, path=path, line=line,
+        message="eval() executes arbitrary JavaScript; use JSON.parse or an explicit dispatch table",
+        evidence=text, title=check.summary,
+    )
+
+
 _TEXT_CHECKS: dict[str, Callable[[Check, str, int, str], Finding | None]] = {
     "AH001": _check_secret_line,
     "AH002": _check_action_pin,
     "AH012": _check_requirement_pin,
     "AH016": _check_base_image,
+    "AH019": _check_shell_quoting,
+    "AH024": _check_k8s_privilege,
+    "AH025": _check_npm_range,
+    "AH026": _check_go_discarded_error,
+    "AH027": _check_handmade_temp,
+    "AH029": _check_js_eval,
+    "AH033": _check_console_log,
+    "AH035": _check_pipe_to_shell,
 }
 
 
@@ -912,9 +1328,128 @@ def _check_dockerfile_user(check: Check, ctx: Context, path: str) -> list[Findin
     )]
 
 
+# Workflow expressions an outside contributor can influence. `secrets.*`, `matrix.*`
+# and `env.*` are deliberately absent: they are not attacker-controlled, and flagging
+# them would bury the ones that are.
+_UNTRUSTED_EXPR_RE = re.compile(
+    r"\$\{\{\s*(github\.event\b[^}]*|github\.head_ref|github\.ref_name|inputs\.[^}]*|"
+    r"github\.actor|github\.triggering_actor)\s*\}\}"
+)
+# Captures everything up to and including the `-` and whitespace, so the recorded
+# indent is the column of the `run` *key*. Using the line's leading whitespace instead
+# would treat a sibling `env:` mapping key as part of the run block — and `env:` is
+# exactly where the compliant form puts the expression, so the check would fire on the
+# fix it is asking for.
+_RUN_KEY_RE = re.compile(r"^(\s*(?:-\s*)?)run\s*:\s*(.*)$")
+
+
+def _check_workflow_injection(check: Check, ctx: Context, path: str) -> list[Finding]:
+    """Flag an untrusted expression expanded inside a `run:` script.
+
+    Tracked by indentation rather than parsed, because parsing YAML would mean a
+    dependency. A `run:` opens a block; lines indented further than the `run:` key
+    belong to it. The expansion happens before the shell ever sees the script, so a
+    branch named `$(curl evil)` executes — which is why this is an error and not a
+    warning.
+    """
+    source = ctx.read(path)
+    if source is None:
+        return []
+    findings: list[Finding] = []
+    run_indent: int | None = None
+    for number, text in enumerate(source.splitlines(), start=1):
+        match = _RUN_KEY_RE.match(text)
+        if match:
+            run_indent = len(match.group(1))
+            inline = match.group(2)
+            if _UNTRUSTED_EXPR_RE.search(inline):
+                findings.append(_injection_finding(check, path, number, text))
+            continue
+        if run_indent is not None:
+            indent = len(text) - len(text.lstrip())
+            if text.strip() and indent <= run_indent:
+                run_indent = None  # the block ended
+            elif _UNTRUSTED_EXPR_RE.search(text):
+                findings.append(_injection_finding(check, path, number, text))
+    return findings
+
+
+def _injection_finding(check: Check, path: str, line: int, text: str) -> Finding:
+    expr = _UNTRUSTED_EXPR_RE.search(text)
+    name = expr.group(1).strip() if expr else "the expression"
+    return make_finding(
+        check=check.id, slug=check.slug, severity=check.severity, path=path, line=line,
+        message=f"{name} is expanded into the script before the shell runs; pass it through env: "
+                f"and reference it as a shell variable",
+        evidence=text, title=check.summary,
+    )
+
+
+def _check_shell_strict_mode(check: Check, ctx: Context, path: str) -> list[Finding]:
+    source = ctx.read(path)
+    if source is None or not source.strip():
+        return []
+    head = "\n".join(source.splitlines()[:20])
+    if re.search(r"^\s*set\s+-[a-z]*e", head, re.M) or "set -o errexit" in head:
+        return []
+    return [make_finding(
+        check=check.id, slug=check.slug, severity=check.severity, path=path, line=1,
+        message="no `set -e` in the first 20 lines; the script continues after a failed command",
+        evidence="", title=check.summary,
+    )]
+
+
+def _check_checkout_ref(check: Check, ctx: Context, path: str) -> list[Finding]:
+    source = ctx.read(path)
+    if source is None or "pull_request_target" not in source:
+        return []
+    if not re.search(r"uses:\s*actions/checkout", source):
+        return []
+    if re.search(r"^\s+ref\s*:", source, re.M):
+        return []
+    line = next(
+        (n for n, t in enumerate(source.splitlines(), start=1) if "pull_request_target" in t), 1
+    )
+    return [make_finding(
+        check=check.id, slug=check.slug, severity=check.severity, path=path, line=line,
+        message="pull_request_target runs with repository secrets and checks out the base by "
+                "default; state the ref explicitly so it is not ambiguous",
+        evidence="", title=check.summary,
+    )]
+
+
+_DEP_INSTALL_RE = re.compile(
+    r"^\s*RUN\b.*\b(?:pip3?\s+install|poetry\s+install|uv\s+(?:pip\s+)?(?:install|sync)|"
+    r"npm\s+(?:ci|install)|yarn\s+install|pnpm\s+install|bundle\s+install)\b", re.IGNORECASE
+)
+_COPY_ALL_RE = re.compile(r"^\s*COPY\s+(?:--\S+\s+)*\.{1,2}[/ ]", re.IGNORECASE)
+
+
+def _check_dependency_layer_order(check: Check, ctx: Context, path: str) -> list[Finding]:
+    source = ctx.read(path)
+    if source is None:
+        return []
+    copy_all_line = 0
+    for number, text in enumerate(source.splitlines(), start=1):
+        if _COPY_ALL_RE.match(text):
+            copy_all_line = copy_all_line or number
+        elif _DEP_INSTALL_RE.match(text) and copy_all_line:
+            return [make_finding(
+                check=check.id, slug=check.slug, severity=check.severity, path=path, line=number,
+                message=f"dependencies are installed after the source was copied at line "
+                        f"{copy_all_line}, so every source edit invalidates the install layer",
+                evidence=text, title=check.summary,
+            )]
+    return []
+
+
 _FILE_CHECKS: dict[str, Callable[[Check, Context, str], list[Finding]]] = {
     "AH003": _check_workflow_permissions,
     "AH015": _check_dockerfile_user,
+    "AH017": _check_workflow_injection,
+    "AH018": _check_shell_strict_mode,
+    "AH028": _check_checkout_ref,
+    "AH032": _check_dependency_layer_order,
 }
 
 

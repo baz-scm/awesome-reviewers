@@ -18,6 +18,16 @@ run does not isolate the network, and saying otherwise in a provenance record wo
 make the record a lie.
 
 Derived from the corpus:
+  archon-subprocess-stream-lifecycle (coleam00/Archon) — process exit, stream close,
+      abort and timeout escalation are concurrent events that race. `_terminate_group`
+      and reading the logs only after the wait returns come from this.
+  mcp-enforce-resource-caps (awslabs/mcp) — bound inputs and outputs, and clean up on
+      timeout or eviction. The rlimits, the output cap and the pids limit are this
+      rule in three places.
+  volcano-use-controlled-concurrency-patterns (volcano-sh/volcano) — concurrency is
+      declared and bounded, never incidental.
+  azure-cli-secure-untrusted-boundaries (Azure/azure-cli) — for subprocess execution,
+      never rely on naive quoting; pass arguments as separate items.
   aidlc-workflows-sandbox-config-boundary — the sandbox's configuration is part of
       the security boundary; resolve it once and report it, do not re-derive it at
       each use site.

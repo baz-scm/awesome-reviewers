@@ -12,6 +12,12 @@ Derived from the corpus:
       boundary; make it total and order-independent.
   aidlc-workflows-use-correct-null-semantics — absent and empty are different
       inputs and must hash differently, see `digest_tree`.
+  azure-sentinel-timeout-aware-chunking (Azure/Azure-Sentinel) — size chunks
+      realistically instead of reading a whole input into memory; `CHUNK_BYTES` and
+      the streaming `digest_file` come from this.
+  apisix-verify-download-integrity (apache/apisix) — hold the expected digest in
+      versioned configuration and fail closed on mismatch. `require_digest`
+      validating at every boundary is the same instinct applied inward.
 """
 
 from __future__ import annotations

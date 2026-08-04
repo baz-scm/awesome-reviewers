@@ -41,6 +41,17 @@ OID_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 
 SNAPSHOT_REF_PREFIX = "refs/harness/snapshots"
 
+# The harness's own committed state is not code under review, and excluding it is not
+# cosmetic. `.harness/policy/*.pack.json` holds a title and digest for every instruction
+# in the corpus; left in scope it dominates the gate's view of what a change is about,
+# and it matches the `**/*.json` selector of every JSON-language instruction. Snapshots
+# exclude it for a related reason — see `Git.snapshot`.
+EXCLUDED_PREFIXES = (".harness/",)
+
+
+def _in_scope(path: str) -> bool:
+    return not path.startswith(EXCLUDED_PREFIXES)
+
 
 class GitError(ExecutionError):
     kind = "git"
@@ -191,7 +202,7 @@ class Git:
         if include_untracked:
             paths += self.lines("ls-files", "--others", "--exclude-standard")
         # Sorted and de-duplicated: this list feeds a cache key.
-        return sorted(set(paths))
+        return sorted({p for p in paths if _in_scope(p)})
 
     def added_lines(self, base: str | None = None) -> list[Hunk]:
         """Added lines with their new-file line numbers.
@@ -211,11 +222,13 @@ class Git:
         hunks = _parse_unified_diff(self.run(*args, check=False))
 
         for path in self.lines("ls-files", "--others", "--exclude-standard"):
+            if not _in_scope(path):
+                continue
             text = self.run(
                 "diff", "--no-color", "--no-index", "-U0", "--", "/dev/null", path, check=False
             )
             hunks.extend(_parse_unified_diff(text, force_path=path))
-        return hunks
+        return [h for h in hunks if _in_scope(h.path)]
 
     # ---- snapshots ------------------------------------------------------- #
 

@@ -85,6 +85,10 @@ def write_corpus(directory: Path, *, extra: dict[str, str] | None = None) -> Pat
         "fixture-document-the-contract": ("Configurations", "Python"),
         "fixture-workflow-hygiene": ("CI/CD", "Yaml"),
         "fixture-config-in-one-place": ("Configurations", "Yaml"),
+        # Topics the relevance ranking is tested against: a diff full of `await` and
+        # `Lock` must surface the Concurrency one ahead of the rest.
+        "fixture-coordinate-concurrent-access": ("Concurrency", "Python"),
+        "fixture-query-through-a-session": ("Database", "Python"),
     }
     for slug, (label, language) in advisory.items():
         (directory / f"{slug}.md").write_text(

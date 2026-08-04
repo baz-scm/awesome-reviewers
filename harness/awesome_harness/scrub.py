@@ -9,6 +9,13 @@ output into a secret that is now committed, content-addressed, and signed.
 So scrubbing happens on the way *in* to storage, not on the way out to a screen.
 
 Derived from the corpus:
+  azure-sdk-for-net-redact-sensitive-information (Azure/azure-sdk-for-net) — always
+      sanitize configuration and responses before logging, using pattern matching to
+      find credentials. The two-tier pattern table is this instruction implemented.
+  browser-use-avoid-logging-sensitive-content (browser-use/browser-use) — redact at
+      the point of capture, not at the point of display.
+  query-redact-transported-errors (tanstack/query) — an error crossing a boundary
+      carries whatever was in scope; redact before it travels.
   aidlc-workflows-secure-path-confinement — the sandbox is part of the security
       model: scrub credentials from stdout/stderr before returning or logging.
   aidlc-workflows-secret-scan-baselines — a scanner needs a high-confidence tier

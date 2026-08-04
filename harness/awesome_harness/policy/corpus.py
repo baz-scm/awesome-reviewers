@@ -247,17 +247,32 @@ class Corpus:
         languages: Iterable[str] = (),
         repositories: Iterable[str] = (),
         limit: int | None = None,
+        include_all: bool = False,
     ) -> list[Instruction]:
         """Select instructions by any combination of facets.
 
         Explicit slugs are resolved first and always included, so a curated rule
         cannot be silently dropped by a `limit` meant for a broad facet sweep.
+
+        `include_all` selects the entire corpus, which is the default a pack is built
+        with. Pinning all of it is the point: the corpus is the policy, and a pack that
+        held a top-N slice would silently answer a different question than the one its
+        digest appears to answer.
         """
         chosen: dict[str, Instruction] = {slug: self.get(slug) for slug in slugs}
 
         wanted_topics = {t.strip().lower() for t in topics if t.strip()}
         wanted_languages = {t.strip().lower() for t in languages if t.strip()}
         wanted_repositories = {t.strip().lower() for t in repositories if t.strip()}
+        if include_all and not (wanted_topics or wanted_languages or wanted_repositories):
+            # `None` is unlimited and `0` is none. The CLI maps `--limit 0` to None
+            # before it gets here, because "0" reads as "no cap" on a command line and
+            # as "zero" in a function signature.
+            budget = None if limit is None else max(0, limit - len(chosen))
+            ranked = sorted(self, key=lambda i: (-i.comments, -i.stars, i.slug))
+            for instruction in (ranked[:budget] if budget is not None else ranked):
+                chosen.setdefault(instruction.slug, instruction)
+            return sorted(chosen.values(), key=lambda i: i.slug)
         if wanted_topics or wanted_languages or wanted_repositories:
             # Ranked by discussion volume then stars: the instructions distilled from
             # the most reviewer back-and-forth are the ones a team argued about most.

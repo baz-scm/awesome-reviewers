@@ -22,6 +22,13 @@ Derived from the corpus:
       output is the failure mode that reaches production looking like success.
   aidlc-workflows-deterministic-boundary-modeling — the bundle is a boundary; pin
       every field a reader could observe.
+  apisix-verify-download-integrity (apache/apisix) — verify integrity before you
+      install, and fail closed on mismatch. `read_bytes` re-hashes by default and
+      `import_bundle` treats the shipped manifest as a claim for this reason.
+  kong-verify-downloaded-artifacts (Kong/kong) — the same rule from a second
+      project, which is why it is a default here rather than an option.
+  comfyui-prevent-path-traversal (comfyanonymous/ComfyUI) — validate archive member
+      names before extraction; also shipped as check AH006.
   aidlc-workflows-secure-path-confinement — member names in an imported bundle are
       untrusted input (see paths.safe_extract).
 """

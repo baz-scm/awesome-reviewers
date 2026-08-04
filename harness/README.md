@@ -13,7 +13,7 @@ Python 3.9+, standard library only. No install step, no dependencies, no build.
 
 ```bash
 harness/awesome-harness init
-harness/awesome-harness policy build --topic Security --topic CI/CD --language Python
+harness/awesome-harness policy build          # pins the whole corpus by default
 harness/awesome-harness gate                      # evaluate your working change
 harness/awesome-harness run harness/plans/gate-only.json
 harness/awesome-harness verify
@@ -164,7 +164,11 @@ because a truncated-and-rechained ledger can reproduce a head but not its sequen
 ### 6. Policy
 
 Rules are compiled from the corpus into a pack that pins each one by the digest of the instruction
-body, and the pack's own digest feeds the cache key and the attestation. Given an attestation you can
+body, and the pack's own digest feeds the cache key and the attestation. With no facet filter the pack
+pins **the whole corpus** — 35 machine rules and 5,253 advisory ones — because a pack holding a top-N
+slice would make its digest appear to say "this policy" while meaning "the most-discussed fraction of
+it". Selecting down to what a change needs is the bundle's job: it ranks on selector specificity, on
+whether a rule's topic is one the diff shows evidence of, and on discussion volume as a tiebreak. Given an attestation you can
 say which version of which rule, sourced from which review discussion, gated this change — and check
 it, because the pack is committed and the corpus is public.
 
@@ -181,15 +185,15 @@ machine rules — a coded check, bound to the instruction it enforces
 
 Two tiers:
 
-**machine** — sixteen coded checks. Python is analysed with `ast`, not regexes: `subprocess.run(cmd,
+**machine** — thirty-five coded checks, drawn from 31 different repositories. Python is analysed with `ast`, not regexes: `subprocess.run(cmd,
 shell=True)` split over four lines, a `requests.get` whose `timeout=` arrives via `**kwargs`, a
 mutable default on a decorated async method — a regex gets all three wrong in both directions. YAML,
 Dockerfiles and requirements files are matched textually, because parsing them would mean a
 dependency.
 
 **advisory** — the instruction body, delivered as review context for changed files matching its
-language. This is the honest tier, not the lesser one: about five thousand instructions exist and
-roughly a dozen can be decided by a checker. The rest is expertise a reviewer applies, and the
+language. This is the honest tier, not the lesser one: 5,288 instructions exist and 35 of them can
+be decided by a checker. The rest is expertise a reviewer applies, and the
 harness's job is to put the right ones in front of whoever reviews next.
 
 ```bash
@@ -207,24 +211,48 @@ real corpus.
 
 #### The checks
 
-| id | enforces | from |
-| --- | --- | --- |
-| AH001 | no credential literals in source | `checkov-avoid-hardcoded-secrets` |
-| AH002 | pin GitHub Actions to a commit SHA | `angular-pin-github-actions-sha` |
-| AH003 | least-privilege workflow `permissions:` | `grafana-workflow-permission-boundaries` |
-| AH004 | never run a composed string through a shell | `codex-prevent-command-injection` |
-| AH005 | confine paths with `is_relative_to` | `aidlc-workflows-secure-path-confinement` |
-| AH006 | validate archive members before extraction | `comfyui-prevent-path-traversal` |
-| AH007 | catch specific exceptions, never swallow | `airflow-handle-exceptions-with-specificity` |
-| AH008 | explicit timeout on network calls | `waveterm-use-network-timeouts` |
-| AH009 | explicit timeout on subprocess calls | `cline-set-evidence-based-timeouts` |
-| AH010 | validate environment variables at startup | `cli-validate-environment-variables-early` |
-| AH011 | do not log secret-named values | `azure-sentinel-avoid-logging-sensitive-data` |
-| AH012 | pin dependency versions exactly | `ant-design-pin-ci-dependencies-securely` |
-| AH013 | no mutable default arguments | `compose-avoid-mutable-defaults` |
-| AH014 | guards and raised errors, not `assert` | `airflow-use-guards-over-assertions` |
-| AH015 | containers declare a non-root `USER` | `comfyui-container-security-best-practices` |
-| AH016 | pin base images to a digest or version | `lobe-chat-pin-docker-base-versions` |
+Thirty-five, each bound to a distinct instruction. The first sixteen were read out of one
+repository's reviews; the rest came from searching the whole corpus for rules a checker can decide,
+which is why they reach YAML, shell, Dockerfiles, Go, TypeScript and package manifests as well as
+Python.
+
+| id | enforces | from | repository |
+| --- | --- | --- | --- |
+| AH001 | no credential literals in source | `checkov-avoid-hardcoded-secrets` | `bridgecrewio/checkov` |
+| AH002 | pin GitHub Actions to a commit SHA | `angular-pin-github-actions-sha` | `angular/angular` |
+| AH003 | least-privilege workflow `permissions:` | `grafana-workflow-permission-boundaries` | `grafana/grafana` |
+| AH004 | never run a composed string through a shell | `codex-prevent-command-injection` | `openai/codex` |
+| AH005 | confine paths with `is_relative_to` | `aidlc-workflows-secure-path-confinement` | `awslabs/aidlc-workflows` |
+| AH006 | validate archive members before extraction | `comfyui-prevent-path-traversal` | `comfyanonymous/ComfyUI` |
+| AH007 | catch specific exceptions, never swallow | `airflow-handle-exceptions-with-specificity` | `apache/airflow` |
+| AH008 | explicit timeout on network calls | `waveterm-use-network-timeouts` | `wavetermdev/waveterm` |
+| AH009 | explicit timeout on subprocess calls | `cline-set-evidence-based-timeouts` | `cline/cline` |
+| AH010 | validate env vars at startup | `cli-validate-environment-variables-early` | `snyk/cli` |
+| AH011 | do not log secret-named values | `azure-sentinel-avoid-logging-sensitive-data` | `Azure/Azure-Sentinel` |
+| AH012 | pin dependency versions exactly | `ant-design-pin-ci-dependencies-securely` | `ant-design/ant-design` |
+| AH013 | no mutable default arguments | `compose-avoid-mutable-defaults` | `docker/compose` |
+| AH014 | guards and raised errors, not `assert` | `airflow-use-guards-over-assertions` | `apache/airflow` |
+| AH015 | containers declare a non-root `USER` | `comfyui-container-security-best-practices` | `comfyanonymous/ComfyUI` |
+| AH016 | pin base images to a digest or version | `lobe-chat-pin-docker-base-versions` | `lobehub/lobe-chat` |
+| AH017 | no untrusted `${{ }}` inside `run:` | `prometheus-avoid-github-template-injection` | `prometheus/prometheus` |
+| AH018 | shell scripts set `-euo pipefail` | `claude-code-fail-fast-principle` | `anthropics/claude-code` |
+| AH019 | quote shell variable expansions | `airflow-quote-shell-variables` | `apache/airflow` |
+| AH020 | no `eval` / `exec` in Python | `mxnet-avoid-eval-function` | `apache/mxnet` |
+| AH021 | `select()` over legacy `session.query()` | `dify-sqlalchemy-20-patterns` | `langgenius/dify` |
+| AH022 | no blocking calls inside `async def` | `fastapi-avoid-blocking-in-async` | `fastapi/fastapi` |
+| AH023 | use the module's logger, not `print` | `serena-use-proper-logging-practices` | `oraios/serena` |
+| AH024 | no privileged containers or uid 0 | `kubeflow-enforce-least-privilege` | `kubeflow/kubeflow` |
+| AH025 | pin package.json dependencies exactly | `cli-pin-dependency-versions` | `snyk/cli` |
+| AH026 | never discard an error with `_ =` | `fiber-check-all-error-returns` | `gofiber/fiber` |
+| AH027 | build temp paths with `mktemp` | `ghostty-secure-temporary-files` | `ghostty-org/ghostty` |
+| AH028 | `pull_request_target` states its ref | `terraform-secure-checkout-configurations` | `hashicorp/terraform` |
+| AH029 | no `eval()` in TypeScript/JavaScript | `yoga-avoid-eval-function` | `facebook/yoga` |
+| AH030 | compare to None with `is` | `heretic-handle-nullable-values` | `p-e-w/heretic` |
+| AH031 | keep a reference to a created task | `litellm-background-task-coordination` | `BerriAI/litellm` |
+| AH032 | install dependencies before copying source | `celery-split-dependency-installs` | `celery/celery` |
+| AH033 | `console.debug` for developer output | `gemini-cli-use-appropriate-logging-levels` | `google-gemini/gemini-cli` |
+| AH034 | examine the subprocess exit code | `servo-validate-subprocess-errors-comprehensively` | `servo/servo` |
+| AH035 | never pipe a download into a shell | `apisix-verify-download-integrity` | `apache/apisix` |
 
 Every check ships a positive **and** a negative fixture. A check with only a positive fixture is one
 nobody has shown to be quiet on correct code, and false positives are how gates get switched off.

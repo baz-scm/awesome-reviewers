@@ -1,0 +1,686 @@
+---
+layout: base
+title: Harness
+permalink: /harness/
+description: awesome-harness — a coding harness whose policy layer is compiled from this corpus, and a full accounting of the instructions that shaped it.
+---
+
+<section class="intro">
+  <div class="wrap">
+    <h1>awesome-harness</h1>
+    <p class="intro__lead">
+      A coding harness with six machine-enforced pillars, whose policy layer is compiled from this
+      corpus. <strong>35 instructions from 14 repositories</strong> shaped it: 16 became coded checks,
+      20 decided how its own internals work. Every one of them is linked below.
+    </p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap prose">
+    <p>
+      It lives in
+      <a href="https://github.com/baz-scm/awesome-reviewers/tree/main/harness" rel="noopener"><code>harness/</code></a>.
+      Python standard library only, no install step, no build. It is not part of this site.
+    </p>
+    <pre><code>harness/awesome-harness gate       # evaluate the corpus against your working change
+harness/awesome-harness context    # the instructions that apply to the files you touched
+harness/awesome-harness run harness/plans/gate-only.json
+harness/awesome-harness verify</code></pre>
+
+    <h2>Where it came from</h2>
+    <p>
+      The design is inspired by
+      <a href="https://github.com/awslabs/aidlc-workflows" rel="noopener">awslabs/aidlc-workflows</a>,
+      which gives an AI coding agent a three-phase workflow — inception, construction, operations —
+      with blocking review gates and human approval between phases. That shape is good, and the
+      harness keeps it.
+    </p>
+    <p>
+      What differs is where enforcement lives. AI-DLC's verification is prose the model is asked to
+      honour. The harness supplies the substrate underneath: the gate is code, the history is
+      hash-chained, the approval binds to a tree digest, and a run ends in a signed statement naming
+      the policy version that gated it.
+    </p>
+    <p>
+      There is a pleasing recursion in the sourcing. This corpus contains 23 instructions distilled
+      from review discussions on aidlc-workflows itself, because that project's reviewers had already
+      worked out what is hard about building an agent harness. <strong>20 of those 23</strong> are
+      cited in the harness's source, in the module whose behaviour they decided.
+    </p>
+
+    <h2>The idea</h2>
+    <p>
+      A harness needs a policy layer, and a policy layer needs rules that a team will actually accept.
+      Invented lint rules do not survive contact with a code review. Rules traceable to the discussion
+      that produced them do, which is what makes a corpus of distilled review feedback the right source.
+    </p>
+    <p>
+      So a <em>policy pack</em> selects instructions from the corpus, pins each one by the digest of
+      its body, and carries a digest of its own. That pack digest feeds the cache key and the
+      attestation. Given an attestation you can say which version of which rule, sourced from which
+      review discussion, gated a particular change — and check it, because the pack is committed and
+      the corpus is public.
+    </p>
+    <p>
+      Enforcement has two tiers, and the split is the honest part:
+    </p>
+    <ul>
+      <li>
+        <strong>machine</strong> — 16 coded checks, each bound to the instruction it enforces.
+        <code>policy build</code> refuses to compile a check whose slug does not resolve to a real
+        instruction file, because a rule citing something that does not exist enforces nothing while
+        looking identical to one that does.
+      </li>
+      <li>
+        <strong>advisory</strong> — the instruction body, delivered as review context for the changed
+        files that match its language. 16 checks out of 5,000+ instructions is the true ratio: almost
+        all of this material is judgement a reviewer applies, and no checker will ever decide
+        &ldquo;name things for what they do&rdquo;. The harness's job for that majority is to put the
+        right instructions in front of whoever reviews next, and to record which ones it delivered.
+      </li>
+    </ul>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap prose">
+    <h2>The six pillars, and what the corpus decided</h2>
+
+    <h3>1. Source control — durable, immutable history of how code evolved</h3>
+    <p>
+      Git is already the immutable history. Two things it does not give you.
+    </p>
+    <p>
+      <strong>Work that is not a commit yet.</strong> An agent's output exists as a dirty worktree long
+      before it is a commit, and that is exactly the window you want recorded. <code>snapshot</code>
+      writes the working tree into real git objects through a <em>temporary index</em> —
+      <code>write-tree</code> then <code>commit-tree</code> — and anchors the result at
+      <code>refs/harness/snapshots/&lt;run-id&gt;</code>. Nothing is staged, no branch moves, no commit
+      lands on any branch, and the state becomes a content-addressed object git will not collect.
+    </p>
+    <p>
+      <strong>A record of the process.</strong> The ledger is append-only JSONL where each record's
+      digest covers the previous record's digest, so editing or removing record <em>n</em> invalidates
+      every record after it and <code>verify</code> says which one. It is committed to git: the record
+      of how the code was made is as durable as the code.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-single-transaction-locking/' | relative_url }}">Single-Transaction Locking</a>
+      decided the write path. Reading the ledger tail and appending its successor happens inside one
+      <code>flock</code>; split them and two concurrent writers build two chains from the same
+      predecessor — a fork that <code>verify</code> would report but no repair could untangle.
+      <a href="{{ '/reviewers/aidlc-workflows-scoped-hash-based-idempotency/' | relative_url }}">Scoped Hash-Based Idempotency</a>
+      decided how it is read: an append-only ledger keeps every previous attempt, so
+      &ldquo;has this stage converged?&rdquo; answered over all of history says yes on the strength of a
+      run from yesterday against different code. <code>Ledger.since_stage_start</code> exists because
+      of that sentence, and floors every such query at the latest <code>STAGE_STARTED</code> for the
+      current stage run.
+    </p>
+
+    <h3>2. Execution — isolated, performant compute for building and validating changes</h3>
+    <p>
+      Steps run in a detached worktree of an immutable commit. The container backend drops all
+      capabilities, disables the network, runs as a non-root uid under a read-only root filesystem with
+      pids and memory caps, and passes secrets through <code>--env-file</code> rather than
+      <code>-e</code>, which <code>docker inspect</code> exposes to any user on the host. The local
+      backend uses a fresh session plus <code>setrlimit</code>, and a timeout kills the process
+      <em>group</em>, not just the child.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-secure-path-confinement/' | relative_url }}">Secure Path Confinement</a>
+      is the instruction the container flag set is taken from, almost line by line — drop capabilities,
+      cap resources, avoid root via the calling uid, and scrub credentials from stdout and stderr
+      before returning or logging them. Scrubbing happens on the way <em>into</em> storage rather than
+      on the way out to a screen, because step output is persisted in the run folder, hashed into the
+      artifact store, and summarised in the ledger; there is no later point at which redaction helps.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-explicit-environment-contracts/' | relative_url }}">Explicit Environment Contracts</a>
+      is why a step sees an allowlist and never <code>os.environ</code> wholesale, and why the allowlist
+      <em>replaces</em> rather than appends — an <code>env_allow</code> that only ever added could never
+      remove an inherited variable, which is the whole point of an allowlist.
+      <a href="{{ '/reviewers/aidlc-workflows-sandbox-config-boundary/' | relative_url }}">Sandbox config boundary</a>
+      is why isolation is resolved once into a reported structure rather than re-derived at each use
+      site, and why that structure is what the attestation carries.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-fail-loudly-degrade-safely/' | relative_url }}">Fail Loudly, Degrade Safely</a>
+      decided the backend policy. <code>auto</code> may fall back from container to local and records
+      the reason verbatim; <code>container</code> refuses rather than substituting. And the local
+      backend's isolation report says <code>"network": "host (not isolated)"</code>, because claiming
+      otherwise in a record designed to be handed to someone else would make the record a lie.
+    </p>
+
+    <h3>3. Artifacts — reproducible outputs that move across systems</h3>
+    <p>
+      A content-addressed store, manifests digested excluding their own timestamp, and bundles that
+      are byte-identical anywhere. Every tar field a writer would otherwise take from the ambient
+      system is pinned: <code>mtime=0</code>, uid and gid <code>0</code>, empty uname and gname, member
+      order sorted, permissions normalised to 0644/0755.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-deterministic-boundary-modeling/' | relative_url }}">Deterministic Boundary Modeling</a>
+      is why: the bundle is a boundary, so pin every field a reader could observe. The same instruction
+      is why there is exactly one canonical serialization for every digest in the package — if two code
+      paths hashed &ldquo;the same&rdquo; object differently, every guarantee built on digests would
+      quietly degrade to a guess.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-executable-documentation-accuracy/' | relative_url }}">Executable Documentation Accuracy</a>
+      turned that claim into a plan step. <code>harness/tools/determinism_check.py</code> builds the
+      same bundle twice under a changed umask, changed mtimes, a changed timezone and a different
+      working directory, and fails the run if the digests differ. A documented guarantee that nothing
+      executes is a guarantee that quietly stops being true.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-no-silent-null-artifacts/' | relative_url }}">No Silent Null Artifacts</a>
+      is why publishing a zero-byte artifact is an error unless the step declared
+      <code>allow_empty</code>, and why a required output that matched nothing fails by name rather
+      than reporting &ldquo;no files matched&rdquo;. An empty output that reaches production looking
+      like success is the failure mode.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/comfyui-prevent-path-traversal/' | relative_url }}">Prevent path traversal</a>
+      governs import: a bundle is the one input arriving from a machine this process does not control,
+      so every member name is validated before extraction, every member is re-hashed against the digest
+      the manifest asserts, and a member the manifest does not list is rejected rather than ignored —
+      an unlisted member is how you smuggle a file into a &ldquo;verified&rdquo; bundle.
+    </p>
+
+    <h3>4. Caching — reuse of deterministic work</h3>
+    <p>
+      The key covers the step's argv, cwd, declared environment and outputs; the digest of every
+      declared input file; a fingerprint of every declared tool version; a digest per environment
+      value; the policy pack digest; the platform; and the resolved isolation backend — for a
+      container, the image <em>digest</em>, never the tag, because a tag is a mutable pointer and a
+      cache keyed on <code>python:3.11-slim</code> silently spans every toolchain that tag ever
+      addressed.
+    </p>
+    <p>
+      Deliberately excluded: the run id, timestamps, the actor, the ledger head, the hostname, absolute
+      paths, and <code>HOME</code>/<code>TMPDIR</code>, whose values are per-run by construction. Each
+      of those changes between two runs that should hit, so including any one produces a cache with a
+      permanent 0% hit rate — which looks exactly like a working cache until someone measures it.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-scoped-hash-based-idempotency/' | relative_url }}">Scoped Hash-Based Idempotency</a>
+      is the single most load-bearing instruction in the harness, and it appears in five modules. Its
+      three rules map directly onto three refusals: key by content and not identity, so a step
+      declaring <strong>no inputs cannot be cached</strong> and says so rather than replaying its first
+      result forever; detect same-key conflicts and fail loudly, so one key addressing two input sets
+      <strong>raises</strong> and never resolves by preferring a side; and scope completion signals to
+      the current run window, which is why content reuse legitimately crosses runs while
+      &ldquo;this stage already finished&rdquo; does not.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-no-silent-null-artifacts/' | relative_url }}">No Silent Null Artifacts</a>
+      is why a hit whose blobs have been evicted is reported as a miss, rather than handing the caller
+      a manifest pointing at nothing.
+      <a href="{{ '/reviewers/aidlc-workflows-defensive-observable-error-handling/' | relative_url }}">Defensive Observable Error Handling</a>
+      is why a miss names the input that moved instead of merely being reported.
+    </p>
+
+    <h3>5. Identity — proving who or what produced code</h3>
+    <p>
+      The pillar turns on one distinction most provenance tooling blurs. A <strong>claim</strong> is
+      what the environment says — <code>git config user.email</code>, <code>CLAUDECODE=1</code>,
+      <code>GITHUB_ACTOR</code> — all writable by whoever runs the process. A <strong>proof</strong> is
+      a signature verifying against a key in a committed allowed-signers file. An attestation records
+      both, in separate fields, and never promotes one to the other.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-security-trust-boundaries/' | relative_url }}">Security Trust Boundaries</a>
+      is the reason. An environment variable crossing into a security decision is untrusted input, so
+      the harness records <em>which variable it observed</em> alongside the claim it produced, and lets
+      the reader weigh it.
+      <a href="{{ '/reviewers/aidlc-workflows-fail-loudly-degrade-safely/' | relative_url }}">Fail Loudly, Degrade Safely</a>
+      is why no signer configured is a labelled state written into the file itself — a reader who never
+      runs <code>verify</code> still cannot mistake an unsigned record for a signed one — and why
+      <code>unsigned</code>, <code>unverifiable</code> and <code>invalid</code> are three different
+      answers that stay three different answers. There is no code path that reports
+      <code>verified</code> without having checked a signature. An unsigned record is merely weak; a
+      fabricated one poisons every record beside it.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-secure-scope-and-input-validation/' | relative_url }}">Secure Scope and Input Validation</a>
+      — verify before trusting — is why the payload is parsed from the envelope it was signed over
+      rather than from a convenient copy beside it, and why the verifier takes the signing principal
+      from the statement and never from a flag. A caller who supplied the principal would be choosing
+      whose signature counts.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/azure-sentinel-avoid-logging-sensitive-data/' | relative_url }}">Avoid Logging Sensitive Data</a>
+      is why a CI token's <em>presence</em> is recorded and its value never is, and why argv is scrubbed
+      before it enters the ledger — <code>--token=&hellip;</code> looks harmless while you are typing it
+      and is permanent once chained.
+    </p>
+
+    <h3>6. Policy — machine-enforceable rules for quality, security and compliance</h3>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-pinned-releases-for-ci/' | relative_url }}">Pinned Releases For CI</a>
+      is the pack model: pin what you depend on, because a floating reference is not a version. Each
+      rule records the digest of its instruction body, and
+      <a href="{{ '/reviewers/aidlc-workflows-behavior-correct-versionless-docs/' | relative_url }}">Behavior-Correct, Versionless Docs</a>
+      is why drift is <em>named</em> rather than tolerated: <code>policy verify</code> reports a rule
+      whose source instruction changed since the pack was built and exits non-zero, so the pack gets
+      rebuilt deliberately with the new digest recorded instead of drifting under a signature.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-check-mode-must-mirror/' | relative_url }}">Check mode must mirror</a>
+      set the bar for the checks themselves: a check must decide exactly what its rule says, or it
+      teaches people that the gate is noise. That instruction is directly responsible for the four
+      narrowings described below. It also shaped <code>verify</code>, which re-derives what the runner
+      asserted rather than reading back its own JSON — if the same code did both, a serialization bug
+      would verify itself.
+    </p>
+    <p>
+      <a href="{{ '/reviewers/aidlc-workflows-portable-configuration-standards/' | relative_url }}">Portable Configuration Standards</a>
+      is why the corpus is read from <code>_reviewers/</code> or from a download of the
+      <a href="{{ '/api/' | relative_url }}">raw endpoints</a>, and never from this site's derived
+      <code>_data/</code> — those files are generated and uncommitted, and depending on them would make
+      the harness require a site build.
+      <a href="{{ '/reviewers/aidlc-workflows-use-scoped-consistent-names/' | relative_url }}">Use scoped, consistent names</a>
+      is why a finding's fingerprint covers check, path and normalized evidence but excludes the line
+      number: inserting an import above a violation must not present it as a new violation, or two runs
+      cannot be compared.
+    </p>
+    <p>
+      Findings are scoped to <strong>added lines</strong>. A gate that reported whole files would blame
+      every change for the state of the repository and be switched off within a week.
+    </p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section__head">
+      <h2>The 16 machine checks</h2>
+      <p>Each bound to the instruction it enforces. Python is analysed with <code>ast</code>, not regexes.</p>
+    </div>
+    <div class="table__scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Check</th>
+            <th>Fires on</th>
+            <th>Severity</th>
+            <th>Analysed via</th>
+            <th>Instruction</th>
+            <th>Source repository</th>
+          </tr>
+        </thead>
+        <tbody>
+      <tr>
+        <td><code>AH001</code></td>
+        <td>A credential literal in a changed line, matched only by provider-shaped patterns</td>
+        <td>error</td>
+        <td>added lines</td>
+        <td><a href="{{ '/reviewers/checkov-avoid-hardcoded-secrets/' | relative_url }}">Avoid hardcoded secrets</a></td>
+        <td><code>bridgecrewio/checkov</code></td>
+      </tr>
+      <tr>
+        <td><code>AH002</code></td>
+        <td><code>uses:</code> whose ref is not a full commit SHA — error for a branch, warning for a tag</td>
+        <td>warning</td>
+        <td>added lines</td>
+        <td><a href="{{ '/reviewers/angular-pin-github-actions-sha/' | relative_url }}">Pin GitHub Actions SHA</a></td>
+        <td><code>angular/angular</code></td>
+      </tr>
+      <tr>
+        <td><code>AH003</code></td>
+        <td>A workflow with no top-level <code>permissions:</code>, or any <code>write-all</code></td>
+        <td>warning</td>
+        <td>whole file</td>
+        <td><a href="{{ '/reviewers/grafana-workflow-permission-boundaries/' | relative_url }}">Workflow permission boundaries</a></td>
+        <td><code>grafana/grafana</code></td>
+      </tr>
+      <tr>
+        <td><code>AH004</code></td>
+        <td><code>shell=True</code>, or <code>os.system</code> — escalated when the command is composed at runtime</td>
+        <td>error</td>
+        <td>Python <code>ast</code></td>
+        <td><a href="{{ '/reviewers/codex-prevent-command-injection/' | relative_url }}">Prevent command injection</a></td>
+        <td><code>openai/codex</code></td>
+      </tr>
+      <tr>
+        <td><code>AH005</code></td>
+        <td>A string prefix check standing in for path containment</td>
+        <td>error</td>
+        <td>Python <code>ast</code></td>
+        <td><a href="{{ '/reviewers/aidlc-workflows-secure-path-confinement/' | relative_url }}">Secure Path Confinement</a></td>
+        <td><code>awslabs/aidlc-workflows</code></td>
+      </tr>
+      <tr>
+        <td><code>AH006</code></td>
+        <td><code>extractall</code> with neither <code>filter=</code> nor validated members</td>
+        <td>error</td>
+        <td>Python <code>ast</code></td>
+        <td><a href="{{ '/reviewers/comfyui-prevent-path-traversal/' | relative_url }}">Prevent path traversal</a></td>
+        <td><code>comfyanonymous/ComfyUI</code></td>
+      </tr>
+      <tr>
+        <td><code>AH007</code></td>
+        <td>A bare <code>except</code>, or <code>except Exception</code> whose whole body is <code>pass</code></td>
+        <td>warning</td>
+        <td>Python <code>ast</code></td>
+        <td><a href="{{ '/reviewers/airflow-handle-exceptions-with-specificity/' | relative_url }}">Handle exceptions with specificity</a></td>
+        <td><code>apache/airflow</code></td>
+      </tr>
+      <tr>
+        <td><code>AH008</code></td>
+        <td>An HTTP call with no <code>timeout=</code></td>
+        <td>warning</td>
+        <td>Python <code>ast</code></td>
+        <td><a href="{{ '/reviewers/waveterm-use-network-timeouts/' | relative_url }}">Use network timeouts</a></td>
+        <td><code>wavetermdev/waveterm</code></td>
+      </tr>
+      <tr>
+        <td><code>AH009</code></td>
+        <td><code>subprocess.run</code> and friends with no <code>timeout=</code></td>
+        <td>warning</td>
+        <td>Python <code>ast</code></td>
+        <td><a href="{{ '/reviewers/cline-set-evidence-based-timeouts/' | relative_url }}">Set evidence-based timeouts</a></td>
+        <td><code>cline/cline</code></td>
+      </tr>
+      <tr>
+        <td><code>AH010</code></td>
+        <td><code>os.environ["LITERAL"]</code> read at the point of use</td>
+        <td>info</td>
+        <td>Python <code>ast</code></td>
+        <td><a href="{{ '/reviewers/cli-validate-environment-variables-early/' | relative_url }}">validate environment variables early</a></td>
+        <td><code>snyk/cli</code></td>
+      </tr>
+      <tr>
+        <td><code>AH011</code></td>
+        <td>A secret-named identifier whose value reaches a log or <code>print</code></td>
+        <td>warning</td>
+        <td>Python <code>ast</code></td>
+        <td><a href="{{ '/reviewers/azure-sentinel-avoid-logging-sensitive-data/' | relative_url }}">Avoid Logging Sensitive Data</a></td>
+        <td><code>Azure/Azure-Sentinel</code></td>
+      </tr>
+      <tr>
+        <td><code>AH012</code></td>
+        <td>A requirement with no exact version</td>
+        <td>warning</td>
+        <td>added lines</td>
+        <td><a href="{{ '/reviewers/ant-design-pin-ci-dependencies-securely/' | relative_url }}">Pin CI dependencies securely</a></td>
+        <td><code>ant-design/ant-design</code></td>
+      </tr>
+      <tr>
+        <td><code>AH013</code></td>
+        <td>A mutable default argument</td>
+        <td>warning</td>
+        <td>Python <code>ast</code></td>
+        <td><a href="{{ '/reviewers/compose-avoid-mutable-defaults/' | relative_url }}">avoid mutable defaults</a></td>
+        <td><code>docker/compose</code></td>
+      </tr>
+      <tr>
+        <td><code>AH014</code></td>
+        <td><code>assert</code> used as a runtime guard outside tests</td>
+        <td>info</td>
+        <td>Python <code>ast</code></td>
+        <td><a href="{{ '/reviewers/airflow-use-guards-over-assertions/' | relative_url }}">Use guards over assertions</a></td>
+        <td><code>apache/airflow</code></td>
+      </tr>
+      <tr>
+        <td><code>AH015</code></td>
+        <td>A Dockerfile with no non-root <code>USER</code></td>
+        <td>warning</td>
+        <td>whole file</td>
+        <td><a href="{{ '/reviewers/comfyui-container-security-best-practices/' | relative_url }}">Container security best practices</a></td>
+        <td><code>comfyanonymous/ComfyUI</code></td>
+      </tr>
+      <tr>
+        <td><code>AH016</code></td>
+        <td>A base image on <code>latest</code>, or with no tag or digest</td>
+        <td>warning</td>
+        <td>added lines</td>
+        <td><a href="{{ '/reviewers/lobe-chat-pin-docker-base-versions/' | relative_url }}">Pin Docker base versions</a></td>
+        <td><code>lobehub/lobe-chat</code></td>
+      </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section__head">
+      <h2>The 20 instructions that decided the internals</h2>
+      <p>All from <code>awslabs/aidlc-workflows</code> — cited in the module whose behaviour they set.</p>
+    </div>
+    <div class="table__scroll">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Instruction</th>
+            <th>Topic</th>
+            <th>What it decided</th>
+            <th>Modules</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-scoped-hash-based-idempotency/' | relative_url }}">Scoped Hash-Based Idempotency</a></td>
+            <td>Caching</td>
+            <td>Key by content, not identity. Same-key conflicts raise. Stage queries are floored at the current stage-run boundary, which is why <code>since_stage_start</code> exists.</td>
+            <td><code>cache.py</code>, <code>ledger.py</code>, <code>errors.py</code>, <code>policy/engine.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-fail-loudly-degrade-safely/' | relative_url }}">Fail Loudly, Degrade Safely</a></td>
+            <td>Error Handling</td>
+            <td><code>auto</code> records its fallback reason and <code>container</code> refuses; an unsigned attestation says so in the file; a capped context bundle reports what it dropped; a corrupt cache entry is deleted and reported.</td>
+            <td>nine modules</td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-secure-path-confinement/' | relative_url }}">Secure Path Confinement</a></td>
+            <td>Security</td>
+            <td><code>Path.is_relative_to</code> on resolved paths everywhere; the container hardening flag set; output scrubbed before it is persisted. Also ships as check AH005.</td>
+            <td><code>paths.py</code>, <code>execution.py</code>, <code>scrub.py</code>, <code>artifacts.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-no-silent-null-artifacts/' | relative_url }}">No Silent Null Artifacts</a></td>
+            <td>Null Handling</td>
+            <td>A zero-byte output errors unless declared; an evicted cache hit is a miss; an unparseable ledger line is an integrity failure; a corpus yielding zero instructions raises.</td>
+            <td><code>artifacts.py</code>, <code>cache.py</code>, <code>ledger.py</code>, <code>policy/corpus.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-deterministic-boundary-modeling/' | relative_url }}">Deterministic Boundary Modeling</a></td>
+            <td>Algorithms</td>
+            <td>One canonical serialization for every digest; every ambient tar field pinned.</td>
+            <td><code>digest.py</code>, <code>artifacts.py</code>, <code>tools/determinism_check.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-defensive-observable-error-handling/' | relative_url }}">Defensive Observable Error Handling</a></td>
+            <td>Error Handling</td>
+            <td>Failures name their input: a git error carries the subcommand and stderr, a finding carries path and evidence, an unexamined file appears in the gate's notes.</td>
+            <td><code>errors.py</code>, <code>scm.py</code>, <code>policy/findings.py</code>, <code>policy/engine.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-single-transaction-locking/' | relative_url }}">Single-Transaction Locking</a></td>
+            <td>Concurrency</td>
+            <td>Read-tail-then-append is one transaction under one <code>flock</code>.</td>
+            <td><code>ledger.py</code>, <code>workspace.py</code>, <code>plan.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-secure-scope-and-input-validation/' | relative_url }}">Secure Scope and Input Validation</a></td>
+            <td>Security</td>
+            <td>Validate at the boundary and reject rather than sanitize: an absolute path is refused not re-rooted; git gets argv, never a shell string; a signature is checked against the payload it covered.</td>
+            <td><code>paths.py</code>, <code>scm.py</code>, <code>identity.py</code>, <code>policy/checks.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-check-mode-must-mirror/' | relative_url }}">Check mode must mirror</a></td>
+            <td>CI/CD</td>
+            <td>A check decides exactly what its rule says — responsible for four narrowings. <code>verify</code> re-derives rather than reading back its own JSON.</td>
+            <td><code>policy/checks.py</code>, <code>verify.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-explicit-environment-contracts/' | relative_url }}">Explicit Environment Contracts</a></td>
+            <td>Configurations</td>
+            <td>A step sees a declared allowlist; the allowlist replaces rather than appends, so a variable can actually be removed.</td>
+            <td><code>execution.py</code>, <code>workspace.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-portable-configuration-standards/' | relative_url }}">Portable Configuration Standards</a></td>
+            <td>Configurations</td>
+            <td>One documented JSON config; the corpus is read from its source of truth or the raw endpoints, never from uncommitted derived data.</td>
+            <td><code>workspace.py</code>, <code>policy/corpus.py</code>, <code>policy/pack.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-security-trust-boundaries/' | relative_url }}">Security Trust Boundaries</a></td>
+            <td>Security</td>
+            <td>An environment variable crossing into a security decision is untrusted, so claims and proofs are separate fields and the observed variable is recorded.</td>
+            <td><code>identity.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-sandbox-config-boundary/' | relative_url }}">Sandbox config boundary</a></td>
+            <td>Configurations</td>
+            <td>Isolation is resolved once into a reported structure, and that structure is what the attestation carries.</td>
+            <td><code>execution.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-pinned-releases-for-ci/' | relative_url }}">Pinned Releases For CI</a></td>
+            <td>CI/CD</td>
+            <td>A pack pins each rule by its instruction digest; the pack digest feeds the cache key and the attestation.</td>
+            <td><code>policy/pack.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-behavior-correct-versionless-docs/' | relative_url }}">Behavior-Correct, Versionless Docs</a></td>
+            <td>Documentation</td>
+            <td>Drift is named and exits non-zero, so a pack is rebuilt deliberately rather than drifting under a signature.</td>
+            <td><code>policy/pack.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-cicd-workflow-predictability/' | relative_url }}">CI/CD Workflow Predictability</a></td>
+            <td>CI/CD</td>
+            <td>Phases run in declaration order with no inferred conditionals; a phase that cannot run stops the run rather than being skipped.</td>
+            <td><code>plan.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-secret-scan-baselines/' | relative_url }}">Secret scan baselines</a></td>
+            <td>Security</td>
+            <td>Two scrubbing tiers: high-confidence provider patterns that may block a gate, and a broad tier used only to redact.</td>
+            <td><code>scrub.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-use-correct-null-semantics/' | relative_url }}">Use Correct Null Semantics</a></td>
+            <td>Null Handling</td>
+            <td>Absent and empty hash differently — a missing input is its own token, an empty file is a real digest. Collapsing them would make a deleted input a cache hit.</td>
+            <td><code>digest.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-use-scoped-consistent-names/' | relative_url }}">Use scoped, consistent names</a></td>
+            <td>Naming Conventions</td>
+            <td>A finding's fingerprint covers check, path and normalized evidence, and excludes the line number.</td>
+            <td><code>policy/findings.py</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/reviewers/aidlc-workflows-executable-documentation-accuracy/' | relative_url }}">Executable Documentation Accuracy</a></td>
+            <td>Documentation</td>
+            <td>The bundle-determinism guarantee is a plan step that runs, not a README paragraph.</td>
+            <td><code>tools/determinism_check.py</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap prose">
+    <h2>What the corpus caught in the harness's own code</h2>
+    <p>
+      The first time the gate ran against the harness, it fired on the harness. Some of those findings
+      were real, and some were the checks failing to decide what their instructions actually say —
+      which is
+      <a href="{{ '/reviewers/aidlc-workflows-check-mode-must-mirror/' | relative_url }}">Check mode must mirror</a>
+      in the negative. Four checks were narrowed as a result, each narrowing justified by re-reading
+      the source instruction rather than by wanting a green build:
+    </p>
+    <ul>
+      <li>
+        <strong>AH008</strong> fired on <code>s.get("name")</code>, a dictionary lookup, because
+        <code>s</code> had been listed as a plausible HTTP receiver. Narrowed to unambiguous clients
+        plus a URL-shaped first argument. <code>s.get</code> on a dict is far more common than an HTTP
+        call, and a check that fires on it gets the gate switched off.
+      </li>
+      <li>
+        <strong>AH010</strong> fired on <code>os.environ["TZ"] = "UTC"</code>, which is a write, and on
+        <code>os.environ[name]</code> already guarded by <code>if name in os.environ</code>. Narrowed to
+        reads with a constant key — which is the hardcoded required-variable read
+        <a href="{{ '/reviewers/cli-validate-environment-variables-early/' | relative_url }}">the instruction</a>
+        is actually about.
+      </li>
+      <li>
+        <strong>AH005</strong> fired on <code>str(x).startswith("https://")</code> and on
+        <code>name.startswith("/")</code>, an absoluteness test. Narrowed to require path-ness in the
+        receiver, in the prefix, or an absolute prefix naming an actual directory —
+        <a href="{{ '/reviewers/aidlc-workflows-secure-path-confinement/' | relative_url }}">the rule</a>
+        is about containment, and a bare <code>"/"</code> check is a different and legitimate operation.
+      </li>
+      <li>
+        <strong>AH011</strong> fired on <code>logging.info("key of %d chars", len(api_key))</code>, which
+        discloses a length. Narrowed to stop descending into calls that consume a value without
+        printing it.
+      </li>
+    </ul>
+    <p>
+      It also fired, correctly, on the harness's own test fixtures — which carry deliberately
+      provider-shaped strings so that AH001 can be shown to fire — and then on the waiver written to
+      excuse them, because that waiver's stated reason quoted the example key. Both are recorded in
+      <code>.harness/waivers.json</code> with a reason, which is the mechanism working rather than
+      failing.
+    </p>
+    <p>
+      Two implementation bugs came out of reading the corpus rather than running it. The cache
+      collision guard, as first written, compared two digests and could therefore only have fired on an
+      actual SHA-256 collision — dead code dressed as a safety check. Re-reading
+      <a href="{{ '/reviewers/aidlc-workflows-scoped-hash-based-idempotency/' | relative_url }}">Scoped Hash-Based Idempotency</a>
+      &mdash; <em>detect same-key conflicts and don't fail silently</em> &mdash; made the right
+      comparison obvious: check the recorded inputs against the current ones, which catches the case
+      that really happens, a non-deterministic field creeping into the key function. And the snapshot
+      originally included <code>.harness/</code>, so the ledger's own growth changed the snapshot tree
+      digest, silently voiding every approval the moment the approval itself was recorded.
+    </p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap prose">
+    <h2>What was not used</h2>
+    <p>
+      Three of the 23 aidlc-workflows instructions are not cited.
+      <a href="{{ '/reviewers/aidlc-workflows-ci-security-defaults/' | relative_url }}">CI security defaults</a>
+      overlaps almost exactly with the instruction AH003 is bound to; grafana's was chosen so the check
+      set draws on more source repositories, and either would serve.
+      <a href="{{ '/reviewers/aidlc-workflows-secure-by-default-integrations/' | relative_url }}">Secure-by-default integrations</a>
+      is about configurable external services and plugin registries, which the harness does not have —
+      it has no network surface at all.
+      <a href="{{ '/reviewers/aidlc-workflows-concise-factual-instructions/' | relative_url }}">Concise, factual instructions</a>
+      governs how agent-facing instruction text is written; it applies to this corpus's own prose more
+      than to the harness's code.
+    </p>
+    <p>
+      Recording the misses matters as much as the hits. A page that claimed every instruction had been
+      applied would be the same category of thing as a check that cites an instruction which does not
+      exist.
+    </p>
+
+    <h2>Using it</h2>
+    <p>
+      The harness works against a vendored corpus or against the
+      <a href="{{ '/api/' | relative_url }}">raw endpoints</a>, so it runs in any repository, offline,
+      with no dependencies:
+    </p>
+    <pre><code>harness/awesome-harness init
+harness/awesome-harness policy build --topic Security --topic CI/CD --language Python
+harness/awesome-harness gate --base origin/main</code></pre>
+    <p>
+      <code>harness/README.md</code> documents every command, the exit-code contract, and the plan
+      format. <code>harness/AGENTS.md</code> is written for an AI agent driving it — including the
+      instruction not to approve a human-gated phase on the user's behalf.
+    </p>
+  </div>
+</section>

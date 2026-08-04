@@ -1,0 +1,228 @@
+[
+  {
+    "discussion_id": "1958719563",
+    "pr_number": 14333,
+    "pr_file": "quickstarts/microsoft.web/function-app-flex-managed-identities/main.bicep",
+    "created_at": "2025-02-17T19:45:52+00:00",
+    "commented_code": "+/* This Bicep file creates a function app running in a Flex Consumption plan \n+that connects to Azure Storage by using managed identities with Microsoft Entra ID. */\n+\n+//********************************************\n+// Parameters\n+//********************************************\n+\n+@description('Primary region for all Azure resources.')\n+@minLength(1)\n+param location string = resourceGroup().location \n+@description('Language runtime used by the function app.')\n+@allowed(['dotnet-isolated','python','java', 'node', 'powerShell'])\n+param functionAppRuntime string = 'dotnet-isolated' //Defaults to .NET isolated worker\n+@description('Target language version used by the function app.')\n+@allowed(['3.10','3.11', '7.4', '8.0', '9.0', '10', '11', '17', '20'])\n+param functionAppRuntimeVersion string = '8.0' //Defaults to .NET 8.\n+@description('The maximum scale-out instance count limit for the app.')\n+@minValue(40)\n+@maxValue(1000)\n+param maximumInstanceCount int = 100\n+@description('The memory size of instances used by the app.')\n+@allowed([2048,4096])\n+param instanceMemoryMB int = 2048\n+\n+@description('A unique token used for resource name generation.')\n+@minLength(3)\n+param resourceToken string = toLower(uniqueString(subscription().id, location))\n+@description('A globally unigue name for your deployed function app.')\n+param appName string = 'func-${resourceToken}'\n+\n+//********************************************\n+// Variables\n+//********************************************\n+\n+// Generates a unique container name for deployments.\n+var deploymentStorageContainerName = 'app-package-${take(appName, 32)}-${take(resourceToken, 7)}'\n+\n+// Key access to the storage account is disabled by default \n+var storageAccountAllowSharedKeyAccess = false\n+\n+// Define the IDs of the roles we need to assign to our managed identities.\n+var storageBlobDataOwnerRoleId  = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'\n+var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'\n+var storageQueueDataContributorId = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'\n+var storageTableDataContributorId = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'\n+var monitoringMetricsPublisherId = '3913510d-42f4-4e42-8a64-420c390055eb'\n+\n+//********************************************\n+// Azure resources required by your function app.\n+//********************************************\n+\n+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {\n+  name: 'log-${resourceToken}'\n+  location: location\n+  properties: any({\n+    retentionInDays: 30\n+    features: {\n+      searchVersion: 1\n+    }\n+    sku: {\n+      name: 'PerGB2018'\n+    }\n+  })\n+}\n+\n+resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {\n+  name: 'appi-${resourceToken}'\n+  location: location\n+  kind: 'web'\n+  properties: {\n+    Application_Type: 'web'\n+    WorkspaceResourceId: logAnalytics.id\n+  }\n+}\n+\n+resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {\n+  name: 'st${resourceToken}'\n+  location: location\n+  kind: 'StorageV2'\n+  sku: { name: 'Standard_LRS' }\n+  properties: {\n+    accessTier: 'Hot'\n+    allowBlobPublicAccess: false\n+    allowSharedKeyAccess: storageAccountAllowSharedKeyAccess\n+    dnsEndpointType: 'Standard'\n+    minimumTlsVersion: 'TLS1_2'\n+    networkAcls: {\n+      bypass: 'AzureServices'\n+      defaultAction: 'Allow'\n+    }\n+    publicNetworkAccess: 'Enabled'\n+  }\n+  resource blobServices 'blobServices' = {\n+    name: 'default'\n+    properties: {\n+      deleteRetentionPolicy: {}\n+    }\n+    resource deploymentContainer 'containers' = {\n+      name: deploymentStorageContainerName\n+      properties: {\n+        publicAccess: 'None'\n+      }\n+    }\n+  }\n+}\n+\n+resource userStorageDataOwner 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {\n+  name: 'uai-data-owner-${resourceToken}'\n+  location: location\n+}\n+\n+resource userStorageDataContributor 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {\n+  name: 'uai-ata-contrib-${resourceToken}'\n+  location: location\n+}\n+\n+resource userMonitorMetrics 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {\n+  name: 'uai-monitor-metrics-${resourceToken}'\n+  location: location\n+}\n+\n+resource roleAssignmentBlobDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {\n+  name: guid(subscription().id, storage.id, userStorageDataOwner.id, 'Storage Blob Data Owner')\n+  scope: storage\n+  properties: {\n+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataOwnerRoleId)\n+    principalId: userStorageDataOwner.properties.principalId\n+    principalType: 'ServicePrincipal'\n+  }\n+}\n+\n+resource roleAssignmentBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = {\n+  name: guid(subscription().id, storage.id, userStorageDataContributor.id, 'Storage Blob Data Contributor')\n+  scope: storage\n+  properties: {\n+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)\n+    principalId: userStorageDataContributor.properties.principalId\n+    principalType: 'ServicePrincipal'\n+  }\n+}\n+\n+resource roleAssignmentQueueStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = {\n+  name: guid(subscription().id, storage.id, userStorageDataContributor.id, 'Storage Queue Data Contributor')\n+  scope: storage\n+  properties: {\n+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageQueueDataContributorId)\n+    principalId: userStorageDataContributor.properties.principalId\n+    principalType: 'ServicePrincipal'\n+  }\n+}\n+\n+resource roleAssignmentTableStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = {\n+  name: guid(subscription().id, storage.id, userStorageDataContributor.id, 'Storage Table Data Contributor')\n+  scope: storage\n+  properties: {\n+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageTableDataContributorId)\n+    principalId: userStorageDataContributor.properties.principalId\n+    principalType: 'ServicePrincipal'\n+  }\n+}\n+\n+resource roleAssignmentAppInsights 'Microsoft.Authorization/roleAssignments@2022-04-01' = {\n+  name: guid(subscription().id, applicationInsights.id, userMonitorMetrics.id, 'Monitoring Metrics Publisher')\n+  scope: applicationInsights\n+  properties: {\n+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', monitoringMetricsPublisherId)\n+    principalId: userMonitorMetrics.properties.principalId\n+    principalType: 'ServicePrincipal'\n+  }\n+}\n+\n+//********************************************\n+// Azure resources required by your function app.\n+//********************************************\n+\n+resource appServicePlan 'Microsoft.Web/serverfarms@2024-04-01' = {\n+  name: 'plan-${resourceToken}'\n+  location: location\n+  kind: 'functionapp'\n+  sku: {\n+    tier: 'FlexConsumption'\n+    name: 'FC1'\n+  }\n+  properties: {\n+    reserved: true\n+  }\n+}\n+\n+resource functionApp 'Microsoft.Web/sites@2024-04-01' = {\n+  name: appName\n+  location: location\n+  kind: 'functionapp,linux'\n+  identity: {\n+    type: 'UserAssigned'\n+    userAssignedIdentities: {\n+      '${userStorageDataOwner.id}':{}\n+      '${userStorageDataContributor.id}':{}\n+      '${userMonitorMetrics.id}':{}\n+      }\n+    }\n+  properties: {\n+    serverFarmId: appServicePlan.id\n+    functionAppConfig: {\n+      deployment: {\n+        storage: {\n+          type: 'blobContainer'\n+          value: '${storage.properties.primaryEndpoints.blob}${deploymentStorageContainerName}'\n+          authentication: {\n+            type: 'UserAssignedIdentity'\n+            userAssignedIdentityResourceId: userStorageDataContributor.id\n+          }\n+        }\n+      }\n+      scaleAndConcurrency: {\n+        maximumInstanceCount: maximumInstanceCount\n+        instanceMemoryMB: instanceMemoryMB\n+      }\n+      runtime: { \n+        name: functionAppRuntime\n+        version: functionAppRuntimeVersion\n+      }\n+    }\n+  }\n+  resource configAppSettings 'config' = {\n+    name: 'appsettings'\n+    properties: {\n+        AzureWebJobsStorage__accountName: storage.name",
+    "repo_full_name": "Azure/azure-quickstart-templates",
+    "discussion_comments": [
+      {
+        "comment_id": "1958719563",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 14333,
+        "pr_file": "quickstarts/microsoft.web/function-app-flex-managed-identities/main.bicep",
+        "discussion_id": "1958719563",
+        "commented_code": "@@ -0,0 +1,233 @@\n+/* This Bicep file creates a function app running in a Flex Consumption plan \n+that connects to Azure Storage by using managed identities with Microsoft Entra ID. */\n+\n+//********************************************\n+// Parameters\n+//********************************************\n+\n+@description('Primary region for all Azure resources.')\n+@minLength(1)\n+param location string = resourceGroup().location \n+@description('Language runtime used by the function app.')\n+@allowed(['dotnet-isolated','python','java', 'node', 'powerShell'])\n+param functionAppRuntime string = 'dotnet-isolated' //Defaults to .NET isolated worker\n+@description('Target language version used by the function app.')\n+@allowed(['3.10','3.11', '7.4', '8.0', '9.0', '10', '11', '17', '20'])\n+param functionAppRuntimeVersion string = '8.0' //Defaults to .NET 8.\n+@description('The maximum scale-out instance count limit for the app.')\n+@minValue(40)\n+@maxValue(1000)\n+param maximumInstanceCount int = 100\n+@description('The memory size of instances used by the app.')\n+@allowed([2048,4096])\n+param instanceMemoryMB int = 2048\n+\n+@description('A unique token used for resource name generation.')\n+@minLength(3)\n+param resourceToken string = toLower(uniqueString(subscription().id, location))\n+@description('A globally unigue name for your deployed function app.')\n+param appName string = 'func-${resourceToken}'\n+\n+//********************************************\n+// Variables\n+//********************************************\n+\n+// Generates a unique container name for deployments.\n+var deploymentStorageContainerName = 'app-package-${take(appName, 32)}-${take(resourceToken, 7)}'\n+\n+// Key access to the storage account is disabled by default \n+var storageAccountAllowSharedKeyAccess = false\n+\n+// Define the IDs of the roles we need to assign to our managed identities.\n+var storageBlobDataOwnerRoleId  = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b'\n+var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'\n+var storageQueueDataContributorId = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'\n+var storageTableDataContributorId = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'\n+var monitoringMetricsPublisherId = '3913510d-42f4-4e42-8a64-420c390055eb'\n+\n+//********************************************\n+// Azure resources required by your function app.\n+//********************************************\n+\n+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {\n+  name: 'log-${resourceToken}'\n+  location: location\n+  properties: any({\n+    retentionInDays: 30\n+    features: {\n+      searchVersion: 1\n+    }\n+    sku: {\n+      name: 'PerGB2018'\n+    }\n+  })\n+}\n+\n+resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {\n+  name: 'appi-${resourceToken}'\n+  location: location\n+  kind: 'web'\n+  properties: {\n+    Application_Type: 'web'\n+    WorkspaceResourceId: logAnalytics.id\n+  }\n+}\n+\n+resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {\n+  name: 'st${resourceToken}'\n+  location: location\n+  kind: 'StorageV2'\n+  sku: { name: 'Standard_LRS' }\n+  properties: {\n+    accessTier: 'Hot'\n+    allowBlobPublicAccess: false\n+    allowSharedKeyAccess: storageAccountAllowSharedKeyAccess\n+    dnsEndpointType: 'Standard'\n+    minimumTlsVersion: 'TLS1_2'\n+    networkAcls: {\n+      bypass: 'AzureServices'\n+      defaultAction: 'Allow'\n+    }\n+    publicNetworkAccess: 'Enabled'\n+  }\n+  resource blobServices 'blobServices' = {\n+    name: 'default'\n+    properties: {\n+      deleteRetentionPolicy: {}\n+    }\n+    resource deploymentContainer 'containers' = {\n+      name: deploymentStorageContainerName\n+      properties: {\n+        publicAccess: 'None'\n+      }\n+    }\n+  }\n+}\n+\n+resource userStorageDataOwner 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {\n+  name: 'uai-data-owner-${resourceToken}'\n+  location: location\n+}\n+\n+resource userStorageDataContributor 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {\n+  name: 'uai-ata-contrib-${resourceToken}'\n+  location: location\n+}\n+\n+resource userMonitorMetrics 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {\n+  name: 'uai-monitor-metrics-${resourceToken}'\n+  location: location\n+}\n+\n+resource roleAssignmentBlobDataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {\n+  name: guid(subscription().id, storage.id, userStorageDataOwner.id, 'Storage Blob Data Owner')\n+  scope: storage\n+  properties: {\n+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataOwnerRoleId)\n+    principalId: userStorageDataOwner.properties.principalId\n+    principalType: 'ServicePrincipal'\n+  }\n+}\n+\n+resource roleAssignmentBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = {\n+  name: guid(subscription().id, storage.id, userStorageDataContributor.id, 'Storage Blob Data Contributor')\n+  scope: storage\n+  properties: {\n+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)\n+    principalId: userStorageDataContributor.properties.principalId\n+    principalType: 'ServicePrincipal'\n+  }\n+}\n+\n+resource roleAssignmentQueueStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = {\n+  name: guid(subscription().id, storage.id, userStorageDataContributor.id, 'Storage Queue Data Contributor')\n+  scope: storage\n+  properties: {\n+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageQueueDataContributorId)\n+    principalId: userStorageDataContributor.properties.principalId\n+    principalType: 'ServicePrincipal'\n+  }\n+}\n+\n+resource roleAssignmentTableStorage 'Microsoft.Authorization/roleAssignments@2022-04-01' = {\n+  name: guid(subscription().id, storage.id, userStorageDataContributor.id, 'Storage Table Data Contributor')\n+  scope: storage\n+  properties: {\n+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageTableDataContributorId)\n+    principalId: userStorageDataContributor.properties.principalId\n+    principalType: 'ServicePrincipal'\n+  }\n+}\n+\n+resource roleAssignmentAppInsights 'Microsoft.Authorization/roleAssignments@2022-04-01' = {\n+  name: guid(subscription().id, applicationInsights.id, userMonitorMetrics.id, 'Monitoring Metrics Publisher')\n+  scope: applicationInsights\n+  properties: {\n+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', monitoringMetricsPublisherId)\n+    principalId: userMonitorMetrics.properties.principalId\n+    principalType: 'ServicePrincipal'\n+  }\n+}\n+\n+//********************************************\n+// Azure resources required by your function app.\n+//********************************************\n+\n+resource appServicePlan 'Microsoft.Web/serverfarms@2024-04-01' = {\n+  name: 'plan-${resourceToken}'\n+  location: location\n+  kind: 'functionapp'\n+  sku: {\n+    tier: 'FlexConsumption'\n+    name: 'FC1'\n+  }\n+  properties: {\n+    reserved: true\n+  }\n+}\n+\n+resource functionApp 'Microsoft.Web/sites@2024-04-01' = {\n+  name: appName\n+  location: location\n+  kind: 'functionapp,linux'\n+  identity: {\n+    type: 'UserAssigned'\n+    userAssignedIdentities: {\n+      '${userStorageDataOwner.id}':{}\n+      '${userStorageDataContributor.id}':{}\n+      '${userMonitorMetrics.id}':{}\n+      }\n+    }\n+  properties: {\n+    serverFarmId: appServicePlan.id\n+    functionAppConfig: {\n+      deployment: {\n+        storage: {\n+          type: 'blobContainer'\n+          value: '${storage.properties.primaryEndpoints.blob}${deploymentStorageContainerName}'\n+          authentication: {\n+            type: 'UserAssignedIdentity'\n+            userAssignedIdentityResourceId: userStorageDataContributor.id\n+          }\n+        }\n+      }\n+      scaleAndConcurrency: {\n+        maximumInstanceCount: maximumInstanceCount\n+        instanceMemoryMB: instanceMemoryMB\n+      }\n+      runtime: { \n+        name: functionAppRuntime\n+        version: functionAppRuntimeVersion\n+      }\n+    }\n+  }\n+  resource configAppSettings 'config' = {\n+    name: 'appsettings'\n+    properties: {\n+        AzureWebJobsStorage__accountName: storage.name",
+        "comment_created_at": "2025-02-17T19:45:52+00:00",
+        "comment_author": "nzthiago",
+        "comment_body": "Missing AzureWebJobsStorage__clientId as well",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1579388496",
+    "pr_number": 13985,
+    "pr_file": "quickstarts/microsoft.apicenter/azure-api-center-create/main.bicep",
+    "created_at": "2024-04-25T12:29:57+00:00",
+    "commented_code": "+@description('Specifies the location for resources.')\n+param location string = 'eastus'",
+    "repo_full_name": "Azure/azure-quickstart-templates",
+    "discussion_comments": [
+      {
+        "comment_id": "1579388496",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 13985,
+        "pr_file": "quickstarts/microsoft.apicenter/azure-api-center-create/main.bicep",
+        "discussion_id": "1579388496",
+        "commented_code": "@@ -0,0 +1,43 @@\n+@description('Specifies the location for resources.')\n+param location string = 'eastus'",
+        "comment_created_at": "2024-04-25T12:29:57+00:00",
+        "comment_author": "mumian",
+        "comment_body": "Please change 'eastus' to resourceGroup().location.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "932614522",
+    "pr_number": 12729,
+    "pr_file": "quickstarts/microsoft.network/azure-dns-private-resolver/main.bicep",
+    "created_at": "2022-07-28T19:52:04+00:00",
+    "commented_code": "+@description('name of the new virtual network where DNS resolver will be created')\n+param resolverVNETName string = 'dnsresolverVNET'\n+\n+@description('the IP address space for the resolver virtual network')\n+param resolverVNETAddressSpace string = '10.7.0.0/24'\n+\n+@description('name of the dns private resolver')\n+param dnsResolverName string = 'dnsResolver'\n+\n+@description('the location for resolver VNET and dns private resolver')\n+param resolverLocation string = 'westcentralus' //resolver available in specific region, refer the documenation for more information https://docs.microsoft.com/en-us/azure/dns/dns-private-resolver-overview#regional-availability",
+    "repo_full_name": "Azure/azure-quickstart-templates",
+    "discussion_comments": [
+      {
+        "comment_id": "932614522",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 12729,
+        "pr_file": "quickstarts/microsoft.network/azure-dns-private-resolver/main.bicep",
+        "discussion_id": "932614522",
+        "commented_code": "@@ -0,0 +1,143 @@\n+@description('name of the new virtual network where DNS resolver will be created')\n+param resolverVNETName string = 'dnsresolverVNET'\n+\n+@description('the IP address space for the resolver virtual network')\n+param resolverVNETAddressSpace string = '10.7.0.0/24'\n+\n+@description('name of the dns private resolver')\n+param dnsResolverName string = 'dnsResolver'\n+\n+@description('the location for resolver VNET and dns private resolver')\n+param resolverLocation string = 'westcentralus' //resolver available in specific region, refer the documenation for more information https://docs.microsoft.com/en-us/azure/dns/dns-private-resolver-overview#regional-availability",
+        "comment_created_at": "2022-07-28T19:52:04+00:00",
+        "comment_author": "bmoore-msft",
+        "comment_body": "rename this to ```location``` - also if it's not globally available use ```@allowedValues``` to provide the list...\r\n\r\nThen remove the defaultValue (as that tends to overload a region).",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "932954583",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 12729,
+        "pr_file": "quickstarts/microsoft.network/azure-dns-private-resolver/main.bicep",
+        "discussion_id": "932614522",
+        "commented_code": "@@ -0,0 +1,143 @@\n+@description('name of the new virtual network where DNS resolver will be created')\n+param resolverVNETName string = 'dnsresolverVNET'\n+\n+@description('the IP address space for the resolver virtual network')\n+param resolverVNETAddressSpace string = '10.7.0.0/24'\n+\n+@description('name of the dns private resolver')\n+param dnsResolverName string = 'dnsResolver'\n+\n+@description('the location for resolver VNET and dns private resolver')\n+param resolverLocation string = 'westcentralus' //resolver available in specific region, refer the documenation for more information https://docs.microsoft.com/en-us/azure/dns/dns-private-resolver-overview#regional-availability",
+        "comment_created_at": "2022-07-29T07:37:21+00:00",
+        "comment_author": "aarunraaj",
+        "comment_body": "thanks for the review @bmoore-msft. Implemented the changes.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "933122950",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 12729,
+        "pr_file": "quickstarts/microsoft.network/azure-dns-private-resolver/main.bicep",
+        "discussion_id": "932614522",
+        "commented_code": "@@ -0,0 +1,143 @@\n+@description('name of the new virtual network where DNS resolver will be created')\n+param resolverVNETName string = 'dnsresolverVNET'\n+\n+@description('the IP address space for the resolver virtual network')\n+param resolverVNETAddressSpace string = '10.7.0.0/24'\n+\n+@description('name of the dns private resolver')\n+param dnsResolverName string = 'dnsResolver'\n+\n+@description('the location for resolver VNET and dns private resolver')\n+param resolverLocation string = 'westcentralus' //resolver available in specific region, refer the documenation for more information https://docs.microsoft.com/en-us/azure/dns/dns-private-resolver-overview#regional-availability",
+        "comment_created_at": "2022-07-29T11:07:00+00:00",
+        "comment_author": "aarunraaj",
+        "comment_body": "@bmoore-msft , we might send default location for dnsresolver/vnet to bypass the failure for valid deployment.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "848894278",
+    "pr_number": 12338,
+    "pr_file": "quickstarts/microsoft.web/function-app-create-dynamic/main.bicep",
+    "created_at": "2022-04-12T21:39:35+00:00",
+    "commented_code": "+@description('The name of the function app that you wish to create.')\n+param appName string = 'fnapp${uniqueString(resourceGroup().id)}'\n+\n+@description('Storage Account type')\n+@allowed([\n+  'Standard_LRS'\n+  'Standard_GRS'\n+  'Standard_RAGRS'\n+])\n+param storageAccountType string = 'Standard_LRS'\n+\n+@description('Location for all resources.')\n+param location string = resourceGroup().location\n+\n+@description('Location for Application Insights')\n+param appInsightsLocation string\n+\n+@description('The language worker runtime to load in the function app.')\n+@allowed([\n+  'node'\n+  'dotnet'\n+  'java'\n+])\n+param runtime string = 'node'\n+\n+var functionAppName = appName\n+var hostingPlanName = appName\n+var applicationInsightsName = appName\n+var storageAccountName = '${uniqueString(resourceGroup().id)}azfunctions'\n+var functionWorkerRuntime = runtime\n+\n+resource storageAccount 'Microsoft.Storage/storageAccounts@2021-08-01' = {\n+  name: storageAccountName\n+  location: location\n+  sku: {\n+    name: storageAccountType\n+  }\n+  kind: 'Storage'\n+}\n+\n+resource hostingPlan 'Microsoft.Web/serverfarms@2021-03-01' = {\n+  name: hostingPlanName\n+  location: location\n+  sku: {\n+    name: 'Y1'\n+    tier: 'Dynamic'\n+  }\n+  properties: {}\n+}\n+\n+resource functionApp 'Microsoft.Web/sites@2021-03-01' = {\n+  name: functionAppName\n+  location: location\n+  kind: 'functionapp'\n+  identity: {\n+    type: 'SystemAssigned'\n+  }\n+  properties: {\n+    serverFarmId: hostingPlan.id\n+    siteConfig: {\n+      appSettings: [\n+        {\n+          name: 'AzureWebJobsStorage'\n+          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccountName};EndpointSuffix=${environment().suffixes.storage};AccountKey=${listKeys(storageAccount.id, '2021-08-01').keys[0].value}'\n+        }\n+        {\n+          name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'\n+          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccountName};EndpointSuffix=${environment().suffixes.storage};AccountKey=${listKeys(storageAccount.id, '2021-08-01').keys[0].value}'\n+        }\n+        {\n+          name: 'WEBSITE_CONTENTSHARE'\n+          value: toLower(functionAppName)\n+        }\n+        {\n+          name: 'FUNCTIONS_EXTENSION_VERSION'\n+          value: '~2'\n+        }\n+        {\n+          name: 'WEBSITE_NODE_DEFAULT_VERSION'\n+          value: '~10'\n+        }\n+        {\n+          name: 'APPINSIGHTS_INSTRUMENTATIONKEY'\n+          value: reference(applicationInsights.id, '2020-02-02').InstrumentationKey",
+    "repo_full_name": "Azure/azure-quickstart-templates",
+    "discussion_comments": [
+      {
+        "comment_id": "848894278",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 12338,
+        "pr_file": "quickstarts/microsoft.web/function-app-create-dynamic/main.bicep",
+        "discussion_id": "848894278",
+        "commented_code": "@@ -0,0 +1,109 @@\n+@description('The name of the function app that you wish to create.')\n+param appName string = 'fnapp${uniqueString(resourceGroup().id)}'\n+\n+@description('Storage Account type')\n+@allowed([\n+  'Standard_LRS'\n+  'Standard_GRS'\n+  'Standard_RAGRS'\n+])\n+param storageAccountType string = 'Standard_LRS'\n+\n+@description('Location for all resources.')\n+param location string = resourceGroup().location\n+\n+@description('Location for Application Insights')\n+param appInsightsLocation string\n+\n+@description('The language worker runtime to load in the function app.')\n+@allowed([\n+  'node'\n+  'dotnet'\n+  'java'\n+])\n+param runtime string = 'node'\n+\n+var functionAppName = appName\n+var hostingPlanName = appName\n+var applicationInsightsName = appName\n+var storageAccountName = '${uniqueString(resourceGroup().id)}azfunctions'\n+var functionWorkerRuntime = runtime\n+\n+resource storageAccount 'Microsoft.Storage/storageAccounts@2021-08-01' = {\n+  name: storageAccountName\n+  location: location\n+  sku: {\n+    name: storageAccountType\n+  }\n+  kind: 'Storage'\n+}\n+\n+resource hostingPlan 'Microsoft.Web/serverfarms@2021-03-01' = {\n+  name: hostingPlanName\n+  location: location\n+  sku: {\n+    name: 'Y1'\n+    tier: 'Dynamic'\n+  }\n+  properties: {}\n+}\n+\n+resource functionApp 'Microsoft.Web/sites@2021-03-01' = {\n+  name: functionAppName\n+  location: location\n+  kind: 'functionapp'\n+  identity: {\n+    type: 'SystemAssigned'\n+  }\n+  properties: {\n+    serverFarmId: hostingPlan.id\n+    siteConfig: {\n+      appSettings: [\n+        {\n+          name: 'AzureWebJobsStorage'\n+          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccountName};EndpointSuffix=${environment().suffixes.storage};AccountKey=${listKeys(storageAccount.id, '2021-08-01').keys[0].value}'\n+        }\n+        {\n+          name: 'WEBSITE_CONTENTAZUREFILECONNECTIONSTRING'\n+          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccountName};EndpointSuffix=${environment().suffixes.storage};AccountKey=${listKeys(storageAccount.id, '2021-08-01').keys[0].value}'\n+        }\n+        {\n+          name: 'WEBSITE_CONTENTSHARE'\n+          value: toLower(functionAppName)\n+        }\n+        {\n+          name: 'FUNCTIONS_EXTENSION_VERSION'\n+          value: '~2'\n+        }\n+        {\n+          name: 'WEBSITE_NODE_DEFAULT_VERSION'\n+          value: '~10'\n+        }\n+        {\n+          name: 'APPINSIGHTS_INSTRUMENTATIONKEY'\n+          value: reference(applicationInsights.id, '2020-02-02').InstrumentationKey",
+        "comment_created_at": "2022-04-12T21:39:35+00:00",
+        "comment_author": "bmoore-msft",
+        "comment_body": "remove ```reference``` and use ```applicationsInsights.properties.InstrumentationKey```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "700640724",
+    "pr_number": 11818,
+    "pr_file": "quickstarts/microsoft.storage/storage-static-website/scripts/.gitattributes",
+    "created_at": "2021-09-01T23:31:59+00:00",
+    "commented_code": "+*.ps1 text eol=lf",
+    "repo_full_name": "Azure/azure-quickstart-templates",
+    "discussion_comments": [
+      {
+        "comment_id": "700640724",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 11818,
+        "pr_file": "quickstarts/microsoft.storage/storage-static-website/scripts/.gitattributes",
+        "discussion_id": "700640724",
+        "commented_code": "@@ -0,0 +1 @@\n+*.ps1 text eol=lf",
+        "comment_created_at": "2021-09-01T23:31:59+00:00",
+        "comment_author": "bmoore-msft",
+        "comment_body": "why is this needed?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "700643663",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 11818,
+        "pr_file": "quickstarts/microsoft.storage/storage-static-website/scripts/.gitattributes",
+        "discussion_id": "700640724",
+        "commented_code": "@@ -0,0 +1 @@\n+*.ps1 text eol=lf",
+        "comment_created_at": "2021-09-01T23:40:08+00:00",
+        "comment_author": "johndowns",
+        "comment_body": "Without this, when Bicep evaluates the `loadTextContent()` function on the pipeline agent, it creates different JSON code than when I run this locally on both Windows and macOS. @StephenWeatherford suggested adding the `.gitattributes` file on this comment: https://github.com/Azure/azure-quickstart-templates/pull/11696#issuecomment-888680692",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "701204996",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 11818,
+        "pr_file": "quickstarts/microsoft.storage/storage-static-website/scripts/.gitattributes",
+        "discussion_id": "700640724",
+        "commented_code": "@@ -0,0 +1 @@\n+*.ps1 text eol=lf",
+        "comment_created_at": "2021-09-02T15:38:15+00:00",
+        "comment_author": "bmoore-msft",
+        "comment_body": "Is there a bicep issue for this?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "701413473",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 11818,
+        "pr_file": "quickstarts/microsoft.storage/storage-static-website/scripts/.gitattributes",
+        "discussion_id": "700640724",
+        "commented_code": "@@ -0,0 +1 @@\n+*.ps1 text eol=lf",
+        "comment_created_at": "2021-09-02T20:50:22+00:00",
+        "comment_author": "StephenWeatherford",
+        "comment_body": "Hard to argue that it's a bicep issue.  git by default automatically changes the file newlines based on the OS, Bicep just sucks in what git downloaded, without making any changes.\r\n\r\nYou could use replace() to standardize them, but since this is not an actual deployment issue but rather a diff against the generated JSON, it shouldn't happen to normal useers.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "729071086",
+    "pr_number": 11901,
+    "pr_file": "quickstarts/microsoft.network/point-to-site-aad/main.bicep",
+    "created_at": "2021-10-14T14:57:18+00:00",
+    "commented_code": "param tenantId string = subscription().tenantId\n \n @description('The cloud your tenant is in')\n-@allowed([\n-  'Public'\n-  'Government'\n-  'Germany'\n-  'China'\n-])\n-param cloud string = 'Public'\n+param cloud string = environment().name",
+    "repo_full_name": "Azure/azure-quickstart-templates",
+    "discussion_comments": [
+      {
+        "comment_id": "729071086",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 11901,
+        "pr_file": "quickstarts/microsoft.network/point-to-site-aad/main.bicep",
+        "discussion_id": "729071086",
+        "commented_code": "@@ -43,23 +43,17 @@ param vpnClientAddressPool string = '172.16.0.0/24'\n param tenantId string = subscription().tenantId\n \n @description('The cloud your tenant is in')\n-@allowed([\n-  'Public'\n-  'Government'\n-  'Germany'\n-  'China'\n-])\n-param cloud string = 'Public'\n+param cloud string = environment().name",
+        "comment_created_at": "2021-10-14T14:57:18+00:00",
+        "comment_author": "bmoore-msft",
+        "comment_body": "move this to a variable - it cannot be changed by the user without causing the template to fail.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "771527012",
+    "pr_number": 12066,
+    "pr_file": "quickstarts/microsoft.hybridcompute/machine-windows-configuration/main.bicep",
+    "created_at": "2021-12-17T16:27:02+00:00",
+    "commented_code": "+@description('The Azure region where resources in the template should be deployed.')\n+param location string\n+\n+@description('Name of the machine.')\n+param machineName string\n+\n+@description('The base URI where artifacts required by this template are located. When the template is deployed using the accompanying scripts, a private location in the subscription will be used and this value will be automatically generated.')\n+param artifactsLocation string = deployment().properties.templateLink.uri\n+\n+@description('The sasToken required to access _artifactsLocation.')\n+@secure()\n+param artifactsLocationSasToken string = ''\n+\n+@description('Name of subfolder containing the configuration package.')\n+param configurationFolder string = 'configuration'\n+\n+@description('File name of the configuration package.')\n+param configurationFileName string = 'netcore6.zip'\n+\n+resource machine 'Microsoft.HybridCompute/Machines@2021-05-20' = {\n+  name: machineName\n+  location: location\n+}\n+\n+resource configuration 'Microsoft.GuestConfiguration/guestConfigurationAssignments@2020-06-25' = {\n+  name: 'netcore6'\n+  scope: machine\n+  location: location\n+  properties: {\n+    guestConfiguration: {\n+      assignmentType: 'ApplyAndMonitor'",
+    "repo_full_name": "Azure/azure-quickstart-templates",
+    "discussion_comments": [
+      {
+        "comment_id": "771527012",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 12066,
+        "pr_file": "quickstarts/microsoft.hybridcompute/machine-windows-configuration/main.bicep",
+        "discussion_id": "771527012",
+        "commented_code": "@@ -0,0 +1,38 @@\n+@description('The Azure region where resources in the template should be deployed.')\n+param location string\n+\n+@description('Name of the machine.')\n+param machineName string\n+\n+@description('The base URI where artifacts required by this template are located. When the template is deployed using the accompanying scripts, a private location in the subscription will be used and this value will be automatically generated.')\n+param artifactsLocation string = deployment().properties.templateLink.uri\n+\n+@description('The sasToken required to access _artifactsLocation.')\n+@secure()\n+param artifactsLocationSasToken string = ''\n+\n+@description('Name of subfolder containing the configuration package.')\n+param configurationFolder string = 'configuration'\n+\n+@description('File name of the configuration package.')\n+param configurationFileName string = 'netcore6.zip'\n+\n+resource machine 'Microsoft.HybridCompute/Machines@2021-05-20' = {\n+  name: machineName\n+  location: location\n+}\n+\n+resource configuration 'Microsoft.GuestConfiguration/guestConfigurationAssignments@2020-06-25' = {\n+  name: 'netcore6'\n+  scope: machine\n+  location: location\n+  properties: {\n+    guestConfiguration: {\n+      assignmentType: 'ApplyAndMonitor'",
+        "comment_created_at": "2021-12-17T16:27:02+00:00",
+        "comment_author": "rpsqrd",
+        "comment_body": "Any reason why you aren't parameterizing this to allow them to opt into auto correct, too?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "799553817",
+        "repo_full_name": "Azure/azure-quickstart-templates",
+        "pr_number": 12066,
+        "pr_file": "quickstarts/microsoft.hybridcompute/machine-windows-configuration/main.bicep",
+        "discussion_id": "771527012",
+        "commented_code": "@@ -0,0 +1,38 @@\n+@description('The Azure region where resources in the template should be deployed.')\n+param location string\n+\n+@description('Name of the machine.')\n+param machineName string\n+\n+@description('The base URI where artifacts required by this template are located. When the template is deployed using the accompanying scripts, a private location in the subscription will be used and this value will be automatically generated.')\n+param artifactsLocation string = deployment().properties.templateLink.uri\n+\n+@description('The sasToken required to access _artifactsLocation.')\n+@secure()\n+param artifactsLocationSasToken string = ''\n+\n+@description('Name of subfolder containing the configuration package.')\n+param configurationFolder string = 'configuration'\n+\n+@description('File name of the configuration package.')\n+param configurationFileName string = 'netcore6.zip'\n+\n+resource machine 'Microsoft.HybridCompute/Machines@2021-05-20' = {\n+  name: machineName\n+  location: location\n+}\n+\n+resource configuration 'Microsoft.GuestConfiguration/guestConfigurationAssignments@2020-06-25' = {\n+  name: 'netcore6'\n+  scope: machine\n+  location: location\n+  properties: {\n+    guestConfiguration: {\n+      assignmentType: 'ApplyAndMonitor'",
+        "comment_created_at": "2022-02-04T15:14:39+00:00",
+        "comment_author": "mgreenegit",
+        "comment_body": "added",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

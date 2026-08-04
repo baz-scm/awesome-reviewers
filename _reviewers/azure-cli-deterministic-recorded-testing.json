@@ -1,0 +1,262 @@
+[
+  {
+    "discussion_id": "3647607040",
+    "pr_number": 33772,
+    "pr_file": "src/azure-cli/azure/cli/command_modules/acr/_params.py",
+    "created_at": "2026-07-24T19:08:20+00:00",
+    "commented_code": "with self.argument_context('acr create') as c:\n         c.argument('allow_metadata_search', arg_type=get_three_state_flag(), is_preview=True, help=\"Enable or disable the metadata-search feature for the registry. If not specified, this is set to disabled by default.\")\n+        c.argument('writable_cache_repo', arg_type=get_enum_type(WritableCacheRepos), is_preview=True, help=\"Enable or disable cache operations that write to repositories in this registry. If not specified, this is set to Disabled by default.\")",
+    "repo_full_name": "Azure/azure-cli",
+    "discussion_comments": [
+      {
+        "comment_id": "3647607040",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 33772,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/acr/_params.py",
+        "discussion_id": "3647607040",
+        "commented_code": "@@ -128,6 +130,7 @@ def load_arguments(self, _):  # pylint: disable=too-many-statements\n \n     with self.argument_context('acr create') as c:\n         c.argument('allow_metadata_search', arg_type=get_three_state_flag(), is_preview=True, help=\"Enable or disable the metadata-search feature for the registry. If not specified, this is set to disabled by default.\")\n+        c.argument('writable_cache_repo', arg_type=get_enum_type(WritableCacheRepos), is_preview=True, help=\"Enable or disable cache operations that write to repositories in this registry. If not specified, this is set to Disabled by default.\")",
+        "comment_created_at": "2026-07-24T19:08:20+00:00",
+        "comment_author": "luisdlp",
+        "comment_body": "Lets make sure we validate the default behavior.  \"Disabled\" by default both in the create and the update cases. if the flag is not provided.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3647842806",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 33772,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/acr/_params.py",
+        "discussion_id": "3647607040",
+        "commented_code": "@@ -128,6 +130,7 @@ def load_arguments(self, _):  # pylint: disable=too-many-statements\n \n     with self.argument_context('acr create') as c:\n         c.argument('allow_metadata_search', arg_type=get_three_state_flag(), is_preview=True, help=\"Enable or disable the metadata-search feature for the registry. If not specified, this is set to disabled by default.\")\n+        c.argument('writable_cache_repo', arg_type=get_enum_type(WritableCacheRepos), is_preview=True, help=\"Enable or disable cache operations that write to repositories in this registry. If not specified, this is set to Disabled by default.\")",
+        "comment_created_at": "2026-07-24T20:08:47+00:00",
+        "comment_author": "mabelegba",
+        "comment_body": "Added scenario tests to validate:\n\u2022 Create without flag \u2192 Disabled\n\u2022 Create with Enabled\u00a0\u2192 Enabled\n\u2022 Update without flag \u2192 preserves current value\n\u2022 Update with explicit value \u2192 changes it\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3032110200",
+    "pr_number": 33130,
+    "pr_file": "src/azure-cli/azure/cli/command_modules/acs/tests/latest/test_aks_commands.py",
+    "created_at": "2026-04-07T06:11:58+00:00",
+    "commented_code": "method_name, recording_processors=[KeyReplacer()]\n         )\n \n+    def cmd(self, command, checks=None, expect_failure=False):\n+        if (checks and self.is_live and\n+            os.environ.get('AZURE_CLI_TEST_RETRY_PROVISIONING_CHECK') == 'true'):\n+            return self._cmd_with_retry(command, checks, expect_failure)\n+        return super().cmd(command, checks=checks, expect_failure=expect_failure)\n+\n+    def _is_provisioning_state_check(self, check):\n+        from azure.cli.testsdk.checkers import JMESPathCheck\n+        if not isinstance(check, JMESPathCheck):\n+            return False\n+        return check._query == 'provisioningState' and check._expected_result == 'Succeeded'\n+\n+    def _should_retry_for_provisioning_state(self, result):\n+        if not hasattr(result, 'get_output_in_json'):\n+            return False, None\n+        data = result.get_output_in_json()\n+        if not isinstance(data, dict) or 'id' not in data:\n+            return False, None\n+        provisioning_state = data.get('provisioningState')\n+        if not provisioning_state:\n+            return False, None\n+        terminal_states = {'Succeeded', 'Failed', 'Canceled'}\n+        if provisioning_state in terminal_states:\n+            return False, None\n+        return True, data['id']\n+\n+    def _cmd_with_retry(self, command, checks, expect_failure):\n+        from azure.cli.testsdk.base import execute\n+        import logging\n+\n+        # Apply kwargs substitution (e.g. {resource_group}) before executing,\n+        # matching what ScenarioTest.cmd() does internally.\n+        command = self._apply_kwargs(command)\n+        result = execute(self.cli_ctx, command, expect_failure=expect_failure)\n+\n+        # Split checks into provisioning vs everything else\n+        provisioning_checks = [c for c in (checks or []) if self._is_provisioning_state_check(c)]\n+        other_checks = [c for c in (checks or []) if not self._is_provisioning_state_check(c)]\n+\n+        if provisioning_checks:\n+            should_retry, resource_id = self._should_retry_for_provisioning_state(result)\n+            if should_retry:\n+                initial_data = result.get_output_in_json()\n+                initial_etag = initial_data.get('etag')\n+                last_seen_etag = initial_etag\n+                max_retries = int(os.environ.get('AZURE_CLI_TEST_PROVISIONING_MAX_RETRIES', '10'))\n+                base_delay = float(os.environ.get('AZURE_CLI_TEST_PROVISIONING_BASE_DELAY', '2.0'))\n+\n+                # Poll with exponential backoff + jitter until terminal state\n+                for attempt in range(max_retries):\n+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 1)\n+                    time.sleep(delay)\n+                    poll_result = execute(self.cli_ctx, f'resource show --ids {resource_id}', expect_failure=False)\n+                    poll_data = poll_result.get_output_in_json()\n+                    current_provisioning_state = poll_data.get('provisioningState')\n+                    current_etag = poll_data.get('etag')\n+\n+                    # Track etag changes to detect external modifications during polling\n+                    if current_etag and last_seen_etag and current_etag != last_seen_etag:\n+                        logging.warning(f\"ETag changed during polling (external modification detected)\")\n+                    last_seen_etag = current_etag\n+\n+                    if current_provisioning_state == 'Succeeded':\n+                        break\n+                    elif current_provisioning_state in {'Failed', 'Canceled'}:\n+                        raise AssertionError(\n+                            f\"provisioningState reached terminal failure: {current_provisioning_state}\"\n+                        )\n+                else:\n+                    # for/else: ran all retries without breaking\n+                    final_etag_msg = \"\"\n+                    if initial_etag and last_seen_etag:\n+                        final_etag_msg = f\" (initial etag: {initial_etag}, final: {last_seen_etag})\"\n+                    raise TimeoutError(\n+                        f\"provisioningState did not reach 'Succeeded' after {max_retries} retries. \"\n+                        f\"Final state: {current_provisioning_state}{final_etag_msg}\"\n+                    )\n+\n+            # Provisioning checks already verified via polling, skip re-checking stale result\n+\n+        # Run all non-provisioning checks against the original result\n+        for check in other_checks:\n+            check(result)",
+    "repo_full_name": "Azure/azure-cli",
+    "discussion_comments": [
+      {
+        "comment_id": "3043166484",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 33130,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/acs/tests/latest/test_aks_commands.py",
+        "discussion_id": "3032110200",
+        "commented_code": "@@ -50,6 +51,92 @@ def __init__(self, method_name):\n             method_name, recording_processors=[KeyReplacer()]\n         )\n \n+    def cmd(self, command, checks=None, expect_failure=False):\n+        if (checks and self.is_live and\n+            os.environ.get('AZURE_CLI_TEST_RETRY_PROVISIONING_CHECK') == 'true'):\n+            return self._cmd_with_retry(command, checks, expect_failure)\n+        return super().cmd(command, checks=checks, expect_failure=expect_failure)\n+\n+    def _is_provisioning_state_check(self, check):\n+        from azure.cli.testsdk.checkers import JMESPathCheck\n+        if not isinstance(check, JMESPathCheck):\n+            return False\n+        return check._query == 'provisioningState' and check._expected_result == 'Succeeded'\n+\n+    def _should_retry_for_provisioning_state(self, result):\n+        if not hasattr(result, 'get_output_in_json'):\n+            return False, None\n+        data = result.get_output_in_json()\n+        if not isinstance(data, dict) or 'id' not in data:\n+            return False, None\n+        provisioning_state = data.get('provisioningState')\n+        if not provisioning_state:\n+            return False, None\n+        terminal_states = {'Succeeded', 'Failed', 'Canceled'}\n+        if provisioning_state in terminal_states:\n+            return False, None\n+        return True, data['id']\n+\n+    def _cmd_with_retry(self, command, checks, expect_failure):\n+        from azure.cli.testsdk.base import execute\n+        import logging\n+\n+        # Apply kwargs substitution (e.g. {resource_group}) before executing,\n+        # matching what ScenarioTest.cmd() does internally.\n+        command = self._apply_kwargs(command)\n+        result = execute(self.cli_ctx, command, expect_failure=expect_failure)\n+\n+        # Split checks into provisioning vs everything else\n+        provisioning_checks = [c for c in (checks or []) if self._is_provisioning_state_check(c)]\n+        other_checks = [c for c in (checks or []) if not self._is_provisioning_state_check(c)]\n+\n+        if provisioning_checks:\n+            should_retry, resource_id = self._should_retry_for_provisioning_state(result)\n+            if should_retry:\n+                initial_data = result.get_output_in_json()\n+                initial_etag = initial_data.get('etag')\n+                last_seen_etag = initial_etag\n+                max_retries = int(os.environ.get('AZURE_CLI_TEST_PROVISIONING_MAX_RETRIES', '10'))\n+                base_delay = float(os.environ.get('AZURE_CLI_TEST_PROVISIONING_BASE_DELAY', '2.0'))\n+\n+                # Poll with exponential backoff + jitter until terminal state\n+                for attempt in range(max_retries):\n+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 1)\n+                    time.sleep(delay)\n+                    poll_result = execute(self.cli_ctx, f'resource show --ids {resource_id}', expect_failure=False)\n+                    poll_data = poll_result.get_output_in_json()\n+                    current_provisioning_state = poll_data.get('provisioningState')\n+                    current_etag = poll_data.get('etag')\n+\n+                    # Track etag changes to detect external modifications during polling\n+                    if current_etag and last_seen_etag and current_etag != last_seen_etag:\n+                        logging.warning(f\"ETag changed during polling (external modification detected)\")\n+                    last_seen_etag = current_etag\n+\n+                    if current_provisioning_state == 'Succeeded':\n+                        break\n+                    elif current_provisioning_state in {'Failed', 'Canceled'}:\n+                        raise AssertionError(\n+                            f\"provisioningState reached terminal failure: {current_provisioning_state}\"\n+                        )\n+                else:\n+                    # for/else: ran all retries without breaking\n+                    final_etag_msg = \"\"\n+                    if initial_etag and last_seen_etag:\n+                        final_etag_msg = f\" (initial etag: {initial_etag}, final: {last_seen_etag})\"\n+                    raise TimeoutError(\n+                        f\"provisioningState did not reach 'Succeeded' after {max_retries} retries. \"\n+                        f\"Final state: {current_provisioning_state}{final_etag_msg}\"\n+                    )\n+\n+            # Provisioning checks already verified via polling, skip re-checking stale result\n+\n+        # Run all non-provisioning checks against the original result\n+        for check in other_checks:\n+            check(result)",
+        "comment_created_at": "2026-04-07T06:11:58+00:00",
+        "comment_author": "deveshdama",
+        "comment_body": "Fixed. Replaced the manual `for check in other_checks: check(result)` loop with `result.assert_with_checks(other_checks)` which respects `skip_assert`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3424529983",
+    "pr_number": 33130,
+    "pr_file": "src/azure-cli/azure/cli/command_modules/acs/tests/latest/test_aks_commands.py",
+    "created_at": "2026-06-17T01:29:59+00:00",
+    "commented_code": "method_name, recording_processors=[KeyReplacer()]\n         )\n \n+    def cmd(self, command, checks=None, expect_failure=False):\n+        # Live-only retry adapter: when AZURE_CLI_TEST_RETRY_PROVISIONING_CHECK\n+        # is set during a live run, poll provisioningState until terminal so an\n+        # Azure Policy race can't fail the test on a stale 'Updating' body.\n+        # Recordings made with the flag enabled must NOT be committed; the\n+        # replay pipeline runs with the flag off and would assert against the\n+        # initial pre-poll response.\n+        if (checks and self.is_live and\n+            os.environ.get('AZURE_CLI_TEST_RETRY_PROVISIONING_CHECK') == 'true'):\n+            normalized_checks = checks if isinstance(checks, (list, tuple)) else [checks]\n+            return self._cmd_with_retry(command, normalized_checks, expect_failure)\n+        return super().cmd(command, checks=checks, expect_failure=expect_failure)\n+\n+    def _is_provisioning_state_check(self, check):\n+        from azure.cli.testsdk.checkers import JMESPathCheck\n+        if not isinstance(check, JMESPathCheck):\n+            return False\n+        return check._query == 'provisioningState' and check._expected_result == 'Succeeded'",
+    "repo_full_name": "Azure/azure-cli",
+    "discussion_comments": [
+      {
+        "comment_id": "3425025942",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 33130,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/acs/tests/latest/test_aks_commands.py",
+        "discussion_id": "3424529983",
+        "commented_code": "@@ -50,6 +51,103 @@ def __init__(self, method_name):\n             method_name, recording_processors=[KeyReplacer()]\n         )\n \n+    def cmd(self, command, checks=None, expect_failure=False):\n+        # Live-only retry adapter: when AZURE_CLI_TEST_RETRY_PROVISIONING_CHECK\n+        # is set during a live run, poll provisioningState until terminal so an\n+        # Azure Policy race can't fail the test on a stale 'Updating' body.\n+        # Recordings made with the flag enabled must NOT be committed; the\n+        # replay pipeline runs with the flag off and would assert against the\n+        # initial pre-poll response.\n+        if (checks and self.is_live and\n+            os.environ.get('AZURE_CLI_TEST_RETRY_PROVISIONING_CHECK') == 'true'):\n+            normalized_checks = checks if isinstance(checks, (list, tuple)) else [checks]\n+            return self._cmd_with_retry(command, normalized_checks, expect_failure)\n+        return super().cmd(command, checks=checks, expect_failure=expect_failure)\n+\n+    def _is_provisioning_state_check(self, check):\n+        from azure.cli.testsdk.checkers import JMESPathCheck\n+        if not isinstance(check, JMESPathCheck):\n+            return False\n+        return check._query == 'provisioningState' and check._expected_result == 'Succeeded'",
+        "comment_created_at": "2026-06-17T01:29:59+00:00",
+        "comment_author": "deveshdama",
+        "comment_body": "Agreed it's not ideal to reach into `JMESPathCheck`'s internals. The testsdk doesn't expose a public getter for the JMESPath query or expected value, so the alternatives are: (a) wrap every relevant check in our own typed marker before passing to `cmd()`, which would change every call site in the AKS suite, or (b) defensively `getattr` and silently skip on mismatch, which trades one silent failure mode for another. Since `azure.cli.testsdk` ships from this same repo, a rename of those attributes would break a large number of tests across modules and would be caught in CI immediately rather than silently. I'd prefer to leave this as is for now; happy to revisit if testsdk grows a public accessor.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3338408822",
+    "pr_number": 33431,
+    "pr_file": "src/azure-cli/azure/cli/command_modules/acs/tests/latest/test_maintenanceconfiguration.py",
+    "created_at": "2026-06-02T03:05:18+00:00",
+    "commented_code": "with self.assertRaises(RequiredArgumentMissingError) as cm:\n             aks_maintenanceconfiguration_update_internal(cmd, None, raw_parameters)\n         self.assertEqual(str(cm.exception), err)\n-        \n\\ No newline at end of file\n+\n+    def test_add_default_maintenance_configuration_with_weekly_schedule_type(self):\n+        cmd = MockCmd(self.cli_ctx)\n+\n+        class MockMaintenanceConfigClient:\n+            def create_or_update(self, **kwargs):\n+                return kwargs.get('parameters')\n+\n+        raw_parameters = {\n+            \"resource_group_name\": \"test_rg\",\n+            \"cluster_name\": \"test_cluster\",\n+            \"config_name\": \"default\",\n+            \"weekday\": None,\n+            \"start_hour\": None,\n+            \"schedule_type\": \"Weekly\",\n+            \"interval_days\": None,\n+            \"interval_weeks\": None,\n+            \"interval_months\": None,\n+            \"day_of_week\": \"Monday\",\n+            \"day_of_month\": None,\n+            \"week_index\": None,\n+            \"start_time\": \"09:00\",\n+            \"duration_hours\": 4,\n+            \"utc_offset\": None,\n+            \"start_date\": None,\n+        }\n+\n+        result = aks_maintenanceconfiguration_update_internal(cmd, MockMaintenanceConfigClient(), raw_parameters)\n+\n+        self.assertIsNotNone(result.maintenance_window)\n+        self.assertEqual(result.maintenance_window.start_time, \"09:00\")\n+        self.assertEqual(result.maintenance_window.duration_hours, 4)\n+        self.assertIsNotNone(result.maintenance_window.schedule)\n+        self.assertIsNotNone(result.maintenance_window.schedule.weekly)\n+        self.assertIsNone(getattr(result, 'time_in_week', None))",
+    "repo_full_name": "Azure/azure-cli",
+    "discussion_comments": [
+      {
+        "comment_id": "3338408822",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 33431,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/acs/tests/latest/test_maintenanceconfiguration.py",
+        "discussion_id": "3338408822",
+        "commented_code": "@@ -177,4 +269,73 @@ def test_add_dedicated_schedule_with_missing_options(self):\n         with self.assertRaises(RequiredArgumentMissingError) as cm:\n             aks_maintenanceconfiguration_update_internal(cmd, None, raw_parameters)\n         self.assertEqual(str(cm.exception), err)\n-        \n\\ No newline at end of file\n+\n+    def test_add_default_maintenance_configuration_with_weekly_schedule_type(self):\n+        cmd = MockCmd(self.cli_ctx)\n+\n+        class MockMaintenanceConfigClient:\n+            def create_or_update(self, **kwargs):\n+                return kwargs.get('parameters')\n+\n+        raw_parameters = {\n+            \"resource_group_name\": \"test_rg\",\n+            \"cluster_name\": \"test_cluster\",\n+            \"config_name\": \"default\",\n+            \"weekday\": None,\n+            \"start_hour\": None,\n+            \"schedule_type\": \"Weekly\",\n+            \"interval_days\": None,\n+            \"interval_weeks\": None,\n+            \"interval_months\": None,\n+            \"day_of_week\": \"Monday\",\n+            \"day_of_month\": None,\n+            \"week_index\": None,\n+            \"start_time\": \"09:00\",\n+            \"duration_hours\": 4,\n+            \"utc_offset\": None,\n+            \"start_date\": None,\n+        }\n+\n+        result = aks_maintenanceconfiguration_update_internal(cmd, MockMaintenanceConfigClient(), raw_parameters)\n+\n+        self.assertIsNotNone(result.maintenance_window)\n+        self.assertEqual(result.maintenance_window.start_time, \"09:00\")\n+        self.assertEqual(result.maintenance_window.duration_hours, 4)\n+        self.assertIsNotNone(result.maintenance_window.schedule)\n+        self.assertIsNotNone(result.maintenance_window.schedule.weekly)\n+        self.assertIsNone(getattr(result, 'time_in_week', None))",
+        "comment_created_at": "2026-06-02T03:05:18+00:00",
+        "comment_author": "yewmsft",
+        "comment_body": "**Missing negative-test coverage: `--day-of-week` omitted.**\n\nThere's no test that pins the user-facing error when `--schedule-type Weekly` is used for default config without `--day-of-week`. Today this falls through to `constructWeeklySchedule`'s message (related: comment on `maintenanceconfiguration.py:71`). Once that fix lands, please add a test like:\n\n```python\ndef test_add_default_maintenance_configuration_requires_day_of_week(self):\n    # --schedule-type Weekly + start_time + duration, but no day_of_week\n    raw_parameters = { ..., \"day_of_week\": None, \"start_time\": \"09:00\", \"duration_hours\": 4 }\n    with self.assertRaises(RequiredArgumentMissingError):\n        aks_maintenanceconfiguration_update_internal(cmd, None, raw_parameters)\n```\n\nThis locks the message so a future refactor doesn't silently regress to the confusing generic weekly-schedule error.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3343362164",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 33431,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/acs/tests/latest/test_maintenanceconfiguration.py",
+        "discussion_id": "3338408822",
+        "commented_code": "@@ -177,4 +269,73 @@ def test_add_dedicated_schedule_with_missing_options(self):\n         with self.assertRaises(RequiredArgumentMissingError) as cm:\n             aks_maintenanceconfiguration_update_internal(cmd, None, raw_parameters)\n         self.assertEqual(str(cm.exception), err)\n-        \n\\ No newline at end of file\n+\n+    def test_add_default_maintenance_configuration_with_weekly_schedule_type(self):\n+        cmd = MockCmd(self.cli_ctx)\n+\n+        class MockMaintenanceConfigClient:\n+            def create_or_update(self, **kwargs):\n+                return kwargs.get('parameters')\n+\n+        raw_parameters = {\n+            \"resource_group_name\": \"test_rg\",\n+            \"cluster_name\": \"test_cluster\",\n+            \"config_name\": \"default\",\n+            \"weekday\": None,\n+            \"start_hour\": None,\n+            \"schedule_type\": \"Weekly\",\n+            \"interval_days\": None,\n+            \"interval_weeks\": None,\n+            \"interval_months\": None,\n+            \"day_of_week\": \"Monday\",\n+            \"day_of_month\": None,\n+            \"week_index\": None,\n+            \"start_time\": \"09:00\",\n+            \"duration_hours\": 4,\n+            \"utc_offset\": None,\n+            \"start_date\": None,\n+        }\n+\n+        result = aks_maintenanceconfiguration_update_internal(cmd, MockMaintenanceConfigClient(), raw_parameters)\n+\n+        self.assertIsNotNone(result.maintenance_window)\n+        self.assertEqual(result.maintenance_window.start_time, \"09:00\")\n+        self.assertEqual(result.maintenance_window.duration_hours, 4)\n+        self.assertIsNotNone(result.maintenance_window.schedule)\n+        self.assertIsNotNone(result.maintenance_window.schedule.weekly)\n+        self.assertIsNone(getattr(result, 'time_in_week', None))",
+        "comment_created_at": "2026-06-02T17:59:50+00:00",
+        "comment_author": "anushkasingh16",
+        "comment_body": "Added the test for this!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3338408886",
+    "pr_number": 33431,
+    "pr_file": "src/azure-cli/azure/cli/command_modules/acs/tests/latest/test_maintenanceconfiguration.py",
+    "created_at": "2026-06-02T03:05:19+00:00",
+    "commented_code": "with self.assertRaises(RequiredArgumentMissingError) as cm:\n             aks_maintenanceconfiguration_update_internal(cmd, None, raw_parameters)\n         self.assertEqual(str(cm.exception), err)\n-        \n\\ No newline at end of file\n+\n+    def test_add_default_maintenance_configuration_with_weekly_schedule_type(self):\n+        cmd = MockCmd(self.cli_ctx)\n+\n+        class MockMaintenanceConfigClient:\n+            def create_or_update(self, **kwargs):\n+                return kwargs.get('parameters')\n+\n+        raw_parameters = {\n+            \"resource_group_name\": \"test_rg\",\n+            \"cluster_name\": \"test_cluster\",\n+            \"config_name\": \"default\",\n+            \"weekday\": None,\n+            \"start_hour\": None,\n+            \"schedule_type\": \"Weekly\",\n+            \"interval_days\": None,\n+            \"interval_weeks\": None,\n+            \"interval_months\": None,\n+            \"day_of_week\": \"Monday\",\n+            \"day_of_month\": None,\n+            \"week_index\": None,\n+            \"start_time\": \"09:00\",\n+            \"duration_hours\": 4,\n+            \"utc_offset\": None,\n+            \"start_date\": None,\n+        }\n+\n+        result = aks_maintenanceconfiguration_update_internal(cmd, MockMaintenanceConfigClient(), raw_parameters)\n+\n+        self.assertIsNotNone(result.maintenance_window)\n+        self.assertEqual(result.maintenance_window.start_time, \"09:00\")\n+        self.assertEqual(result.maintenance_window.duration_hours, 4)\n+        self.assertIsNotNone(result.maintenance_window.schedule)\n+        self.assertIsNotNone(result.maintenance_window.schedule.weekly)\n+        self.assertIsNone(getattr(result, 'time_in_week', None))",
+    "repo_full_name": "Azure/azure-cli",
+    "discussion_comments": [
+      {
+        "comment_id": "3338408886",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 33431,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/acs/tests/latest/test_maintenanceconfiguration.py",
+        "discussion_id": "3338408886",
+        "commented_code": "@@ -177,4 +269,73 @@ def test_add_dedicated_schedule_with_missing_options(self):\n         with self.assertRaises(RequiredArgumentMissingError) as cm:\n             aks_maintenanceconfiguration_update_internal(cmd, None, raw_parameters)\n         self.assertEqual(str(cm.exception), err)\n-        \n\\ No newline at end of file\n+\n+    def test_add_default_maintenance_configuration_with_weekly_schedule_type(self):\n+        cmd = MockCmd(self.cli_ctx)\n+\n+        class MockMaintenanceConfigClient:\n+            def create_or_update(self, **kwargs):\n+                return kwargs.get('parameters')\n+\n+        raw_parameters = {\n+            \"resource_group_name\": \"test_rg\",\n+            \"cluster_name\": \"test_cluster\",\n+            \"config_name\": \"default\",\n+            \"weekday\": None,\n+            \"start_hour\": None,\n+            \"schedule_type\": \"Weekly\",\n+            \"interval_days\": None,\n+            \"interval_weeks\": None,\n+            \"interval_months\": None,\n+            \"day_of_week\": \"Monday\",\n+            \"day_of_month\": None,\n+            \"week_index\": None,\n+            \"start_time\": \"09:00\",\n+            \"duration_hours\": 4,\n+            \"utc_offset\": None,\n+            \"start_date\": None,\n+        }\n+\n+        result = aks_maintenanceconfiguration_update_internal(cmd, MockMaintenanceConfigClient(), raw_parameters)\n+\n+        self.assertIsNotNone(result.maintenance_window)\n+        self.assertEqual(result.maintenance_window.start_time, \"09:00\")\n+        self.assertEqual(result.maintenance_window.duration_hours, 4)\n+        self.assertIsNotNone(result.maintenance_window.schedule)\n+        self.assertIsNotNone(result.maintenance_window.schedule.weekly)\n+        self.assertIsNone(getattr(result, 'time_in_week', None))",
+        "comment_created_at": "2026-06-02T03:05:19+00:00",
+        "comment_author": "yewmsft",
+        "comment_body": "**No test exercises `--utc-offset` / `--start-date` on default config.**\n\nThe comment at `maintenanceconfiguration.py:78-79` makes a load-bearing promise \u2014 *\"the RP accepts the full MaintenanceWindow schema (including these optional fields)\"* \u2014 but the happy-path test passes `utc_offset=None` and `start_date=None`, so a future model regen that quietly drops one of those fields would not be caught here.\n\nSuggest extending this test (or adding a sibling) that sets:\n```python\n\"utc_offset\": \"+05:30\",\n\"start_date\": \"2026-01-15\",\n```\nand asserts both land on the constructed `result.maintenance_window` (`utc_offset`, `start_date`).",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2991875129",
+    "pr_number": 33039,
+    "pr_file": "src/azure-cli/azure/cli/command_modules/acs/tests/latest/test_aks_commands.py",
+    "created_at": "2026-03-26T00:53:54+00:00",
+    "commented_code": "self.check('properties.provisioningState', f'Succeeded')\n                 ])\n \n-        # make sure monitoring can be smoothly disabled\n-        self.cmd(f'aks disable-addons -a monitoring -g={resource_group} -n={aks_name}')\n+        # wait for any in-progress cluster operation to finish before disabling\n+        self.cmd(f'aks wait -g {resource_group} -n {aks_name} --updated --interval 30 --timeout 600')\n+        time.sleep(60)",
+    "repo_full_name": "Azure/azure-cli",
+    "discussion_comments": [
+      {
+        "comment_id": "2991875129",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 33039,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/acs/tests/latest/test_aks_commands.py",
+        "discussion_id": "2991875129",
+        "commented_code": "@@ -9094,8 +9094,20 @@ def create_new_cluster_with_monitoring_aad_auth(self, resource_group, resource_g\n                 self.check('properties.provisioningState', f'Succeeded')\n                 ])\n \n-        # make sure monitoring can be smoothly disabled\n-        self.cmd(f'aks disable-addons -a monitoring -g={resource_group} -n={aks_name}')\n+        # wait for any in-progress cluster operation to finish before disabling\n+        self.cmd(f'aks wait -g {resource_group} -n {aks_name} --updated --interval 30 --timeout 600')\n+        time.sleep(60)",
+        "comment_created_at": "2026-03-26T00:53:54+00:00",
+        "comment_author": "FumingZhang",
+        "comment_body": "should skip this in replay mode",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2994145029",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 33039,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/acs/tests/latest/test_aks_commands.py",
+        "discussion_id": "2991875129",
+        "commented_code": "@@ -9094,8 +9094,20 @@ def create_new_cluster_with_monitoring_aad_auth(self, resource_group, resource_g\n                 self.check('properties.provisioningState', f'Succeeded')\n                 ])\n \n-        # make sure monitoring can be smoothly disabled\n-        self.cmd(f'aks disable-addons -a monitoring -g={resource_group} -n={aks_name}')\n+        # wait for any in-progress cluster operation to finish before disabling\n+        self.cmd(f'aks wait -g {resource_group} -n {aks_name} --updated --interval 30 --timeout 600')\n+        time.sleep(60)",
+        "comment_created_at": "2026-03-26T11:21:43+00:00",
+        "comment_author": "carlotaarvela",
+        "comment_body": "Done, also made this change for the other test that have a sleep ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1928081747",
+    "pr_number": 30612,
+    "pr_file": "src/azure-cli/azure/cli/command_modules/appservice/custom.py",
+    "created_at": "2025-01-24T04:45:07+00:00",
+    "commented_code": "functionapp_def.kind = 'functionapp'\n         # if os_type is None, the os type is windows\n         is_linux = bool(os_type and os_type.lower() == LINUX_OS_NAME)\n+        plan_name = generatePlanName(resource_group_name)",
+    "repo_full_name": "Azure/azure-cli",
+    "discussion_comments": [
+      {
+        "comment_id": "1928081747",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 30612,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/appservice/custom.py",
+        "discussion_id": "1928081747",
+        "commented_code": "@@ -4922,6 +4922,11 @@ def create_functionapp(cmd, resource_group_name, name, storage_account, plan=Non\n         functionapp_def.kind = 'functionapp'\n         # if os_type is None, the os type is windows\n         is_linux = bool(os_type and os_type.lower() == LINUX_OS_NAME)\n+        plan_name = generatePlanName(resource_group_name)",
+        "comment_created_at": "2025-01-24T04:45:07+00:00",
+        "comment_author": "yanzhudd",
+        "comment_body": "I think this is the reason why the recording tests failed. A new random plan name will be generated when each time this function is run. Thus, when tests are run under recording mode, the plan name is generated again and different from what in the recoding file.\r\nhttps://github.com/Azure/azure-cli/blob/900d76206b748f84864a9a4f441dcdd53ea175ff/src/azure-cli/azure/cli/command_modules/appservice/custom.py#L5394-L5398",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1928859808",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 30612,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/appservice/custom.py",
+        "discussion_id": "1928081747",
+        "commented_code": "@@ -4922,6 +4922,11 @@ def create_functionapp(cmd, resource_group_name, name, storage_account, plan=Non\n         functionapp_def.kind = 'functionapp'\n         # if os_type is None, the os type is windows\n         is_linux = bool(os_type and os_type.lower() == LINUX_OS_NAME)\n+        plan_name = generatePlanName(resource_group_name)",
+        "comment_created_at": "2025-01-24T15:23:57+00:00",
+        "comment_author": "kamperiadis",
+        "comment_body": "Hi @yanzhudd We actually do intend to create a new plan resource with a new name on behalf of the customer.  Does this mean we should just make the tests run live? Or what would you require for this PR to be merged?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1929642998",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 30612,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/appservice/custom.py",
+        "discussion_id": "1928081747",
+        "commented_code": "@@ -4922,6 +4922,11 @@ def create_functionapp(cmd, resource_group_name, name, storage_account, plan=Non\n         functionapp_def.kind = 'functionapp'\n         # if os_type is None, the os type is windows\n         is_linux = bool(os_type and os_type.lower() == LINUX_OS_NAME)\n+        plan_name = generatePlanName(resource_group_name)",
+        "comment_created_at": "2025-01-26T02:13:51+00:00",
+        "comment_author": "yanzhudd",
+        "comment_body": "yes, please mark the related tests as live only, and remove the corresponding recording files as well.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1932385271",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 30612,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/appservice/custom.py",
+        "discussion_id": "1928081747",
+        "commented_code": "@@ -4922,6 +4922,11 @@ def create_functionapp(cmd, resource_group_name, name, storage_account, plan=Non\n         functionapp_def.kind = 'functionapp'\n         # if os_type is None, the os type is windows\n         is_linux = bool(os_type and os_type.lower() == LINUX_OS_NAME)\n+        plan_name = generatePlanName(resource_group_name)",
+        "comment_created_at": "2025-01-28T15:28:17+00:00",
+        "comment_author": "kamperiadis",
+        "comment_body": "Done! Thank you @yanzhudd. The PR is ready to be merged. Can you please review/merge it?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1836496233",
+    "pr_number": 29908,
+    "pr_file": "src/azure-cli/azure/cli/command_modules/servicefabric/tests/latest/test_sf_cluster.py",
+    "created_at": "2024-11-11T11:02:47+00:00",
+    "commented_code": "self.cmd('sf cluster reliability update --resource-group {rg} -c {cluster_name} --reliability-level Silver',\n                  checks=[self.check('reliabilityLevel', 'Silver')])\n \n+    @ResourceGroupPreparer()\n+    def test_cluster_settings_and_upgrade_mode(self):\n+        self.kwargs.update({\n+            'kv_name': self.create_random_name('sfrp-cli-kv-', 24),\n+            'loc': 'westus',\n+            'cert_name': self.create_random_name('sfrp-cli-', 24),\n+            'cluster_name': self.create_random_name('sfrp-cli-', 24),\n+            'vm_password': \"Pass123!@#\",\n+            'primary_node_type': 'nt1vm',\n+            'new_node_type': 'nt2',\n+            'cluster_size': '5',\n+            'version': '10.1.2338.9590'\n+        })\n+        _create_cluster(self, self.kwargs)\n+        _wait_for_cluster_state_ready(self, self.kwargs)\n+\n+        # add setting\n+        self.cmd('sf cluster update --resource-group {rg} -c {cluster_name} --settings-section-set --section NamingService --parameter MaxOperationTimeout --value 10001',\n+                 checks=[self.check('length(fabricSettings)', 2),\n+                         self.check('fabricSettings[1].name', 'NamingService'),\n+                         self.check('fabricSettings[1].parameters[0].name', 'MaxOperationTimeout'),\n+                         self.check('fabricSettings[1].parameters[0].value', '10001')])\n+\n+        # remove setting\n+        self.cmd('sf cluster update --resource-group {rg} -c {cluster_name} --settings-section-rem --section NamingService --parameter MaxOperationTimeout',\n+                 checks=[self.check('length(fabricSettings)', 1),\n+                         self.check('fabricSettings[0].name', 'Security')])\n+        \n+        # update upgrade mode\n+        self.cmd('sf cluster update --resource-group {rg} -c {cluster_name} --upgrade-mode manual --version {version}',\n+                 checks=[self.check('upgradeMode', 'Manual')])\n+        \n+    @live_only()",
+    "repo_full_name": "Azure/azure-cli",
+    "discussion_comments": [
+      {
+        "comment_id": "1836496233",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 29908,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/servicefabric/tests/latest/test_sf_cluster.py",
+        "discussion_id": "1836496233",
+        "commented_code": "@@ -60,6 +60,71 @@ def test_update_settings_and_reliability(self):\n         self.cmd('sf cluster reliability update --resource-group {rg} -c {cluster_name} --reliability-level Silver',\n                  checks=[self.check('reliabilityLevel', 'Silver')])\n \n+    @ResourceGroupPreparer()\n+    def test_cluster_settings_and_upgrade_mode(self):\n+        self.kwargs.update({\n+            'kv_name': self.create_random_name('sfrp-cli-kv-', 24),\n+            'loc': 'westus',\n+            'cert_name': self.create_random_name('sfrp-cli-', 24),\n+            'cluster_name': self.create_random_name('sfrp-cli-', 24),\n+            'vm_password': \"Pass123!@#\",\n+            'primary_node_type': 'nt1vm',\n+            'new_node_type': 'nt2',\n+            'cluster_size': '5',\n+            'version': '10.1.2338.9590'\n+        })\n+        _create_cluster(self, self.kwargs)\n+        _wait_for_cluster_state_ready(self, self.kwargs)\n+\n+        # add setting\n+        self.cmd('sf cluster update --resource-group {rg} -c {cluster_name} --settings-section-set --section NamingService --parameter MaxOperationTimeout --value 10001',\n+                 checks=[self.check('length(fabricSettings)', 2),\n+                         self.check('fabricSettings[1].name', 'NamingService'),\n+                         self.check('fabricSettings[1].parameters[0].name', 'MaxOperationTimeout'),\n+                         self.check('fabricSettings[1].parameters[0].value', '10001')])\n+\n+        # remove setting\n+        self.cmd('sf cluster update --resource-group {rg} -c {cluster_name} --settings-section-rem --section NamingService --parameter MaxOperationTimeout',\n+                 checks=[self.check('length(fabricSettings)', 1),\n+                         self.check('fabricSettings[0].name', 'Security')])\n+        \n+        # update upgrade mode\n+        self.cmd('sf cluster update --resource-group {rg} -c {cluster_name} --upgrade-mode manual --version {version}',\n+                 checks=[self.check('upgradeMode', 'Manual')])\n+        \n+    @live_only()    ",
+        "comment_created_at": "2024-11-11T11:02:47+00:00",
+        "comment_author": "zhoxing-ms",
+        "comment_body": "May I ask why do you need to mark this test as `@live_only()`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1846997185",
+        "repo_full_name": "Azure/azure-cli",
+        "pr_number": 29908,
+        "pr_file": "src/azure-cli/azure/cli/command_modules/servicefabric/tests/latest/test_sf_cluster.py",
+        "discussion_id": "1836496233",
+        "commented_code": "@@ -60,6 +60,71 @@ def test_update_settings_and_reliability(self):\n         self.cmd('sf cluster reliability update --resource-group {rg} -c {cluster_name} --reliability-level Silver',\n                  checks=[self.check('reliabilityLevel', 'Silver')])\n \n+    @ResourceGroupPreparer()\n+    def test_cluster_settings_and_upgrade_mode(self):\n+        self.kwargs.update({\n+            'kv_name': self.create_random_name('sfrp-cli-kv-', 24),\n+            'loc': 'westus',\n+            'cert_name': self.create_random_name('sfrp-cli-', 24),\n+            'cluster_name': self.create_random_name('sfrp-cli-', 24),\n+            'vm_password': \"Pass123!@#\",\n+            'primary_node_type': 'nt1vm',\n+            'new_node_type': 'nt2',\n+            'cluster_size': '5',\n+            'version': '10.1.2338.9590'\n+        })\n+        _create_cluster(self, self.kwargs)\n+        _wait_for_cluster_state_ready(self, self.kwargs)\n+\n+        # add setting\n+        self.cmd('sf cluster update --resource-group {rg} -c {cluster_name} --settings-section-set --section NamingService --parameter MaxOperationTimeout --value 10001',\n+                 checks=[self.check('length(fabricSettings)', 2),\n+                         self.check('fabricSettings[1].name', 'NamingService'),\n+                         self.check('fabricSettings[1].parameters[0].name', 'MaxOperationTimeout'),\n+                         self.check('fabricSettings[1].parameters[0].value', '10001')])\n+\n+        # remove setting\n+        self.cmd('sf cluster update --resource-group {rg} -c {cluster_name} --settings-section-rem --section NamingService --parameter MaxOperationTimeout',\n+                 checks=[self.check('length(fabricSettings)', 1),\n+                         self.check('fabricSettings[0].name', 'Security')])\n+        \n+        # update upgrade mode\n+        self.cmd('sf cluster update --resource-group {rg} -c {cluster_name} --upgrade-mode manual --version {version}',\n+                 checks=[self.check('upgradeMode', 'Manual')])\n+        \n+    @live_only()    ",
+        "comment_created_at": "2024-11-18T17:34:14+00:00",
+        "comment_author": "mwesigwaguma",
+        "comment_body": "after running test live it fails in playback with following errors and workaround to replaced mismatched values does not work, in this case keyvault name\r\n\r\nE           AssertionError: Can't overwrite existing cassette ('e:\\\\repos\\\\azure-cli\\\\src\\\\azure-cli\\\\azure\\\\cli\\\\command_modules\\\\servicefabric\\\\tests\\\\latest\\\\recordings\\\\test_reliability_and_durability.yaml') in your current record mode ('once').\r\nE           No match for the request (<Request (GET) https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/clitest.rg000001/providers/Microsoft.KeyVault/vaults/clitestrg000001?api-version=2023-02-01>) was found.\r\nE           Found 3 similar requests with 1 different matcher(s) :\r\nE\r\nE           1 - (<Request (GET) https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/clitest.rg000001/providers/Microsoft.KeyVault/vaults/clitestrgojwj2hjwlnme?api-version=2023-02-01>).\r\nE           Matchers succeeded : ['method', 'scheme', 'host', 'port', '_custom_request_query_matcher']\r\nE           Matchers failed :\r\nE           path - assertion failure :\r\nE           /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/clitest.rg000001/providers/Microsoft.KeyVault/vaults/clitestrg000001 != /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/clitest.rg000001/providers/Microsoft.KeyVault/vaults/clitestrgojwj2hjwlnme\r\nE\r\nE           2 - (<Request (GET) https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/clitest.rg000001/providers/Microsoft.KeyVault/vaults/clitestrgojwj2hjwlnme?api-version=2023-02-01>).\r\nE           Matchers succeeded : ['method', 'scheme', 'host', 'port', '_custom_request_query_matcher']\r\nE           Matchers failed :\r\nE           path - assertion failure :\r\nE           /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/clitest.rg000001/providers/Microsoft.KeyVault/vaults/clitestrg000001 != /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/clitest.rg000001/providers/Microsoft.KeyVault/vaults/clitestrgojwj2hjwlnme\r\nE\r\nE           3 - (<Request (GET) https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/clitest.rg000001/providers/Microsoft.KeyVault/vaults/clitestrgojwj2hjwlnme?api-version=2023-02-01>).\r\nE           Matchers succeeded : ['method', 'scheme', 'host', 'port', '_custom_request_query_matcher']\r\nE           Matchers failed :\r\nE           path - assertion failure :\r\nE           /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/clitest.rg000001/providers/Microsoft.KeyVault/vaults/clitestrg000001 != /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/clitest.rg000001/providers/Microsoft.KeyVault/vaults/clitestrgojwj2hjwlnme\r\n\r\nworkaround of switching ",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -79,6 +79,22 @@ bundle exec jekyll serve
 
 `build_data.py` needs only the standard library. Re-run it after changing anything in `_reviewers/`.
 
+## awesome-harness
+
+`harness/` holds a coding harness that consumes this corpus as its policy source. It compiles a
+selection of instructions into a pinned, digested policy pack, enforces the mechanically decidable
+ones as coded checks over a diff, and delivers the rest as review context for the changed files. Around
+that it provides an append-only hash-chained run ledger, isolated step execution, content-addressed
+artifacts with byte-identical bundles, a content-keyed cache, and an in-toto attestation naming the
+policy version that gated the change.
+
+```bash
+harness/awesome-harness gate       # evaluate the corpus against your working change
+harness/awesome-harness context    # the instructions that apply to the files you touched
+```
+
+Python standard library only, no install step. It is not part of the site — see `harness/README.md`.
+
 ## Contributing
 
 - **Add a repository:** submit it from the [sources page](https://awesomereviewers.com/sources/) and

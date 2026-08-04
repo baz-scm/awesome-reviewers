@@ -1,0 +1,78 @@
+name: Harness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'harness/**'
+      - '.harness/**'
+      - '.github/workflows/harness.yml'
+  pull_request:
+    paths:
+      - 'harness/**'
+      - '.harness/**'
+      - '_reviewers/**'
+      - '.github/workflows/harness.yml'
+  workflow_dispatch:
+
+# Least privilege, per AH003 / grafana-workflow-permission-boundaries. This job reads
+# the repository and writes nothing.
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a tag rather than a commit SHA, matching the convention already used
+      # by deploy.yml in this repository. The harness's own AH002 check reports that as
+      # a warning on this file, which is correct: a tag can be moved. Moving the whole
+      # repository to SHA pins is a deliberate decision to make separately, so the
+      # finding is left visible rather than waived.
+      - uses: actions/checkout@v5
+        with:
+          # The gate diffs against the base ref, so it needs history, not just a tip.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Report what is available
+        run: harness/awesome-harness doctor
+
+      - name: Unit tests
+        run: python3 -m unittest discover -s harness/tests -t harness -v
+
+      # The pack pins each rule by the digest of its source instruction. Drift is not a
+      # failure of the code under review, it means the corpus moved and the pack must be
+      # rebuilt deliberately so the new digest is recorded.
+      - name: Policy pack is current
+        run: harness/awesome-harness policy verify
+
+      - name: Ledger chain is intact
+        run: harness/awesome-harness ledger verify
+
+      - name: Policy gate
+        run: |
+          harness/awesome-harness gate \
+            --base "origin/${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}" \
+            --out gate.json
+
+      - name: Review context for the changed files
+        if: always()
+        run: |
+          harness/awesome-harness context \
+            --base "origin/${{ github.event.pull_request.base.ref || github.event.repository.default_branch }}" \
+            --out review-context.md
+
+      # Uploaded even when the gate failed: the findings and the instructions behind
+      # them are the useful output of a failed run.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: harness-gate
+          path: |
+            gate.json
+            review-context.md
+          if-no-files-found: warn

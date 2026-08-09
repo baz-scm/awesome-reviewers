@@ -1,0 +1,112 @@
+[
+  {
+    "discussion_id": "3678454582",
+    "pr_number": 89,
+    "pr_file": "sdk/typescript/_bundled_plugin/scripts/generate_rank_input.py",
+    "created_at": "2026-07-29T22:30:02+00:00",
+    "commented_code": "return path.name.endswith((\".min.js\", \".map\"))\n \n \n+def diff_path_is_security_relevant(path: Path) -> bool:\n+    if path.name in SECURITY_RELEVANT_DIFF_FILENAMES:\n+        return True\n+    if path.name.startswith((\"Dockerfile.\", \"Containerfile.\")):\n+        return True\n+    if path.name.lower().endswith(\".dockerfile\"):\n+        return True\n+    return (\n+        len(path.parts) >= 2\n+        and path.parts[0] == \".github\"\n+        and (\n+            path.parts[1] in SECURITY_RELEVANT_GITHUB_DIFF_DIRECTORIES\n+            or len(path.parts) == 2\n+            and path.parts[1] in SECURITY_RELEVANT_GITHUB_DIFF_FILENAMES\n+        )\n+    )\n+\n+\n+def diff_path_is_included(path: Path) -> bool:\n+    if diff_path_is_security_relevant(path):\n+        return not any(part in EXCLUDED_DIRS and part != \".github\" for part in path.parts)",
+    "repo_full_name": "openai/codex-security",
+    "discussion_comments": [
+      {
+        "comment_id": "3678454582",
+        "repo_full_name": "openai/codex-security",
+        "pr_number": 89,
+        "pr_file": "sdk/typescript/_bundled_plugin/scripts/generate_rank_input.py",
+        "discussion_id": "3678454582",
+        "commented_code": "@@ -274,6 +310,78 @@ def path_is_excluded(path: Path) -> bool:\n     return path.name.endswith((\".min.js\", \".map\"))\n \n \n+def diff_path_is_security_relevant(path: Path) -> bool:\n+    if path.name in SECURITY_RELEVANT_DIFF_FILENAMES:\n+        return True\n+    if path.name.startswith((\"Dockerfile.\", \"Containerfile.\")):\n+        return True\n+    if path.name.lower().endswith(\".dockerfile\"):\n+        return True\n+    return (\n+        len(path.parts) >= 2\n+        and path.parts[0] == \".github\"\n+        and (\n+            path.parts[1] in SECURITY_RELEVANT_GITHUB_DIFF_DIRECTORIES\n+            or len(path.parts) == 2\n+            and path.parts[1] in SECURITY_RELEVANT_GITHUB_DIFF_FILENAMES\n+        )\n+    )\n+\n+\n+def diff_path_is_included(path: Path) -> bool:\n+    if diff_path_is_security_relevant(path):\n+        return not any(part in EXCLUDED_DIRS and part != \".github\" for part in path.parts)",
+        "comment_created_at": "2026-07-29T22:30:02+00:00",
+        "comment_author": "ianw-oai",
+        "comment_body": "This still excludes first-party paths such as .github/actions/build/action.yml, .github/actions/test/action.yml, .github/scripts/ci/check.py, and build/Dockerfile because build, test, and ci are global exclusions. Those security-sensitive changes never reach review. Narrow the exclusions.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3678454584",
+    "pr_number": 89,
+    "pr_file": "sdk/typescript/_bundled_plugin/scripts/generate_rank_input.py",
+    "created_at": "2026-07-29T22:30:02+00:00",
+    "commented_code": "rows: list[JsonRow] = []\n     for path, status in git_changed_paths(repo, args.base, args.head, args.mode):\n         rel = path.relative_to(repo)\n-        if path_is_excluded(rel) or path.suffix.lower() not in TEXT_CODE_EXTENSIONS:\n+        if not diff_path_is_included(rel):\n             continue\n \n-        if status == \"D\":\n+        if status in {\"D\", \"U\"}:\n             preview = \"\"\n-        elif path.is_file():\n-            preview, is_binary = preview_for(path, args.preview_bytes)\n+        else:\n+            preview, is_binary = confined_diff_preview(repo, path, args.preview_bytes)",
+    "repo_full_name": "openai/codex-security",
+    "discussion_comments": [
+      {
+        "comment_id": "3678454584",
+        "repo_full_name": "openai/codex-security",
+        "pr_number": 89,
+        "pr_file": "sdk/typescript/_bundled_plugin/scripts/generate_rank_input.py",
+        "discussion_id": "3678454584",
+        "commented_code": "@@ -540,17 +648,15 @@ def make_diff_rank_input(args: argparse.Namespace) -> None:\n     rows: list[JsonRow] = []\n     for path, status in git_changed_paths(repo, args.base, args.head, args.mode):\n         rel = path.relative_to(repo)\n-        if path_is_excluded(rel) or path.suffix.lower() not in TEXT_CODE_EXTENSIONS:\n+        if not diff_path_is_included(rel):\n             continue\n \n-        if status == \"D\":\n+        if status in {\"D\", \"U\"}:\n             preview = \"\"\n-        elif path.is_file():\n-            preview, is_binary = preview_for(path, args.preview_bytes)\n+        else:\n+            preview, is_binary = confined_diff_preview(repo, path, args.preview_bytes)",
+        "comment_created_at": "2026-07-29T22:30:02+00:00",
+        "comment_author": "ianw-oai",
+        "comment_body": "For symlinks and pipes, confined_diff_preview returns an empty preview without marking the file unsafe, so the next line sends it to mandatory full-file review. A symlink can escape the repository and a pipe can hang. Reject or defer these paths.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3706480055",
+    "pr_number": 89,
+    "pr_file": "sdk/typescript/_bundled_plugin/scripts/workbench_constants.py",
+    "created_at": "2026-08-03T17:53:22+00:00",
+    "commented_code": "EMPTY_GIT_TREE = \"4b825dc642cb6eb9a060e54bf8d69288fbee4904\"\n \n \n+def trusted_git_executable(protected_root: Path | None = None) -> str | None:\n+    root = protected_root.resolve() if protected_root is not None else None\n+    if root is not None:\n+        for ancestor in root.parents:\n+            marker = ancestor / \".git\"\n+            try:\n+                if marker.is_dir() or marker.is_file():\n+                    root = ancestor\n+            except OSError:\n+                continue\n+    executable = os.environ.get(\"CODEX_SECURITY_GIT\")\n+    if not executable:\n+        names = (\"git.exe\", \"git.com\") if os.name == \"nt\" else (\"git\",)\n+        for entry in os.environ.get(\"PATH\", \"\").split(os.pathsep):\n+            if not entry:\n+                continue\n+            for name in names:\n+                try:\n+                    candidate = (Path(entry) / name).resolve(strict=True)",
+    "repo_full_name": "openai/codex-security",
+    "discussion_comments": [
+      {
+        "comment_id": "3706480055",
+        "repo_full_name": "openai/codex-security",
+        "pr_number": 89,
+        "pr_file": "sdk/typescript/_bundled_plugin/scripts/workbench_constants.py",
+        "discussion_id": "3706480055",
+        "commented_code": "@@ -73,6 +75,47 @@\n EMPTY_GIT_TREE = \"4b825dc642cb6eb9a060e54bf8d69288fbee4904\"\n \n \n+def trusted_git_executable(protected_root: Path | None = None) -> str | None:\n+    root = protected_root.resolve() if protected_root is not None else None\n+    if root is not None:\n+        for ancestor in root.parents:\n+            marker = ancestor / \".git\"\n+            try:\n+                if marker.is_dir() or marker.is_file():\n+                    root = ancestor\n+            except OSError:\n+                continue\n+    executable = os.environ.get(\"CODEX_SECURITY_GIT\")\n+    if not executable:\n+        names = (\"git.exe\", \"git.com\") if os.name == \"nt\" else (\"git\",)\n+        for entry in os.environ.get(\"PATH\", \"\").split(os.pathsep):\n+            if not entry:\n+                continue\n+            for name in names:\n+                try:\n+                    candidate = (Path(entry) / name).resolve(strict=True)",
+        "comment_created_at": "2026-08-03T17:53:22+00:00",
+        "comment_author": "ianw-oai",
+        "comment_body": "[P1] Resolving a `git` shim or symlink and then executing the canonical target changes executable identity and `argv[0]`. Wrapper-dispatched Git installations consequently fail normal workbench commands. Validate the canonical target and repository boundary, but invoke the original absolute path.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3706480060",
+    "pr_number": 89,
+    "pr_file": "sdk/typescript/_bundled_plugin/scripts/workbench_db.py",
+    "created_at": "2026-08-03T17:53:22+00:00",
+    "commented_code": "\"Select Uncommitted changes again.\"\n             )\n         if content_digest and content_digest != current_digest:",
+    "repo_full_name": "openai/codex-security",
+    "discussion_comments": [
+      {
+        "comment_id": "3706480060",
+        "repo_full_name": "openai/codex-security",
+        "pr_number": 89,
+        "pr_file": "sdk/typescript/_bundled_plugin/scripts/workbench_db.py",
+        "discussion_id": "3706480060",
+        "commented_code": "@@ -378,10 +379,14 @@ def require_diff_target(\n                 \"Select Uncommitted changes again.\"\n             )\n         if content_digest and content_digest != current_digest:",
+        "comment_created_at": "2026-08-03T17:53:22+00:00",
+        "comment_author": "ianw-oai",
+        "comment_body": "[P1] This legacy fallback accepts a selected snapshot after staged content changes. I reproduced a clean-tree selection followed by an index-only blob change: the current digest changed, the legacy digest still matched the original selection, and this function silently accepted the changed contents. Require an exact digest for current selections; use explicit versioning for legacy snapshots.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3708266252",
+    "pr_number": 238,
+    "pr_file": "sdk/typescript/_bundled_plugin/scripts/finalize_scan_contract.py",
+    "created_at": "2026-08-04T17:11:54+00:00",
+    "commented_code": "target = scan.get(\"target\")\n     if isinstance(target, dict):\n-        _populate_unsealed_target_binding(target, completion_binding[\"target\"])\n+        _populate_unsealed_target_binding(\n+            target,\n+            completion_binding[\"target\"],\n+            completion_binding.get(\"allowedTargetKinds\"),\n+        )\n \n     scope = scan.get(\"scope\")\n     if isinstance(scope, dict):\n         scope.update(copy.deepcopy(completion_binding[\"scope\"]))\n \n \n+def _populate_unsealed_target_kind(target: dict[str, Any], allowed_kinds: Any) -> None:\n+    \"\"\"Adopt the registered target kind when the workbench allows exactly one.\n+\n+    The scan prompt tells the agent to copy CODEX_SECURITY_TARGET_KIND verbatim rather\n+    than infer the kind from the checkout, because only the workbench knows how the\n+    target was registered. A draft that infers it anyway used to discard the whole\n+    completed scan at the seal step. A clean worktree is the common way to hit this:\n+    the workbench registers it as git_revision, while the checkout still looks like a\n+    worktree to the agent. The kind carries no draft-owned information when the\n+    registration allows a single value, so take that value instead of failing.\n+    \"\"\"\n+\n+    if not isinstance(allowed_kinds, list) or len(allowed_kinds) != 1:\n+        return\n+    registered_kind = allowed_kinds[0]\n+    if not isinstance(registered_kind, str) or target.get(\"kind\") == registered_kind:\n+        return\n+    target[\"kind\"] = registered_kind",
+    "repo_full_name": "openai/codex-security",
+    "discussion_comments": [
+      {
+        "comment_id": "3714659265",
+        "repo_full_name": "openai/codex-security",
+        "pr_number": 238,
+        "pr_file": "sdk/typescript/_bundled_plugin/scripts/finalize_scan_contract.py",
+        "discussion_id": "3708266252",
+        "commented_code": "@@ -1115,19 +1115,45 @@ def _populate_unsealed_manifest_envelope(\n \n     target = scan.get(\"target\")\n     if isinstance(target, dict):\n-        _populate_unsealed_target_binding(target, completion_binding[\"target\"])\n+        _populate_unsealed_target_binding(\n+            target,\n+            completion_binding[\"target\"],\n+            completion_binding.get(\"allowedTargetKinds\"),\n+        )\n \n     scope = scan.get(\"scope\")\n     if isinstance(scope, dict):\n         scope.update(copy.deepcopy(completion_binding[\"scope\"]))\n \n \n+def _populate_unsealed_target_kind(target: dict[str, Any], allowed_kinds: Any) -> None:\n+    \"\"\"Adopt the registered target kind when the workbench allows exactly one.\n+\n+    The scan prompt tells the agent to copy CODEX_SECURITY_TARGET_KIND verbatim rather\n+    than infer the kind from the checkout, because only the workbench knows how the\n+    target was registered. A draft that infers it anyway used to discard the whole\n+    completed scan at the seal step. A clean worktree is the common way to hit this:\n+    the workbench registers it as git_revision, while the checkout still looks like a\n+    worktree to the agent. The kind carries no draft-owned information when the\n+    registration allows a single value, so take that value instead of failing.\n+    \"\"\"\n+\n+    if not isinstance(allowed_kinds, list) or len(allowed_kinds) != 1:\n+        return\n+    registered_kind = allowed_kinds[0]\n+    if not isinstance(registered_kind, str) or target.get(\"kind\") == registered_kind:\n+        return\n+    target[\"kind\"] = registered_kind",
+        "comment_created_at": "2026-08-04T17:11:54+00:00",
+        "comment_author": "rohanpoudel2",
+        "comment_body": "Confirmed and fixed in 042cf36.\n\nReproduced first. Removing only the new binding condition and sealing a `HEAD~1..HEAD` draft that claims `git_worktree` with a fabricated digest produces exactly the manifest you describe:\n\n```json\n{\"kind\":\"git_diff\",\"baseRevision\":\"a6d08e2\u2026\",\"headRevision\":\"0e562bf\u2026\",\n \"snapshotDigest\":\"codex-security-snapshot/v1:sha256:bbbb\u2026bbbb\"}\n```\n\n`workbench_completion_binding` authors `snapshotDigest` only when `scan[\"diff_target_kind\"] == \"working_tree\"`, `snapshotDigest` is required for `git_diff` so the pruning keeps it, and nothing downstream re-checks it \u2014 `verify_manifest_binding` gates the diff digest comparison on `working_tree` too. The draft's whole-worktree digest was sealed as the diff digest.\n\nI took the second remedy you named \u2014 reject the kind change when the binding cannot replace the kind-dependent coordinates \u2014 rather than the first:\n\n```python\nif not TARGET_REQUIRED_COORDINATE_FIELDS.get(registered_kind, set()) <= target_binding.keys():\n    return\ntarget[\"kind\"] = registered_kind\n```\n\nEvery coordinate the draft can carry is then either in the binding, and overwritten by the `target.update` below, or not required by the adopted kind, and pruned. The one class that could survive with the draft's meaning under a new label is precisely what this refuses. `TARGET_COORDINATE_FIELDS` mirrors the conditional `required` blocks in `scan-manifest.schema.json`, so there is no other kind-dependent field.\n\nThe clean-worktree restriction was the weaker option, and measurably so. Coding it as `if registered_kind != \"git_revision\" or target.get(\"kind\") != \"git_worktree\": return` makes `scan-recovery.test.ts` 21 pass / 1 fail \u2014 `seals a dirty worktree draft that inferred the revision target kind`. A dirty worktree registers `requiredSnapshotDigest`, so the draft's digest is overwritten rather than reinterpreted; refusing it discards a completed scan for no integrity gain.\n\nTests in `sdk/typescript/tests-ts/scan-recovery.test.ts`, all driving the real workbench:\n\n- `rejects a range diff draft whose inferred kind kept an unbindable digest` \u2014 your case. Without the condition: 21 pass / 1 fail (it seals). With it: rejected at `scan.target.kind: must match the workbench target`, and the draft's digest is left untouched on disk.\n- `seals a range diff draft that reported the registered diff kind` \u2014 the honest range-diff path still seals.\n- `seals a dirty worktree draft that inferred the revision target kind` \u2014 normalization still applies where the binding owns the digest.\n\n`scan-recovery.test.ts` is 22 pass / 0 fail; full suite 742 pass / 5 skip / 0 fail; `types` and `format` clean; `python3 -m py_compile` clean.\n\nOne related gap this does not close, and I left it out of scope: a commit/range-diff draft that reports `git_diff` honestly still supplies its own `snapshotDigest`, and no check compares it to anything. That is pre-existing on `main` and independent of kind adoption.\n",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

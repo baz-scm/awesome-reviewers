@@ -1,0 +1,46 @@
+[
+  {
+    "discussion_id": "3708272236",
+    "pr_number": 241,
+    "pr_file": "sdk/typescript/_bundled_plugin/scripts/workbench_target.py",
+    "created_at": "2026-08-04T17:12:49+00:00",
+    "commented_code": "return worktree_content_digest_for_context(repository, pathspec)\n \n \n+def committed_diff_content_digest(target: Path, base: str, head: str) -> str:\n+    \"\"\"Digest the committed changes a diff scan reviews.\n+\n+    Mirrors worktree_content_digest for a base..head range. The two revisions\n+    already pin the content, but the contract requires git_diff targets to carry\n+    a snapshotDigest, and computing it here keeps the value deterministic and\n+    verifiable instead of leaving the scan agent to invent one.\n+    \"\"\"\n+\n+    repository, pathspec = git_worktree_context(target)\n+    tracked = git_bytes(",
+    "repo_full_name": "openai/codex-security",
+    "discussion_comments": [
+      {
+        "comment_id": "3714665380",
+        "repo_full_name": "openai/codex-security",
+        "pr_number": 241,
+        "pr_file": "sdk/typescript/_bundled_plugin/scripts/workbench_target.py",
+        "discussion_id": "3708272236",
+        "commented_code": "@@ -86,6 +86,37 @@ def worktree_content_digest(target: Path) -> str:\n     return worktree_content_digest_for_context(repository, pathspec)\n \n \n+def committed_diff_content_digest(target: Path, base: str, head: str) -> str:\n+    \"\"\"Digest the committed changes a diff scan reviews.\n+\n+    Mirrors worktree_content_digest for a base..head range. The two revisions\n+    already pin the content, but the contract requires git_diff targets to carry\n+    a snapshotDigest, and computing it here keeps the value deterministic and\n+    verifiable instead of leaving the scan agent to invent one.\n+    \"\"\"\n+\n+    repository, pathspec = git_worktree_context(target)\n+    tracked = git_bytes(",
+        "comment_created_at": "2026-08-04T17:12:49+00:00",
+        "comment_author": "rohanpoudel2",
+        "comment_body": "Agreed, and fixed in ba90629.\n\nMeasured first, on a two-commit fixture whose second commit replaces a 1 MiB blob with 20 MiB of incompressible data (macOS 15, Python 3.14.5, git 2.50.1). `git diff --binary` emitted a **27.1 MiB** patch, and `committed_diff_content_digest` peaked at **88.9 MiB RSS** against a 27.4 MiB floor \u2014 so the buffered patch really is the whole difference.\n\n`committed_diff_content_digest` now builds the digest first and streams the patch into it through a new `git_digest_field`, which spools Git's stdout into a private temporary file, takes the value length from `os.fstat`, and hashes the file in 1 MiB chunks. Same fixture, same process shape: **88.9 MiB \u2192 27.4 MiB peak RSS**, a floor set by the interpreter plus the hashing chunk rather than by the patch.\n\nStreaming straight from the pipe into `hashlib` is not available: `update_digest_field` writes an 8-byte big-endian *value length* before the value, so the total byte count is part of the hashed material and has to be known before any content is hashed. A second `git diff` purely to count bytes would double the work and would not be atomic. Spooling keeps one Git invocation and gets the length from `fstat`.\n\nDigest stability matters more than usual here, because the revalidation added for your other comment on this PR compares recorded digests against freshly computed ones \u2014 a changed digest would read as changed reviewed content. Buffered and streaming were run in separate processes over the same fixtures and agreed on every one:\n\n| fixture | buffered == streaming |\n| --- | --- |\n| empty range | identical `1d74df0bc5da366e\u2026` |\n| text diff | identical `25e510ab75f7ee0d\u2026` |\n| 64 KiB binary diff | identical `3a78c1c5207e0c36\u2026` |\n| rename | identical `03e6430eaef2bc18\u2026` |\n| mode change | identical `cb87a9351fcbe0cc\u2026` |\n| root commit vs empty tree | identical `77315e8f791716cc\u2026` |\n| 20 MiB binary diff (27.1 MiB patch) | identical `7908fcf6b0ea2eff\u2026` |\n\nThe empty range reproduces `1d74df0b\u2026`, which is the hardcoded `clean_worktree_content_digest()` sentinel \u2014 the framing is unchanged down to that constant. Failure behaviour is unchanged too: against an unresolvable base, buffered and streaming both exit 1 with `Could not snapshot the selected committed changes.`\n\n`git_command` gained a keyword-only `stdout` so the streaming path reuses the existing environment scrubbing and `core.fsmonitor=false` hardening instead of building its own command, and `capture_output=True` became the equivalent explicit `stdout=PIPE, stderr=PIPE`. `git_bytes` is untouched and still serves its many small callers.\n\n**Relationship to #256.** That PR fixes the same defect on the other digest path \u2014 `worktree_content_digest_for_context`, the working-tree diff \u2014 and branches from `ea19f24`, where `committed_diff_content_digest` does not exist yet. So neither PR covers the other's call site: #256 streams the working-tree patch, this one streams the committed patch. To keep that from becoming a conflict, `git_digest_field` and the `git_command` signature change here are byte-for-byte identical to #256's, verified by diffing the two files. Whichever lands first, the other's helper merges as an identical addition and only its own call site remains.\n\nCovered by `tests-ts/scan-recovery.test.ts`, `streams the committed patch instead of buffering it`. Rather than assert on memory, which would be flaky, it wraps `workbench_target.git_bytes` in a spy, runs `committed_diff_content_digest` over a changed binary, and requires that no `diff` invocation went through it \u2014 `git_bytes` *is* `capture_output=True`, so any diff call through it is a buffered patch. It then recomputes the digest through the buffered `git_bytes` + `update_digest_field` pair the streaming path replaced and requires the two values to be equal, so the framing cannot drift.\n\nMeasured, from `sdk/typescript`: full suite **743 pass / 5 skip / 0 fail**. With `workbench_target.py` reverted to its previous state, **742 pass / 5 skip / 1 fail** \u2014 that test. `types` and `format` clean; both changed Python modules compile under `python3 -m py_compile`.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3706478626",
+    "pr_number": 88,
+    "pr_file": "sdk/typescript/_bundled_plugin/scripts/generate_rank_input.py",
+    "created_at": "2026-08-03T17:53:08+00:00",
+    "commented_code": "from __future__ import annotations\n \n import argparse\n+import fnmatch\n import hashlib\n import json\n import re\n import subprocess\n import sys\n from collections import Counter\n-from collections.abc import Callable\n-from pathlib import Path\n+from collections.abc import Callable, Iterator\n+from pathlib import Path, PurePosixPath\n \n # Some plugin hosts launch Python with safe-path isolation enabled.\n sys.path.insert(0, str(Path(__file__).resolve().parent))\n+from normalize_candidates import combine, normalize_candidate, read_scope_inventory\n from rank_preview import DEFAULT_PREVIEW_BYTES, TEXT_CODE_EXTENSIONS, preview_for\n \n+STANDARD_SCOPE_EXCLUDED_DIRS = {",
+    "repo_full_name": "openai/codex-security",
+    "discussion_comments": [
+      {
+        "comment_id": "3706478626",
+        "repo_full_name": "openai/codex-security",
+        "pr_number": 88,
+        "pr_file": "sdk/typescript/_bundled_plugin/scripts/generate_rank_input.py",
+        "discussion_id": "3706478626",
+        "commented_code": "@@ -25,19 +29,31 @@\n from __future__ import annotations\n \n import argparse\n+import fnmatch\n import hashlib\n import json\n import re\n import subprocess\n import sys\n from collections import Counter\n-from collections.abc import Callable\n-from pathlib import Path\n+from collections.abc import Callable, Iterator\n+from pathlib import Path, PurePosixPath\n \n # Some plugin hosts launch Python with safe-path isolation enabled.\n sys.path.insert(0, str(Path(__file__).resolve().parent))\n+from normalize_candidates import combine, normalize_candidate, read_scope_inventory\n from rank_preview import DEFAULT_PREVIEW_BYTES, TEXT_CODE_EXTENSIONS, preview_for\n \n+STANDARD_SCOPE_EXCLUDED_DIRS = {",
+        "comment_created_at": "2026-08-03T17:53:08+00:00",
+        "comment_author": "ianw-oai",
+        "comment_body": "[P2] Standard scans still inventory `.venv`, `vendor`, and binary assets; my fixture included all three. Installed environments and vendored dependencies can dominate review cost or exceed the 250,000-file cap. Add practical dependency and binary exclusions unless directly requested.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

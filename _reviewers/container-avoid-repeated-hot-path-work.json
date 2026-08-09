@@ -1,0 +1,204 @@
+[
+  {
+    "discussion_id": "3641211122",
+    "pr_number": 2005,
+    "pr_file": "Sources/ContainerCommands/Image/ImageTree.swift",
+    "created_at": "2026-07-23T20:34:42+00:00",
+    "commented_code": "+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ArgumentParser\n+import ContainerAPIClient\n+import ContainerPersistence\n+import ContainerPlugin\n+import ContainerResource\n+import Containerization\n+import ContainerizationError\n+import ContainerizationOCI\n+import Foundation\n+\n+extension Application {\n+    public struct ImageTree: AsyncLoggableCommand {\n+        public init() {}\n+        public static let configuration = CommandConfiguration(\n+            commandName: \"tree\",\n+            abstract: \"Show images in a tree view based on parent-child relationships\",\n+            aliases: [\"tr\"]\n+        )\n+\n+        @Flag(name: .shortAndLong, help: \"Show image sizes\")\n+        var size = false\n+\n+        @OptionGroup\n+        public var logOptions: Flags.Logging\n+\n+        public mutating func run() async throws {\n+            let containerSystemConfig: ContainerSystemConfig = try await Application.loadContainerSystemConfig()\n+            \n+            var images = try await ClientImage.list().filter { img in\n+                !Utility.isInfraImage(name: img.reference, builderImage: containerSystemConfig.build.image, initImage: containerSystemConfig.vminit.image)\n+            }\n+            images.sort { $0.reference < $1.reference }\n+            \n+            let resources = try await Self.buildResources(images: images, containerSystemConfig: containerSystemConfig)\n+            \n+            // Build tree\n+            let rootNodes = buildTree(from: resources)\n+            \n+            // Print tree\n+            if rootNodes.isEmpty {\n+                return\n+            }\n+            \n+            for (index, node) in rootNodes.enumerated() {\n+                // Determine root print style. The root doesn't have the \u251c\u2500\u2500 marker\n+                printRootNode(node, isLast: index == rootNodes.count - 1)\n+            }\n+        }\n+\n+        private static func buildResources(images: [ClientImage], containerSystemConfig: ContainerSystemConfig) async throws -> [ImageResource] {\n+            var resources: [ImageResource] = []\n+            for image in images {\n+                resources.append(\n+                    try await image.toImageResource(containerSystemConfig: containerSystemConfig)\n+                )\n+            }\n+            return resources\n+        }\n+        \n+        private class Node {\n+            let resource: ImageResource\n+            let allDiffIDs: [[String]]\n+            let displaySize: String\n+            var children: [Node] = []\n+            \n+            init(resource: ImageResource, allDiffIDs: [[String]], displaySize: String) {\n+                self.resource = resource\n+                self.allDiffIDs = allDiffIDs\n+                self.displaySize = displaySize\n+            }\n+        }\n+        \n+        private func buildTree(from resources: [ImageResource]) -> [Node] {\n+            let formatter = ByteCountFormatter()\n+            var nodes: [Node] = []\n+            \n+            for resource in resources {\n+                let allDiffIDs = resource.variants.map { $0.config.rootfs.diffIDs }\n+                let sizeStr = resource.variants.first.map { formatter.string(fromByteCount: $0.size) } ?? \"0 MB\"\n+                nodes.append(Node(resource: resource, allDiffIDs: allDiffIDs, displaySize: sizeStr))\n+            }\n+            \n+            // Sort nodes by number of diffIDs (parents have fewer diffIDs)\n+            nodes.sort { ($0.allDiffIDs.first?.count ?? 0) < ($1.allDiffIDs.first?.count ?? 0) }\n+            \n+            var roots: [Node] = []\n+            \n+            for node in nodes {\n+                var foundParent = false\n+                // Find a parent: a node with maximum diffIDs that is a strict prefix of current node's diffIDs\n+                for potentialParent in roots.flatMap({ getAllNodes(in: $0) }).sorted(by: { ($0.allDiffIDs.first?.count ?? 0) > ($1.allDiffIDs.first?.count ?? 0) }) {",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "3641211122",
+        "repo_full_name": "apple/container",
+        "pr_number": 2005,
+        "pr_file": "Sources/ContainerCommands/Image/ImageTree.swift",
+        "discussion_id": "3641211122",
+        "commented_code": "@@ -0,0 +1,191 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ArgumentParser\n+import ContainerAPIClient\n+import ContainerPersistence\n+import ContainerPlugin\n+import ContainerResource\n+import Containerization\n+import ContainerizationError\n+import ContainerizationOCI\n+import Foundation\n+\n+extension Application {\n+    public struct ImageTree: AsyncLoggableCommand {\n+        public init() {}\n+        public static let configuration = CommandConfiguration(\n+            commandName: \"tree\",\n+            abstract: \"Show images in a tree view based on parent-child relationships\",\n+            aliases: [\"tr\"]\n+        )\n+\n+        @Flag(name: .shortAndLong, help: \"Show image sizes\")\n+        var size = false\n+\n+        @OptionGroup\n+        public var logOptions: Flags.Logging\n+\n+        public mutating func run() async throws {\n+            let containerSystemConfig: ContainerSystemConfig = try await Application.loadContainerSystemConfig()\n+            \n+            var images = try await ClientImage.list().filter { img in\n+                !Utility.isInfraImage(name: img.reference, builderImage: containerSystemConfig.build.image, initImage: containerSystemConfig.vminit.image)\n+            }\n+            images.sort { $0.reference < $1.reference }\n+            \n+            let resources = try await Self.buildResources(images: images, containerSystemConfig: containerSystemConfig)\n+            \n+            // Build tree\n+            let rootNodes = buildTree(from: resources)\n+            \n+            // Print tree\n+            if rootNodes.isEmpty {\n+                return\n+            }\n+            \n+            for (index, node) in rootNodes.enumerated() {\n+                // Determine root print style. The root doesn't have the \u251c\u2500\u2500 marker\n+                printRootNode(node, isLast: index == rootNodes.count - 1)\n+            }\n+        }\n+\n+        private static func buildResources(images: [ClientImage], containerSystemConfig: ContainerSystemConfig) async throws -> [ImageResource] {\n+            var resources: [ImageResource] = []\n+            for image in images {\n+                resources.append(\n+                    try await image.toImageResource(containerSystemConfig: containerSystemConfig)\n+                )\n+            }\n+            return resources\n+        }\n+        \n+        private class Node {\n+            let resource: ImageResource\n+            let allDiffIDs: [[String]]\n+            let displaySize: String\n+            var children: [Node] = []\n+            \n+            init(resource: ImageResource, allDiffIDs: [[String]], displaySize: String) {\n+                self.resource = resource\n+                self.allDiffIDs = allDiffIDs\n+                self.displaySize = displaySize\n+            }\n+        }\n+        \n+        private func buildTree(from resources: [ImageResource]) -> [Node] {\n+            let formatter = ByteCountFormatter()\n+            var nodes: [Node] = []\n+            \n+            for resource in resources {\n+                let allDiffIDs = resource.variants.map { $0.config.rootfs.diffIDs }\n+                let sizeStr = resource.variants.first.map { formatter.string(fromByteCount: $0.size) } ?? \"0 MB\"\n+                nodes.append(Node(resource: resource, allDiffIDs: allDiffIDs, displaySize: sizeStr))\n+            }\n+            \n+            // Sort nodes by number of diffIDs (parents have fewer diffIDs)\n+            nodes.sort { ($0.allDiffIDs.first?.count ?? 0) < ($1.allDiffIDs.first?.count ?? 0) }\n+            \n+            var roots: [Node] = []\n+            \n+            for node in nodes {\n+                var foundParent = false\n+                // Find a parent: a node with maximum diffIDs that is a strict prefix of current node's diffIDs\n+                for potentialParent in roots.flatMap({ getAllNodes(in: $0) }).sorted(by: { ($0.allDiffIDs.first?.count ?? 0) > ($1.allDiffIDs.first?.count ?? 0) }) {",
+        "comment_created_at": "2026-07-23T20:34:42+00:00",
+        "comment_author": "gnavadev",
+        "comment_body": "Some questions that I have in mind for this:\n1 - You are sorting the nodes based only on the first variant's DiffIDs `($0.allDiffIDs.first)`, but assigning parents using `isPrefixOfAny`, which loops through all variants. Doesn't this mismatch break the tree's ordering guarantee?\n2 - You are calling `flatMap` and `.sorted()` inside the for node in nodes loop. This means you are unpacking the entire tree into a flat list and re-sorting it from scratch on every single iteration, which will severely bottleneck performance.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3463316502",
+    "pr_number": 1791,
+    "pr_file": "Sources/Services/ContainerAPIService/Client/Parser.swift",
+    "created_at": "2026-06-23T22:26:30+00:00",
+    "commented_code": "public static func tmpfsMounts(_ mounts: [String]) throws -> [Filesystem] {\n         var result: [Filesystem] = []\n+        result.reserveCapacity(mounts.count)",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "3463316502",
+        "repo_full_name": "apple/container",
+        "pr_number": 1791,
+        "pr_file": "Sources/Services/ContainerAPIService/Client/Parser.swift",
+        "discussion_id": "3463316502",
+        "commented_code": "@@ -331,6 +339,7 @@ public struct Parser {\n \n     public static func tmpfsMounts(_ mounts: [String]) throws -> [Filesystem] {\n         var result: [Filesystem] = []\n+        result.reserveCapacity(mounts.count)",
+        "comment_created_at": "2026-06-23T22:26:30+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "Would it make more sense to reserve capacity for the deduped list?\n\n```swift\n        let mounts = mounts.dedupe()\n        var result: [Filesystem] = []\n        result.reserveCapacity(mounts.count)\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2934125030",
+    "pr_number": 1309,
+    "pr_file": "Sources/ContainerLog/StderrLogHandler.swift",
+    "created_at": "2026-03-13T22:59:08+00:00",
+    "commented_code": "let data: Data\n         switch logLevel {\n         case .debug, .trace:\n-            let timestamp = ISO8601DateFormatter().string(from: Date())\n+            let timestamp = isoTimestamp()",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2934125030",
+        "repo_full_name": "apple/container",
+        "pr_number": 1309,
+        "pr_file": "Sources/ContainerLog/StderrLogHandler.swift",
+        "discussion_id": "2934125030",
+        "commented_code": "@@ -46,31 +46,42 @@ public struct StderrLogHandler: LogHandler {\n         let data: Data\n         switch logLevel {\n         case .debug, .trace:\n-            let timestamp = ISO8601DateFormatter().string(from: Date())\n+            let timestamp = isoTimestamp()",
+        "comment_created_at": "2026-03-13T22:59:08+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "Let's not construct a non-Sendable date formatter every log message.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2316934023",
+    "pr_number": 560,
+    "pr_file": "Sources/ContainerClient/Core/ClientImage.swift",
+    "created_at": "2025-09-02T19:09:05+00:00",
+    "commented_code": "let _ = try await client.send(request)\n     }\n \n+    public static func save(references: [String], out: String, platform: Platform? = nil) async throws {\n+        let images: [ClientImage] = try await self.list()\n+        var errors: [String] = []\n+        var descriptions: [ImageDescription] = []\n+        for reference in references {\n+            do {\n+                guard let image = try Self._search(reference: reference, in: images) else {\n+                    errors.append(reference)\n+                    continue\n+                }\n+                descriptions.append(image.description)\n+            } catch {\n+                errors.append(reference)\n+            }\n+        }",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2316934023",
+        "repo_full_name": "apple/container",
+        "pr_number": 560,
+        "pr_file": "Sources/ContainerClient/Core/ClientImage.swift",
+        "discussion_id": "2316934023",
+        "commented_code": "@@ -256,6 +256,35 @@ extension ClientImage {\n         let _ = try await client.send(request)\n     }\n \n+    public static func save(references: [String], out: String, platform: Platform? = nil) async throws {\n+        let images: [ClientImage] = try await self.list()\n+        var errors: [String] = []\n+        var descriptions: [ImageDescription] = []\n+        for reference in references {\n+            do {\n+                guard let image = try Self._search(reference: reference, in: images) else {\n+                    errors.append(reference)\n+                    continue\n+                }\n+                descriptions.append(image.description)\n+            } catch {\n+                errors.append(reference)\n+            }\n+        }",
+        "comment_created_at": "2025-09-02T19:09:05+00:00",
+        "comment_author": "katiewasnothere",
+        "comment_body": "Is there a reason we don't want to use `get` here instead? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2331854875",
+        "repo_full_name": "apple/container",
+        "pr_number": 560,
+        "pr_file": "Sources/ContainerClient/Core/ClientImage.swift",
+        "discussion_id": "2316934023",
+        "commented_code": "@@ -256,6 +256,35 @@ extension ClientImage {\n         let _ = try await client.send(request)\n     }\n \n+    public static func save(references: [String], out: String, platform: Platform? = nil) async throws {\n+        let images: [ClientImage] = try await self.list()\n+        var errors: [String] = []\n+        var descriptions: [ImageDescription] = []\n+        for reference in references {\n+            do {\n+                guard let image = try Self._search(reference: reference, in: images) else {\n+                    errors.append(reference)\n+                    continue\n+                }\n+                descriptions.append(image.description)\n+            } catch {\n+                errors.append(reference)\n+            }\n+        }",
+        "comment_created_at": "2025-09-09T02:44:32+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "Because get() would do list() and search() for each reference.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2334831806",
+        "repo_full_name": "apple/container",
+        "pr_number": 560,
+        "pr_file": "Sources/ContainerClient/Core/ClientImage.swift",
+        "discussion_id": "2316934023",
+        "commented_code": "@@ -256,6 +256,35 @@ extension ClientImage {\n         let _ = try await client.send(request)\n     }\n \n+    public static func save(references: [String], out: String, platform: Platform? = nil) async throws {\n+        let images: [ClientImage] = try await self.list()\n+        var errors: [String] = []\n+        var descriptions: [ImageDescription] = []\n+        for reference in references {\n+            do {\n+                guard let image = try Self._search(reference: reference, in: images) else {\n+                    errors.append(reference)\n+                    continue\n+                }\n+                descriptions.append(image.description)\n+            } catch {\n+                errors.append(reference)\n+            }\n+        }",
+        "comment_created_at": "2025-09-09T21:20:00+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "I didn't see the `get(names:)` call. Yes, I think that would work. Let me use that and add an integration test.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2280681238",
+    "pr_number": 516,
+    "pr_file": "Sources/NativeBuilder/ContainerBuildIR/Graph/GraphBuilder+Arg.swift",
+    "created_at": "2025-08-17T02:02:11+00:00",
+    "commented_code": "+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2025 Apple Inc. and the container project authors. All rights reserved.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import Foundation\n+\n+extension GraphBuilder {\n+    /// Add a build argument.\n+    /// These arguments are available within the stage.\n+    @discardableResult\n+    public func arg(_ name: String, defaultValue: String? = nil) throws -> Self {\n+        let operation = MetadataOperation(\n+            action: .declareArg(name: name, defaultValue: defaultValue)\n+        )\n+        return try add(operation)\n+    }\n+\n+    /// Add a FROM-only build argument (ARG before the first FROM).\n+    /// These arguments are only available in FROM instructions, not within stages.\n+    @discardableResult\n+    public func fromOnlyArg(_ name: String, defaultValue: String? = nil) -> Self {\n+        buildArgs[name] = defaultValue\n+        return self\n+    }\n+\n+    /// Check if there's an active stage.\n+    public var hasActiveStage: Bool {\n+        currentStage != nil\n+    }\n+\n+    /// Resolve an ARG value.\n+    /// - Parameters:\n+    ///   - key: The ARG name to resolve.\n+    ///   - inFromContext: Whether this is being called from a FROM instruction context.\n+    /// - Returns: The resolved ARG value, or nil if not found.\n+    public func resolveArg(key: String, inFromContext: Bool = false) -> String? {\n+        // A global FROM-only ARG\n+        guard let currentStage, !inFromContext else {\n+            return buildArgs[key]\n+        }\n+\n+        let (found, defaultValue) = currentStage.getDeclaredArg(key)\n+        if found {\n+            // A stage-local ARG with a default value\n+            if let defaultValue {\n+                return defaultValue\n+            }\n+            // A stage-local ARG without a default value - a redeclared global FROM-only ARG\n+            return buildArgs[key]\n+        }\n+\n+        return nil\n+    }\n+\n+    /// Substitute ARG variables in a string.\n+    /// - Parameters:\n+    ///   - input: The string that may contain `${ARG}` references.\n+    ///   - inFromContext: Whether this substitution is happening in a FROM instruction context.\n+    /// - Returns: The string with ARG variables substituted.\n+    public func substituteArgs(_ input: String, inFromContext: Bool) -> String {\n+        let pattern = #\"\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}\"#  // `${ARG}`\n+        let regex = try! NSRegularExpression(pattern: pattern)",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2280681238",
+        "repo_full_name": "apple/container",
+        "pr_number": 516,
+        "pr_file": "Sources/NativeBuilder/ContainerBuildIR/Graph/GraphBuilder+Arg.swift",
+        "discussion_id": "2280681238",
+        "commented_code": "@@ -0,0 +1,99 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2025 Apple Inc. and the container project authors. All rights reserved.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import Foundation\n+\n+extension GraphBuilder {\n+    /// Add a build argument.\n+    /// These arguments are available within the stage.\n+    @discardableResult\n+    public func arg(_ name: String, defaultValue: String? = nil) throws -> Self {\n+        let operation = MetadataOperation(\n+            action: .declareArg(name: name, defaultValue: defaultValue)\n+        )\n+        return try add(operation)\n+    }\n+\n+    /// Add a FROM-only build argument (ARG before the first FROM).\n+    /// These arguments are only available in FROM instructions, not within stages.\n+    @discardableResult\n+    public func fromOnlyArg(_ name: String, defaultValue: String? = nil) -> Self {\n+        buildArgs[name] = defaultValue\n+        return self\n+    }\n+\n+    /// Check if there's an active stage.\n+    public var hasActiveStage: Bool {\n+        currentStage != nil\n+    }\n+\n+    /// Resolve an ARG value.\n+    /// - Parameters:\n+    ///   - key: The ARG name to resolve.\n+    ///   - inFromContext: Whether this is being called from a FROM instruction context.\n+    /// - Returns: The resolved ARG value, or nil if not found.\n+    public func resolveArg(key: String, inFromContext: Bool = false) -> String? {\n+        // A global FROM-only ARG\n+        guard let currentStage, !inFromContext else {\n+            return buildArgs[key]\n+        }\n+\n+        let (found, defaultValue) = currentStage.getDeclaredArg(key)\n+        if found {\n+            // A stage-local ARG with a default value\n+            if let defaultValue {\n+                return defaultValue\n+            }\n+            // A stage-local ARG without a default value - a redeclared global FROM-only ARG\n+            return buildArgs[key]\n+        }\n+\n+        return nil\n+    }\n+\n+    /// Substitute ARG variables in a string.\n+    /// - Parameters:\n+    ///   - input: The string that may contain `${ARG}` references.\n+    ///   - inFromContext: Whether this substitution is happening in a FROM instruction context.\n+    /// - Returns: The string with ARG variables substituted.\n+    public func substituteArgs(_ input: String, inFromContext: Bool) -> String {\n+        let pattern = #\"\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}\"#  // `${ARG}`\n+        let regex = try! NSRegularExpression(pattern: pattern)",
+        "comment_created_at": "2025-08-17T02:02:11+00:00",
+        "comment_author": "wlan0",
+        "comment_body": "make this a singleton, otherwise it compiles on each invocation\n\n```\nstatic let regex: NSRegularExpression = {\n     try! NSRegularExpression(pattern: #\"\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}\"# ) // `${ARG}`\n}()\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2283174324",
+        "repo_full_name": "apple/container",
+        "pr_number": 516,
+        "pr_file": "Sources/NativeBuilder/ContainerBuildIR/Graph/GraphBuilder+Arg.swift",
+        "discussion_id": "2280681238",
+        "commented_code": "@@ -0,0 +1,99 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2025 Apple Inc. and the container project authors. All rights reserved.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import Foundation\n+\n+extension GraphBuilder {\n+    /// Add a build argument.\n+    /// These arguments are available within the stage.\n+    @discardableResult\n+    public func arg(_ name: String, defaultValue: String? = nil) throws -> Self {\n+        let operation = MetadataOperation(\n+            action: .declareArg(name: name, defaultValue: defaultValue)\n+        )\n+        return try add(operation)\n+    }\n+\n+    /// Add a FROM-only build argument (ARG before the first FROM).\n+    /// These arguments are only available in FROM instructions, not within stages.\n+    @discardableResult\n+    public func fromOnlyArg(_ name: String, defaultValue: String? = nil) -> Self {\n+        buildArgs[name] = defaultValue\n+        return self\n+    }\n+\n+    /// Check if there's an active stage.\n+    public var hasActiveStage: Bool {\n+        currentStage != nil\n+    }\n+\n+    /// Resolve an ARG value.\n+    /// - Parameters:\n+    ///   - key: The ARG name to resolve.\n+    ///   - inFromContext: Whether this is being called from a FROM instruction context.\n+    /// - Returns: The resolved ARG value, or nil if not found.\n+    public func resolveArg(key: String, inFromContext: Bool = false) -> String? {\n+        // A global FROM-only ARG\n+        guard let currentStage, !inFromContext else {\n+            return buildArgs[key]\n+        }\n+\n+        let (found, defaultValue) = currentStage.getDeclaredArg(key)\n+        if found {\n+            // A stage-local ARG with a default value\n+            if let defaultValue {\n+                return defaultValue\n+            }\n+            // A stage-local ARG without a default value - a redeclared global FROM-only ARG\n+            return buildArgs[key]\n+        }\n+\n+        return nil\n+    }\n+\n+    /// Substitute ARG variables in a string.\n+    /// - Parameters:\n+    ///   - input: The string that may contain `${ARG}` references.\n+    ///   - inFromContext: Whether this substitution is happening in a FROM instruction context.\n+    /// - Returns: The string with ARG variables substituted.\n+    public func substituteArgs(_ input: String, inFromContext: Bool) -> String {\n+        let pattern = #\"\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}\"#  // `${ARG}`\n+        let regex = try! NSRegularExpression(pattern: pattern)",
+        "comment_created_at": "2025-08-18T18:46:24+00:00",
+        "comment_author": "dkovba",
+        "comment_body": "Done",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2263804061",
+    "pr_number": 467,
+    "pr_file": "Sources/ContainerPlugin/PluginLoader.swift",
+    "created_at": "2025-08-08T19:04:50+00:00",
+    "commented_code": "else {\n                 continue\n             }\n+\n+            // Filter out all but plugin installation directories\n             dirs = dirs.filter {\n-                $0.isDirectory\n+                $0.resolvingSymlinksInPath().isDirectory",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2263804061",
+        "repo_full_name": "apple/container",
+        "pr_number": 467,
+        "pr_file": "Sources/ContainerPlugin/PluginLoader.swift",
+        "discussion_id": "2263804061",
+        "commented_code": "@@ -95,12 +106,15 @@ extension PluginLoader {\n             else {\n                 continue\n             }\n+\n+            // Filter out all but plugin installation directories\n             dirs = dirs.filter {\n-                $0.isDirectory\n+                $0.resolvingSymlinksInPath().isDirectory",
+        "comment_created_at": "2025-08-08T19:04:50+00:00",
+        "comment_author": "realrajaryan",
+        "comment_body": "Calling `resolvingSymlinksInPath().isDirectory` for every item creates unnecessary URL objects and performs filesystem operations even for regular directories which is expensive. We could instead request both `.isDirectoryKey` and `.isSymbolicLinkKey` up front in `contentsOfDirectory`, then:\r\n  - If `.isDirectoryKey` is true, keep it\r\n  - If it's a symlink, use `FileManager.fileExists(atPath:isDirectory:)` to check the target",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2263827699",
+    "pr_number": 467,
+    "pr_file": "Sources/ContainerPlugin/PluginLoader.swift",
+    "created_at": "2025-08-08T19:20:08+00:00",
+    "commented_code": "return plugins\n     }\n \n+    /// Locate a plugin with a specific name.\n     public func findPlugin(name: String, log: Logger? = nil) -> Plugin? {\n         do {\n+            // Try to load the plugin from each parent directory, using each plugin factory\n             return\n                 try pluginDirectories\n                 .compactMap { installURL in\n-                    try pluginFactories.compactMap { try $0.create(installURL: installURL.appending(path: name)) }.first\n+                    try pluginFactories",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2263827699",
+        "repo_full_name": "apple/container",
+        "pr_number": 467,
+        "pr_file": "Sources/ContainerPlugin/PluginLoader.swift",
+        "discussion_id": "2263827699",
+        "commented_code": "@@ -143,12 +159,16 @@ extension PluginLoader {\n         return plugins\n     }\n \n+    /// Locate a plugin with a specific name.\n     public func findPlugin(name: String, log: Logger? = nil) -> Plugin? {\n         do {\n+            // Try to load the plugin from each parent directory, using each plugin factory\n             return\n                 try pluginDirectories\n                 .compactMap { installURL in\n-                    try pluginFactories.compactMap { try $0.create(installURL: installURL.appending(path: name)) }.first\n+                    try pluginFactories",
+        "comment_created_at": "2025-08-08T19:20:08+00:00",
+        "comment_author": "realrajaryan",
+        "comment_body": "This double `compactMap { \u2026 }.first` creates temporary arrays at both levels. Using `.lazy` or nested loops would avoid the extra allocations and stop searching as soon as a plugin is found",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2263932818",
+        "repo_full_name": "apple/container",
+        "pr_number": 467,
+        "pr_file": "Sources/ContainerPlugin/PluginLoader.swift",
+        "discussion_id": "2263827699",
+        "commented_code": "@@ -143,12 +159,16 @@ extension PluginLoader {\n         return plugins\n     }\n \n+    /// Locate a plugin with a specific name.\n     public func findPlugin(name: String, log: Logger? = nil) -> Plugin? {\n         do {\n+            // Try to load the plugin from each parent directory, using each plugin factory\n             return\n                 try pluginDirectories\n                 .compactMap { installURL in\n-                    try pluginFactories.compactMap { try $0.create(installURL: installURL.appending(path: name)) }.first\n+                    try pluginFactories",
+        "comment_created_at": "2025-08-08T20:26:46+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "I just didn't stop to think, would nested loops be clearer here. Fixed",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

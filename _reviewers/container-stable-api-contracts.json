@@ -1,0 +1,218 @@
+[
+  {
+    "discussion_id": "3312830944",
+    "pr_number": 1594,
+    "pr_file": "Sources/ContainerResource/Container/PublishSocket.swift",
+    "created_at": "2026-05-27T18:07:11+00:00",
+    "commented_code": "/// Represents a socket that should be published from container to host.\n public struct PublishSocket: Sendable, Codable {\n     /// The path to the socket in the container.\n-    public var containerPath: URL\n+    public var containerPath: FilePath\n \n     /// The path where the socket should appear on the host.\n-    public var hostPath: URL\n+    public var hostPath: FilePath\n \n     /// File permissions for the socket on the host.\n     public var permissions: FilePermissions?\n \n     public init(\n-        containerPath: URL,\n-        hostPath: URL,\n+        containerPath: FilePath,\n+        hostPath: FilePath,\n         permissions: FilePermissions? = nil\n     ) {\n         self.containerPath = containerPath\n         self.hostPath = hostPath\n         self.permissions = permissions\n     }\n+\n+    private enum CodingKeys: String, CodingKey {\n+        case containerPath\n+        case hostPath\n+        case permissions\n+    }\n+\n+    /// Encode paths as file-URL absolute strings (e.g. `\"file:///var/run/docker.sock\"`).\n+    ///\n+    /// These fields were previously typed `URL`; `JSONEncoder` special-cases\n+    /// `URL` to emit `absoluteString`. `FilePath`'s synthesized `Codable`\n+    /// would instead emit a keyed container (`{\"_storage\": \"...\"}`), changing\n+    /// the on-disk and XPC wire format. We therefore encode each path as the\n+    /// equivalent `URL.absoluteString` so the byte form remains compatible\n+    /// with persisted bundles and any readers (e.g. an older service binary)\n+    /// that still decode these fields as `URL`.\n+    public func encode(to encoder: any Encoder) throws {\n+        var container = encoder.container(keyedBy: CodingKeys.self)\n+        try container.encode(Self.encodePath(containerPath), forKey: .containerPath)",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "3312830944",
+        "repo_full_name": "apple/container",
+        "pr_number": 1594,
+        "pr_file": "Sources/ContainerResource/Container/PublishSocket.swift",
+        "discussion_id": "3312830944",
+        "commented_code": "@@ -20,21 +20,100 @@ import SystemPackage\n /// Represents a socket that should be published from container to host.\n public struct PublishSocket: Sendable, Codable {\n     /// The path to the socket in the container.\n-    public var containerPath: URL\n+    public var containerPath: FilePath\n \n     /// The path where the socket should appear on the host.\n-    public var hostPath: URL\n+    public var hostPath: FilePath\n \n     /// File permissions for the socket on the host.\n     public var permissions: FilePermissions?\n \n     public init(\n-        containerPath: URL,\n-        hostPath: URL,\n+        containerPath: FilePath,\n+        hostPath: FilePath,\n         permissions: FilePermissions? = nil\n     ) {\n         self.containerPath = containerPath\n         self.hostPath = hostPath\n         self.permissions = permissions\n     }\n+\n+    private enum CodingKeys: String, CodingKey {\n+        case containerPath\n+        case hostPath\n+        case permissions\n+    }\n+\n+    /// Encode paths as file-URL absolute strings (e.g. `\"file:///var/run/docker.sock\"`).\n+    ///\n+    /// These fields were previously typed `URL`; `JSONEncoder` special-cases\n+    /// `URL` to emit `absoluteString`. `FilePath`'s synthesized `Codable`\n+    /// would instead emit a keyed container (`{\"_storage\": \"...\"}`), changing\n+    /// the on-disk and XPC wire format. We therefore encode each path as the\n+    /// equivalent `URL.absoluteString` so the byte form remains compatible\n+    /// with persisted bundles and any readers (e.g. an older service binary)\n+    /// that still decode these fields as `URL`.\n+    public func encode(to encoder: any Encoder) throws {\n+        var container = encoder.container(keyedBy: CodingKeys.self)\n+        try container.encode(Self.encodePath(containerPath), forKey: .containerPath)",
+        "comment_created_at": "2026-05-27T18:07:11+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "If we can get the change in before the end of the week or very early next week (1.0 release), we should do a breaking change on the XPC wire format and encode the absolute path but as the string representation of the path instead of as a URL.\n\nThe decoder should preserve compatibility (which it looks like you have with `decodePath`) for a few versions so that persisted config values from older releases continue to work.\n\nWe could in a separate PR add a persistent config migration at containers service startup in the API server.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2238094036",
+    "pr_number": 362,
+    "pr_file": "Sources/APIServer/Containers/ContainersService.swift",
+    "created_at": "2025-07-29T00:56:22+00:00",
+    "commented_code": "message: \"container \\(id) is not yet stopped and can not be deleted\"\n                 )\n             }\n-            try self._cleanup(id: id, item: item)\n+            try await self._cleanup(id: id, item: item)\n         case .dead, .exited(_):\n-            try self._cleanup(id: id, item: item)\n+            try await self._cleanup(id: id, item: item)\n         }\n     }\n \n     private static func fullLaunchdServiceLabel(runtimeName: String, instanceId: String) -> String {\n         \"\\(Self.launchdDomainString)/\\(Self.machServicePrefix).\\(runtimeName).\\(instanceId)\"\n     }\n \n-    private func _cleanup(id: String, item: Item) throws {\n+    private func _cleanup(id: String, item: Item) async throws {\n         self.log.debug(\"\\(#function)\")\n         let config = try item.bundle.configuration\n+\n+        // Release volumes before deleting the container\n+        do {\n+            try await self.releaseVolumes(for: config, containerId: id)\n+        } catch {\n+            self.log.error(\"Failed to release volumes for container \\(id): \\(error)\")\n+            // Don't fail the cleanup process if volume release fails\n+        }\n+\n         let label = Self.fullLaunchdServiceLabel(runtimeName: config.runtimeHandler, instanceId: id)\n         try ServiceManager.deregister(fullServiceLabel: label)\n         try item.bundle.delete()\n         self.containers.removeValue(forKey: id)\n     }\n \n+    private func releaseVolumes(for config: ContainerConfiguration, containerId: String) async throws {\n+        let volumePrefix = \"volumes/\"\n+        let volumeSuffix = \"/volume.img\"\n+\n+        for mount in config.mounts {\n+            // Check if this is a named volume by looking at the source path\n+            if mount.isBlock && mount.source.contains(volumePrefix) && mount.source.hasSuffix(volumeSuffix) {\n+                // Extract volume name from path like \".../volumes/myvolume/volume.img\"\n+                let sourcePath = mount.source\n+                if let volumeStart = sourcePath.range(of: volumePrefix)?.upperBound,\n+                    let volumeEnd = sourcePath.range(of: volumeSuffix)?.lowerBound",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2238094036",
+        "repo_full_name": "apple/container",
+        "pr_number": 362,
+        "pr_file": "Sources/APIServer/Containers/ContainersService.swift",
+        "discussion_id": "2238094036",
+        "commented_code": "@@ -215,33 +215,80 @@ actor ContainersService {\n                     message: \"container \\(id) is not yet stopped and can not be deleted\"\n                 )\n             }\n-            try self._cleanup(id: id, item: item)\n+            try await self._cleanup(id: id, item: item)\n         case .dead, .exited(_):\n-            try self._cleanup(id: id, item: item)\n+            try await self._cleanup(id: id, item: item)\n         }\n     }\n \n     private static func fullLaunchdServiceLabel(runtimeName: String, instanceId: String) -> String {\n         \"\\(Self.launchdDomainString)/\\(Self.machServicePrefix).\\(runtimeName).\\(instanceId)\"\n     }\n \n-    private func _cleanup(id: String, item: Item) throws {\n+    private func _cleanup(id: String, item: Item) async throws {\n         self.log.debug(\"\\(#function)\")\n         let config = try item.bundle.configuration\n+\n+        // Release volumes before deleting the container\n+        do {\n+            try await self.releaseVolumes(for: config, containerId: id)\n+        } catch {\n+            self.log.error(\"Failed to release volumes for container \\(id): \\(error)\")\n+            // Don't fail the cleanup process if volume release fails\n+        }\n+\n         let label = Self.fullLaunchdServiceLabel(runtimeName: config.runtimeHandler, instanceId: id)\n         try ServiceManager.deregister(fullServiceLabel: label)\n         try item.bundle.delete()\n         self.containers.removeValue(forKey: id)\n     }\n \n+    private func releaseVolumes(for config: ContainerConfiguration, containerId: String) async throws {\n+        let volumePrefix = \"volumes/\"\n+        let volumeSuffix = \"/volume.img\"\n+\n+        for mount in config.mounts {\n+            // Check if this is a named volume by looking at the source path\n+            if mount.isBlock && mount.source.contains(volumePrefix) && mount.source.hasSuffix(volumeSuffix) {\n+                // Extract volume name from path like \".../volumes/myvolume/volume.img\"\n+                let sourcePath = mount.source\n+                if let volumeStart = sourcePath.range(of: volumePrefix)?.upperBound,\n+                    let volumeEnd = sourcePath.range(of: volumeSuffix)?.lowerBound",
+        "comment_created_at": "2025-07-29T00:56:22+00:00",
+        "comment_author": "dcantah",
+        "comment_body": "This is... crummy (and fragile) that we need to do this. There has to be a better way we can just include at least the volume name in what we send over. The `.block` Filesystem type has everything we need except the volume name which we need to dec the refcount right? I honestly wouldn't be opposed to (I know, we were the ones who told you to use .block) a new FS type that is literally just .block, but with a volume name included. OR just extend .block to include an optional volumeName parameter potentially",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2238095172",
+        "repo_full_name": "apple/container",
+        "pr_number": 362,
+        "pr_file": "Sources/APIServer/Containers/ContainersService.swift",
+        "discussion_id": "2238094036",
+        "commented_code": "@@ -215,33 +215,80 @@ actor ContainersService {\n                     message: \"container \\(id) is not yet stopped and can not be deleted\"\n                 )\n             }\n-            try self._cleanup(id: id, item: item)\n+            try await self._cleanup(id: id, item: item)\n         case .dead, .exited(_):\n-            try self._cleanup(id: id, item: item)\n+            try await self._cleanup(id: id, item: item)\n         }\n     }\n \n     private static func fullLaunchdServiceLabel(runtimeName: String, instanceId: String) -> String {\n         \"\\(Self.launchdDomainString)/\\(Self.machServicePrefix).\\(runtimeName).\\(instanceId)\"\n     }\n \n-    private func _cleanup(id: String, item: Item) throws {\n+    private func _cleanup(id: String, item: Item) async throws {\n         self.log.debug(\"\\(#function)\")\n         let config = try item.bundle.configuration\n+\n+        // Release volumes before deleting the container\n+        do {\n+            try await self.releaseVolumes(for: config, containerId: id)\n+        } catch {\n+            self.log.error(\"Failed to release volumes for container \\(id): \\(error)\")\n+            // Don't fail the cleanup process if volume release fails\n+        }\n+\n         let label = Self.fullLaunchdServiceLabel(runtimeName: config.runtimeHandler, instanceId: id)\n         try ServiceManager.deregister(fullServiceLabel: label)\n         try item.bundle.delete()\n         self.containers.removeValue(forKey: id)\n     }\n \n+    private func releaseVolumes(for config: ContainerConfiguration, containerId: String) async throws {\n+        let volumePrefix = \"volumes/\"\n+        let volumeSuffix = \"/volume.img\"\n+\n+        for mount in config.mounts {\n+            // Check if this is a named volume by looking at the source path\n+            if mount.isBlock && mount.source.contains(volumePrefix) && mount.source.hasSuffix(volumeSuffix) {\n+                // Extract volume name from path like \".../volumes/myvolume/volume.img\"\n+                let sourcePath = mount.source\n+                if let volumeStart = sourcePath.range(of: volumePrefix)?.upperBound,\n+                    let volumeEnd = sourcePath.range(of: volumeSuffix)?.lowerBound",
+        "comment_created_at": "2025-07-29T00:57:47+00:00",
+        "comment_author": "dcantah",
+        "comment_body": "@jglogan @adityaramani thoughts?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2238436470",
+        "repo_full_name": "apple/container",
+        "pr_number": 362,
+        "pr_file": "Sources/APIServer/Containers/ContainersService.swift",
+        "discussion_id": "2238094036",
+        "commented_code": "@@ -215,33 +215,80 @@ actor ContainersService {\n                     message: \"container \\(id) is not yet stopped and can not be deleted\"\n                 )\n             }\n-            try self._cleanup(id: id, item: item)\n+            try await self._cleanup(id: id, item: item)\n         case .dead, .exited(_):\n-            try self._cleanup(id: id, item: item)\n+            try await self._cleanup(id: id, item: item)\n         }\n     }\n \n     private static func fullLaunchdServiceLabel(runtimeName: String, instanceId: String) -> String {\n         \"\\(Self.launchdDomainString)/\\(Self.machServicePrefix).\\(runtimeName).\\(instanceId)\"\n     }\n \n-    private func _cleanup(id: String, item: Item) throws {\n+    private func _cleanup(id: String, item: Item) async throws {\n         self.log.debug(\"\\(#function)\")\n         let config = try item.bundle.configuration\n+\n+        // Release volumes before deleting the container\n+        do {\n+            try await self.releaseVolumes(for: config, containerId: id)\n+        } catch {\n+            self.log.error(\"Failed to release volumes for container \\(id): \\(error)\")\n+            // Don't fail the cleanup process if volume release fails\n+        }\n+\n         let label = Self.fullLaunchdServiceLabel(runtimeName: config.runtimeHandler, instanceId: id)\n         try ServiceManager.deregister(fullServiceLabel: label)\n         try item.bundle.delete()\n         self.containers.removeValue(forKey: id)\n     }\n \n+    private func releaseVolumes(for config: ContainerConfiguration, containerId: String) async throws {\n+        let volumePrefix = \"volumes/\"\n+        let volumeSuffix = \"/volume.img\"\n+\n+        for mount in config.mounts {\n+            // Check if this is a named volume by looking at the source path\n+            if mount.isBlock && mount.source.contains(volumePrefix) && mount.source.hasSuffix(volumeSuffix) {\n+                // Extract volume name from path like \".../volumes/myvolume/volume.img\"\n+                let sourcePath = mount.source\n+                if let volumeStart = sourcePath.range(of: volumePrefix)?.upperBound,\n+                    let volumeEnd = sourcePath.range(of: volumeSuffix)?.lowerBound",
+        "comment_created_at": "2025-07-29T04:24:11+00:00",
+        "comment_author": "adityaramani",
+        "comment_body": "Agree - lets avoid checking the path and making a guess based off of that ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3449065179",
+    "pr_number": 1630,
+    "pr_file": "Sources/Services/ContainerAPIService/Server/Containers/ContainersService.swift",
+    "created_at": "2026-06-21T21:07:32+00:00",
+    "commented_code": "return FileManager.default.allocatedSize(of: URL(fileURLWithPath: containerPath))\n     }\n \n-    public func exportRootfs(id: String, archive: URL) async throws {\n+    public func exportRootfs(id: String, archive: URL, live: Bool = false) async throws {\n         self.log.debug(\"\\(#function)\")\n \n         let state = try self._getContainerState(id: id)\n-        guard state.snapshot.status == .stopped else {\n+        guard state.snapshot.status == .stopped || (live && state.snapshot.status == .running) else {\n             throw ContainerizationError(.invalidState, message: \"container is not stopped\")\n         }\n \n         let path = self.containerRoot.appendingPathComponent(id)\n         let bundle = ContainerResource.Bundle(path: path)\n         let rootfs = bundle.containerRootfsBlock\n+\n+        if live {\n+            let client = try state.getClient()\n+            try await client.filesystemOperation(operation: .freeze, path: \"/\")",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "3449065179",
+        "repo_full_name": "apple/container",
+        "pr_number": 1630,
+        "pr_file": "Sources/Services/ContainerAPIService/Server/Containers/ContainersService.swift",
+        "discussion_id": "3449065179",
+        "commented_code": "@@ -897,17 +959,40 @@ public actor ContainersService {\n         return FileManager.default.allocatedSize(of: URL(fileURLWithPath: containerPath))\n     }\n \n-    public func exportRootfs(id: String, archive: URL) async throws {\n+    public func exportRootfs(id: String, archive: URL, live: Bool = false) async throws {\n         self.log.debug(\"\\(#function)\")\n \n         let state = try self._getContainerState(id: id)\n-        guard state.snapshot.status == .stopped else {\n+        guard state.snapshot.status == .stopped || (live && state.snapshot.status == .running) else {\n             throw ContainerizationError(.invalidState, message: \"container is not stopped\")\n         }\n \n         let path = self.containerRoot.appendingPathComponent(id)\n         let bundle = ContainerResource.Bundle(path: path)\n         let rootfs = bundle.containerRootfsBlock\n+\n+        if live {\n+            let client = try state.getClient()\n+            try await client.filesystemOperation(operation: .freeze, path: \"/\")",
+        "comment_created_at": "2026-06-21T21:07:32+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "It might be possible to make the PR quite a bit simpler and at the same time, make the amount of time that the container filesystem is frozen as short as possible.\n\nInstead of exposing any freeze/thaw APIs, we could have something like this on the runtime API:\n\n```swift\n  // RuntimeRoutes\n  static let snapshotDisk = \"com.apple.container.runtime/snapshotDisk\"\n\n  // RuntimeKeys (reuses existing destinationPath key; adds imagePath)\n  static let imagePath = \"imagePath\"\n\n  // RuntimeClient\n  public func snapshotDisk(imagePath: String, destinationPath: String) async throws\n```\n\nwhere `snapshotDisk` in RuntimeService does freeze/clonefile/thaw in a single call.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2862238095",
+    "pr_number": 1214,
+    "pr_file": "Sources/Services/ContainerAPIService/Server/Containers/ContainersService.swift",
+    "created_at": "2026-02-27T02:53:40+00:00",
+    "commented_code": "}\n \n     /// Bootstrap the init process of the container.\n-    public func bootstrap(id: String, stdio: [FileHandle?]) async throws {\n+    /// - Parameter sshAuthSocketPath: Optional path to the current shell's SSH agent socket, supplied by the client at bootstrap time when SSH forwarding is enabled.\n+    public func bootstrap(id: String, stdio: [FileHandle?], sshAuthSocketPath: String? = nil) async throws {",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2862238095",
+        "repo_full_name": "apple/container",
+        "pr_number": 1214,
+        "pr_file": "Sources/Services/ContainerAPIService/Server/Containers/ContainersService.swift",
+        "discussion_id": "2862238095",
+        "commented_code": "@@ -378,7 +378,8 @@ public actor ContainersService {\n     }\n \n     /// Bootstrap the init process of the container.\n-    public func bootstrap(id: String, stdio: [FileHandle?]) async throws {\n+    /// - Parameter sshAuthSocketPath: Optional path to the current shell's SSH agent socket, supplied by the client at bootstrap time when SSH forwarding is enabled.\n+    public func bootstrap(id: String, stdio: [FileHandle?], sshAuthSocketPath: String? = nil) async throws {",
+        "comment_created_at": "2026-02-27T02:53:40+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "@chavezMac I had a thought on this to future-proof the API.\n\nWhat do you think about changing it to:\n\n```swift\npublic func bootstrap(id: String, stdio: [FileHandle?], dynamicEnv: [String:String] = [:]) async throws {...}\n```\n\nWe'd not expose this up to the CLI (`container start`) as generally, the env variables are baked in at create time. With this API we can address any other cases like SSH_AUTH_SOCK without breaking changes.\n\nDo you think it'd work cleanly with what you have?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2881699053",
+        "repo_full_name": "apple/container",
+        "pr_number": 1214,
+        "pr_file": "Sources/Services/ContainerAPIService/Server/Containers/ContainersService.swift",
+        "discussion_id": "2862238095",
+        "commented_code": "@@ -378,7 +378,8 @@ public actor ContainersService {\n     }\n \n     /// Bootstrap the init process of the container.\n-    public func bootstrap(id: String, stdio: [FileHandle?]) async throws {\n+    /// - Parameter sshAuthSocketPath: Optional path to the current shell's SSH agent socket, supplied by the client at bootstrap time when SSH forwarding is enabled.\n+    public func bootstrap(id: String, stdio: [FileHandle?], sshAuthSocketPath: String? = nil) async throws {",
+        "comment_created_at": "2026-03-04T04:15:14+00:00",
+        "comment_author": "chavezMac",
+        "comment_body": " I do like the idea of a dynamicEnv API as a future-proof idea to support other bootstrap\u2011time env overrides without breaking changes. If we see more use cases beyond SSH, I\u2019d be happy to prototype that in a separate PR.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2881814365",
+        "repo_full_name": "apple/container",
+        "pr_number": 1214,
+        "pr_file": "Sources/Services/ContainerAPIService/Server/Containers/ContainersService.swift",
+        "discussion_id": "2862238095",
+        "commented_code": "@@ -378,7 +378,8 @@ public actor ContainersService {\n     }\n \n     /// Bootstrap the init process of the container.\n-    public func bootstrap(id: String, stdio: [FileHandle?]) async throws {\n+    /// - Parameter sshAuthSocketPath: Optional path to the current shell's SSH agent socket, supplied by the client at bootstrap time when SSH forwarding is enabled.\n+    public func bootstrap(id: String, stdio: [FileHandle?], sshAuthSocketPath: String? = nil) async throws {",
+        "comment_created_at": "2026-03-04T05:02:15+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "The problem with not doing it now is that it guarantees there will be a breaking change.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2921708325",
+        "repo_full_name": "apple/container",
+        "pr_number": 1214,
+        "pr_file": "Sources/Services/ContainerAPIService/Server/Containers/ContainersService.swift",
+        "discussion_id": "2862238095",
+        "commented_code": "@@ -378,7 +378,8 @@ public actor ContainersService {\n     }\n \n     /// Bootstrap the init process of the container.\n-    public func bootstrap(id: String, stdio: [FileHandle?]) async throws {\n+    /// - Parameter sshAuthSocketPath: Optional path to the current shell's SSH agent socket, supplied by the client at bootstrap time when SSH forwarding is enabled.\n+    public func bootstrap(id: String, stdio: [FileHandle?], sshAuthSocketPath: String? = nil) async throws {",
+        "comment_created_at": "2026-03-12T00:57:39+00:00",
+        "comment_author": "chavezMac",
+        "comment_body": "I apologize for the delay in this request, I have been busy with other work. I plan on getting an updated PR for this by end of day, Friday!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2934633343",
+        "repo_full_name": "apple/container",
+        "pr_number": 1214,
+        "pr_file": "Sources/Services/ContainerAPIService/Server/Containers/ContainersService.swift",
+        "discussion_id": "2862238095",
+        "commented_code": "@@ -378,7 +378,8 @@ public actor ContainersService {\n     }\n \n     /// Bootstrap the init process of the container.\n-    public func bootstrap(id: String, stdio: [FileHandle?]) async throws {\n+    /// - Parameter sshAuthSocketPath: Optional path to the current shell's SSH agent socket, supplied by the client at bootstrap time when SSH forwarding is enabled.\n+    public func bootstrap(id: String, stdio: [FileHandle?], sshAuthSocketPath: String? = nil) async throws {",
+        "comment_created_at": "2026-03-14T04:01:07+00:00",
+        "comment_author": "chavezMac",
+        "comment_body": "Updated PR! @jglogan ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2791047418",
+    "pr_number": 1190,
+    "pr_file": "Sources/Services/ContainerAPIService/Client/ContainerClient.swift",
+    "created_at": "2026-02-11T01:29:27+00:00",
+    "commented_code": "return fh\n     }\n \n+    /// Copy a file from the host into the container.\n+    public func copyIn(id: String, source: String, destination: String, mode: UInt32 = 0o644) async throws {",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2791047418",
+        "repo_full_name": "apple/container",
+        "pr_number": 1190,
+        "pr_file": "Sources/Services/ContainerAPIService/Client/ContainerClient.swift",
+        "discussion_id": "2791047418",
+        "commented_code": "@@ -297,6 +297,43 @@ public struct ContainerClient: Sendable {\n         return fh\n     }\n \n+    /// Copy a file from the host into the container.\n+    public func copyIn(id: String, source: String, destination: String, mode: UInt32 = 0o644) async throws {",
+        "comment_created_at": "2026-02-11T01:29:27+00:00",
+        "comment_author": "JaewonHur",
+        "comment_body": "It'd be better to get `source` and `destination` as `URL` type and convert them to string here.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2257958470",
+    "pr_number": 419,
+    "pr_file": "Sources/ContainerClient/Core/ClientHealthCheck.swift",
+    "created_at": "2025-08-06T18:28:23+00:00",
+    "commented_code": "XPCClient(service: serviceIdentifier)\n     }\n \n-    public static func ping(timeout: Duration? = .seconds(5)) async throws {\n+    public static func ping(timeout: Duration? = .seconds(5)) async throws -> SystemHealth {\n         let client = Self.newClient()\n         let request = XPCMessage(route: .ping)\n-        try await client.send(request, responseTimeout: timeout)\n+        let reply = try await client.send(request, responseTimeout: timeout)\n+        guard let appRootValue = reply.string(key: .appRoot), let appRoot = URL(string: appRootValue) else {",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2257958470",
+        "repo_full_name": "apple/container",
+        "pr_number": 419,
+        "pr_file": "Sources/ContainerClient/Core/ClientHealthCheck.swift",
+        "discussion_id": "2257958470",
+        "commented_code": "@@ -26,9 +27,19 @@ extension ClientHealthCheck {\n         XPCClient(service: serviceIdentifier)\n     }\n \n-    public static func ping(timeout: Duration? = .seconds(5)) async throws {\n+    public static func ping(timeout: Duration? = .seconds(5)) async throws -> SystemHealth {\n         let client = Self.newClient()\n         let request = XPCMessage(route: .ping)\n-        try await client.send(request, responseTimeout: timeout)\n+        let reply = try await client.send(request, responseTimeout: timeout)\n+        guard let appRootValue = reply.string(key: .appRoot), let appRoot = URL(string: appRootValue) else {",
+        "comment_created_at": "2025-08-06T18:28:23+00:00",
+        "comment_author": "realrajaryan",
+        "comment_body": "The server uses `appRoot.formatted()` (which produces a human readable string) to encode the URL, but the client uses `URL(string:)` (which expects a proper URL format) to decode it. Would these always be compatible?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2258091399",
+        "repo_full_name": "apple/container",
+        "pr_number": 419,
+        "pr_file": "Sources/ContainerClient/Core/ClientHealthCheck.swift",
+        "discussion_id": "2257958470",
+        "commented_code": "@@ -26,9 +27,19 @@ extension ClientHealthCheck {\n         XPCClient(service: serviceIdentifier)\n     }\n \n-    public static func ping(timeout: Duration? = .seconds(5)) async throws {\n+    public static func ping(timeout: Duration? = .seconds(5)) async throws -> SystemHealth {\n         let client = Self.newClient()\n         let request = XPCMessage(route: .ping)\n-        try await client.send(request, responseTimeout: timeout)\n+        let reply = try await client.send(request, responseTimeout: timeout)\n+        guard let appRootValue = reply.string(key: .appRoot), let appRoot = URL(string: appRootValue) else {",
+        "comment_created_at": "2025-08-06T19:33:35+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "yup: should be `.absoluteString`",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

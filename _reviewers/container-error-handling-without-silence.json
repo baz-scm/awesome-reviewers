@@ -1,0 +1,408 @@
+[
+  {
+    "discussion_id": "3732252746",
+    "pr_number": 2079,
+    "pr_file": "Sources/ContainerK8s/K8sHelper.swift",
+    "created_at": "2026-08-06T22:41:49+00:00",
+    "commented_code": "sysctl -w net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true\n         systemctl restart containerd\n         ctr -n k8s.io images tag registry.k8s.io/pause:3.10 registry.k8s.io/pause:3.10.1 2>/dev/null || true\n-        iptables -t mangle -A OUTPUT  -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220\n-        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220\n+        /usr/sbin/iptables-nft -t mangle -A OUTPUT  -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220 2>/dev/null || true",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "3732252746",
+        "repo_full_name": "apple/container",
+        "pr_number": 2079,
+        "pr_file": "Sources/ContainerK8s/K8sHelper.swift",
+        "discussion_id": "3732252746",
+        "commented_code": "@@ -291,8 +291,8 @@ struct K8sHelper {\n         sysctl -w net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true\n         systemctl restart containerd\n         ctr -n k8s.io images tag registry.k8s.io/pause:3.10 registry.k8s.io/pause:3.10.1 2>/dev/null || true\n-        iptables -t mangle -A OUTPUT  -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220\n-        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220\n+        /usr/sbin/iptables-nft -t mangle -A OUTPUT  -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220 2>/dev/null || true",
+        "comment_created_at": "2026-08-06T22:41:49+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "Why dump the diagnostic output to /dev/null? I think we'd want to see that.\n\nWhy don't we let the command just fail if it doesn't work, instead of ignoring failure?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3732724877",
+        "repo_full_name": "apple/container",
+        "pr_number": 2079,
+        "pr_file": "Sources/ContainerK8s/K8sHelper.swift",
+        "discussion_id": "3732252746",
+        "commented_code": "@@ -291,8 +291,8 @@ struct K8sHelper {\n         sysctl -w net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true\n         systemctl restart containerd\n         ctr -n k8s.io images tag registry.k8s.io/pause:3.10 registry.k8s.io/pause:3.10.1 2>/dev/null || true\n-        iptables -t mangle -A OUTPUT  -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220\n-        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220\n+        /usr/sbin/iptables-nft -t mangle -A OUTPUT  -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1220 2>/dev/null || true",
+        "comment_created_at": "2026-08-07T00:57:11+00:00",
+        "comment_author": "jshi991",
+        "comment_body": "yup ill fail and log",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3384969110",
+    "pr_number": 1661,
+    "pr_file": "Sources/Services/RuntimeLinux/Server/VmnetHelperInterfaceStrategy.swift",
+    "created_at": "2026-06-10T01:55:35+00:00",
+    "commented_code": "+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerResource\n+import ContainerRuntimeClient\n+import ContainerXPC\n+import Containerization\n+import ContainerizationError\n+import ContainerizationExtras\n+import CryptoKit\n+import Foundation\n+import Logging\n+\n+/// Creates network interfaces for bridged networks by launching a\n+/// vmnet-helper process per interface.\n+///\n+/// vmnet-helper (https://github.com/nirs/vmnet-helper) attaches to the\n+/// physical host interface in vmnet bridged mode and relays Ethernet\n+/// frames over a `SOCK_DGRAM` socketpair. The strategy spawns the helper,\n+/// reads the interface parameters it reports on stdout, and hands the VM\n+/// end of the socketpair to the virtual machine. The MAC address comes\n+/// from vmnet, not from the caller.\n+public struct VmnetHelperInterfaceStrategy: InterfaceStrategy {\n+    /// Default helper locations for Homebrew on macOS 26 and newer,\n+    /// then the install script location for macOS 15 and earlier.\n+    private static let defaultHelperPaths = [\n+        \"/opt/homebrew/opt/vmnet-helper/libexec/vmnet-helper\",\n+        \"/usr/local/opt/vmnet-helper/libexec/vmnet-helper\",\n+        \"/opt/vmnet-helper/bin/vmnet-helper\",\n+    ]\n+\n+    private static let startupTimeout = Duration.seconds(15)\n+    // The Virtualization framework requires SO_RCVBUF of at least twice\n+    // SO_SNDBUF on the attachment socket and recommends four times.\n+    private static let socketSendBufferSize: Int32 = 1024 * 1024\n+    private static let socketReceiveBufferSize: Int32 = 4 * 1024 * 1024\n+\n+    private let log: Logger\n+\n+    public init(log: Logger) {\n+        self.log = log\n+    }\n+\n+    public func toInterface(attachment: Attachment, interfaceIndex: Int, additionalData: XPCMessage?) async throws -> Interface {\n+        guard let additionalData else {\n+            throw ContainerizationError(.invalidState, message: \"bridged network attachment has no additional data\")\n+        }\n+        guard let hostInterface = additionalData.string(key: VmnetHelperNetwork.AdditionalDataKey.interface.rawValue) else {\n+            throw ContainerizationError(.invalidState, message: \"bridged network attachment does not specify a host interface\")\n+        }\n+        let helperPath = try Self.resolveHelperPath(\n+            override: additionalData.string(key: VmnetHelperNetwork.AdditionalDataKey.helperPath.rawValue)\n+        )\n+\n+        // A stable interface ID gives the attachment a stable vmnet MAC\n+        // address across container restarts.\n+        let interfaceId = Self.stableInterfaceId(network: attachment.network, hostname: attachment.hostname, interfaceIndex: interfaceIndex)\n+\n+        // The helper gets one end of the socketpair as its stdin and\n+        // the VM gets the other.\n+        var fds: [Int32] = [-1, -1]\n+        guard socketpair(AF_UNIX, SOCK_DGRAM, 0, &fds) == 0 else {\n+            throw ContainerizationError(.internalError, message: \"socketpair failed with errno \\(errno)\")\n+        }\n+        let vmFd = fds[0]\n+        let helperFd = fds[1]\n+        for fd in fds {\n+            var sendSize = Self.socketSendBufferSize\n+            var receiveSize = Self.socketReceiveBufferSize\n+            _ = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sendSize, socklen_t(MemoryLayout<Int32>.size))",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "3384969110",
+        "repo_full_name": "apple/container",
+        "pr_number": 1661,
+        "pr_file": "Sources/Services/RuntimeLinux/Server/VmnetHelperInterfaceStrategy.swift",
+        "discussion_id": "3384969110",
+        "commented_code": "@@ -0,0 +1,290 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerResource\n+import ContainerRuntimeClient\n+import ContainerXPC\n+import Containerization\n+import ContainerizationError\n+import ContainerizationExtras\n+import CryptoKit\n+import Foundation\n+import Logging\n+\n+/// Creates network interfaces for bridged networks by launching a\n+/// vmnet-helper process per interface.\n+///\n+/// vmnet-helper (https://github.com/nirs/vmnet-helper) attaches to the\n+/// physical host interface in vmnet bridged mode and relays Ethernet\n+/// frames over a `SOCK_DGRAM` socketpair. The strategy spawns the helper,\n+/// reads the interface parameters it reports on stdout, and hands the VM\n+/// end of the socketpair to the virtual machine. The MAC address comes\n+/// from vmnet, not from the caller.\n+public struct VmnetHelperInterfaceStrategy: InterfaceStrategy {\n+    /// Default helper locations for Homebrew on macOS 26 and newer,\n+    /// then the install script location for macOS 15 and earlier.\n+    private static let defaultHelperPaths = [\n+        \"/opt/homebrew/opt/vmnet-helper/libexec/vmnet-helper\",\n+        \"/usr/local/opt/vmnet-helper/libexec/vmnet-helper\",\n+        \"/opt/vmnet-helper/bin/vmnet-helper\",\n+    ]\n+\n+    private static let startupTimeout = Duration.seconds(15)\n+    // The Virtualization framework requires SO_RCVBUF of at least twice\n+    // SO_SNDBUF on the attachment socket and recommends four times.\n+    private static let socketSendBufferSize: Int32 = 1024 * 1024\n+    private static let socketReceiveBufferSize: Int32 = 4 * 1024 * 1024\n+\n+    private let log: Logger\n+\n+    public init(log: Logger) {\n+        self.log = log\n+    }\n+\n+    public func toInterface(attachment: Attachment, interfaceIndex: Int, additionalData: XPCMessage?) async throws -> Interface {\n+        guard let additionalData else {\n+            throw ContainerizationError(.invalidState, message: \"bridged network attachment has no additional data\")\n+        }\n+        guard let hostInterface = additionalData.string(key: VmnetHelperNetwork.AdditionalDataKey.interface.rawValue) else {\n+            throw ContainerizationError(.invalidState, message: \"bridged network attachment does not specify a host interface\")\n+        }\n+        let helperPath = try Self.resolveHelperPath(\n+            override: additionalData.string(key: VmnetHelperNetwork.AdditionalDataKey.helperPath.rawValue)\n+        )\n+\n+        // A stable interface ID gives the attachment a stable vmnet MAC\n+        // address across container restarts.\n+        let interfaceId = Self.stableInterfaceId(network: attachment.network, hostname: attachment.hostname, interfaceIndex: interfaceIndex)\n+\n+        // The helper gets one end of the socketpair as its stdin and\n+        // the VM gets the other.\n+        var fds: [Int32] = [-1, -1]\n+        guard socketpair(AF_UNIX, SOCK_DGRAM, 0, &fds) == 0 else {\n+            throw ContainerizationError(.internalError, message: \"socketpair failed with errno \\(errno)\")\n+        }\n+        let vmFd = fds[0]\n+        let helperFd = fds[1]\n+        for fd in fds {\n+            var sendSize = Self.socketSendBufferSize\n+            var receiveSize = Self.socketReceiveBufferSize\n+            _ = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sendSize, socklen_t(MemoryLayout<Int32>.size))",
+        "comment_created_at": "2026-06-10T01:55:35+00:00",
+        "comment_author": "servusdei2018",
+        "comment_body": "We're ignoring the return values on these `setsockopt` calls (`_ = setsockopt(...)`). If a system has a restrictive buffer ceiling set via sysctl (`kern.ipc.maxsockbuf`), the OS will truncate or reject these 1MB/4MB sizes. If that happens, the Virtualization framework might start throwing silent packet drops under high throughput. We should probably log a warning or check the return code here instead of discarding it completely.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3483337331",
+        "repo_full_name": "apple/container",
+        "pr_number": 1661,
+        "pr_file": "Sources/Services/RuntimeLinux/Server/VmnetHelperInterfaceStrategy.swift",
+        "discussion_id": "3384969110",
+        "commented_code": "@@ -0,0 +1,290 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerResource\n+import ContainerRuntimeClient\n+import ContainerXPC\n+import Containerization\n+import ContainerizationError\n+import ContainerizationExtras\n+import CryptoKit\n+import Foundation\n+import Logging\n+\n+/// Creates network interfaces for bridged networks by launching a\n+/// vmnet-helper process per interface.\n+///\n+/// vmnet-helper (https://github.com/nirs/vmnet-helper) attaches to the\n+/// physical host interface in vmnet bridged mode and relays Ethernet\n+/// frames over a `SOCK_DGRAM` socketpair. The strategy spawns the helper,\n+/// reads the interface parameters it reports on stdout, and hands the VM\n+/// end of the socketpair to the virtual machine. The MAC address comes\n+/// from vmnet, not from the caller.\n+public struct VmnetHelperInterfaceStrategy: InterfaceStrategy {\n+    /// Default helper locations for Homebrew on macOS 26 and newer,\n+    /// then the install script location for macOS 15 and earlier.\n+    private static let defaultHelperPaths = [\n+        \"/opt/homebrew/opt/vmnet-helper/libexec/vmnet-helper\",\n+        \"/usr/local/opt/vmnet-helper/libexec/vmnet-helper\",\n+        \"/opt/vmnet-helper/bin/vmnet-helper\",\n+    ]\n+\n+    private static let startupTimeout = Duration.seconds(15)\n+    // The Virtualization framework requires SO_RCVBUF of at least twice\n+    // SO_SNDBUF on the attachment socket and recommends four times.\n+    private static let socketSendBufferSize: Int32 = 1024 * 1024\n+    private static let socketReceiveBufferSize: Int32 = 4 * 1024 * 1024\n+\n+    private let log: Logger\n+\n+    public init(log: Logger) {\n+        self.log = log\n+    }\n+\n+    public func toInterface(attachment: Attachment, interfaceIndex: Int, additionalData: XPCMessage?) async throws -> Interface {\n+        guard let additionalData else {\n+            throw ContainerizationError(.invalidState, message: \"bridged network attachment has no additional data\")\n+        }\n+        guard let hostInterface = additionalData.string(key: VmnetHelperNetwork.AdditionalDataKey.interface.rawValue) else {\n+            throw ContainerizationError(.invalidState, message: \"bridged network attachment does not specify a host interface\")\n+        }\n+        let helperPath = try Self.resolveHelperPath(\n+            override: additionalData.string(key: VmnetHelperNetwork.AdditionalDataKey.helperPath.rawValue)\n+        )\n+\n+        // A stable interface ID gives the attachment a stable vmnet MAC\n+        // address across container restarts.\n+        let interfaceId = Self.stableInterfaceId(network: attachment.network, hostname: attachment.hostname, interfaceIndex: interfaceIndex)\n+\n+        // The helper gets one end of the socketpair as its stdin and\n+        // the VM gets the other.\n+        var fds: [Int32] = [-1, -1]\n+        guard socketpair(AF_UNIX, SOCK_DGRAM, 0, &fds) == 0 else {\n+            throw ContainerizationError(.internalError, message: \"socketpair failed with errno \\(errno)\")\n+        }\n+        let vmFd = fds[0]\n+        let helperFd = fds[1]\n+        for fd in fds {\n+            var sendSize = Self.socketSendBufferSize\n+            var receiveSize = Self.socketReceiveBufferSize\n+            _ = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sendSize, socklen_t(MemoryLayout<Int32>.size))",
+        "comment_created_at": "2026-06-26T18:20:51+00:00",
+        "comment_author": "s3rj1k",
+        "comment_body": "Hi, thanks for the review, I've rebased on top of recent changes and hopefully solved both highlighted issues.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3501541854",
+    "pr_number": 1868,
+    "pr_file": "Tests/IntegrationTests/System/TestCLIKernelSetSerial.swift",
+    "created_at": "2026-06-30T20:08:29+00:00",
+    "commented_code": "+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerAPIClient\n+import ContainerPersistence\n+import ContainerizationArchive\n+import Foundation\n+import Testing\n+\n+/// Tests for `container system kernel set`. Each test modifies the global default\n+/// kernel binary, so the suite must run fully serialised.\n+@Suite(.serialized)\n+struct TestCLIKernelSetSerial {\n+    private let remoteTar = ContainerSystemConfig().kernel.url\n+    private let defaultBinaryPath = ContainerSystemConfig().kernel.binaryPath\n+\n+    // MARK: - Tests\n+\n+    @Test func fromLocalTar() async throws {\n+        let symlinkBinaryPath = URL(filePath: defaultBinaryPath)\n+            .deletingLastPathComponent()\n+            .appending(path: \"vmlinux.container\")\n+            .relativePath\n+\n+        try await ContainerFixture.with { f in\n+            f.addCleanup { _ = try? f.run([\"system\", \"kernel\", \"set\", \"--recommended\", \"--force\"]) }",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "3501541854",
+        "repo_full_name": "apple/container",
+        "pr_number": 1868,
+        "pr_file": "Tests/IntegrationTests/System/TestCLIKernelSetSerial.swift",
+        "discussion_id": "3501541854",
+        "commented_code": "@@ -0,0 +1,88 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerAPIClient\n+import ContainerPersistence\n+import ContainerizationArchive\n+import Foundation\n+import Testing\n+\n+/// Tests for `container system kernel set`. Each test modifies the global default\n+/// kernel binary, so the suite must run fully serialised.\n+@Suite(.serialized)\n+struct TestCLIKernelSetSerial {\n+    private let remoteTar = ContainerSystemConfig().kernel.url\n+    private let defaultBinaryPath = ContainerSystemConfig().kernel.binaryPath\n+\n+    // MARK: - Tests\n+\n+    @Test func fromLocalTar() async throws {\n+        let symlinkBinaryPath = URL(filePath: defaultBinaryPath)\n+            .deletingLastPathComponent()\n+            .appending(path: \"vmlinux.container\")\n+            .relativePath\n+\n+        try await ContainerFixture.with { f in\n+            f.addCleanup { _ = try? f.run([\"system\", \"kernel\", \"set\", \"--recommended\", \"--force\"]) }",
+        "comment_created_at": "2026-06-30T20:08:29+00:00",
+        "comment_author": "JaewonHur",
+        "comment_body": "Should catch and log if this fails? because it affects following tests.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3501786399",
+        "repo_full_name": "apple/container",
+        "pr_number": 1868,
+        "pr_file": "Tests/IntegrationTests/System/TestCLIKernelSetSerial.swift",
+        "discussion_id": "3501541854",
+        "commented_code": "@@ -0,0 +1,88 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerAPIClient\n+import ContainerPersistence\n+import ContainerizationArchive\n+import Foundation\n+import Testing\n+\n+/// Tests for `container system kernel set`. Each test modifies the global default\n+/// kernel binary, so the suite must run fully serialised.\n+@Suite(.serialized)\n+struct TestCLIKernelSetSerial {\n+    private let remoteTar = ContainerSystemConfig().kernel.url\n+    private let defaultBinaryPath = ContainerSystemConfig().kernel.binaryPath\n+\n+    // MARK: - Tests\n+\n+    @Test func fromLocalTar() async throws {\n+        let symlinkBinaryPath = URL(filePath: defaultBinaryPath)\n+            .deletingLastPathComponent()\n+            .appending(path: \"vmlinux.container\")\n+            .relativePath\n+\n+        try await ContainerFixture.with { f in\n+            f.addCleanup { _ = try? f.run([\"system\", \"kernel\", \"set\", \"--recommended\", \"--force\"]) }",
+        "comment_created_at": "2026-06-30T20:54:52+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "Agree. Changed to record test issues on non-zero status or throw.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3456817836",
+    "pr_number": 1784,
+    "pr_file": "Sources/Services/ContainerAPIService/Client/ProcessIO.swift",
+    "created_at": "2026-06-23T03:27:48+00:00",
+    "commented_code": "cc.yield()\n                     return\n                 }\n-                try! pout.write(contentsOf: data)\n+                try? pout.write(contentsOf: data)",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "3456817836",
+        "repo_full_name": "apple/container",
+        "pr_number": 1784,
+        "pr_file": "Sources/Services/ContainerAPIService/Client/ProcessIO.swift",
+        "discussion_id": "3456817836",
+        "commented_code": "@@ -105,7 +105,7 @@ public struct ProcessIO: Sendable {\n                     cc.yield()\n                     return\n                 }\n-                try! pout.write(contentsOf: data)\n+                try? pout.write(contentsOf: data)",
+        "comment_created_at": "2026-06-23T03:27:48+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "Thanks for catching these force-try cases.\n\nI think we'd be better served in this case if we treat these failed writse like an EOF:\n\n```suggestion\n                do {\n                    try pout.write(contentsOf: data)\n                } catch {\n                    rout.readabilityHandler = nil\n                    cc.yield()\n                }\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3461599675",
+        "repo_full_name": "apple/container",
+        "pr_number": 1784,
+        "pr_file": "Sources/Services/ContainerAPIService/Client/ProcessIO.swift",
+        "discussion_id": "3456817836",
+        "commented_code": "@@ -105,7 +105,7 @@ public struct ProcessIO: Sendable {\n                     cc.yield()\n                     return\n                 }\n-                try! pout.write(contentsOf: data)\n+                try? pout.write(contentsOf: data)",
+        "comment_created_at": "2026-06-23T17:16:00+00:00",
+        "comment_author": "heptalianyaftali-boop",
+        "comment_body": "@",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3456818967",
+    "pr_number": 1784,
+    "pr_file": "Sources/Services/ContainerAPIService/Client/ProcessIO.swift",
+    "created_at": "2026-06-23T03:28:14+00:00",
+    "commented_code": "cc.yield()\n                     return\n                 }\n-                try! perr.write(contentsOf: data)\n+                try? perr.write(contentsOf: data)",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "3456818967",
+        "repo_full_name": "apple/container",
+        "pr_number": 1784,
+        "pr_file": "Sources/Services/ContainerAPIService/Client/ProcessIO.swift",
+        "discussion_id": "3456818967",
+        "commented_code": "@@ -126,7 +126,7 @@ public struct ProcessIO: Sendable {\n                     cc.yield()\n                     return\n                 }\n-                try! perr.write(contentsOf: data)\n+                try? perr.write(contentsOf: data)",
+        "comment_created_at": "2026-06-23T03:28:14+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "```suggestion\n                do {\n                    try perr.write(contentsOf: data)\n                } catch {\n                    rerr.readabilityHandler = nil\n                    cc.yield()\n                }\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2791055729",
+    "pr_number": 1190,
+    "pr_file": "Sources/Services/ContainerAPIService/Server/Containers/ContainersService.swift",
+    "created_at": "2026-02-11T01:34:31+00:00",
+    "commented_code": "}\n     }\n \n+    /// Copy a file from the host into the container.\n+    public func copyIn(id: String, source: String, destination: String, mode: UInt32) async throws {\n+        self.log.debug(\"\\(#function)\")\n+\n+        let state = try self._getContainerState(id: id)\n+        let client = try state.getClient()",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2791055729",
+        "repo_full_name": "apple/container",
+        "pr_number": 1190,
+        "pr_file": "Sources/Services/ContainerAPIService/Server/Containers/ContainersService.swift",
+        "discussion_id": "2791055729",
+        "commented_code": "@@ -468,6 +468,24 @@ public actor ContainersService {\n         }\n     }\n \n+    /// Copy a file from the host into the container.\n+    public func copyIn(id: String, source: String, destination: String, mode: UInt32) async throws {\n+        self.log.debug(\"\\(#function)\")\n+\n+        let state = try self._getContainerState(id: id)\n+        let client = try state.getClient()",
+        "comment_created_at": "2026-02-11T01:34:31+00:00",
+        "comment_author": "JaewonHur",
+        "comment_body": "Need to check container is running.\nIt's a bit different as container requires the agent in VM to be running to get the file copied.\n(docker does not)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2960998750",
+    "pr_number": 1269,
+    "pr_file": "Sources/DNSServer/Handlers/HostTableResolver.swift",
+    "created_at": "2026-03-19T15:51:50+00:00",
+    "commented_code": "// limitations under the License.\n //===----------------------------------------------------------------------===//\n \n-import DNS\n+import ContainerizationExtras\n \n /// Handler that uses table lookup to resolve hostnames.\n+///\n+/// Keys in `hosts4` are normalized to `DNSName` on construction, so lookups\n+/// are case-insensitive and trailing dots are optional.\n public struct HostTableResolver: DNSHandler {\n-    public let hosts4: [String: IPv4]\n+    public let hosts4: [DNSName: IPv4Address]\n     private let ttl: UInt32\n \n-    public init(hosts4: [String: IPv4], ttl: UInt32 = 300) {\n-        self.hosts4 = hosts4\n+    /// Creates a resolver backed by a static IPv4 host table.\n+    ///\n+    /// - Parameter hosts4: A dictionary mapping domain names to IPv4 addresses.\n+    ///   Keys are normalized to `DNSName` (lowercased, trailing dot stripped), so\n+    ///   `\"FOO.\"`, `\"foo.\"`, and `\"foo\"` all refer to the same entry.\n+    /// - Parameter ttl: The TTL in seconds to set on answer records (default is 300).\n+    /// - Throws: `DNSBindError.invalidName` if any key is not a valid DNS name.\n+    public init(hosts4: [String: IPv4Address], ttl: UInt32 = 300) throws {\n+        self.hosts4 = try Dictionary(uniqueKeysWithValues: hosts4.map { (try DNSName($0.key), $0.value) })\n         self.ttl = ttl\n     }\n \n     public func answer(query: Message) async throws -> Message? {\n-        let question = query.questions[0]\n+        guard let question = query.questions.first else {",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2960998750",
+        "repo_full_name": "apple/container",
+        "pr_number": 1269,
+        "pr_file": "Sources/DNSServer/Handlers/HostTableResolver.swift",
+        "discussion_id": "2960998750",
+        "commented_code": "@@ -14,30 +14,44 @@\n // limitations under the License.\n //===----------------------------------------------------------------------===//\n \n-import DNS\n+import ContainerizationExtras\n \n /// Handler that uses table lookup to resolve hostnames.\n+///\n+/// Keys in `hosts4` are normalized to `DNSName` on construction, so lookups\n+/// are case-insensitive and trailing dots are optional.\n public struct HostTableResolver: DNSHandler {\n-    public let hosts4: [String: IPv4]\n+    public let hosts4: [DNSName: IPv4Address]\n     private let ttl: UInt32\n \n-    public init(hosts4: [String: IPv4], ttl: UInt32 = 300) {\n-        self.hosts4 = hosts4\n+    /// Creates a resolver backed by a static IPv4 host table.\n+    ///\n+    /// - Parameter hosts4: A dictionary mapping domain names to IPv4 addresses.\n+    ///   Keys are normalized to `DNSName` (lowercased, trailing dot stripped), so\n+    ///   `\"FOO.\"`, `\"foo.\"`, and `\"foo\"` all refer to the same entry.\n+    /// - Parameter ttl: The TTL in seconds to set on answer records (default is 300).\n+    /// - Throws: `DNSBindError.invalidName` if any key is not a valid DNS name.\n+    public init(hosts4: [String: IPv4Address], ttl: UInt32 = 300) throws {\n+        self.hosts4 = try Dictionary(uniqueKeysWithValues: hosts4.map { (try DNSName($0.key), $0.value) })\n         self.ttl = ttl\n     }\n \n     public func answer(query: Message) async throws -> Message? {\n-        let question = query.questions[0]\n+        guard let question = query.questions.first else {",
+        "comment_created_at": "2026-03-19T15:51:50+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "summary: updated all handlers to ensure `questions[0]` is present, and if not, defer to the next handler\n\nThis would result in a `NXDOMAIN` when the last handler returns nil, when a `.formatError` would be more appropriate. The typical usage, though, is to put a `StandardQueryValidator` at the front of the chain which ensures that exactly one question is present and returns a `.formatError` otherwise.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2844983273",
+    "pr_number": 1216,
+    "pr_file": "Sources/ContainerResource/Network/Attachment.swift",
+    "created_at": "2026-02-24T07:11:06+00:00",
+    "commented_code": "self.ipv6Address = ipv6Address\n         self.macAddress = macAddress\n     }\n+\n+    enum CodingKeys: String, CodingKey {\n+        case network\n+        case hostname\n+        case ipv4Address\n+        case ipv4Gateway\n+        case ipv6Address\n+        case macAddress\n+        // TODO: retain for deserialization compatability for now, remove later\n+        case address\n+        case gateway\n+    }\n+\n+    /// Create a configuration from the supplied Decoder, initializing missing\n+    /// values where possible to reasonable defaults.\n+    public init(from decoder: Decoder) throws {\n+        let container = try decoder.container(keyedBy: CodingKeys.self)\n+\n+        network = try container.decode(String.self, forKey: .network)\n+        hostname = try container.decode(String.self, forKey: .hostname)\n+        if let address = try? container.decode(CIDRv4.self, forKey: .ipv4Address) {",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2844983273",
+        "repo_full_name": "apple/container",
+        "pr_number": 1216,
+        "pr_file": "Sources/ContainerResource/Network/Attachment.swift",
+        "discussion_id": "2844983273",
+        "commented_code": "@@ -47,4 +47,49 @@ public struct Attachment: Codable, Sendable {\n         self.ipv6Address = ipv6Address\n         self.macAddress = macAddress\n     }\n+\n+    enum CodingKeys: String, CodingKey {\n+        case network\n+        case hostname\n+        case ipv4Address\n+        case ipv4Gateway\n+        case ipv6Address\n+        case macAddress\n+        // TODO: retain for deserialization compatability for now, remove later\n+        case address\n+        case gateway\n+    }\n+\n+    /// Create a configuration from the supplied Decoder, initializing missing\n+    /// values where possible to reasonable defaults.\n+    public init(from decoder: Decoder) throws {\n+        let container = try decoder.container(keyedBy: CodingKeys.self)\n+\n+        network = try container.decode(String.self, forKey: .network)\n+        hostname = try container.decode(String.self, forKey: .hostname)\n+        if let address = try? container.decode(CIDRv4.self, forKey: .ipv4Address) {",
+        "comment_created_at": "2026-02-24T07:11:06+00:00",
+        "comment_author": "manojmahapatra",
+        "comment_body": "Suggestion: I think optional `try?` for fallback approach will swallow decode errors. A better approach would be fallback only on keyNotFound and throw error for malformed payloads. You could use something akin to;\n\n```Swift\n private static func decodeOrFallback<T: Decodable>(\n      _ type: T.Type,\n      from container: KeyedDecodingContainer<CodingKeys>,\n      primary: CodingKeys,\n      fallback: CodingKeys\n  ) throws -> T {\n      do {\n          // return primary\n      } catch let DecodingError.keyNotFound(key, _) where key.stringValue ==\n  primary.stringValue {\n          // return fallback\n      } catch {\n          // throw error\n      }\n  }\n\n// callsite will be much cleaner\n\nipv4Address = try Self.decodeOrFallback(\n      CIDRv4.self,\n      from: container,\n      primary: .ipv4Address,\n      fallback: .address\n  )\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2850923743",
+        "repo_full_name": "apple/container",
+        "pr_number": 1216,
+        "pr_file": "Sources/ContainerResource/Network/Attachment.swift",
+        "discussion_id": "2844983273",
+        "commented_code": "@@ -47,4 +47,49 @@ public struct Attachment: Codable, Sendable {\n         self.ipv6Address = ipv6Address\n         self.macAddress = macAddress\n     }\n+\n+    enum CodingKeys: String, CodingKey {\n+        case network\n+        case hostname\n+        case ipv4Address\n+        case ipv4Gateway\n+        case ipv6Address\n+        case macAddress\n+        // TODO: retain for deserialization compatability for now, remove later\n+        case address\n+        case gateway\n+    }\n+\n+    /// Create a configuration from the supplied Decoder, initializing missing\n+    /// values where possible to reasonable defaults.\n+    public init(from decoder: Decoder) throws {\n+        let container = try decoder.container(keyedBy: CodingKeys.self)\n+\n+        network = try container.decode(String.self, forKey: .network)\n+        hostname = try container.decode(String.self, forKey: .hostname)\n+        if let address = try? container.decode(CIDRv4.self, forKey: .ipv4Address) {",
+        "comment_created_at": "2026-02-25T05:25:01+00:00",
+        "comment_author": "saehejkang",
+        "comment_body": "I see the point about being more precise with error handling, but in this case I think it is a bit over-engineered for what we need right now. I also agree that swallowing all decode errors via `try?` isn\u2019t ideal, but at the moment we don\u2019t have meaningful error propagation wired up (managed resource work). Would prefer to just keep what we have here.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2492280771",
+    "pr_number": 841,
+    "pr_file": "Sources/Services/ContainerAPIService/Containers/ContainersService.swift",
+    "created_at": "2025-11-04T23:10:14+00:00",
+    "commented_code": "await self.exitMonitor.stopTracking(id: id)\n \n-        // Try and shutdown the runtime helper.\n-        do {\n-            self.log.info(\"Shutting down sandbox service for \\(id)\")\n+        // Shutdown and deregister the sandbox service\n+        self.log.info(\"Shutting down sandbox service for \\(id)\")\n \n-            let client = try state.getClient()\n-            try await client.shutdown()\n-        } catch {\n-            self.log.error(\"failed to shutdown sandbox service for \\(id): \\(error)\")\n-        }\n+        let path = self.containerRoot.appendingPathComponent(id)\n+        let bundle = ContainerClient.Bundle(path: path)\n+        let config = try bundle.configuration\n+        let label = Self.fullLaunchdServiceLabel(\n+            runtimeName: config.runtimeHandler,\n+            instanceId: id\n+        )\n+\n+        let client = try state.getClient()\n+        try await client.shutdown()",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2492280771",
+        "repo_full_name": "apple/container",
+        "pr_number": 841,
+        "pr_file": "Sources/Services/ContainerAPIService/Containers/ContainersService.swift",
+        "discussion_id": "2492280771",
+        "commented_code": "@@ -457,15 +450,23 @@ public actor ContainersService {\n \n         await self.exitMonitor.stopTracking(id: id)\n \n-        // Try and shutdown the runtime helper.\n-        do {\n-            self.log.info(\"Shutting down sandbox service for \\(id)\")\n+        // Shutdown and deregister the sandbox service\n+        self.log.info(\"Shutting down sandbox service for \\(id)\")\n \n-            let client = try state.getClient()\n-            try await client.shutdown()\n-        } catch {\n-            self.log.error(\"failed to shutdown sandbox service for \\(id): \\(error)\")\n-        }\n+        let path = self.containerRoot.appendingPathComponent(id)\n+        let bundle = ContainerClient.Bundle(path: path)\n+        let config = try bundle.configuration\n+        let label = Self.fullLaunchdServiceLabel(\n+            runtimeName: config.runtimeHandler,\n+            instanceId: id\n+        )\n+\n+        let client = try state.getClient()\n+        try await client.shutdown()",
+        "comment_created_at": "2025-11-04T23:10:14+00:00",
+        "comment_author": "dcantah",
+        "comment_body": "Sorry, I still think shutdown shouldn't be fatal and we can leave what we had as it's mostly best effort cleanup on the sb services end, I just meant to not ignore all of the errors like what you had in your original change.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2492285022",
+        "repo_full_name": "apple/container",
+        "pr_number": 841,
+        "pr_file": "Sources/Services/ContainerAPIService/Containers/ContainersService.swift",
+        "discussion_id": "2492280771",
+        "commented_code": "@@ -457,15 +450,23 @@ public actor ContainersService {\n \n         await self.exitMonitor.stopTracking(id: id)\n \n-        // Try and shutdown the runtime helper.\n-        do {\n-            self.log.info(\"Shutting down sandbox service for \\(id)\")\n+        // Shutdown and deregister the sandbox service\n+        self.log.info(\"Shutting down sandbox service for \\(id)\")\n \n-            let client = try state.getClient()\n-            try await client.shutdown()\n-        } catch {\n-            self.log.error(\"failed to shutdown sandbox service for \\(id): \\(error)\")\n-        }\n+        let path = self.containerRoot.appendingPathComponent(id)\n+        let bundle = ContainerClient.Bundle(path: path)\n+        let config = try bundle.configuration\n+        let label = Self.fullLaunchdServiceLabel(\n+            runtimeName: config.runtimeHandler,\n+            instanceId: id\n+        )\n+\n+        let client = try state.getClient()\n+        try await client.shutdown()",
+        "comment_created_at": "2025-11-04T23:13:00+00:00",
+        "comment_author": "dcantah",
+        "comment_body": "We're in a weird spot if deregistration fails though. Curious on your thoughts on how to handle that.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2492433989",
+        "repo_full_name": "apple/container",
+        "pr_number": 841,
+        "pr_file": "Sources/Services/ContainerAPIService/Containers/ContainersService.swift",
+        "discussion_id": "2492280771",
+        "commented_code": "@@ -457,15 +450,23 @@ public actor ContainersService {\n \n         await self.exitMonitor.stopTracking(id: id)\n \n-        // Try and shutdown the runtime helper.\n-        do {\n-            self.log.info(\"Shutting down sandbox service for \\(id)\")\n+        // Shutdown and deregister the sandbox service\n+        self.log.info(\"Shutting down sandbox service for \\(id)\")\n \n-            let client = try state.getClient()\n-            try await client.shutdown()\n-        } catch {\n-            self.log.error(\"failed to shutdown sandbox service for \\(id): \\(error)\")\n-        }\n+        let path = self.containerRoot.appendingPathComponent(id)\n+        let bundle = ContainerClient.Bundle(path: path)\n+        let config = try bundle.configuration\n+        let label = Self.fullLaunchdServiceLabel(\n+            runtimeName: config.runtimeHandler,\n+            instanceId: id\n+        )\n+\n+        let client = try state.getClient()\n+        try await client.shutdown()",
+        "comment_created_at": "2025-11-05T00:46:07+00:00",
+        "comment_author": "realrajaryan",
+        "comment_body": "ahh, If deregister fails, we could catch it and attempt kill SIGKILL + deregister as a fallback?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2625753428",
+    "pr_number": 964,
+    "pr_file": "Sources/ContainerClient/Parser.swift",
+    "created_at": "2025-12-17T06:22:46+00:00",
+    "commented_code": "// This is a somewhat faithful Go->Swift port of Moby's envfile\n         // parsing in the cli:\n         // https://github.com/docker/cli/blob/f5a7a3c72eb35fc5ba9c4d65a2a0e2e1bd216bf2/pkg/kvfile/kvfile.go#L81\n-        guard FileManager.default.fileExists(atPath: path) else {\n-            throw ContainerizationError(\n-                .notFound,\n-                message: \"envfile at \\(path) not found\"\n-            )\n-        }\n \n-        guard let data = FileManager.default.contents(atPath: path) else {\n+        let data: Data\n+        do {\n+            // Use FileHandle to support named pipes (FIFOs) and process substitutions\n+            // like --env-file <(echo \"KEY=value\")\n+            let fileHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))\n+            defer { try? fileHandle.close() }\n+            data = fileHandle.readDataToEndOfFile()\n+        } catch {\n+            guard FileManager.default.fileExists(atPath: path) else {",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2625753428",
+        "repo_full_name": "apple/container",
+        "pr_number": 964,
+        "pr_file": "Sources/ContainerClient/Parser.swift",
+        "discussion_id": "2625753428",
+        "commented_code": "@@ -110,14 +110,21 @@ public struct Parser {\n         // This is a somewhat faithful Go->Swift port of Moby's envfile\n         // parsing in the cli:\n         // https://github.com/docker/cli/blob/f5a7a3c72eb35fc5ba9c4d65a2a0e2e1bd216bf2/pkg/kvfile/kvfile.go#L81\n-        guard FileManager.default.fileExists(atPath: path) else {\n-            throw ContainerizationError(\n-                .notFound,\n-                message: \"envfile at \\(path) not found\"\n-            )\n-        }\n \n-        guard let data = FileManager.default.contents(atPath: path) else {\n+        let data: Data\n+        do {\n+            // Use FileHandle to support named pipes (FIFOs) and process substitutions\n+            // like --env-file <(echo \"KEY=value\")\n+            let fileHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))\n+            defer { try? fileHandle.close() }\n+            data = fileHandle.readDataToEndOfFile()\n+        } catch {\n+            guard FileManager.default.fileExists(atPath: path) else {",
+        "comment_created_at": "2025-12-17T06:22:46+00:00",
+        "comment_author": "dcantah",
+        "comment_body": "I would axe this, just edit the ContainerizationError below to:\r\n\r\n```swift\r\nthrow ContainerizationError(\r\n    .internalError,\r\n    message: \"failed to read envfile at \\(path)\",\r\n    cause: error\r\n)\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2626129963",
+        "repo_full_name": "apple/container",
+        "pr_number": 964,
+        "pr_file": "Sources/ContainerClient/Parser.swift",
+        "discussion_id": "2625753428",
+        "commented_code": "@@ -110,14 +110,21 @@ public struct Parser {\n         // This is a somewhat faithful Go->Swift port of Moby's envfile\n         // parsing in the cli:\n         // https://github.com/docker/cli/blob/f5a7a3c72eb35fc5ba9c4d65a2a0e2e1bd216bf2/pkg/kvfile/kvfile.go#L81\n-        guard FileManager.default.fileExists(atPath: path) else {\n-            throw ContainerizationError(\n-                .notFound,\n-                message: \"envfile at \\(path) not found\"\n-            )\n-        }\n \n-        guard let data = FileManager.default.contents(atPath: path) else {\n+        let data: Data\n+        do {\n+            // Use FileHandle to support named pipes (FIFOs) and process substitutions\n+            // like --env-file <(echo \"KEY=value\")\n+            let fileHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))\n+            defer { try? fileHandle.close() }\n+            data = fileHandle.readDataToEndOfFile()\n+        } catch {\n+            guard FileManager.default.fileExists(atPath: path) else {",
+        "comment_created_at": "2025-12-17T08:48:50+00:00",
+        "comment_author": "Bortnyak",
+        "comment_body": "Fixed in https://github.com/apple/container/commit/ccf552a401acb5c0c4217388018e0516a4df7306",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2483008860",
+    "pr_number": 734,
+    "pr_file": "Sources/ContainerCommands/Image/ImageLoad.swift",
+    "created_at": "2025-11-01T00:29:49+00:00",
+    "commented_code": "transform: { str in\n                 URL(fileURLWithPath: str, relativeTo: .currentDirectory()).absoluteURL.path(percentEncoded: false)\n             })\n-        var input: String\n+        var input: String?\n \n         @OptionGroup\n         var global: Flags.Global\n \n         public func run() async throws {\n-            guard FileManager.default.fileExists(atPath: input) else {\n-                print(\"File does not exist \\(input)\")\n+            let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent(\"temp-file.tar\")\n+            if input == nil {\n+                guard FileManager.default.createFile(atPath: tempFile.path(), contents: nil) else {\n+                    throw ContainerizationError(.internalError, message: \"unable to create temporary file\")\n+                }\n+\n+                guard let outputHandle = try? FileHandle(forWritingTo: tempFile) else {\n+                    throw ContainerizationError(.internalError, message: \"unable to open temporary file for writing\")\n+                }\n+\n+                let bufferSize = 4096\n+                while true {\n+                    let chunk = FileHandle.standardInput.readData(ofLength: bufferSize)\n+                    if chunk.isEmpty { break }\n+                    outputHandle.write(chunk)\n+                }\n+            }\n+            defer {",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2483008860",
+        "repo_full_name": "apple/container",
+        "pr_number": 734,
+        "pr_file": "Sources/ContainerCommands/Image/ImageLoad.swift",
+        "discussion_id": "2483008860",
+        "commented_code": "@@ -34,14 +34,35 @@ extension Application {\n             transform: { str in\n                 URL(fileURLWithPath: str, relativeTo: .currentDirectory()).absoluteURL.path(percentEncoded: false)\n             })\n-        var input: String\n+        var input: String?\n \n         @OptionGroup\n         var global: Flags.Global\n \n         public func run() async throws {\n-            guard FileManager.default.fileExists(atPath: input) else {\n-                print(\"File does not exist \\(input)\")\n+            let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent(\"temp-file.tar\")\n+            if input == nil {\n+                guard FileManager.default.createFile(atPath: tempFile.path(), contents: nil) else {\n+                    throw ContainerizationError(.internalError, message: \"unable to create temporary file\")\n+                }\n+\n+                guard let outputHandle = try? FileHandle(forWritingTo: tempFile) else {\n+                    throw ContainerizationError(.internalError, message: \"unable to open temporary file for writing\")\n+                }\n+\n+                let bufferSize = 4096\n+                while true {\n+                    let chunk = FileHandle.standardInput.readData(ofLength: bufferSize)\n+                    if chunk.isEmpty { break }\n+                    outputHandle.write(chunk)\n+                }\n+            }\n+            defer {",
+        "comment_created_at": "2025-11-01T00:29:49+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "Since you're using `try?` you could move this right below L43 to ensure that the file gets removed even if L49 throws.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2360169495",
+    "pr_number": 628,
+    "pr_file": "Sources/ContainerClient/Core/ClientContainer.swift",
+    "created_at": "2025-09-18T16:25:41+00:00",
+    "commented_code": "extension ClientContainer {\n     public func bootstrap(stdio: [FileHandle?]) async throws -> ClientProcess {\n-        let client = self.sandboxClient\n-        try await client.bootstrap(stdio: stdio)\n-        return ClientProcessImpl(containerId: self.id, client: self.sandboxClient)\n+        let request = XPCMessage(route: .containerBootstrap)\n+        let client = Self.newClient()\n+\n+        for (i, h) in stdio.enumerated() {\n+            let key: XPCKeys = {\n+                switch i {\n+                case 0: .stdin\n+                case 1: .stdout\n+                case 2: .stderr\n+                default:\n+                    fatalError(\"invalid fd \\(i)\")",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2360169495",
+        "repo_full_name": "apple/container",
+        "pr_number": 628,
+        "pr_file": "Sources/ContainerClient/Core/ClientContainer.swift",
+        "discussion_id": "2360169495",
+        "commented_code": "@@ -145,16 +137,67 @@ extension ClientContainer {\n \n extension ClientContainer {\n     public func bootstrap(stdio: [FileHandle?]) async throws -> ClientProcess {\n-        let client = self.sandboxClient\n-        try await client.bootstrap(stdio: stdio)\n-        return ClientProcessImpl(containerId: self.id, client: self.sandboxClient)\n+        let request = XPCMessage(route: .containerBootstrap)\n+        let client = Self.newClient()\n+\n+        for (i, h) in stdio.enumerated() {\n+            let key: XPCKeys = {\n+                switch i {\n+                case 0: .stdin\n+                case 1: .stdout\n+                case 2: .stderr\n+                default:\n+                    fatalError(\"invalid fd \\(i)\")",
+        "comment_created_at": "2025-09-18T16:25:41+00:00",
+        "comment_author": "wlan0",
+        "comment_body": "If a user accidentally sends a longer array, this would crash the whole program. Consider a typed error instead",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2360544649",
+        "repo_full_name": "apple/container",
+        "pr_number": 628,
+        "pr_file": "Sources/ContainerClient/Core/ClientContainer.swift",
+        "discussion_id": "2360169495",
+        "commented_code": "@@ -145,16 +137,67 @@ extension ClientContainer {\n \n extension ClientContainer {\n     public func bootstrap(stdio: [FileHandle?]) async throws -> ClientProcess {\n-        let client = self.sandboxClient\n-        try await client.bootstrap(stdio: stdio)\n-        return ClientProcessImpl(containerId: self.id, client: self.sandboxClient)\n+        let request = XPCMessage(route: .containerBootstrap)\n+        let client = Self.newClient()\n+\n+        for (i, h) in stdio.enumerated() {\n+            let key: XPCKeys = {\n+                switch i {\n+                case 0: .stdin\n+                case 1: .stdout\n+                case 2: .stderr\n+                default:\n+                    fatalError(\"invalid fd \\(i)\")",
+        "comment_created_at": "2025-09-18T17:58:31+00:00",
+        "comment_author": "dcantah",
+        "comment_body": "Yea this was a copy paste from the type we already had, I'd love to fix this up now though. I've been trying to get rid of some of our fatalError's in CZ recently too ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3483777799",
+    "pr_number": 1840,
+    "pr_file": "Tests/IntegrationTests/Utilities/ContainerFixture+ContainerHelpers.swift",
+    "created_at": "2026-06-26T19:50:33+00:00",
+    "commented_code": "+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerResource\n+import Foundation\n+import SystemPackage\n+\n+// MARK: - Inspect types\n+\n+extension ContainerFixture {\n+    /// Decoded output of `container inspect <name>`.\n+    struct InspectOutput: Codable {\n+        struct Status: Codable {\n+            let state: String\n+            let networks: [ContainerResource.Attachment]\n+        }\n+        let configuration: ContainerConfiguration\n+        let status: Status\n+        var networks: [ContainerResource.Attachment] { status.networks }\n+    }\n+}\n+\n+// MARK: - Container lifecycle helpers\n+\n+extension ContainerFixture {\n+\n+    /// `-e` flags forwarding proxy env vars into container commands.\n+    var proxyEnvironmentArgs: [String] {\n+        let vars = Set([\"HTTP_PROXY\", \"http_proxy\", \"HTTPS_PROXY\", \"https_proxy\", \"NO_PROXY\", \"no_proxy\"])\n+        return ProcessInfo.processInfo.environment\n+            .filter { vars.contains($0.key) }\n+            .flatMap { [\"-e\", \"\\($0.key)=\\($0.value)\"] }\n+    }\n+\n+    /// Starts a detached container. Uses the first warmup image when `image` is nil.\n+    func doLongRun(\n+        name: String,\n+        image: String? = nil,\n+        args: [String] = [],\n+        containerArgs: [String] = [\"sleep\", \"infinity\"],\n+        autoRemove: Bool = true,\n+        env: [String: String] = [:]\n+    ) throws {\n+        let imageRef = image ?? ContainerFixture.warmupImages[0]\n+        var runArgs = [\"run\"]\n+        if autoRemove { runArgs.append(\"--rm\") }\n+        runArgs += [\"--name\", name, \"-d\"]\n+        runArgs += proxyEnvironmentArgs\n+        runArgs += args\n+        for (k, v) in env { runArgs += [\"-e\", \"\\(k)=\\(v)\"] }\n+        runArgs.append(imageRef)\n+        runArgs += containerArgs\n+        try run(runArgs).check()\n+    }\n+\n+    /// Creates a stopped container (`container create`).\n+    func doCreate(\n+        name: String,\n+        image: String? = nil,\n+        args: [String] = [\"sleep\", \"infinity\"],\n+        volumes: [String] = [],\n+        networks: [String] = [],\n+        ports: [String] = []\n+    ) throws {\n+        let imageRef = image ?? ContainerFixture.warmupImages[0]\n+        var createArgs = [\"create\", \"--rm\", \"--name\", name]\n+        createArgs += proxyEnvironmentArgs\n+        for v in volumes { createArgs += [\"-v\", v] }\n+        for n in networks { createArgs += [\"--network\", n] }\n+        for p in ports { createArgs += [\"--publish\", \"\\(p):\\(p)\"] }\n+        createArgs.append(imageRef)\n+        createArgs += args\n+        try run(createArgs).check()\n+    }\n+\n+    /// Starts a stopped container.\n+    func doStart(_ name: String) throws {\n+        try run([\"start\", name]).check()\n+    }\n+\n+    /// Stops a container. Pass `signal: nil` to use the server's default.\n+    func doStop(_ name: String, signal: String? = \"SIGKILL\") throws {\n+        var args = [\"stop\"]\n+        if let signal { args += [\"-s\", signal] }\n+        args.append(name)\n+        try run(args).check()\n+    }\n+\n+    /// Deletes a container.\n+    func doRemove(_ name: String, force: Bool = false) throws {\n+        var args = [\"delete\"]\n+        if force { args.append(\"--force\") }\n+        args.append(name)\n+        try run(args).check()\n+    }\n+\n+    /// Deletes a container, silencing errors if it does not exist.",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "3483777799",
+        "repo_full_name": "apple/container",
+        "pr_number": 1840,
+        "pr_file": "Tests/IntegrationTests/Utilities/ContainerFixture+ContainerHelpers.swift",
+        "discussion_id": "3483777799",
+        "commented_code": "@@ -0,0 +1,163 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerResource\n+import Foundation\n+import SystemPackage\n+\n+// MARK: - Inspect types\n+\n+extension ContainerFixture {\n+    /// Decoded output of `container inspect <name>`.\n+    struct InspectOutput: Codable {\n+        struct Status: Codable {\n+            let state: String\n+            let networks: [ContainerResource.Attachment]\n+        }\n+        let configuration: ContainerConfiguration\n+        let status: Status\n+        var networks: [ContainerResource.Attachment] { status.networks }\n+    }\n+}\n+\n+// MARK: - Container lifecycle helpers\n+\n+extension ContainerFixture {\n+\n+    /// `-e` flags forwarding proxy env vars into container commands.\n+    var proxyEnvironmentArgs: [String] {\n+        let vars = Set([\"HTTP_PROXY\", \"http_proxy\", \"HTTPS_PROXY\", \"https_proxy\", \"NO_PROXY\", \"no_proxy\"])\n+        return ProcessInfo.processInfo.environment\n+            .filter { vars.contains($0.key) }\n+            .flatMap { [\"-e\", \"\\($0.key)=\\($0.value)\"] }\n+    }\n+\n+    /// Starts a detached container. Uses the first warmup image when `image` is nil.\n+    func doLongRun(\n+        name: String,\n+        image: String? = nil,\n+        args: [String] = [],\n+        containerArgs: [String] = [\"sleep\", \"infinity\"],\n+        autoRemove: Bool = true,\n+        env: [String: String] = [:]\n+    ) throws {\n+        let imageRef = image ?? ContainerFixture.warmupImages[0]\n+        var runArgs = [\"run\"]\n+        if autoRemove { runArgs.append(\"--rm\") }\n+        runArgs += [\"--name\", name, \"-d\"]\n+        runArgs += proxyEnvironmentArgs\n+        runArgs += args\n+        for (k, v) in env { runArgs += [\"-e\", \"\\(k)=\\(v)\"] }\n+        runArgs.append(imageRef)\n+        runArgs += containerArgs\n+        try run(runArgs).check()\n+    }\n+\n+    /// Creates a stopped container (`container create`).\n+    func doCreate(\n+        name: String,\n+        image: String? = nil,\n+        args: [String] = [\"sleep\", \"infinity\"],\n+        volumes: [String] = [],\n+        networks: [String] = [],\n+        ports: [String] = []\n+    ) throws {\n+        let imageRef = image ?? ContainerFixture.warmupImages[0]\n+        var createArgs = [\"create\", \"--rm\", \"--name\", name]\n+        createArgs += proxyEnvironmentArgs\n+        for v in volumes { createArgs += [\"-v\", v] }\n+        for n in networks { createArgs += [\"--network\", n] }\n+        for p in ports { createArgs += [\"--publish\", \"\\(p):\\(p)\"] }\n+        createArgs.append(imageRef)\n+        createArgs += args\n+        try run(createArgs).check()\n+    }\n+\n+    /// Starts a stopped container.\n+    func doStart(_ name: String) throws {\n+        try run([\"start\", name]).check()\n+    }\n+\n+    /// Stops a container. Pass `signal: nil` to use the server's default.\n+    func doStop(_ name: String, signal: String? = \"SIGKILL\") throws {\n+        var args = [\"stop\"]\n+        if let signal { args += [\"-s\", signal] }\n+        args.append(name)\n+        try run(args).check()\n+    }\n+\n+    /// Deletes a container.\n+    func doRemove(_ name: String, force: Bool = false) throws {\n+        var args = [\"delete\"]\n+        if force { args.append(\"--force\") }\n+        args.append(name)\n+        try run(args).check()\n+    }\n+\n+    /// Deletes a container, silencing errors if it does not exist.",
+        "comment_created_at": "2026-06-26T19:50:33+00:00",
+        "comment_author": "katiewasnothere",
+        "comment_body": "Should we explicitly check the error here instead of using `try?`? ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3483902249",
+        "repo_full_name": "apple/container",
+        "pr_number": 1840,
+        "pr_file": "Tests/IntegrationTests/Utilities/ContainerFixture+ContainerHelpers.swift",
+        "discussion_id": "3483777799",
+        "commented_code": "@@ -0,0 +1,163 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerResource\n+import Foundation\n+import SystemPackage\n+\n+// MARK: - Inspect types\n+\n+extension ContainerFixture {\n+    /// Decoded output of `container inspect <name>`.\n+    struct InspectOutput: Codable {\n+        struct Status: Codable {\n+            let state: String\n+            let networks: [ContainerResource.Attachment]\n+        }\n+        let configuration: ContainerConfiguration\n+        let status: Status\n+        var networks: [ContainerResource.Attachment] { status.networks }\n+    }\n+}\n+\n+// MARK: - Container lifecycle helpers\n+\n+extension ContainerFixture {\n+\n+    /// `-e` flags forwarding proxy env vars into container commands.\n+    var proxyEnvironmentArgs: [String] {\n+        let vars = Set([\"HTTP_PROXY\", \"http_proxy\", \"HTTPS_PROXY\", \"https_proxy\", \"NO_PROXY\", \"no_proxy\"])\n+        return ProcessInfo.processInfo.environment\n+            .filter { vars.contains($0.key) }\n+            .flatMap { [\"-e\", \"\\($0.key)=\\($0.value)\"] }\n+    }\n+\n+    /// Starts a detached container. Uses the first warmup image when `image` is nil.\n+    func doLongRun(\n+        name: String,\n+        image: String? = nil,\n+        args: [String] = [],\n+        containerArgs: [String] = [\"sleep\", \"infinity\"],\n+        autoRemove: Bool = true,\n+        env: [String: String] = [:]\n+    ) throws {\n+        let imageRef = image ?? ContainerFixture.warmupImages[0]\n+        var runArgs = [\"run\"]\n+        if autoRemove { runArgs.append(\"--rm\") }\n+        runArgs += [\"--name\", name, \"-d\"]\n+        runArgs += proxyEnvironmentArgs\n+        runArgs += args\n+        for (k, v) in env { runArgs += [\"-e\", \"\\(k)=\\(v)\"] }\n+        runArgs.append(imageRef)\n+        runArgs += containerArgs\n+        try run(runArgs).check()\n+    }\n+\n+    /// Creates a stopped container (`container create`).\n+    func doCreate(\n+        name: String,\n+        image: String? = nil,\n+        args: [String] = [\"sleep\", \"infinity\"],\n+        volumes: [String] = [],\n+        networks: [String] = [],\n+        ports: [String] = []\n+    ) throws {\n+        let imageRef = image ?? ContainerFixture.warmupImages[0]\n+        var createArgs = [\"create\", \"--rm\", \"--name\", name]\n+        createArgs += proxyEnvironmentArgs\n+        for v in volumes { createArgs += [\"-v\", v] }\n+        for n in networks { createArgs += [\"--network\", n] }\n+        for p in ports { createArgs += [\"--publish\", \"\\(p):\\(p)\"] }\n+        createArgs.append(imageRef)\n+        createArgs += args\n+        try run(createArgs).check()\n+    }\n+\n+    /// Starts a stopped container.\n+    func doStart(_ name: String) throws {\n+        try run([\"start\", name]).check()\n+    }\n+\n+    /// Stops a container. Pass `signal: nil` to use the server's default.\n+    func doStop(_ name: String, signal: String? = \"SIGKILL\") throws {\n+        var args = [\"stop\"]\n+        if let signal { args += [\"-s\", signal] }\n+        args.append(name)\n+        try run(args).check()\n+    }\n+\n+    /// Deletes a container.\n+    func doRemove(_ name: String, force: Bool = false) throws {\n+        var args = [\"delete\"]\n+        if force { args.append(\"--force\") }\n+        args.append(name)\n+        try run(args).check()\n+    }\n+\n+    /// Deletes a container, silencing errors if it does not exist.",
+        "comment_created_at": "2026-06-26T20:16:04+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "I added an ignoreFailure parameter defaulting to `false`.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

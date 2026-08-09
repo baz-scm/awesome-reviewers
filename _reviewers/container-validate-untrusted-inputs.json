@@ -1,0 +1,230 @@
+[
+  {
+    "discussion_id": "3741823856",
+    "pr_number": 2103,
+    "pr_file": "Sources/Services/ContainerAPIService/Client/Parser.swift",
+    "created_at": "2026-08-08T22:36:46+00:00",
+    "commented_code": "public static let defaultDirectives = [\"type\": \"virtiofs\"]\n \n     public static func tmpfsMounts(_ mounts: [String]) throws -> [Filesystem] {\n-        let mounts = mounts.dedupe()\n         var result: [Filesystem] = []\n         result.reserveCapacity(mounts.count)\n+        var seenDestinations: Set<String> = []\n+\n         for tmpfs in mounts {\n-            let fs = Filesystem.tmpfs(destination: tmpfs, options: [])\n+            let parts = tmpfs.split(separator: \":\", maxSplits: 1, omittingEmptySubsequences: false)\n+            let destination = String(parts[0])\n+            let options = parts.count == 2 ? String(parts[1]).split(separator: \",\").map(String.init) : []\n+\n+            if destination.isEmpty {\n+                 throw ContainerizationError(.invalidArgument, message: \"mount destination cannot be empty\")\n+            }\n+            \n+            let normalizedDest = FilePath(destination).lexicallyNormalized().string",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "3741823856",
+        "repo_full_name": "apple/container",
+        "pr_number": 2103,
+        "pr_file": "Sources/Services/ContainerAPIService/Client/Parser.swift",
+        "discussion_id": "3741823856",
+        "commented_code": "@@ -340,11 +340,24 @@ public struct Parser {\n     public static let defaultDirectives = [\"type\": \"virtiofs\"]\n \n     public static func tmpfsMounts(_ mounts: [String]) throws -> [Filesystem] {\n-        let mounts = mounts.dedupe()\n         var result: [Filesystem] = []\n         result.reserveCapacity(mounts.count)\n+        var seenDestinations: Set<String> = []\n+\n         for tmpfs in mounts {\n-            let fs = Filesystem.tmpfs(destination: tmpfs, options: [])\n+            let parts = tmpfs.split(separator: \":\", maxSplits: 1, omittingEmptySubsequences: false)\n+            let destination = String(parts[0])\n+            let options = parts.count == 2 ? String(parts[1]).split(separator: \",\").map(String.init) : []\n+\n+            if destination.isEmpty {\n+                 throw ContainerizationError(.invalidArgument, message: \"mount destination cannot be empty\")\n+            }\n+            \n+            let normalizedDest = FilePath(destination).lexicallyNormalized().string",
+        "comment_created_at": "2026-08-08T22:36:46+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "compute the filepath first and guard to ensure that `isAbsolute` is true.\nThen do the normalization and continue.\n\nAdd a test to ensure non-absolute destinations fail.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3743075184",
+        "repo_full_name": "apple/container",
+        "pr_number": 2103,
+        "pr_file": "Sources/Services/ContainerAPIService/Client/Parser.swift",
+        "discussion_id": "3741823856",
+        "commented_code": "@@ -340,11 +340,24 @@ public struct Parser {\n     public static let defaultDirectives = [\"type\": \"virtiofs\"]\n \n     public static func tmpfsMounts(_ mounts: [String]) throws -> [Filesystem] {\n-        let mounts = mounts.dedupe()\n         var result: [Filesystem] = []\n         result.reserveCapacity(mounts.count)\n+        var seenDestinations: Set<String> = []\n+\n         for tmpfs in mounts {\n-            let fs = Filesystem.tmpfs(destination: tmpfs, options: [])\n+            let parts = tmpfs.split(separator: \":\", maxSplits: 1, omittingEmptySubsequences: false)\n+            let destination = String(parts[0])\n+            let options = parts.count == 2 ? String(parts[1]).split(separator: \",\").map(String.init) : []\n+\n+            if destination.isEmpty {\n+                 throw ContainerizationError(.invalidArgument, message: \"mount destination cannot be empty\")\n+            }\n+            \n+            let normalizedDest = FilePath(destination).lexicallyNormalized().string",
+        "comment_created_at": "2026-08-09T07:49:18+00:00",
+        "comment_author": "LevelVoid",
+        "comment_body": "> compute the filepath first and guard to ensure that `isAbsolute` is true. Then do the normalization and continue.\r\n> \r\n> Add a test to ensure non-absolute destinations fail.\r\n\r\nGot it, i will do that and push after configuring my account.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3320133345",
+    "pr_number": 1594,
+    "pr_file": "Sources/ContainerResource/Container/PublishSocket.swift",
+    "created_at": "2026-05-28T19:16:13+00:00",
+    "commented_code": "// limitations under the License.\n //===----------------------------------------------------------------------===//\n \n+import ContainerizationError\n import Foundation\n import SystemPackage\n \n /// Represents a socket that should be published from container to host.\n+///\n+/// - Deprecated: New for 1.0.0, path types changed from `URL` to `FilePath`.\n+/// - Note: Decoder handles `FilePath` and `URL` for persistent data compatibility;\n+///    this compatibility will be removed in a later release.\n public struct PublishSocket: Sendable, Codable {\n-    /// The path to the socket in the container.\n-    public var containerPath: URL\n+    /// Absolute path to the socket inside the container.\n+    public var containerPath: FilePath\n \n-    /// The path where the socket should appear on the host.\n-    public var hostPath: URL\n+    /// Absolute path where the socket appears on the host.\n+    public var hostPath: FilePath\n \n     /// File permissions for the socket on the host.\n     public var permissions: FilePermissions?\n \n+    /// Creates a `PublishSocket` with validated absolute paths.\n+    ///\n+    /// - Parameters:\n+    ///   - containerPath: Absolute path to the socket inside the container.\n+    ///     Must begin with `/`.\n+    ///   - hostPath: Absolute path where the socket appears on the host.\n+    ///     Must begin with `/`.\n+    ///   - permissions: File permissions applied to the socket on the host.\n+    /// - Throws: `ContainerizationError` with code `.invalidArgument` if\n+    ///   either path is not absolute.\n     public init(\n-        containerPath: URL,\n-        hostPath: URL,\n+        containerPath: FilePath,\n+        hostPath: FilePath,\n         permissions: FilePermissions? = nil\n-    ) {\n+    ) throws {\n+        guard containerPath.isAbsolute else {\n+            throw ContainerizationError(\n+                .invalidArgument,\n+                message: \"containerPath must be absolute: \\(containerPath)\"\n+            )\n+        }\n+        guard hostPath.isAbsolute else {\n+            throw ContainerizationError(\n+                .invalidArgument,\n+                message: \"hostPath must be absolute: \\(hostPath)\"\n+            )\n+        }\n         self.containerPath = containerPath\n         self.hostPath = hostPath\n         self.permissions = permissions\n     }\n+\n+    private enum CodingKeys: String, CodingKey {\n+        case containerPath\n+        case hostPath\n+        case permissions\n+    }\n+\n+    /// Encodes each path as its plain absolute string (e.g. `\"/var/run/docker.sock\"`).\n+    ///\n+    /// Pre-1.0 wire-format change from the prior `URL`-typed encoding which\n+    /// emitted `URL.absoluteString` (`\"file:///var/run/docker.sock\"`). The\n+    /// decoder accepts both forms for compatibility with persisted bundles\n+    /// from earlier releases; that compatibility will be removed in a later\n+    /// release.\n+    public func encode(to encoder: any Encoder) throws {\n+        var container = encoder.container(keyedBy: CodingKeys.self)\n+        try container.encode(containerPath.string, forKey: .containerPath)\n+        try container.encode(hostPath.string, forKey: .hostPath)\n+        try container.encodeIfPresent(permissions, forKey: .permissions)\n+    }\n+\n+    public init(from decoder: any Decoder) throws {\n+        let container = try decoder.container(keyedBy: CodingKeys.self)\n+        let containerPath = try Self.decodePath(from: container, forKey: .containerPath)",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "3320133345",
+        "repo_full_name": "apple/container",
+        "pr_number": 1594,
+        "pr_file": "Sources/ContainerResource/Container/PublishSocket.swift",
+        "discussion_id": "3320133345",
+        "commented_code": "@@ -14,27 +14,137 @@\n // limitations under the License.\n //===----------------------------------------------------------------------===//\n \n+import ContainerizationError\n import Foundation\n import SystemPackage\n \n /// Represents a socket that should be published from container to host.\n+///\n+/// - Deprecated: New for 1.0.0, path types changed from `URL` to `FilePath`.\n+/// - Note: Decoder handles `FilePath` and `URL` for persistent data compatibility;\n+///    this compatibility will be removed in a later release.\n public struct PublishSocket: Sendable, Codable {\n-    /// The path to the socket in the container.\n-    public var containerPath: URL\n+    /// Absolute path to the socket inside the container.\n+    public var containerPath: FilePath\n \n-    /// The path where the socket should appear on the host.\n-    public var hostPath: URL\n+    /// Absolute path where the socket appears on the host.\n+    public var hostPath: FilePath\n \n     /// File permissions for the socket on the host.\n     public var permissions: FilePermissions?\n \n+    /// Creates a `PublishSocket` with validated absolute paths.\n+    ///\n+    /// - Parameters:\n+    ///   - containerPath: Absolute path to the socket inside the container.\n+    ///     Must begin with `/`.\n+    ///   - hostPath: Absolute path where the socket appears on the host.\n+    ///     Must begin with `/`.\n+    ///   - permissions: File permissions applied to the socket on the host.\n+    /// - Throws: `ContainerizationError` with code `.invalidArgument` if\n+    ///   either path is not absolute.\n     public init(\n-        containerPath: URL,\n-        hostPath: URL,\n+        containerPath: FilePath,\n+        hostPath: FilePath,\n         permissions: FilePermissions? = nil\n-    ) {\n+    ) throws {\n+        guard containerPath.isAbsolute else {\n+            throw ContainerizationError(\n+                .invalidArgument,\n+                message: \"containerPath must be absolute: \\(containerPath)\"\n+            )\n+        }\n+        guard hostPath.isAbsolute else {\n+            throw ContainerizationError(\n+                .invalidArgument,\n+                message: \"hostPath must be absolute: \\(hostPath)\"\n+            )\n+        }\n         self.containerPath = containerPath\n         self.hostPath = hostPath\n         self.permissions = permissions\n     }\n+\n+    private enum CodingKeys: String, CodingKey {\n+        case containerPath\n+        case hostPath\n+        case permissions\n+    }\n+\n+    /// Encodes each path as its plain absolute string (e.g. `\"/var/run/docker.sock\"`).\n+    ///\n+    /// Pre-1.0 wire-format change from the prior `URL`-typed encoding which\n+    /// emitted `URL.absoluteString` (`\"file:///var/run/docker.sock\"`). The\n+    /// decoder accepts both forms for compatibility with persisted bundles\n+    /// from earlier releases; that compatibility will be removed in a later\n+    /// release.\n+    public func encode(to encoder: any Encoder) throws {\n+        var container = encoder.container(keyedBy: CodingKeys.self)\n+        try container.encode(containerPath.string, forKey: .containerPath)\n+        try container.encode(hostPath.string, forKey: .hostPath)\n+        try container.encodeIfPresent(permissions, forKey: .permissions)\n+    }\n+\n+    public init(from decoder: any Decoder) throws {\n+        let container = try decoder.container(keyedBy: CodingKeys.self)\n+        let containerPath = try Self.decodePath(from: container, forKey: .containerPath)",
+        "comment_created_at": "2026-05-28T19:16:13+00:00",
+        "comment_author": "jglogan",
+        "comment_body": "What do you think about enforcing absolute path here (or in decodePath, since it's a private func dedicated to just these paths) as well? Legacy should always be absolute, but we should protect against bad inputs should someone muck about with a config manually.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3320299348",
+        "repo_full_name": "apple/container",
+        "pr_number": 1594,
+        "pr_file": "Sources/ContainerResource/Container/PublishSocket.swift",
+        "discussion_id": "3320133345",
+        "commented_code": "@@ -14,27 +14,137 @@\n // limitations under the License.\n //===----------------------------------------------------------------------===//\n \n+import ContainerizationError\n import Foundation\n import SystemPackage\n \n /// Represents a socket that should be published from container to host.\n+///\n+/// - Deprecated: New for 1.0.0, path types changed from `URL` to `FilePath`.\n+/// - Note: Decoder handles `FilePath` and `URL` for persistent data compatibility;\n+///    this compatibility will be removed in a later release.\n public struct PublishSocket: Sendable, Codable {\n-    /// The path to the socket in the container.\n-    public var containerPath: URL\n+    /// Absolute path to the socket inside the container.\n+    public var containerPath: FilePath\n \n-    /// The path where the socket should appear on the host.\n-    public var hostPath: URL\n+    /// Absolute path where the socket appears on the host.\n+    public var hostPath: FilePath\n \n     /// File permissions for the socket on the host.\n     public var permissions: FilePermissions?\n \n+    /// Creates a `PublishSocket` with validated absolute paths.\n+    ///\n+    /// - Parameters:\n+    ///   - containerPath: Absolute path to the socket inside the container.\n+    ///     Must begin with `/`.\n+    ///   - hostPath: Absolute path where the socket appears on the host.\n+    ///     Must begin with `/`.\n+    ///   - permissions: File permissions applied to the socket on the host.\n+    /// - Throws: `ContainerizationError` with code `.invalidArgument` if\n+    ///   either path is not absolute.\n     public init(\n-        containerPath: URL,\n-        hostPath: URL,\n+        containerPath: FilePath,\n+        hostPath: FilePath,\n         permissions: FilePermissions? = nil\n-    ) {\n+    ) throws {\n+        guard containerPath.isAbsolute else {\n+            throw ContainerizationError(\n+                .invalidArgument,\n+                message: \"containerPath must be absolute: \\(containerPath)\"\n+            )\n+        }\n+        guard hostPath.isAbsolute else {\n+            throw ContainerizationError(\n+                .invalidArgument,\n+                message: \"hostPath must be absolute: \\(hostPath)\"\n+            )\n+        }\n         self.containerPath = containerPath\n         self.hostPath = hostPath\n         self.permissions = permissions\n     }\n+\n+    private enum CodingKeys: String, CodingKey {\n+        case containerPath\n+        case hostPath\n+        case permissions\n+    }\n+\n+    /// Encodes each path as its plain absolute string (e.g. `\"/var/run/docker.sock\"`).\n+    ///\n+    /// Pre-1.0 wire-format change from the prior `URL`-typed encoding which\n+    /// emitted `URL.absoluteString` (`\"file:///var/run/docker.sock\"`). The\n+    /// decoder accepts both forms for compatibility with persisted bundles\n+    /// from earlier releases; that compatibility will be removed in a later\n+    /// release.\n+    public func encode(to encoder: any Encoder) throws {\n+        var container = encoder.container(keyedBy: CodingKeys.self)\n+        try container.encode(containerPath.string, forKey: .containerPath)\n+        try container.encode(hostPath.string, forKey: .hostPath)\n+        try container.encodeIfPresent(permissions, forKey: .permissions)\n+    }\n+\n+    public init(from decoder: any Decoder) throws {\n+        let container = try decoder.container(keyedBy: CodingKeys.self)\n+        let containerPath = try Self.decodePath(from: container, forKey: .containerPath)",
+        "comment_created_at": "2026-05-28T19:55:45+00:00",
+        "comment_author": "chrisgeo",
+        "comment_body": "I think that's a valid path to cover until it's phased out.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3320321560",
+        "repo_full_name": "apple/container",
+        "pr_number": 1594,
+        "pr_file": "Sources/ContainerResource/Container/PublishSocket.swift",
+        "discussion_id": "3320133345",
+        "commented_code": "@@ -14,27 +14,137 @@\n // limitations under the License.\n //===----------------------------------------------------------------------===//\n \n+import ContainerizationError\n import Foundation\n import SystemPackage\n \n /// Represents a socket that should be published from container to host.\n+///\n+/// - Deprecated: New for 1.0.0, path types changed from `URL` to `FilePath`.\n+/// - Note: Decoder handles `FilePath` and `URL` for persistent data compatibility;\n+///    this compatibility will be removed in a later release.\n public struct PublishSocket: Sendable, Codable {\n-    /// The path to the socket in the container.\n-    public var containerPath: URL\n+    /// Absolute path to the socket inside the container.\n+    public var containerPath: FilePath\n \n-    /// The path where the socket should appear on the host.\n-    public var hostPath: URL\n+    /// Absolute path where the socket appears on the host.\n+    public var hostPath: FilePath\n \n     /// File permissions for the socket on the host.\n     public var permissions: FilePermissions?\n \n+    /// Creates a `PublishSocket` with validated absolute paths.\n+    ///\n+    /// - Parameters:\n+    ///   - containerPath: Absolute path to the socket inside the container.\n+    ///     Must begin with `/`.\n+    ///   - hostPath: Absolute path where the socket appears on the host.\n+    ///     Must begin with `/`.\n+    ///   - permissions: File permissions applied to the socket on the host.\n+    /// - Throws: `ContainerizationError` with code `.invalidArgument` if\n+    ///   either path is not absolute.\n     public init(\n-        containerPath: URL,\n-        hostPath: URL,\n+        containerPath: FilePath,\n+        hostPath: FilePath,\n         permissions: FilePermissions? = nil\n-    ) {\n+    ) throws {\n+        guard containerPath.isAbsolute else {\n+            throw ContainerizationError(\n+                .invalidArgument,\n+                message: \"containerPath must be absolute: \\(containerPath)\"\n+            )\n+        }\n+        guard hostPath.isAbsolute else {\n+            throw ContainerizationError(\n+                .invalidArgument,\n+                message: \"hostPath must be absolute: \\(hostPath)\"\n+            )\n+        }\n         self.containerPath = containerPath\n         self.hostPath = hostPath\n         self.permissions = permissions\n     }\n+\n+    private enum CodingKeys: String, CodingKey {\n+        case containerPath\n+        case hostPath\n+        case permissions\n+    }\n+\n+    /// Encodes each path as its plain absolute string (e.g. `\"/var/run/docker.sock\"`).\n+    ///\n+    /// Pre-1.0 wire-format change from the prior `URL`-typed encoding which\n+    /// emitted `URL.absoluteString` (`\"file:///var/run/docker.sock\"`). The\n+    /// decoder accepts both forms for compatibility with persisted bundles\n+    /// from earlier releases; that compatibility will be removed in a later\n+    /// release.\n+    public func encode(to encoder: any Encoder) throws {\n+        var container = encoder.container(keyedBy: CodingKeys.self)\n+        try container.encode(containerPath.string, forKey: .containerPath)\n+        try container.encode(hostPath.string, forKey: .hostPath)\n+        try container.encodeIfPresent(permissions, forKey: .permissions)\n+    }\n+\n+    public init(from decoder: any Decoder) throws {\n+        let container = try decoder.container(keyedBy: CodingKeys.self)\n+        let containerPath = try Self.decodePath(from: container, forKey: .containerPath)",
+        "comment_created_at": "2026-05-28T20:00:48+00:00",
+        "comment_author": "chrisgeo",
+        "comment_body": "Done in 01ec891. `decodePath` now validates absoluteness directly and throws `DecodingError.dataCorrupted` (\"decoded socket path must be absolute\") for non-absolute decoded paths, covering both the plain-path and legacy `file:` branches. The by-construction check in `init()` stays as defense in depth, but the private helper is now self-validating so a manually edited/corrupt config is rejected at the decode layer.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2819840164",
+    "pr_number": 1190,
+    "pr_file": "Sources/ContainerCommands/Container/ContainerCopy.swift",
+    "created_at": "2026-02-18T01:17:11+00:00",
+    "commented_code": "+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ArgumentParser\n+import ContainerAPIClient\n+import ContainerResource\n+import Containerization\n+import ContainerizationError\n+import Foundation\n+\n+extension Application {\n+    public struct ContainerCopy: AsyncLoggableCommand {\n+        enum PathRef {\n+            case local(String)\n+            case container(id: String, path: String)\n+        }\n+\n+        static func parsePathRef(_ ref: String) -> PathRef {\n+            let parts = ref.components(separatedBy: \":\")\n+            if parts.count == 2 {\n+                let id = parts[0]\n+                let path = parts[1]\n+                if !id.isEmpty && !path.isEmpty {\n+                    return .container(id: id, path: path)\n+                }\n+            }\n+            return .local(ref)\n+        }\n+\n+        public init() {}\n+\n+        public static let configuration = CommandConfiguration(\n+            commandName: \"copy\",\n+            abstract: \"Copy files/folders between a container and the local filesystem\",\n+            aliases: [\"cp\"])\n+\n+        @OptionGroup()\n+        public var logOptions: Flags.Logging\n+\n+        @Argument(help: \"Source path (container:path or local path)\")\n+        var source: String\n+\n+        @Argument(help: \"Destination path (container:path or local path)\")\n+        var destination: String\n+\n+        public func run() async throws {\n+            let client = ContainerClient()\n+            let srcRef = Self.parsePathRef(source)\n+            let dstRef = Self.parsePathRef(destination)\n+\n+            switch (srcRef, dstRef) {",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2819840164",
+        "repo_full_name": "apple/container",
+        "pr_number": 1190,
+        "pr_file": "Sources/ContainerCommands/Container/ContainerCopy.swift",
+        "discussion_id": "2819840164",
+        "commented_code": "@@ -0,0 +1,84 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2026 Apple Inc. and the container project authors.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ArgumentParser\n+import ContainerAPIClient\n+import ContainerResource\n+import Containerization\n+import ContainerizationError\n+import Foundation\n+\n+extension Application {\n+    public struct ContainerCopy: AsyncLoggableCommand {\n+        enum PathRef {\n+            case local(String)\n+            case container(id: String, path: String)\n+        }\n+\n+        static func parsePathRef(_ ref: String) -> PathRef {\n+            let parts = ref.components(separatedBy: \":\")\n+            if parts.count == 2 {\n+                let id = parts[0]\n+                let path = parts[1]\n+                if !id.isEmpty && !path.isEmpty {\n+                    return .container(id: id, path: path)\n+                }\n+            }\n+            return .local(ref)\n+        }\n+\n+        public init() {}\n+\n+        public static let configuration = CommandConfiguration(\n+            commandName: \"copy\",\n+            abstract: \"Copy files/folders between a container and the local filesystem\",\n+            aliases: [\"cp\"])\n+\n+        @OptionGroup()\n+        public var logOptions: Flags.Logging\n+\n+        @Argument(help: \"Source path (container:path or local path)\")\n+        var source: String\n+\n+        @Argument(help: \"Destination path (container:path or local path)\")\n+        var destination: String\n+\n+        public func run() async throws {\n+            let client = ContainerClient()\n+            let srcRef = Self.parsePathRef(source)\n+            let dstRef = Self.parsePathRef(destination)\n+\n+            switch (srcRef, dstRef) {",
+        "comment_created_at": "2026-02-18T01:17:11+00:00",
+        "comment_author": "JaewonHur",
+        "comment_body": "We need a sanitization logic here to check local path.\r\n\r\n1. If `localPath` is source\r\n  a. Check if file or directory at `localPath` exists.\r\n  b. If `localPath` ends with `/`, check it's directory.\r\n\r\n2. If `localPath` is dest\r\n  a. If `localPath` ends with `/`, need to check if it's not existing or a directory.\r\n\r\nThen, we need to extend `destURL` correctly following the comment I left.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2302457917",
+    "pr_number": 530,
+    "pr_file": "Sources/CLI/Container/ContainerStop.swift",
+    "created_at": "2025-08-27T00:15:52+00:00",
+    "commented_code": "for container in containers {\n                     group.addTask {\n                         do {\n-                            try await container.stop(opts: stopOptions)\n-                            print(container.id)\n-                            return nil\n+                            return try await Timeout.run(seconds: UInt32(stopOptions.timeoutInSeconds + 2)) {",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2302457917",
+        "repo_full_name": "apple/container",
+        "pr_number": 530,
+        "pr_file": "Sources/CLI/Container/ContainerStop.swift",
+        "discussion_id": "2302457917",
+        "commented_code": "@@ -78,9 +79,18 @@ extension Application {\n                 for container in containers {\n                     group.addTask {\n                         do {\n-                            try await container.stop(opts: stopOptions)\n-                            print(container.id)\n-                            return nil\n+                            return try await Timeout.run(seconds: UInt32(stopOptions.timeoutInSeconds + 2)) {",
+        "comment_created_at": "2025-08-27T00:15:52+00:00",
+        "comment_author": "realrajaryan",
+        "comment_body": "Seems like we don't do any input validation on `timeoutInSeconds` and it can be negative. So, a `--time -10` input with the wraparound `UInt32(-10 + 2) = UInt32(-8)` would convert to `4294967288` seconds putting us in 136 years timeout here \ud83d\ude30?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2302465455",
+        "repo_full_name": "apple/container",
+        "pr_number": 530,
+        "pr_file": "Sources/CLI/Container/ContainerStop.swift",
+        "discussion_id": "2302457917",
+        "commented_code": "@@ -78,9 +79,18 @@ extension Application {\n                 for container in containers {\n                     group.addTask {\n                         do {\n-                            try await container.stop(opts: stopOptions)\n-                            print(container.id)\n-                            return nil\n+                            return try await Timeout.run(seconds: UInt32(stopOptions.timeoutInSeconds + 2)) {",
+        "comment_created_at": "2025-08-27T00:21:53+00:00",
+        "comment_author": "dcantah",
+        "comment_body": "The timeout for stop should ideally be unsigned.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2302528650",
+        "repo_full_name": "apple/container",
+        "pr_number": 530,
+        "pr_file": "Sources/CLI/Container/ContainerStop.swift",
+        "discussion_id": "2302457917",
+        "commented_code": "@@ -78,9 +79,18 @@ extension Application {\n                 for container in containers {\n                     group.addTask {\n                         do {\n-                            try await container.stop(opts: stopOptions)\n-                            print(container.id)\n-                            return nil\n+                            return try await Timeout.run(seconds: UInt32(stopOptions.timeoutInSeconds + 2)) {",
+        "comment_created_at": "2025-08-27T01:02:39+00:00",
+        "comment_author": "dcantah",
+        "comment_body": "Although docker does use negative values to signify there IS no timeout, which is interesting.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2260949242",
+    "pr_number": 465,
+    "pr_file": "Sources/NativeBuilder/ContainerBuildParser/Docker/Instructions/ExposeInstruction.swift",
+    "created_at": "2025-08-07T17:17:50+00:00",
+    "commented_code": "+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2025 Apple Inc. and the container project authors. All rights reserved.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerBuildIR\n+\n+struct ExposeInstruction: DockerInstruction {\n+    let ports: [PortSpec]\n+\n+    init(_ rawPorts: [String]) throws {\n+        self.ports = try rawPorts.map(parsePort)\n+    }\n+\n+    internal init(ports: [PortSpec]) {\n+        self.ports = ports\n+    }\n+\n+    func accept(_ visitor: DockerInstructionVisitor) throws {\n+        try visitor.visit(self)\n+    }\n+}\n+\n+func parsePort(_ p: String) throws -> PortSpec {\n+    let parts = p.split(separator: \"/\", maxSplits: 1).map(String.init)\n+    guard let rangePart = parts.first, !rangePart.isEmpty else {\n+        throw ParseError.invalidOption(p)\n+    }\n+\n+    // parse the port range\n+    let range = rangePart.split(separator: \"-\", maxSplits: 1)\n+    guard let port = UInt16(range[0]) else {\n+        throw ParseError.invalidOption(p)\n+    }\n+\n+    // parse the end of the range if it exists\n+    let end = range.count == 2 ? UInt16(range[1]) : nil",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2260949242",
+        "repo_full_name": "apple/container",
+        "pr_number": 465,
+        "pr_file": "Sources/NativeBuilder/ContainerBuildParser/Docker/Instructions/ExposeInstruction.swift",
+        "discussion_id": "2260949242",
+        "commented_code": "@@ -0,0 +1,65 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2025 Apple Inc. and the container project authors. All rights reserved.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerBuildIR\n+\n+struct ExposeInstruction: DockerInstruction {\n+    let ports: [PortSpec]\n+\n+    init(_ rawPorts: [String]) throws {\n+        self.ports = try rawPorts.map(parsePort)\n+    }\n+\n+    internal init(ports: [PortSpec]) {\n+        self.ports = ports\n+    }\n+\n+    func accept(_ visitor: DockerInstructionVisitor) throws {\n+        try visitor.visit(self)\n+    }\n+}\n+\n+func parsePort(_ p: String) throws -> PortSpec {\n+    let parts = p.split(separator: \"/\", maxSplits: 1).map(String.init)\n+    guard let rangePart = parts.first, !rangePart.isEmpty else {\n+        throw ParseError.invalidOption(p)\n+    }\n+\n+    // parse the port range\n+    let range = rangePart.split(separator: \"-\", maxSplits: 1)\n+    guard let port = UInt16(range[0]) else {\n+        throw ParseError.invalidOption(p)\n+    }\n+\n+    // parse the end of the range if it exists\n+    let end = range.count == 2 ? UInt16(range[1]) : nil",
+        "comment_created_at": "2025-08-07T17:17:50+00:00",
+        "comment_author": "wlan0",
+        "comment_body": "This will also accept port 0 as valid",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2261140634",
+        "repo_full_name": "apple/container",
+        "pr_number": 465,
+        "pr_file": "Sources/NativeBuilder/ContainerBuildParser/Docker/Instructions/ExposeInstruction.swift",
+        "discussion_id": "2260949242",
+        "commented_code": "@@ -0,0 +1,65 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2025 Apple Inc. and the container project authors. All rights reserved.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerBuildIR\n+\n+struct ExposeInstruction: DockerInstruction {\n+    let ports: [PortSpec]\n+\n+    init(_ rawPorts: [String]) throws {\n+        self.ports = try rawPorts.map(parsePort)\n+    }\n+\n+    internal init(ports: [PortSpec]) {\n+        self.ports = ports\n+    }\n+\n+    func accept(_ visitor: DockerInstructionVisitor) throws {\n+        try visitor.visit(self)\n+    }\n+}\n+\n+func parsePort(_ p: String) throws -> PortSpec {\n+    let parts = p.split(separator: \"/\", maxSplits: 1).map(String.init)\n+    guard let rangePart = parts.first, !rangePart.isEmpty else {\n+        throw ParseError.invalidOption(p)\n+    }\n+\n+    // parse the port range\n+    let range = rangePart.split(separator: \"-\", maxSplits: 1)\n+    guard let port = UInt16(range[0]) else {\n+        throw ParseError.invalidOption(p)\n+    }\n+\n+    // parse the end of the range if it exists\n+    let end = range.count == 2 ? UInt16(range[1]) : nil",
+        "comment_created_at": "2025-08-07T18:38:25+00:00",
+        "comment_author": "wlan0",
+        "comment_body": "add a sentinel to make sure end port is also non-zero",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2261141014",
+        "repo_full_name": "apple/container",
+        "pr_number": 465,
+        "pr_file": "Sources/NativeBuilder/ContainerBuildParser/Docker/Instructions/ExposeInstruction.swift",
+        "discussion_id": "2260949242",
+        "commented_code": "@@ -0,0 +1,65 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2025 Apple Inc. and the container project authors. All rights reserved.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerBuildIR\n+\n+struct ExposeInstruction: DockerInstruction {\n+    let ports: [PortSpec]\n+\n+    init(_ rawPorts: [String]) throws {\n+        self.ports = try rawPorts.map(parsePort)\n+    }\n+\n+    internal init(ports: [PortSpec]) {\n+        self.ports = ports\n+    }\n+\n+    func accept(_ visitor: DockerInstructionVisitor) throws {\n+        try visitor.visit(self)\n+    }\n+}\n+\n+func parsePort(_ p: String) throws -> PortSpec {\n+    let parts = p.split(separator: \"/\", maxSplits: 1).map(String.init)\n+    guard let rangePart = parts.first, !rangePart.isEmpty else {\n+        throw ParseError.invalidOption(p)\n+    }\n+\n+    // parse the port range\n+    let range = rangePart.split(separator: \"-\", maxSplits: 1)\n+    guard let port = UInt16(range[0]) else {\n+        throw ParseError.invalidOption(p)\n+    }\n+\n+    // parse the end of the range if it exists\n+    let end = range.count == 2 ? UInt16(range[1]) : nil",
+        "comment_created_at": "2025-08-07T18:38:38+00:00",
+        "comment_author": "katiewasnothere",
+        "comment_body": "Good catch. Fixed and added more \"invalid\" tests for requests with port 0 either as start or end.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2261174739",
+        "repo_full_name": "apple/container",
+        "pr_number": 465,
+        "pr_file": "Sources/NativeBuilder/ContainerBuildParser/Docker/Instructions/ExposeInstruction.swift",
+        "discussion_id": "2260949242",
+        "commented_code": "@@ -0,0 +1,65 @@\n+//===----------------------------------------------------------------------===//\n+// Copyright \u00a9 2025 Apple Inc. and the container project authors. All rights reserved.\n+//\n+// Licensed under the Apache License, Version 2.0 (the \"License\");\n+// you may not use this file except in compliance with the License.\n+// You may obtain a copy of the License at\n+//\n+//   https://www.apache.org/licenses/LICENSE-2.0\n+//\n+// Unless required by applicable law or agreed to in writing, software\n+// distributed under the License is distributed on an \"AS IS\" BASIS,\n+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+// See the License for the specific language governing permissions and\n+// limitations under the License.\n+//===----------------------------------------------------------------------===//\n+\n+import ContainerBuildIR\n+\n+struct ExposeInstruction: DockerInstruction {\n+    let ports: [PortSpec]\n+\n+    init(_ rawPorts: [String]) throws {\n+        self.ports = try rawPorts.map(parsePort)\n+    }\n+\n+    internal init(ports: [PortSpec]) {\n+        self.ports = ports\n+    }\n+\n+    func accept(_ visitor: DockerInstructionVisitor) throws {\n+        try visitor.visit(self)\n+    }\n+}\n+\n+func parsePort(_ p: String) throws -> PortSpec {\n+    let parts = p.split(separator: \"/\", maxSplits: 1).map(String.init)\n+    guard let rangePart = parts.first, !rangePart.isEmpty else {\n+        throw ParseError.invalidOption(p)\n+    }\n+\n+    // parse the port range\n+    let range = rangePart.split(separator: \"-\", maxSplits: 1)\n+    guard let port = UInt16(range[0]) else {\n+        throw ParseError.invalidOption(p)\n+    }\n+\n+    // parse the end of the range if it exists\n+    let end = range.count == 2 ? UInt16(range[1]) : nil",
+        "comment_created_at": "2025-08-07T18:57:29+00:00",
+        "comment_author": "katiewasnothere",
+        "comment_body": "I added an if statement below this that ensures end is not equal to 0",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2539661637",
+    "pr_number": 896,
+    "pr_file": "Sources/ContainerXPC/XPCServer.swift",
+    "created_at": "2025-11-18T20:44:10+00:00",
+    "commented_code": "}\n \n     func handleMessage(connection: xpc_connection_t, object: xpc_object_t) async throws {\n+        // all requests are dictionary-valued\n+        guard xpc_get_type(object) == XPC_TYPE_DICTIONARY else {\n+            log.error(\"invalid request - not a dictionary\")\n+            let message = XPCMessage(object: object)\n+            let reply = message.reply()\n+            let err = ContainerizationError(.invalidArgument, message: \"invalid request\")\n+            reply.set(error: err)\n+            xpc_connection_send_message(connection, reply.underlying)\n+            return\n+        }\n+\n+        // ensure client has our EUID\n+        var token = audit_token_t()\n+        xpc_dictionary_get_audit_token(object, &token)\n+        let serverEuid = getuid()",
+    "repo_full_name": "apple/container",
+    "discussion_comments": [
+      {
+        "comment_id": "2539661637",
+        "repo_full_name": "apple/container",
+        "pr_number": 896,
+        "pr_file": "Sources/ContainerXPC/XPCServer.swift",
+        "discussion_id": "2539661637",
+        "commented_code": "@@ -145,8 +146,44 @@ public struct XPCServer: Sendable {\n     }\n \n     func handleMessage(connection: xpc_connection_t, object: xpc_object_t) async throws {\n+        // all requests are dictionary-valued\n+        guard xpc_get_type(object) == XPC_TYPE_DICTIONARY else {\n+            log.error(\"invalid request - not a dictionary\")\n+            let message = XPCMessage(object: object)\n+            let reply = message.reply()\n+            let err = ContainerizationError(.invalidArgument, message: \"invalid request\")\n+            reply.set(error: err)\n+            xpc_connection_send_message(connection, reply.underlying)\n+            return\n+        }\n+\n+        // ensure client has our EUID\n+        var token = audit_token_t()\n+        xpc_dictionary_get_audit_token(object, &token)\n+        let serverEuid = getuid()",
+        "comment_created_at": "2025-11-18T20:44:10+00:00",
+        "comment_author": "dkovba",
+        "comment_body": "Should it be `geteuid()`? For example, when running a `sudo` command, `geteuid()` returns `0`.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

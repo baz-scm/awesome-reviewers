@@ -11,7 +11,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 48787
 ---
-
+{% raw %}
 When writing GitHub Actions workflows, apply security best practices for (1) permissions scope and (2) trust boundaries around PR data.
 
 **1) Use least-permissive permissions**
@@ -40,3 +40,4 @@ jobs:
 ```
 
 If an action’s behavior around PR-provided config is unclear, verify in documentation/source or constrain the workflow so trusted configuration is used.
+{% endraw %}

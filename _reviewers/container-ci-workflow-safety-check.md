@@ -14,7 +14,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 48787
 ---
-
+{% raw %}
 When reviewing GitHub Actions used for CI/CD automation, verify three things:
 
 1) Repo context is available
@@ -53,3 +53,4 @@ Example patterns:
 ```
 
 Apply this as a checklist during CI/CD workflow reviews to prevent silent misconfigurations, missing file access, and hard-to-test automation that can impact real PRs.
+{% endraw %}

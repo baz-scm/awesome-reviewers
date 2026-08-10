@@ -9,7 +9,7 @@ language: Yaml
 comments_count: 8
 repository_stars: 9394
 ---
-
+{% raw %}
 All release/publishing workflows must be deterministic, serialized safely, and strictly gated so that user-facing artifacts are published only after the release candidate has passed the final checks.
 
 Apply this standard when building CI/CD for npm/GitHub releases, backfills, and container/image promotions:
@@ -57,3 +57,4 @@ jobs:
 ```
 
 This prevents out-of-order releases, removes dependency on runner/tool bundling, and avoids scenarios where failures leave user-facing tags published even though verification ultimately failed.
+{% endraw %}

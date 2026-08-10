@@ -9,7 +9,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 9394
 ---
-
+{% raw %}
 When multiple workflow runs mutate or publish to the same shared external resource (labels, registries, “latest”), make synchronization explicit and resource-scoped, and handle conflicts by re-verifying state before proceeding.
 
 Apply this standard:
@@ -42,3 +42,4 @@ fi
 ```
 
 Concrete CI action: if your workflow uses something like `concurrency.group: <event ref>`, update it to something stable and shared for the published artifact (e.g., `container-publish-${{ github.repository }}-${{ matrix.image }}`) so overlapping publishes are serialized rather than merely “per ref”.
+{% endraw %}

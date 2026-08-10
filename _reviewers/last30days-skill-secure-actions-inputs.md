@@ -10,7 +10,7 @@ language: Yaml
 comments_count: 2
 repository_stars: 57799
 ---
-
+{% raw %}
 In GitHub Actions, treat workflow inputs/expressions as potentially unsafe and follow two rules: (1) avoid interpolating `${{ ... }}` directly inside shell-script logic, and (2) do not persist Git credentials from `checkout`; instead, scope tokens to only the step that needs to push.
 
 Apply it like this:
@@ -41,3 +41,4 @@ Apply it like this:
   - For the push step, configure `origin` with the token only in that step (so other steps don’t inherit it).
 
 This reduces risk of template-driven code injection and prevents unnecessary credential exposure in the workflow environment.
+{% endraw %}

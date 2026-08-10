@@ -1,0 +1,58 @@
+[
+  {
+    "discussion_id": "3710315583",
+    "pr_number": 2269,
+    "pr_file": "src/platform/linux.rs",
+    "created_at": "2026-08-04T07:31:43+00:00",
+    "commented_code": ".collect()\n }\n \n+/// Whether this kernel exposes `/proc/<pid>/task/<tid>/children`.\n+///\n+/// The file is only present when the kernel was built with\n+/// `CONFIG_PROC_CHILDREN`; some container hosts ship kernels without it. The\n+/// probe reads our own main thread, whose tid always equals our pid, and the\n+/// file exists there whenever the interface exists at all (it is simply empty\n+/// when we have no children).\n+fn proc_children_supported() -> bool {\n+    static SUPPORTED: OnceLock<bool> = OnceLock::new();\n+    *SUPPORTED.get_or_init(|| {\n+        let pid = std::process::id();\n+        let supported = std::fs::metadata(format!(\"/proc/{pid}/task/{pid}/children\")).is_ok();\n+        if !supported {\n+            tracing::info!(\n+                \"kernel does not expose /proc children files; using /proc scans to enumerate process groups\"\n+            );\n+        }\n+        supported\n+    })\n+}\n+\n+/// Every live pid visible in `/proc`.\n+fn all_proc_pids() -> Vec<u32> {\n+    std::fs::read_dir(\"/proc\")\n+        .into_iter()\n+        .flatten()\n+        .flatten()\n+        .filter_map(|entry| numeric_file_name(&entry))\n+        .collect()",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3710346318",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 2269,
+        "pr_file": "src/platform/linux.rs",
+        "discussion_id": "3710315583",
+        "commented_code": "@@ -278,6 +318,47 @@ fn process_task_ids(pid: u32) -> Vec<u32> {\n         .collect()\n }\n \n+/// Whether this kernel exposes `/proc/<pid>/task/<tid>/children`.\n+///\n+/// The file is only present when the kernel was built with\n+/// `CONFIG_PROC_CHILDREN`; some container hosts ship kernels without it. The\n+/// probe reads our own main thread, whose tid always equals our pid, and the\n+/// file exists there whenever the interface exists at all (it is simply empty\n+/// when we have no children).\n+fn proc_children_supported() -> bool {\n+    static SUPPORTED: OnceLock<bool> = OnceLock::new();\n+    *SUPPORTED.get_or_init(|| {\n+        let pid = std::process::id();\n+        let supported = std::fs::metadata(format!(\"/proc/{pid}/task/{pid}/children\")).is_ok();\n+        if !supported {\n+            tracing::info!(\n+                \"kernel does not expose /proc children files; using /proc scans to enumerate process groups\"\n+            );\n+        }\n+        supported\n+    })\n+}\n+\n+/// Every live pid visible in `/proc`.\n+fn all_proc_pids() -> Vec<u32> {\n+    std::fs::read_dir(\"/proc\")\n+        .into_iter()\n+        .flatten()\n+        .flatten()\n+        .filter_map(|entry| numeric_file_name(&entry))\n+        .collect()",
+        "comment_created_at": "2026-08-04T07:31:43+00:00",
+        "comment_author": "knowsuchagency",
+        "comment_body": "Partly fixed in bcacaa03, partly disagreeing.\n\nFixed: `scanned_child_pids` now streams `/proc` (`proc_pids()`) instead of materializing every pid, and stops one past `CHILD_GROUPS_SCAN_LIMIT` \u2014 one past is all the caller needs to return `None`, so the child-group fallback fails closed without reading the rest of the process table. Split out `scanned_child_pids_from` so the bound and the ppid filter are unit tested.\n\nNot changing: the member-discovery sweep in `foreground_process_group_members_with` stays uncapped on purpose. Membership is decided by pgid, and `/proc` has no pgid -> pid index, so finding a group's members is inherently a full sweep \u2014 `session_processes()` in this same file already does exactly that for session ids. A cap there would truncate by readdir order, which is where the process this PR is about tends to land (the agent is spawned after its wrapper, so it has the higher pid), and would silently reintroduce the bug on busy hosts. The sweep only runs at all when the kernel probe reports no children files, and only when `should_probe_foreground_job` lets a probe through.\n\nOn materializing pids in that path specifically: the cost is the readdir plus one `/proc/<pid>/stat` read per pid, and streaming does not avoid either since every candidate must be inspected anyway. The `Vec` itself is a few thousand `u32`s, and it is the seam that keeps these functions injectable in tests, so I would rather keep it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3588532245",
+    "pr_number": 1453,
+    "pr_file": "src/cli.rs",
+    "created_at": "2026-07-15T20:58:59+00:00",
+    "commented_code": "}\n \n pub(super) fn send_request(request: &Request) -> std::io::Result<serde_json::Value> {\n+    let client = ApiClient::local();\n+    ensure_server_protocol_compatible(&client, &request.id)?;\n+    client\n+        .request_value(request)\n+        .map_err(api_client_error_to_io)\n+}\n+\n+pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde_json::Value> {\n     ApiClient::local()\n         .request_value(request)\n         .map_err(api_client_error_to_io)\n }\n \n+fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> std::io::Result<()> {\n+    let status = client.status().map_err(api_client_error_to_io)?;\n+    let server_protocol = status\n+        .protocol\n+        .ok_or_else(|| std::io::Error::other(\"server ping did not include a protocol version\"))?;\n+    let Some(response) = protocol_guard::mismatch_response(\n+        request_id,\n+        server_protocol,\n+        &crate::session::active_restart_after_update_guidance(),\n+    ) else {\n+        return Ok(());\n+    };",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3590707244",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 1453,
+        "pr_file": "src/cli.rs",
+        "discussion_id": "3588532245",
+        "commented_code": "@@ -990,11 +993,43 @@ pub(super) fn send_ok_request(method: Method) -> std::io::Result<i32> {\n }\n \n pub(super) fn send_request(request: &Request) -> std::io::Result<serde_json::Value> {\n+    let client = ApiClient::local();\n+    ensure_server_protocol_compatible(&client, &request.id)?;\n+    client\n+        .request_value(request)\n+        .map_err(api_client_error_to_io)\n+}\n+\n+pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde_json::Value> {\n     ApiClient::local()\n         .request_value(request)\n         .map_err(api_client_error_to_io)\n }\n \n+fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> std::io::Result<()> {\n+    let status = client.status().map_err(api_client_error_to_io)?;\n+    let server_protocol = status\n+        .protocol\n+        .ok_or_else(|| std::io::Error::other(\"server ping did not include a protocol version\"))?;\n+    let Some(response) = protocol_guard::mismatch_response(\n+        request_id,\n+        server_protocol,\n+        &crate::session::active_restart_after_update_guidance(),\n+    ) else {\n+        return Ok(());\n+    };",
+        "comment_created_at": "2026-07-15T20:58:59+00:00",
+        "comment_author": "ogulcancelik",
+        "comment_body": "@akbash-bot wdyt?\n\nPlease inspect this review and reply in this thread.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3590714120",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 1453,
+        "pr_file": "src/cli.rs",
+        "discussion_id": "3588532245",
+        "commented_code": "@@ -990,11 +993,43 @@ pub(super) fn send_ok_request(method: Method) -> std::io::Result<i32> {\n }\n \n pub(super) fn send_request(request: &Request) -> std::io::Result<serde_json::Value> {\n+    let client = ApiClient::local();\n+    ensure_server_protocol_compatible(&client, &request.id)?;\n+    client\n+        .request_value(request)\n+        .map_err(api_client_error_to_io)\n+}\n+\n+pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde_json::Value> {\n     ApiClient::local()\n         .request_value(request)\n         .map_err(api_client_error_to_io)\n }\n \n+fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> std::io::Result<()> {\n+    let status = client.status().map_err(api_client_error_to_io)?;\n+    let server_protocol = status\n+        .protocol\n+        .ok_or_else(|| std::io::Error::other(\"server ping did not include a protocol version\"))?;\n+    let Some(response) = protocol_guard::mismatch_response(\n+        request_id,\n+        server_protocol,\n+        &crate::session::active_restart_after_update_guidance(),\n+    ) else {\n+        return Ok(());\n+    };",
+        "comment_created_at": "2026-07-15T21:00:20+00:00",
+        "comment_author": "akbash-bot",
+        "comment_body": "@ogulcancelik The extra round trip is real, but I think it is the right tradeoff here. The check must happen immediately before each API operation: caching once per CLI process would reopen the exact stale-server gap if an install/handoff replaces the server between `plugin.list` and `plugin.link`. A wait subscription is pinged once before it opens, not once per event, and these are bounded local socket/pipe round trips. I would not weaken or cache this without measured latency showing a problem. If it does become material, the clean optimization is same-connection protocol negotiation/dispatch, not skipping per-operation validation.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

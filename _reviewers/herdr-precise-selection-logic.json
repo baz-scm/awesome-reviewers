@@ -1,0 +1,46 @@
+[
+  {
+    "discussion_id": "3738334294",
+    "pr_number": 2489,
+    "pr_file": "src/detect/mod.rs",
+    "created_at": "2026-08-09T07:02:12+00:00",
+    "commented_code": "\"kilo\" | \"kilo-code\" | \"kilo code\" => Some(Agent::Kilo),\n         \"qodercli\" | \"qoderclicn\" | \"qoder\" | \"qodercn\" => Some(Agent::Qodercli),\n         \"maki\" => Some(Agent::Maki),\n+        \"muse\" | \"muse-code\" | \"muse-cli\" => Some(Agent::Muse),\n+        _ if name.starts_with(\"muse\") => Some(Agent::Muse),",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3742968122",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 2489,
+        "pr_file": "src/detect/mod.rs",
+        "discussion_id": "3738334294",
+        "commented_code": "@@ -197,6 +202,8 @@ fn lookup_agent(name: &str) -> Option<Agent> {\n         \"kilo\" | \"kilo-code\" | \"kilo code\" => Some(Agent::Kilo),\n         \"qodercli\" | \"qoderclicn\" | \"qoder\" | \"qodercn\" => Some(Agent::Qodercli),\n         \"maki\" => Some(Agent::Maki),\n+        \"muse\" | \"muse-code\" | \"muse-cli\" => Some(Agent::Muse),\n+        _ if name.starts_with(\"muse\") => Some(Agent::Muse),",
+        "comment_created_at": "2026-08-09T07:02:12+00:00",
+        "comment_author": "ohk",
+        "comment_body": "Addressed in 7a1853f6: replaced `_ if name.starts_with(\\\"muse\\\")` fallback with explicit `\\\"muse\\\" | \\\"muse-bin\\\" | \\\"muse-code\\\" | \\\"muse-cli\\\"` in `src/detect/mod.rs` lookup. Added positive tests for `muse`/`muse-bin`/`muse-code`/`muse-cli` and negative tests for `museum`, `muse-helper`, `muser` to ensure non-agent binaries don't inherit Muse settings.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3709446593",
+    "pr_number": 2266,
+    "pr_file": "src/layout.rs",
+    "created_at": "2026-08-04T04:43:29+00:00",
+    "commented_code": "let target = self.focus;\n         let ids = self.pane_ids();\n         let pos = ids.iter().position(|id| *id == target).unwrap();\n-        let new_focus = if pos + 1 < ids.len() {\n+        let ordered = if pos + 1 < ids.len() {\n             ids[pos + 1]\n         } else {\n             ids[pos - 1]\n         };\n+        // Prefer the pane focus came from. A pane opened beside another one --\n+        // a plugin split, a file viewer, a transient tool pane -- should hand\n+        // focus back to the pane that opened it when it closes, rather than to\n+        // whichever pane happens to sit next in tree order. Fall back to tree\n+        // order when there is no history, when it points at the pane being\n+        // closed, or when it points at a pane that has since gone away.\n+        let new_focus = match self.prev_focus {\n+            Some(prev) if prev != target && ids.contains(&prev) => prev,\n+            _ => ordered,\n+        };\n         let placeholder = PaneId::from_raw(0);\n         let old = std::mem::replace(&mut self.root, Node::Pane(placeholder));\n         if let Some(new_root) = remove_pane(old, target) {\n             self.root = new_root;\n             self.focus = new_focus;\n+            self.prev_focus = None;",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3709514031",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 2266,
+        "pr_file": "src/layout.rs",
+        "discussion_id": "3709446593",
+        "commented_code": "@@ -169,16 +183,27 @@ impl TileLayout {\n         let target = self.focus;\n         let ids = self.pane_ids();\n         let pos = ids.iter().position(|id| *id == target).unwrap();\n-        let new_focus = if pos + 1 < ids.len() {\n+        let ordered = if pos + 1 < ids.len() {\n             ids[pos + 1]\n         } else {\n             ids[pos - 1]\n         };\n+        // Prefer the pane focus came from. A pane opened beside another one --\n+        // a plugin split, a file viewer, a transient tool pane -- should hand\n+        // focus back to the pane that opened it when it closes, rather than to\n+        // whichever pane happens to sit next in tree order. Fall back to tree\n+        // order when there is no history, when it points at the pane being\n+        // closed, or when it points at a pane that has since gone away.\n+        let new_focus = match self.prev_focus {\n+            Some(prev) if prev != target && ids.contains(&prev) => prev,\n+            _ => ordered,\n+        };\n         let placeholder = PaneId::from_raw(0);\n         let old = std::mem::replace(&mut self.root, Node::Pane(placeholder));\n         if let Some(new_root) = remove_pane(old, target) {\n             self.root = new_root;\n             self.focus = new_focus;\n+            self.prev_focus = None;",
+        "comment_created_at": "2026-08-04T04:43:29+00:00",
+        "comment_author": "jondkinney",
+        "comment_body": "Good catch \u2014 this was real, and I've fixed the cause rather than the symptom.\n\nThe temporary focus cycle in `tab.rs` (`focus_pane` \u2192 `close_focused` \u2192 `focus_pane`) only existed because `TileLayout` had no way to remove a pane that isn't focused. It routed a background removal through the two functions that record focus history, so the still-focused pane's history was overwritten and then cleared. Focus ended up correct, which is why it looked harmless \u2014 the damage only showed on the *next* close, which fell back to tree order.\n\nAdded `TileLayout::close_pane(id)`, which touches focus and its history only when the closed pane is the focused one, and cleared `prev_focus` when the removed pane is the one it points at. Both `detach_pane` and `take_pane_for_move` now call it directly, which removes the dance entirely rather than working around it.\n\nTwo regression tests:\n\n- `closing_a_background_pane_keeps_the_focused_pane_history` \u2014 removes an unrelated pane, then closes the focused one and asserts it returns to where focus came from. Under the old dance this lands on the tree-order neighbour instead, so it fails against the previous behaviour.\n- `closing_the_remembered_pane_drops_the_focus_history` \u2014 removes the pane the history points at, then asserts the next close falls back to tree order.\n\n~~The third `close_focused` caller (the runtime-creation rollback) is unaffected: the pane is focused there, so it takes the same path as before.~~\n\n**Correction:** that last claim was wrong, and the second finding on this PR is the exact counterexample. The rollback runs through the focused path *after* the split already overwrote the history slot, so it consumed and cleared state the pre-history code never touched. Fixed by not moving focus until the runtime spawn succeeds \u2014 the failure path now rolls back a background pane and never touches focus state. Details in the other thread.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

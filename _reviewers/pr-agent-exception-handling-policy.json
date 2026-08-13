@@ -1,0 +1,372 @@
+[
+  {
+    "discussion_id": "3379673348",
+    "pr_number": 2404,
+    "pr_file": "pr_agent/tools/pr_code_suggestions.py",
+    "created_at": "2026-06-12T09:20:06+00:00",
+    "commented_code": "pr_comment_updated += f\"{prev_suggestion_table}\n\"\n \n                         get_logger().info(f\"Persistent mode - updating comment {comment_url} to latest {name} message\")\n-                        if progress_response:  # publish to 'progress_response' comment, because it refreshes immediately\n-                            git_provider.edit_comment(progress_response, pr_comment_updated)\n-                            git_provider.remove_comment(comment)\n-                            comment = progress_response\n-                        else:\n-                            git_provider.edit_comment(comment, pr_comment_updated)\n+                        git_provider.edit_comment(comment, pr_comment_updated)\n+                        if progress_response:\n+                            try:\n+                                git_provider.edit_comment(progress_response, \"Code suggestions published in the persistent thread above.\")\n+                                git_provider.remove_comment(progress_response)\n+                            except Exception as cleanup_error:\n+                                get_logger().warning(\n+                                    f\"Failed to clean up progress note after persistent update, leaving it in place: {cleanup_error}\"\n+                                )",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3402128585",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 2404,
+        "pr_file": "pr_agent/tools/pr_code_suggestions.py",
+        "discussion_id": "3379673348",
+        "commented_code": "@@ -333,12 +333,15 @@ def _extract_link(comment_text: str):\n                             pr_comment_updated += f\"{prev_suggestion_table}\\n\"\n \n                         get_logger().info(f\"Persistent mode - updating comment {comment_url} to latest {name} message\")\n-                        if progress_response:  # publish to 'progress_response' comment, because it refreshes immediately\n-                            git_provider.edit_comment(progress_response, pr_comment_updated)\n-                            git_provider.remove_comment(comment)\n-                            comment = progress_response\n-                        else:\n-                            git_provider.edit_comment(comment, pr_comment_updated)\n+                        git_provider.edit_comment(comment, pr_comment_updated)\n+                        if progress_response:\n+                            try:\n+                                git_provider.edit_comment(progress_response, \"Code suggestions published in the persistent thread above.\")\n+                                git_provider.remove_comment(progress_response)\n+                            except Exception as cleanup_error:\n+                                get_logger().warning(\n+                                    f\"Failed to clean up progress note after persistent update, leaving it in place: {cleanup_error}\"\n+                                )",
+        "comment_created_at": "2026-06-12T09:20:06+00:00",
+        "comment_author": "IsmaelMartinez",
+        "comment_body": "I kept the broad catch deliberately, and documented it with a one-liner. `remove_comment` already swallows its own exceptions in every provider, there is no provider-agnostic exception type in this codebase to narrow to, and letting the cleanup error propagate would send it to the outer handler, which falls through to publishing a new suggestions thread, re-creating the exact duplicate-thread bug this PR fixes. I verified that empirically: the new test `test_persistent_update_survives_progress_cleanup_failure` fails with a republish attempt if the catch is narrowed.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3344330676",
+    "pr_number": 2420,
+    "pr_file": "pr_agent/tools/ticket_pr_compliance_check.py",
+    "created_at": "2026-06-02T21:38:17+00:00",
+    "commented_code": "# Option A: issue number at start of branch or after /, followed by - or end (e.g. feature/1-test-issue, 123-fix)\n BRANCH_ISSUE_PATTERN = re.compile(r\"(?:^|/)(\\d{1,6})(?=-|$)\")\n \n+# Max number of tickets to analyse per PR, and max characters of ticket body to keep.\n+MAX_TICKETS = 3\n+MAX_TICKET_CHARACTERS = 10000\n+\n+# Jira REST API version. Pinned to \"2\" because extract_jira_tickets() reads description\n+# and custom fields as plain strings. v2 returns them that way; v3 returns ADF JSON dicts\n+# that would need separate parsing. The atlassian-python-api client defaults to \"2\" today,\n+# but pinning keeps the contract stable across dependency upgrades.\n+JIRA_API_VERSION = \"2\"\n+\n def find_jira_tickets(text):\n-    # Regular expression patterns for JIRA tickets\n+    # Regular expression patterns for JIRA tickets. Matching is case-insensitive so\n+    # lowercased branch names (e.g. bugfix/abc-123-description) are detected; keys are\n+    # normalized to upper case to match Jira's canonical form.\n     patterns = [\n         r'\\b[A-Z]{2,10}-\\d{1,7}\\b',  # Standard JIRA ticket format (e.g., PROJ-123)\n         r'(?:https?://[^\\s/]+/browse/)?([A-Z]{2,10}-\\d{1,7})\\b'  # JIRA URL or just the ticket\n     ]\n \n-    tickets = set()\n+    # Preserve first-seen order while de-duplicating, so the MAX_TICKETS cap applied\n+    # later is deterministic across runs (a plain set would fetch arbitrary tickets).\n+    seen = set()\n+    tickets = []\n     for pattern in patterns:\n-        matches = re.findall(pattern, text)\n+        matches = re.findall(pattern, text, flags=re.IGNORECASE)\n         for match in matches:\n             if isinstance(match, tuple):\n                 # If it's a tuple (from the URL pattern), take the last non-empty group\n                 ticket = next((m for m in reversed(match) if m), None)\n             else:\n                 ticket = match\n             if ticket:\n-                tickets.add(ticket)\n+                ticket = ticket.upper()\n+                if ticket not in seen:\n+                    seen.add(ticket)\n+                    tickets.append(ticket)\n \n-    return list(tickets)\n+    return tickets\n+\n+\n+def _get_jira_client():\n+    \"\"\"\n+    Build a Jira client from the [jira] settings. Returns None if Jira is not configured.\n+    Cloud uses email + API token; Server/Data Center uses username + password, or a PAT\n+    (passed as the token) together with a base url. The REST API version is pinned via\n+    JIRA_API_VERSION (see its definition for why).\n+    \"\"\"\n+    base_url = get_settings().get(\"JIRA.JIRA_BASE_URL\", None)\n+    api_email = get_settings().get(\"JIRA.JIRA_API_EMAIL\", None)\n+    api_token = get_settings().get(\"JIRA.JIRA_API_TOKEN\", None)\n+    if not (base_url and api_token):\n+        return None\n+    try:\n+        if api_email:\n+            return Jira(url=base_url.rstrip(\"/\"), username=api_email, password=api_token, api_version=JIRA_API_VERSION)\n+        # No email/username: treat the token as a Server/Data Center PAT.\n+        return Jira(url=base_url.rstrip(\"/\"), token=api_token, api_version=JIRA_API_VERSION)\n+    except Exception as e:\n+        get_logger().error(f\"Failed to initialize Jira client: {e}\",\n+                           artifact={\"traceback\": traceback.format_exc()})\n+        return None",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3344576645",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 2420,
+        "pr_file": "pr_agent/tools/ticket_pr_compliance_check.py",
+        "discussion_id": "3344330676",
+        "commented_code": "@@ -13,26 +15,160 @@\n # Option A: issue number at start of branch or after /, followed by - or end (e.g. feature/1-test-issue, 123-fix)\n BRANCH_ISSUE_PATTERN = re.compile(r\"(?:^|/)(\\d{1,6})(?=-|$)\")\n \n+# Max number of tickets to analyse per PR, and max characters of ticket body to keep.\n+MAX_TICKETS = 3\n+MAX_TICKET_CHARACTERS = 10000\n+\n+# Jira REST API version. Pinned to \"2\" because extract_jira_tickets() reads description\n+# and custom fields as plain strings. v2 returns them that way; v3 returns ADF JSON dicts\n+# that would need separate parsing. The atlassian-python-api client defaults to \"2\" today,\n+# but pinning keeps the contract stable across dependency upgrades.\n+JIRA_API_VERSION = \"2\"\n+\n def find_jira_tickets(text):\n-    # Regular expression patterns for JIRA tickets\n+    # Regular expression patterns for JIRA tickets. Matching is case-insensitive so\n+    # lowercased branch names (e.g. bugfix/abc-123-description) are detected; keys are\n+    # normalized to upper case to match Jira's canonical form.\n     patterns = [\n         r'\\b[A-Z]{2,10}-\\d{1,7}\\b',  # Standard JIRA ticket format (e.g., PROJ-123)\n         r'(?:https?://[^\\s/]+/browse/)?([A-Z]{2,10}-\\d{1,7})\\b'  # JIRA URL or just the ticket\n     ]\n \n-    tickets = set()\n+    # Preserve first-seen order while de-duplicating, so the MAX_TICKETS cap applied\n+    # later is deterministic across runs (a plain set would fetch arbitrary tickets).\n+    seen = set()\n+    tickets = []\n     for pattern in patterns:\n-        matches = re.findall(pattern, text)\n+        matches = re.findall(pattern, text, flags=re.IGNORECASE)\n         for match in matches:\n             if isinstance(match, tuple):\n                 # If it's a tuple (from the URL pattern), take the last non-empty group\n                 ticket = next((m for m in reversed(match) if m), None)\n             else:\n                 ticket = match\n             if ticket:\n-                tickets.add(ticket)\n+                ticket = ticket.upper()\n+                if ticket not in seen:\n+                    seen.add(ticket)\n+                    tickets.append(ticket)\n \n-    return list(tickets)\n+    return tickets\n+\n+\n+def _get_jira_client():\n+    \"\"\"\n+    Build a Jira client from the [jira] settings. Returns None if Jira is not configured.\n+    Cloud uses email + API token; Server/Data Center uses username + password, or a PAT\n+    (passed as the token) together with a base url. The REST API version is pinned via\n+    JIRA_API_VERSION (see its definition for why).\n+    \"\"\"\n+    base_url = get_settings().get(\"JIRA.JIRA_BASE_URL\", None)\n+    api_email = get_settings().get(\"JIRA.JIRA_API_EMAIL\", None)\n+    api_token = get_settings().get(\"JIRA.JIRA_API_TOKEN\", None)\n+    if not (base_url and api_token):\n+        return None\n+    try:\n+        if api_email:\n+            return Jira(url=base_url.rstrip(\"/\"), username=api_email, password=api_token, api_version=JIRA_API_VERSION)\n+        # No email/username: treat the token as a Server/Data Center PAT.\n+        return Jira(url=base_url.rstrip(\"/\"), token=api_token, api_version=JIRA_API_VERSION)\n+    except Exception as e:\n+        get_logger().error(f\"Failed to initialize Jira client: {e}\",\n+                           artifact={\"traceback\": traceback.format_exc()})\n+        return None",
+        "comment_created_at": "2026-06-02T21:38:17+00:00",
+        "comment_author": "dellch",
+        "comment_body": "Expanding on why I am not narrowing the exception handling here.\n\n> `_get_jira_client()` catches broad `Exception` \ud83d\udcd8 Rule violation \u263c Reliability\n> New Jira provider-initialization and ticket-fetch logic uses broad `except Exception as e` and continues/returns `None` ... Compliance requires narrow, explicit exception handling (or immediate re-raise with preserved context) in parsing/credential/provider-init paths.\n\nTwo reasons, one about consistency and one about what the library actually raises.\n\n**1. Broad `except Exception` is the established convention in this exact file.** On `main`, before this PR, `ticket_pr_compliance_check.py` already has 7 broad `except Exception as e:` handlers (lines 62, 140, 167, 170, 178, 212, 219), and the same \"log and continue / return None\" shape is already the idiom in `extract_tickets()`:\n- GitHub path (main L138-143): `try: issue_main = ...get_issue(...) except Exception as e: get_logger().error(...); continue`\n- Azure DevOps path (main L212-217): `except Exception as e: get_logger().error(\"Error processing Azure DevOps ticket: ...\")`\n- top-level wrapper (main L219): `except Exception as e: get_logger().error(\"Error extracting tickets ...\")`\n\nThe new Jira handlers deliberately match that shape. Narrowing only the new code would make this file inconsistent with its own neighbours (and with ~312 `except Exception` across ~50 files under `pr_agent/`).\n\n**2. The library does not give a clean typed contract to narrow to on these paths.** `Jira.issue()` in `atlassian-python-api` (3.41.4) is a bare `return self.get(...)` with no custom exceptions; it relies on `AtlassianRestAPI.raise_for_status()`, which raises `requests.HTTPError` (e.g. `HTTPError(\"Unauthorized (401)\")`), not the typed `ApiError` / `ApiNotFoundError` / `ApiPermissionError` classes. Those typed classes exist but are only raised by a few specific helpers, not the generic `.get()` path. So the most precise correct catch would be `(requests.HTTPError, requests.RequestException)` \u2014 and misconfiguration can still surface other ways \u2014 which is why the broad catch (with `{e}` logged) is the safer choice here.\n\nIf tighter exception handling is wanted, I would suggest it as a separate, file-wide cleanup so the convention stays uniform, rather than singling out the new Jira code. Happy to do that if you would like.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3355870554",
+    "pr_number": 2424,
+    "pr_file": "pr_agent/algo/inline_comment_dedup.py",
+    "created_at": "2026-06-04T12:22:37+00:00",
+    "commented_code": "+\"\"\"Cross-run deduplication of inline (line-anchored) comments.\n+\n+Implements the feature requested in issue #2037: when the agent runs more\n+than once on the same PR/MR, it re-posts identical inline suggestions on\n+every run, cluttering the discussion (observed in particular on GitLab).\n+This module fingerprints each inline comment and embeds the fingerprint as\n+an HTML-comment marker in the posted body. On later runs the existing\n+comment bodies are scanned for those markers to rebuild the set of\n+already-posted fingerprints, and any suggestion whose fingerprint is already\n+present is skipped.\n+\n+Two fingerprints are computed per comment and matched with OR semantics:\n+\n+- Body fingerprint: SHA-256 over (relevant_file, anchor line, normalised\n+  first 80 characters of the body). The category/importance tag and the\n+  ``**Suggestion:**`` lead are stripped and whitespace is collapsed first.\n+- Code fingerprint: SHA-256 over (relevant_file, anchor line, normalised\n+  contents of the first ```suggestion fenced block). Returns None when the\n+  body has no suggestion block, in which case matching falls back to the\n+  body fingerprint alone.\n+\n+The OR-match catches both \"same prose, different code\" and \"same code,\n+different prose\" re-emissions of the same defect, which are the two ways an\n+LLM tends to restate a finding across runs.\n+\n+The feature is opt-in via ``config.persistent_inline_comments`` (default\n+false) and is wired into the GitHub and GitLab providers. The marker-scan\n+store needs no external infrastructure; a different backend (database,\n+cache) could populate the same load/seen/add interface.\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import hashlib\n+import re\n+from typing import Iterator, Optional\n+\n+from pr_agent.log import get_logger\n+\n+BODY_MARKER_RE = re.compile(r\"<!-- pr-agent-dedup: ([a-f0-9]{12}) -->\")\n+CODE_MARKER_RE = re.compile(r\"<!-- pr-agent-dedup-code: ([a-f0-9]{12}) -->\")\n+\n+_LEAD_RE = re.compile(r\"^\\*\\*Suggestion:\\*\\*\\s*\", re.IGNORECASE)\n+_TAG_RE = re.compile(r\"\\[(?:[a-z _]+),\\s*importance:\\s*\\d+\\]\", re.IGNORECASE)\n+_WS_RE = re.compile(r\"\\s+\")\n+_CODE_BLOCK_RE = re.compile(r\"```suggestion[^\n]*\n(.*?)```\", re.DOTALL)\n+\n+\n+def body_fingerprint(relevant_file: str, target_line_no, body: str) -> str:\n+    normalised = _LEAD_RE.sub(\"\", body or \"\")\n+    normalised = _TAG_RE.sub(\"\", normalised)\n+    normalised = _WS_RE.sub(\" \", normalised).strip()[:80].lower()\n+    key = f\"{relevant_file}|{target_line_no}|{normalised}\"\n+    return hashlib.sha256(key.encode(\"utf-8\")).hexdigest()[:12]\n+\n+\n+def code_fingerprint(relevant_file: str, target_line_no, body: str) -> Optional[str]:\n+    m = _CODE_BLOCK_RE.search(body or \"\")\n+    if not m:\n+        return None\n+    code = _WS_RE.sub(\" \", m.group(1)).strip().lower()\n+    if not code:\n+        return None\n+    key = f\"{relevant_file}|{target_line_no}|code|{code}\"\n+    return hashlib.sha256(key.encode(\"utf-8\")).hexdigest()[:12]\n+\n+\n+def build_markers(body_fp: str, code_fp: Optional[str]) -> str:\n+    markers = [f\"<!-- pr-agent-dedup: {body_fp} -->\"]\n+    if code_fp is not None:\n+        markers.append(f\"<!-- pr-agent-dedup-code: {code_fp} -->\")\n+    return \"\n\".join(markers)\n+\n+\n+def inline_comment_line(comment: dict):\n+    \"\"\"Best-effort anchor line for a GitHub inline-comment dict.\"\"\"\n+    for key in (\"line\", \"position\", \"start_line\"):\n+        if comment.get(key) is not None:\n+            return comment[key]\n+    return None\n+\n+\n+def iter_existing_inline_comment_bodies(git_provider) -> Iterator[str]:\n+    \"\"\"Yield the body of every existing comment on the current PR/MR.\n+\n+    Dispatch is by provider class name so this module needs no provider\n+    import. Unsupported providers raise NotImplementedError, which the store\n+    treats as \"cannot dedup here\" and degrades to within-run dedup only.\n+    \"\"\"\n+    provider_name = type(git_provider).__name__\n+    if provider_name == \"GithubProvider\":\n+        for comment in git_provider.pr.get_comments():\n+            yield getattr(comment, \"body\", \"\") or \"\"\n+    elif provider_name == \"GitLabProvider\":\n+        for discussion in git_provider.mr.discussions.list(get_all=True):\n+            attrs = getattr(discussion, \"attributes\", None) or {}\n+            for note in attrs.get(\"notes\", []) or []:\n+                if isinstance(note, dict):\n+                    yield note.get(\"body\", \"\") or \"\"\n+    else:\n+        raise NotImplementedError(\n+            f\"inline-comment dedup not implemented for {provider_name}\"\n+        )\n+\n+\n+class InlineCommentStore:\n+    \"\"\"Set of already-posted inline-comment fingerprints for one PR/MR.\n+\n+    The existing comment bodies are scanned lazily on first lookup and the\n+    seen-set is held in memory for the rest of the run. A failure to list\n+    existing comments degrades to within-run dedup only and never raises\n+    into the publish path.\n+    \"\"\"\n+\n+    def __init__(self, git_provider):\n+        self._git_provider = git_provider\n+        self._keys: set = set()\n+        self._loaded = False\n+\n+    def load(self) -> set:\n+        if self._loaded:\n+            return self._keys\n+        try:\n+            for body in iter_existing_inline_comment_bodies(self._git_provider):\n+                for marker_re in (BODY_MARKER_RE, CODE_MARKER_RE):\n+                    for match in marker_re.finditer(body or \"\"):\n+                        self._keys.add(match.group(1))\n+        except Exception as e:\n+            get_logger().info(\n+                f\"Persistent inline comments: could not load existing comments, \"\n+                f\"within-run dedup only. error={e}\"\n+            )\n+        self._loaded = True",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3355926218",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 2424,
+        "pr_file": "pr_agent/algo/inline_comment_dedup.py",
+        "discussion_id": "3355870554",
+        "commented_code": "@@ -0,0 +1,152 @@\n+\"\"\"Cross-run deduplication of inline (line-anchored) comments.\n+\n+Implements the feature requested in issue #2037: when the agent runs more\n+than once on the same PR/MR, it re-posts identical inline suggestions on\n+every run, cluttering the discussion (observed in particular on GitLab).\n+This module fingerprints each inline comment and embeds the fingerprint as\n+an HTML-comment marker in the posted body. On later runs the existing\n+comment bodies are scanned for those markers to rebuild the set of\n+already-posted fingerprints, and any suggestion whose fingerprint is already\n+present is skipped.\n+\n+Two fingerprints are computed per comment and matched with OR semantics:\n+\n+- Body fingerprint: SHA-256 over (relevant_file, anchor line, normalised\n+  first 80 characters of the body). The category/importance tag and the\n+  ``**Suggestion:**`` lead are stripped and whitespace is collapsed first.\n+- Code fingerprint: SHA-256 over (relevant_file, anchor line, normalised\n+  contents of the first ```suggestion fenced block). Returns None when the\n+  body has no suggestion block, in which case matching falls back to the\n+  body fingerprint alone.\n+\n+The OR-match catches both \"same prose, different code\" and \"same code,\n+different prose\" re-emissions of the same defect, which are the two ways an\n+LLM tends to restate a finding across runs.\n+\n+The feature is opt-in via ``config.persistent_inline_comments`` (default\n+false) and is wired into the GitHub and GitLab providers. The marker-scan\n+store needs no external infrastructure; a different backend (database,\n+cache) could populate the same load/seen/add interface.\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import hashlib\n+import re\n+from typing import Iterator, Optional\n+\n+from pr_agent.log import get_logger\n+\n+BODY_MARKER_RE = re.compile(r\"<!-- pr-agent-dedup: ([a-f0-9]{12}) -->\")\n+CODE_MARKER_RE = re.compile(r\"<!-- pr-agent-dedup-code: ([a-f0-9]{12}) -->\")\n+\n+_LEAD_RE = re.compile(r\"^\\*\\*Suggestion:\\*\\*\\s*\", re.IGNORECASE)\n+_TAG_RE = re.compile(r\"\\[(?:[a-z _]+),\\s*importance:\\s*\\d+\\]\", re.IGNORECASE)\n+_WS_RE = re.compile(r\"\\s+\")\n+_CODE_BLOCK_RE = re.compile(r\"```suggestion[^\\n]*\\n(.*?)```\", re.DOTALL)\n+\n+\n+def body_fingerprint(relevant_file: str, target_line_no, body: str) -> str:\n+    normalised = _LEAD_RE.sub(\"\", body or \"\")\n+    normalised = _TAG_RE.sub(\"\", normalised)\n+    normalised = _WS_RE.sub(\" \", normalised).strip()[:80].lower()\n+    key = f\"{relevant_file}|{target_line_no}|{normalised}\"\n+    return hashlib.sha256(key.encode(\"utf-8\")).hexdigest()[:12]\n+\n+\n+def code_fingerprint(relevant_file: str, target_line_no, body: str) -> Optional[str]:\n+    m = _CODE_BLOCK_RE.search(body or \"\")\n+    if not m:\n+        return None\n+    code = _WS_RE.sub(\" \", m.group(1)).strip().lower()\n+    if not code:\n+        return None\n+    key = f\"{relevant_file}|{target_line_no}|code|{code}\"\n+    return hashlib.sha256(key.encode(\"utf-8\")).hexdigest()[:12]\n+\n+\n+def build_markers(body_fp: str, code_fp: Optional[str]) -> str:\n+    markers = [f\"<!-- pr-agent-dedup: {body_fp} -->\"]\n+    if code_fp is not None:\n+        markers.append(f\"<!-- pr-agent-dedup-code: {code_fp} -->\")\n+    return \"\\n\".join(markers)\n+\n+\n+def inline_comment_line(comment: dict):\n+    \"\"\"Best-effort anchor line for a GitHub inline-comment dict.\"\"\"\n+    for key in (\"line\", \"position\", \"start_line\"):\n+        if comment.get(key) is not None:\n+            return comment[key]\n+    return None\n+\n+\n+def iter_existing_inline_comment_bodies(git_provider) -> Iterator[str]:\n+    \"\"\"Yield the body of every existing comment on the current PR/MR.\n+\n+    Dispatch is by provider class name so this module needs no provider\n+    import. Unsupported providers raise NotImplementedError, which the store\n+    treats as \"cannot dedup here\" and degrades to within-run dedup only.\n+    \"\"\"\n+    provider_name = type(git_provider).__name__\n+    if provider_name == \"GithubProvider\":\n+        for comment in git_provider.pr.get_comments():\n+            yield getattr(comment, \"body\", \"\") or \"\"\n+    elif provider_name == \"GitLabProvider\":\n+        for discussion in git_provider.mr.discussions.list(get_all=True):\n+            attrs = getattr(discussion, \"attributes\", None) or {}\n+            for note in attrs.get(\"notes\", []) or []:\n+                if isinstance(note, dict):\n+                    yield note.get(\"body\", \"\") or \"\"\n+    else:\n+        raise NotImplementedError(\n+            f\"inline-comment dedup not implemented for {provider_name}\"\n+        )\n+\n+\n+class InlineCommentStore:\n+    \"\"\"Set of already-posted inline-comment fingerprints for one PR/MR.\n+\n+    The existing comment bodies are scanned lazily on first lookup and the\n+    seen-set is held in memory for the rest of the run. A failure to list\n+    existing comments degrades to within-run dedup only and never raises\n+    into the publish path.\n+    \"\"\"\n+\n+    def __init__(self, git_provider):\n+        self._git_provider = git_provider\n+        self._keys: set = set()\n+        self._loaded = False\n+\n+    def load(self) -> set:\n+        if self._loaded:\n+            return self._keys\n+        try:\n+            for body in iter_existing_inline_comment_bodies(self._git_provider):\n+                for marker_re in (BODY_MARKER_RE, CODE_MARKER_RE):\n+                    for match in marker_re.finditer(body or \"\"):\n+                        self._keys.add(match.group(1))\n+        except Exception as e:\n+            get_logger().info(\n+                f\"Persistent inline comments: could not load existing comments, \"\n+                f\"within-run dedup only. error={e}\"\n+            )\n+        self._loaded = True",
+        "comment_created_at": "2026-06-04T12:22:37+00:00",
+        "comment_author": "IsmaelMartinez",
+        "comment_body": "Kept deliberately as a fail-open guard: dedup must never break comment publishing, so a failure to list existing comments degrades to within-run dedup and logs rather than raising. This mirrors existing provider patterns such as the `except Exception` already used on the publish paths. In `f699e7ea` the logger is imported lazily here so an unexpected import error is not masked, but the broad catch around the provider listing call is intentional.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3356490900",
+    "pr_number": 2424,
+    "pr_file": "pr_agent/git_providers/github_provider.py",
+    "created_at": "2026-06-04T13:56:07+00:00",
+    "commented_code": "self._publish_inline_comments_fallback_with_verification(comments)\n             except Exception as e:\n                 get_logger().error(f\"Failed to publish inline code comments fallback, error: {e}\")\n-                raise e    \n-    \n+                raise e",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3356503804",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 2424,
+        "pr_file": "pr_agent/git_providers/github_provider.py",
+        "discussion_id": "3356490900",
+        "commented_code": "@@ -427,8 +474,15 @@ def publish_inline_comments(self, comments: list[dict], disable_fallback: bool =\n                 self._publish_inline_comments_fallback_with_verification(comments)\n             except Exception as e:\n                 get_logger().error(f\"Failed to publish inline code comments fallback, error: {e}\")\n-                raise e    \n-    \n+                raise e",
+        "comment_created_at": "2026-06-04T13:56:07+00:00",
+        "comment_author": "IsmaelMartinez",
+        "comment_body": "Fixed in `b4873465` (bare `raise` preserves the original traceback).",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2969518816",
+    "pr_number": 2277,
+    "pr_file": "pr_agent/servers/gerrit_server.py",
+    "created_at": "2026-03-21T12:15:34+00:00",
+    "commented_code": "if action == Action.ask:\n         if not item.msg:\n-            return HTTPException(\n+            raise HTTPException(",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "2969518816",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 2277,
+        "pr_file": "pr_agent/servers/gerrit_server.py",
+        "discussion_id": "2969518816",
+        "commented_code": "@@ -39,7 +39,7 @@ async def handle_gerrit_request(action: Action, item: Item):\n \n     if action == Action.ask:\n         if not item.msg:\n-            return HTTPException(\n+            raise HTTPException(",
+        "comment_created_at": "2026-03-21T12:15:34+00:00",
+        "comment_author": "humblefoo02",
+        "comment_body": "[warning][reliability] No error handling for handle_request\nRisk: Exceptions from handle_request will propagate directly to client without proper error handling\nSuggested change: Wrap handle_request call in try/except and return appropriate HTTP responses\nConfidence: high",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2969520182",
+    "pr_number": 2277,
+    "pr_file": "pr_agent/servers/gerrit_server.py",
+    "created_at": "2026-03-21T12:17:02+00:00",
+    "commented_code": "if action == Action.ask:\n         if not item.msg:\n-            return HTTPException(\n+            raise HTTPException(",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "2969520182",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 2277,
+        "pr_file": "pr_agent/servers/gerrit_server.py",
+        "discussion_id": "2969520182",
+        "commented_code": "@@ -39,7 +39,7 @@ async def handle_gerrit_request(action: Action, item: Item):\n \n     if action == Action.ask:\n         if not item.msg:\n-            return HTTPException(\n+            raise HTTPException(",
+        "comment_created_at": "2026-03-21T12:17:02+00:00",
+        "comment_author": "humblefoo02",
+        "comment_body": "[error][correctness] Returning HTTPException instead of raising it causes incorrect HTTP status code\nRisk: Returning HTTPException results in an HTTP 200 status with the exception serialized as the response body, which misleads clients into thinking the request succeeded when it actually failed.\nSuggested change: Change `return HTTPException(...)` to `raise HTTPException(...)` to ensure FastAPI returns the correct HTTP error response.\nConfidence: high",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3084399982",
+    "pr_number": 2307,
+    "pr_file": "pr_agent/algo/ai_handlers/litellm_ai_handler.py",
+    "created_at": "2026-04-15T07:58:44+00:00",
+    "commented_code": "litellm.openai_key = get_settings().openai.key\n         elif 'OPENAI_API_KEY' not in os.environ:\n             litellm.api_key = DUMMY_LITELLM_API_KEY\n-        if get_settings().get(\"aws.AWS_ACCESS_KEY_ID\"):\n+        if os.environ.get(\"AWS_USE_IMDS\", \"\").strip().lower() in (\"1\", \"true\", \"yes\"):\n+            import boto3\n+            session = boto3.Session()\n+            try:\n+                creds = session.get_credentials()\n+                if creds:\n+                    self._aws_boto3_creds = creds  # store for refresh; avoids env-var re-read\n+                    self._write_frozen_aws_creds_to_env(creds.get_frozen_credentials())\n+                    self._aws_imds_mode = True\n+                    get_logger().info(\"Using ambient AWS credentials from IMDS/task-role/IRSA\")\n+                else:\n+                    get_logger().warning(\n+                        \"AWS_USE_IMDS is set but boto3 found no credentials; \"\n+                        \"falling through to static keys\"\n+                    )\n+            except Exception:\n+                get_logger().exception(\n+                    \"AWS_USE_IMDS: failed to resolve credentials via boto3; \"\n+                    \"falling through to static keys\"\n+                )",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "3084872748",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 2307,
+        "pr_file": "pr_agent/algo/ai_handlers/litellm_ai_handler.py",
+        "discussion_id": "3084399982",
+        "commented_code": "@@ -41,11 +55,79 @@ def __init__(self):\n             litellm.openai_key = get_settings().openai.key\n         elif 'OPENAI_API_KEY' not in os.environ:\n             litellm.api_key = DUMMY_LITELLM_API_KEY\n-        if get_settings().get(\"aws.AWS_ACCESS_KEY_ID\"):\n+        if os.environ.get(\"AWS_USE_IMDS\", \"\").strip().lower() in (\"1\", \"true\", \"yes\"):\n+            import boto3\n+            session = boto3.Session()\n+            try:\n+                creds = session.get_credentials()\n+                if creds:\n+                    self._aws_boto3_creds = creds  # store for refresh; avoids env-var re-read\n+                    self._write_frozen_aws_creds_to_env(creds.get_frozen_credentials())\n+                    self._aws_imds_mode = True\n+                    get_logger().info(\"Using ambient AWS credentials from IMDS/task-role/IRSA\")\n+                else:\n+                    get_logger().warning(\n+                        \"AWS_USE_IMDS is set but boto3 found no credentials; \"\n+                        \"falling through to static keys\"\n+                    )\n+            except Exception:\n+                get_logger().exception(\n+                    \"AWS_USE_IMDS: failed to resolve credentials via boto3; \"\n+                    \"falling through to static keys\"\n+                )",
+        "comment_created_at": "2026-04-15T07:58:44+00:00",
+        "comment_author": "ira-at-work",
+        "comment_body": "Fixed. Changed to `except (botocore.exceptions.BotoCoreError, botocore.exceptions.ClientError)`. Worth noting: `ClientError` (raised by STS-backed providers \u2014 AssumeRole, IRSA web-identity) is intentionally *not* a `BotoCoreError` subclass in botocore's design, so a plain `BotoCoreError` catch would have silently let STS/IRSA failures propagate uncaught. Both types are now covered with an explanatory comment at each site.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2418723605",
+    "pr_number": 2053,
+    "pr_file": "pr_agent/algo/pr_processing.py",
+    "created_at": "2025-10-10T07:12:12+00:00",
+    "commented_code": ")\n             get_settings().set(\"openai.deployment_id\", deployment_id)\n             return await f(model)\n-        except:\n+        except Exception as e:\n             get_logger().warning(\n-                f\"Failed to generate prediction with {model}\"\n+                f\"Failed to generate prediction with {model}: {e}\",",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "2418723605",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 2053,
+        "pr_file": "pr_agent/algo/pr_processing.py",
+        "discussion_id": "2418723605",
+        "commented_code": "@@ -329,12 +329,12 @@ async def retry_with_fallback_models(f: Callable, model_type: ModelType = ModelT\n             )\n             get_settings().set(\"openai.deployment_id\", deployment_id)\n             return await f(model)\n-        except:\n+        except Exception as e:\n             get_logger().warning(\n-                f\"Failed to generate prediction with {model}\"\n+                f\"Failed to generate prediction with {model}: {e}\",",
+        "comment_created_at": "2025-10-10T07:12:12+00:00",
+        "comment_author": "ofir-frd",
+        "comment_body": "/implement \r\nPlease move the {e} into an artifact to improve stability\r\n``` python\r\n                f\"Failed to generate prediction with {model}\", artifact={'error': e})\r\n ```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2418726358",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 2053,
+        "pr_file": "pr_agent/algo/pr_processing.py",
+        "discussion_id": "2418723605",
+        "commented_code": "@@ -329,12 +329,12 @@ async def retry_with_fallback_models(f: Callable, model_type: ModelType = ModelT\n             )\n             get_settings().set(\"openai.deployment_id\", deployment_id)\n             return await f(model)\n-        except:\n+        except Exception as e:\n             get_logger().warning(\n-                f\"Failed to generate prediction with {model}\"\n+                f\"Failed to generate prediction with {model}: {e}\",",
+        "comment_created_at": "2025-10-10T07:13:33+00:00",
+        "comment_author": "ofir-frd",
+        "comment_body": "@yamoyamoto One comment here and this PR can be approved, thanks!",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2419657203",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 2053,
+        "pr_file": "pr_agent/algo/pr_processing.py",
+        "discussion_id": "2418723605",
+        "commented_code": "@@ -329,12 +329,12 @@ async def retry_with_fallback_models(f: Callable, model_type: ModelType = ModelT\n             )\n             get_settings().set(\"openai.deployment_id\", deployment_id)\n             return await f(model)\n-        except:\n+        except Exception as e:\n             get_logger().warning(\n-                f\"Failed to generate prediction with {model}\"\n+                f\"Failed to generate prediction with {model}: {e}\",",
+        "comment_created_at": "2025-10-10T11:44:53+00:00",
+        "comment_author": "yamoyamoto",
+        "comment_body": "thanks! I applied it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2159888928",
+    "pr_number": 1884,
+    "pr_file": "pr_agent/agent/pr_agent.py",
+    "created_at": "2025-06-21T06:39:12+00:00",
+    "commented_code": "else:\n                 return False\n             return True\n+\n+    async def handle_request(self, pr_url, request, notify=None) -> bool:\n+        # We wrap the entire entry point to gracefully handle third-party\n+        # service errors (such as the GitLab API) to cover cases when such\n+        # errors were not handled or retried by the low-level code or upstream\n+        # libraries. However, we avoid a bare `except` here to not silence\n+        # critical errors on our side.\n+        try:\n+            return await self._handle_request(pr_url, request, notify)\n+        except gitlab.GitlabError as gitlab_error:\n+            # GitLab 5xx codes: https://docs.gitlab.com/api/rest/troubleshooting/#status-codes\n+            if gitlab_error.response_code in {HTTP_500_INTERNAL_SERVER_ERROR, HTTP_503_SERVICE_UNAVAILABLE}:\n+                get_logger().error(\n+                    f\"Failed to process the command due to a problem on the GitLab API side: {gitlab_error!r}\n\"\n+                    + \"Check https://status.gitlab.com and try again later.\"\n+                )\n+                return False\n+            raise",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "2159888928",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 1884,
+        "pr_file": "pr_agent/agent/pr_agent.py",
+        "discussion_id": "2159888928",
+        "commented_code": "@@ -117,3 +120,21 @@ async def handle_request(self, pr_url, request, notify=None) -> bool:\n             else:\n                 return False\n             return True\n+\n+    async def handle_request(self, pr_url, request, notify=None) -> bool:\n+        # We wrap the entire entry point to gracefully handle third-party\n+        # service errors (such as the GitLab API) to cover cases when such\n+        # errors were not handled or retried by the low-level code or upstream\n+        # libraries. However, we avoid a bare `except` here to not silence\n+        # critical errors on our side.\n+        try:\n+            return await self._handle_request(pr_url, request, notify)\n+        except gitlab.GitlabError as gitlab_error:\n+            # GitLab 5xx codes: https://docs.gitlab.com/api/rest/troubleshooting/#status-codes\n+            if gitlab_error.response_code in {HTTP_500_INTERNAL_SERVER_ERROR, HTTP_503_SERVICE_UNAVAILABLE}:\n+                get_logger().error(\n+                    f\"Failed to process the command due to a problem on the GitLab API side: {gitlab_error!r}\\n\"\n+                    + \"Check https://status.gitlab.com and try again later.\"\n+                )\n+                return False\n+            raise",
+        "comment_created_at": "2025-06-21T06:39:12+00:00",
+        "comment_author": "mrT23",
+        "comment_body": "/implement this shoud be plain \r\ntry:\r\n    ....\r\nexcept:\r\n   get_logger().exception(f\"....\")\r\n   return False\r\n   \r\n   \r\nNo further raising   ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2159889281",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 1884,
+        "pr_file": "pr_agent/agent/pr_agent.py",
+        "discussion_id": "2159888928",
+        "commented_code": "@@ -117,3 +120,21 @@ async def handle_request(self, pr_url, request, notify=None) -> bool:\n             else:\n                 return False\n             return True\n+\n+    async def handle_request(self, pr_url, request, notify=None) -> bool:\n+        # We wrap the entire entry point to gracefully handle third-party\n+        # service errors (such as the GitLab API) to cover cases when such\n+        # errors were not handled or retried by the low-level code or upstream\n+        # libraries. However, we avoid a bare `except` here to not silence\n+        # critical errors on our side.\n+        try:\n+            return await self._handle_request(pr_url, request, notify)\n+        except gitlab.GitlabError as gitlab_error:\n+            # GitLab 5xx codes: https://docs.gitlab.com/api/rest/troubleshooting/#status-codes\n+            if gitlab_error.response_code in {HTTP_500_INTERNAL_SERVER_ERROR, HTTP_503_SERVICE_UNAVAILABLE}:\n+                get_logger().error(\n+                    f\"Failed to process the command due to a problem on the GitLab API side: {gitlab_error!r}\\n\"\n+                    + \"Check https://status.gitlab.com and try again later.\"\n+                )\n+                return False\n+            raise",
+        "comment_created_at": "2025-06-21T06:40:59+00:00",
+        "comment_author": "mrT23",
+        "comment_body": "@alessio-locatelli \r\nThis is what i had in mind.\r\nsimple and robust.\r\n\r\nthe exception will properly log the error",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1660164446",
+    "pr_number": 1013,
+    "pr_file": "pr_agent/algo/ai_handlers/litellm_ai_handler.py",
+    "created_at": "2024-06-30T11:54:59+00:00",
+    "commented_code": "get_logger().info(f\"\nUser prompt:\n{user}\")\n \n             response = await acompletion(**kwargs)\n-        except (openai.APIError, openai.Timeout) as e:\n+        except (openai.APIError, openai.APITimeoutError) as e:\n             get_logger().error(\"Error during OpenAI inference: \", e)\n             raise\n-        except (openai.RateLimitError) as e:\n-            get_logger().error(\"Rate limit error during OpenAI inference: \", e)\n-            raise\n         except (Exception) as e:\n             get_logger().error(\"Unknown error during OpenAI inference: \", e)\n             raise openai.APIError from e",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "1660164446",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 1013,
+        "pr_file": "pr_agent/algo/ai_handlers/litellm_ai_handler.py",
+        "discussion_id": "1660164446",
+        "commented_code": "@@ -143,12 +146,9 @@ async def chat_completion(self, model: str, system: str, user: str, temperature:\n                 get_logger().info(f\"\\nUser prompt:\\n{user}\")\n \n             response = await acompletion(**kwargs)\n-        except (openai.APIError, openai.Timeout) as e:\n+        except (openai.APIError, openai.APITimeoutError) as e:\n             get_logger().error(\"Error during OpenAI inference: \", e)\n             raise\n-        except (openai.RateLimitError) as e:\n-            get_logger().error(\"Rate limit error during OpenAI inference: \", e)\n-            raise\n         except (Exception) as e:\n             get_logger().error(\"Unknown error during OpenAI inference: \", e)\n             raise openai.APIError from e",
+        "comment_created_at": "2024-06-30T11:54:59+00:00",
+        "comment_author": "KennyDizi",
+        "comment_body": "**Suggestion:** Consider using a more specific exception type for the unknown error case. Instead of catching a generic Exception, you could catch specific exceptions that are likely to occur during the OpenAI inference process. This will make the error handling more precise and easier to debug.\n> \ud83e\udd66  **Medium Priority** \n > [category: **`error handling`**, importance: **`7`**]\n> **Reason:** This suggestion correctly identifies an opportunity to improve error handling by catching more specific exceptions, which can lead to better debugging and error management.\n \n\n```suggestion\n        except (openai.InvalidRequestError, openai.AuthenticationError, ValueError) as e:\n            get_logger().error(f\"Specific error during OpenAI inference: {type(e).__name__}\", e)\n            raise\n        except Exception as e:\n            get_logger().error(f\"Unexpected error during OpenAI inference: {type(e).__name__}\", e)\n            raise openai.APIError from e\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1660165604",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 1013,
+        "pr_file": "pr_agent/algo/ai_handlers/litellm_ai_handler.py",
+        "discussion_id": "1660164446",
+        "commented_code": "@@ -143,12 +146,9 @@ async def chat_completion(self, model: str, system: str, user: str, temperature:\n                 get_logger().info(f\"\\nUser prompt:\\n{user}\")\n \n             response = await acompletion(**kwargs)\n-        except (openai.APIError, openai.Timeout) as e:\n+        except (openai.APIError, openai.APITimeoutError) as e:\n             get_logger().error(\"Error during OpenAI inference: \", e)\n             raise\n-        except (openai.RateLimitError) as e:\n-            get_logger().error(\"Rate limit error during OpenAI inference: \", e)\n-            raise\n         except (Exception) as e:\n             get_logger().error(\"Unknown error during OpenAI inference: \", e)\n             raise openai.APIError from e",
+        "comment_created_at": "2024-06-30T12:01:29+00:00",
+        "comment_author": "KennyDizi",
+        "comment_body": "Fixed.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1460339810",
+    "pr_number": 594,
+    "pr_file": "pr_agent/git_providers/github_provider.py",
+    "created_at": "2024-01-20T09:58:17+00:00",
+    "commented_code": "path = relevant_file.strip()\n         return dict(body=body, path=path, position=position) if subject_type == \"LINE\" else {}\n \n-    def publish_inline_comments(self, comments: list[dict]):\n-        self.pr.create_review(commit=self.last_commit_id, comments=comments)\n+    def publish_inline_comments(self, comments: list[dict], disable_fallback: bool = False):\n+        try:\n+            # publish all comments in a single message\n+            self.pr.create_review(commit=self.last_commit_id, comments=comments)\n+        except Exception as e:\n+            if get_settings().config.verbosity_level >= 2:\n+                get_logger().error(f\"Failed to publish inline comments\")\n+\n+            if (getattr(e, \"status\", None) == 422\n+                    and get_settings().github.publish_inline_comments_fallback_with_verification and not disable_fallback):\n+                pass  # continue to try _publish_inline_comments_fallback_with_verification\n+            else:\n+                raise e # will end up with publishing the comments one by one\n+\n+            try:\n+                self._publish_inline_comments_fallback_with_verification(comments)\n+            except Exception as e:\n+                if get_settings().config.verbosity_level >= 2:\n+                    get_logger().error(f\"Failed to publish inline code comments fallback, error: {e}\")\n+                raise e\n+\n+    def _publish_inline_comments_fallback_with_verification(self, comments: list[dict]):\n+        \"\"\"\n+        Check each inline comment separately against the GitHub API and discard of invalid comments,\n+        then publish all the remaining valid comments in a single review.\n+        For invalid comments, also try removing the suggestion part and posting the comment just on the first line.\n+        \"\"\"\n+        verified_comments, invalid_comments = self._verify_code_comments(comments)\n+\n+        # publish as a group the verified comments\n+        if verified_comments:\n+            try:\n+                self.pr.create_review(commit=self.last_commit_id, comments=verified_comments)\n+            except:\n+                pass",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "1460339810",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 594,
+        "pr_file": "pr_agent/git_providers/github_provider.py",
+        "discussion_id": "1460339810",
+        "commented_code": "@@ -221,8 +222,114 @@ def create_inline_comment(self, body: str, relevant_file: str, relevant_line_in_\n         path = relevant_file.strip()\n         return dict(body=body, path=path, position=position) if subject_type == \"LINE\" else {}\n \n-    def publish_inline_comments(self, comments: list[dict]):\n-        self.pr.create_review(commit=self.last_commit_id, comments=comments)\n+    def publish_inline_comments(self, comments: list[dict], disable_fallback: bool = False):\n+        try:\n+            # publish all comments in a single message\n+            self.pr.create_review(commit=self.last_commit_id, comments=comments)\n+        except Exception as e:\n+            if get_settings().config.verbosity_level >= 2:\n+                get_logger().error(f\"Failed to publish inline comments\")\n+\n+            if (getattr(e, \"status\", None) == 422\n+                    and get_settings().github.publish_inline_comments_fallback_with_verification and not disable_fallback):\n+                pass  # continue to try _publish_inline_comments_fallback_with_verification\n+            else:\n+                raise e # will end up with publishing the comments one by one\n+\n+            try:\n+                self._publish_inline_comments_fallback_with_verification(comments)\n+            except Exception as e:\n+                if get_settings().config.verbosity_level >= 2:\n+                    get_logger().error(f\"Failed to publish inline code comments fallback, error: {e}\")\n+                raise e\n+\n+    def _publish_inline_comments_fallback_with_verification(self, comments: list[dict]):\n+        \"\"\"\n+        Check each inline comment separately against the GitHub API and discard of invalid comments,\n+        then publish all the remaining valid comments in a single review.\n+        For invalid comments, also try removing the suggestion part and posting the comment just on the first line.\n+        \"\"\"\n+        verified_comments, invalid_comments = self._verify_code_comments(comments)\n+\n+        # publish as a group the verified comments\n+        if verified_comments:\n+            try:\n+                self.pr.create_review(commit=self.last_commit_id, comments=verified_comments)\n+            except:\n+                pass",
+        "comment_created_at": "2024-01-20T09:58:17+00:00",
+        "comment_author": "mrT23",
+        "comment_body": "**Suggestion:** It's a good practice to avoid using `pass` in `except` block. Instead, consider logging the exception. This would help in debugging if an error occurs. [best practice]\n```suggestion\n            try:\n                self.pr.create_review(commit=self.last_commit_id, comments=verified_comments)\n            except Exception as e:\n                get_logger().error(f\"Failed to publish verified comments, error: {e}\")\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1435778644",
+    "pr_number": 541,
+    "pr_file": "pr_agent/algo/utils.py",
+    "created_at": "2023-12-24T07:41:15+00:00",
+    "commented_code": "except:\n             pass\n \n-    # thrid fallback - try to remove last lines\n+     # third fallback - try to remove leading and trailing curly brackets\n+    response_text_copy = response_text.strip().rstrip().removeprefix('{').removesuffix('}')\n+    try:\n+        data = yaml.safe_load(response_text_copy,)\n+        get_logger().info(f\"Successfully parsed AI prediction after removing curly brackets\")\n+        return data\n+    except:\n+        pass",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "1435778644",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 541,
+        "pr_file": "pr_agent/algo/utils.py",
+        "discussion_id": "1435778644",
+        "commented_code": "@@ -355,7 +357,16 @@\n         except:\n             pass\n \n-    # thrid fallback - try to remove last lines\n+     # third fallback - try to remove leading and trailing curly brackets\n+    response_text_copy = response_text.strip().rstrip().removeprefix('{').removesuffix('}')\n+    try:\n+        data = yaml.safe_load(response_text_copy,)\n+        get_logger().info(f\"Successfully parsed AI prediction after removing curly brackets\")\n+        return data\n+    except:\n+        pass",
+        "comment_created_at": "2023-12-24T07:41:15+00:00",
+        "comment_author": "mrT23",
+        "comment_body": "**Suggestion:** In the `try_fix_yaml` function, the `except` clause is empty. This can make debugging difficult because it swallows all exceptions. Consider logging the exception or re-raising it after handling. [best practice]",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1407661938",
+    "pr_number": 483,
+    "pr_file": "pr_agent/algo/utils.py",
+    "created_at": "2023-11-28T12:09:38+00:00",
+    "commented_code": "def load_yaml(response_text: str) -> dict:\n     response_text = response_text.removeprefix('```yaml').rstrip('`')\n+    response_text = response_text.strip().rstrip().removeprefix('{').removesuffix('}')",
+    "repo_full_name": "The-PR-Agent/pr-agent",
+    "discussion_comments": [
+      {
+        "comment_id": "1407661938",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 483,
+        "pr_file": "pr_agent/algo/utils.py",
+        "discussion_id": "1407661938",
+        "commented_code": "@@ -290,6 +290,7 @@ def _fix_key_value(key: str, value: str):\n \n def load_yaml(response_text: str) -> dict:\n     response_text = response_text.removeprefix('```yaml').rstrip('`')\n+    response_text = response_text.strip().rstrip().removeprefix('{').removesuffix('}')",
+        "comment_created_at": "2023-11-28T12:09:38+00:00",
+        "comment_author": "tmokmss",
+        "comment_body": "Claude tends to add a leading `{` and a trailing `}` in the generated yaml, so I'm removing these characters here. `try_fix_yaml` didn't work for some reason.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1407915810",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 483,
+        "pr_file": "pr_agent/algo/utils.py",
+        "discussion_id": "1407661938",
+        "commented_code": "@@ -290,6 +290,7 @@ def _fix_key_value(key: str, value: str):\n \n def load_yaml(response_text: str) -> dict:\n     response_text = response_text.removeprefix('```yaml').rstrip('`')\n+    response_text = response_text.strip().rstrip().removeprefix('{').removesuffix('}')",
+        "comment_created_at": "2023-11-28T15:05:55+00:00",
+        "comment_author": "mrT23",
+        "comment_body": "this is problematic.\r\n\r\nwhat if the message actually starts with '{' ?\r\nIts not something that should come in any way with a yaml, so removing it just like that is risky",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1407938536",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 483,
+        "pr_file": "pr_agent/algo/utils.py",
+        "discussion_id": "1407661938",
+        "commented_code": "@@ -290,6 +290,7 @@ def _fix_key_value(key: str, value: str):\n \n def load_yaml(response_text: str) -> dict:\n     response_text = response_text.removeprefix('```yaml').rstrip('`')\n+    response_text = response_text.strip().rstrip().removeprefix('{').removesuffix('}')",
+        "comment_created_at": "2023-11-28T15:20:15+00:00",
+        "comment_author": "mrT23",
+        "comment_body": "Move this line, as a seperate fallback, to 'try_fix_yaml' section.\r\n\r\nbut this is not good for claude in terms of claude-vs-openai comparison :-)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1408965215",
+        "repo_full_name": "The-PR-Agent/pr-agent",
+        "pr_number": 483,
+        "pr_file": "pr_agent/algo/utils.py",
+        "discussion_id": "1407661938",
+        "commented_code": "@@ -290,6 +290,7 @@ def _fix_key_value(key: str, value: str):\n \n def load_yaml(response_text: str) -> dict:\n     response_text = response_text.removeprefix('```yaml').rstrip('`')\n+    response_text = response_text.strip().rstrip().removeprefix('{').removesuffix('}')",
+        "comment_created_at": "2023-11-29T09:03:44+00:00",
+        "comment_author": "tmokmss",
+        "comment_body": "Hi thanks. I moved them to `try_fix_yaml`. Yea I think I'll have to optimize prompts for Claude :)",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

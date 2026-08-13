@@ -1,0 +1,146 @@
+[
+  {
+    "discussion_id": "3654736500",
+    "pr_number": 2633,
+    "pr_file": "tools/installer/set-overrides.js",
+    "created_at": "2026-07-28T05:37:51+00:00",
+    "commented_code": "// value lives in the per-module yaml but won't be re-emitted into\n     // config.toml on the next install (the schema-strict partition drops\n     // it); re-pass `--set` if you need it sticky.\n-    const moduleYamlPath = path.join(bmadDir, moduleCode, 'config.yaml');\n-    if (await fs.pathExists(moduleYamlPath)) {\n+    // Core overrides also refresh the spread copies: core values are spread\n+    // into every module's config.yaml at generate time and skills read their\n+    // own module's copy \u2014 without this, a core --set would not take effect\n+    // until the next install regenerates the spread.\n+    const yamlTargets = [path.join(bmadDir, moduleCode, 'config.yaml')];\n+    if (moduleCode === 'core') {\n+      const nonModuleDirs = new Set(['_config', '_memory', 'memory', 'docs', 'scripts', 'custom', 'core']);\n+      const entries = await fs.readdir(bmadDir, { withFileTypes: true });\n+      for (const entry of entries) {\n+        if (entry.isDirectory() && !nonModuleDirs.has(entry.name)) {\n+          yamlTargets.push(path.join(bmadDir, entry.name, 'config.yaml'));\n+        }\n+      }",
+    "repo_full_name": "bmad-code-org/BMAD-METHOD",
+    "discussion_comments": [
+      {
+        "comment_id": "3663054669",
+        "repo_full_name": "bmad-code-org/BMAD-METHOD",
+        "pr_number": 2633,
+        "pr_file": "tools/installer/set-overrides.js",
+        "discussion_id": "3654736500",
+        "commented_code": "@@ -291,8 +291,22 @@ async function applySetOverrides(overrides, bmadDir) {\n     // value lives in the per-module yaml but won't be re-emitted into\n     // config.toml on the next install (the schema-strict partition drops\n     // it); re-pass `--set` if you need it sticky.\n-    const moduleYamlPath = path.join(bmadDir, moduleCode, 'config.yaml');\n-    if (await fs.pathExists(moduleYamlPath)) {\n+    // Core overrides also refresh the spread copies: core values are spread\n+    // into every module's config.yaml at generate time and skills read their\n+    // own module's copy \u2014 without this, a core --set would not take effect\n+    // until the next install regenerates the spread.\n+    const yamlTargets = [path.join(bmadDir, moduleCode, 'config.yaml')];\n+    if (moduleCode === 'core') {\n+      const nonModuleDirs = new Set(['_config', '_memory', 'memory', 'docs', 'scripts', 'custom', 'core']);\n+      const entries = await fs.readdir(bmadDir, { withFileTypes: true });\n+      for (const entry of entries) {\n+        if (entry.isDirectory() && !nonModuleDirs.has(entry.name)) {\n+          yamlTargets.push(path.join(bmadDir, entry.name, 'config.yaml'));\n+        }\n+      }",
+        "comment_created_at": "2026-07-28T05:37:51+00:00",
+        "comment_author": "will-ai-m",
+        "comment_body": "Fixed in c6b9446b: the exclusion set is now a single shared `NON_MODULE_DIRS` constant in `tools/installer/non-module-dirs.js`, imported here and in the other three sites that previously re-declared it (`core/installer.js` \u00d72, `modules/official-modules.js`). The `core` entry stays a local union here since it's excluded only to avoid double-patching core's own yaml (the first target).",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2860905449",
+    "pr_number": 1780,
+    "pr_file": "tools/cli/installers/lib/core/installer.js",
+    "created_at": "2026-02-26T21:12:51+00:00",
+    "commented_code": "// Remove the module from filesystem and manifest\n               const modulePath = path.join(bmadDir, missing.id);\n               if (await fs.pathExists(modulePath)) {\n-                const fsExtra = require('fs-extra');\n+                const fsExtra = require('../../../lib/fs');\n                 await fsExtra.remove(modulePath);\n                 await prompts.log.warn(`Deleted module directory: ${path.relative(projectRoot, modulePath)}`);",
+    "repo_full_name": "bmad-code-org/BMAD-METHOD",
+    "discussion_comments": [
+      {
+        "comment_id": "2861315702",
+        "repo_full_name": "bmad-code-org/BMAD-METHOD",
+        "pr_number": 1780,
+        "pr_file": "tools/cli/installers/lib/core/installer.js",
+        "discussion_id": "2860905449",
+        "commented_code": "@@ -3102,7 +3102,7 @@ class Installer {\n               // Remove the module from filesystem and manifest\n               const modulePath = path.join(bmadDir, missing.id);\n               if (await fs.pathExists(modulePath)) {\n-                const fsExtra = require('fs-extra');\n+                const fsExtra = require('../../../lib/fs');\n                 await fsExtra.remove(modulePath);\n                 await prompts.log.warn(`Deleted module directory: ${path.relative(projectRoot, modulePath)}`);",
+        "comment_created_at": "2026-02-26T21:12:51+00:00",
+        "comment_author": "adambiggs",
+        "comment_body": "Fixed \u2014 removed the redundant `fsExtra` require at line 3105. The wrapper `fs` imported at line 2 already provides all needed methods.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2901791101",
+    "pr_number": 1859,
+    "pr_file": "tools/cli/installers/lib/core/manifest-generator.js",
+    "created_at": "2026-03-08T14:54:24+00:00",
+    "commented_code": "};\n   }\n \n+  /**\n+   * Recursively walk a module directory tree, collecting skill directories.\n+   * A skill directory is one that contains both a bmad-skill-manifest.yaml with\n+   * type: skill AND a workflow.md (or workflow.yaml) file.\n+   * Populates this.skills[] and this.skillClaimedDirs (Set of absolute paths).\n+   */\n+  async collectSkills() {\n+    this.skills = [];\n+    this.skillClaimedDirs = new Set();\n+    const debug = process.env.BMAD_DEBUG_MANIFEST === 'true';\n+\n+    for (const moduleName of this.updatedModules) {\n+      const modulePath = path.join(this.bmadDir, moduleName);\n+      if (!(await fs.pathExists(modulePath))) continue;\n+\n+      // Recursive walk skipping . and _ prefixed dirs\n+      const walk = async (dir) => {\n+        let entries;\n+        try {\n+          entries = await fs.readdir(dir, { withFileTypes: true });\n+        } catch {\n+          return;\n+        }\n+\n+        // Check this directory for skill manifest + workflow file\n+        const manifest = await this.loadSkillManifest(dir);\n+\n+        // Try both workflow.md and workflow.yaml\n+        const workflowFilenames = ['workflow.md', 'workflow.yaml'];\n+        for (const workflowFile of workflowFilenames) {\n+          const workflowPath = path.join(dir, workflowFile);\n+          if (!(await fs.pathExists(workflowPath))) continue;\n+\n+          const artifactType = this.getArtifactType(manifest, workflowFile);\n+          if (artifactType !== 'skill') continue;\n+\n+          // Read and parse the workflow file\n+          try {\n+            const rawContent = await fs.readFile(workflowPath, 'utf8');\n+            const content = rawContent.replaceAll('\\r\n', '\n').replaceAll('\\r', '\n');\n+\n+            let workflow;\n+            if (workflowFile === 'workflow.yaml') {\n+              workflow = yaml.parse(content);\n+            } else {\n+              const frontmatterMatch = content.match(/^---\\r?\n([\\s\\S]*?)\\r?\n---/);\n+              if (!frontmatterMatch) {\n+                if (debug) console.log(`[DEBUG] collectSkills: skipped (no frontmatter): ${workflowPath}`);\n+                continue;\n+              }\n+              workflow = yaml.parse(frontmatterMatch[1]);\n+            }\n+\n+            if (!workflow || !workflow.name || !workflow.description) {\n+              if (debug) console.log(`[DEBUG] collectSkills: skipped (missing name/description): ${workflowPath}`);\n+              continue;\n+            }\n+\n+            // Build path relative from module root\n+            const relativePath = path.relative(modulePath, dir);",
+    "repo_full_name": "bmad-code-org/BMAD-METHOD",
+    "discussion_comments": [
+      {
+        "comment_id": "2901937212",
+        "repo_full_name": "bmad-code-org/BMAD-METHOD",
+        "pr_number": 1859,
+        "pr_file": "tools/cli/installers/lib/core/manifest-generator.js",
+        "discussion_id": "2901791101",
+        "commented_code": "@@ -141,13 +144,136 @@ class ManifestGenerator {\n     };\n   }\n \n+  /**\n+   * Recursively walk a module directory tree, collecting skill directories.\n+   * A skill directory is one that contains both a bmad-skill-manifest.yaml with\n+   * type: skill AND a workflow.md (or workflow.yaml) file.\n+   * Populates this.skills[] and this.skillClaimedDirs (Set of absolute paths).\n+   */\n+  async collectSkills() {\n+    this.skills = [];\n+    this.skillClaimedDirs = new Set();\n+    const debug = process.env.BMAD_DEBUG_MANIFEST === 'true';\n+\n+    for (const moduleName of this.updatedModules) {\n+      const modulePath = path.join(this.bmadDir, moduleName);\n+      if (!(await fs.pathExists(modulePath))) continue;\n+\n+      // Recursive walk skipping . and _ prefixed dirs\n+      const walk = async (dir) => {\n+        let entries;\n+        try {\n+          entries = await fs.readdir(dir, { withFileTypes: true });\n+        } catch {\n+          return;\n+        }\n+\n+        // Check this directory for skill manifest + workflow file\n+        const manifest = await this.loadSkillManifest(dir);\n+\n+        // Try both workflow.md and workflow.yaml\n+        const workflowFilenames = ['workflow.md', 'workflow.yaml'];\n+        for (const workflowFile of workflowFilenames) {\n+          const workflowPath = path.join(dir, workflowFile);\n+          if (!(await fs.pathExists(workflowPath))) continue;\n+\n+          const artifactType = this.getArtifactType(manifest, workflowFile);\n+          if (artifactType !== 'skill') continue;\n+\n+          // Read and parse the workflow file\n+          try {\n+            const rawContent = await fs.readFile(workflowPath, 'utf8');\n+            const content = rawContent.replaceAll('\\r\\n', '\\n').replaceAll('\\r', '\\n');\n+\n+            let workflow;\n+            if (workflowFile === 'workflow.yaml') {\n+              workflow = yaml.parse(content);\n+            } else {\n+              const frontmatterMatch = content.match(/^---\\r?\\n([\\s\\S]*?)\\r?\\n---/);\n+              if (!frontmatterMatch) {\n+                if (debug) console.log(`[DEBUG] collectSkills: skipped (no frontmatter): ${workflowPath}`);\n+                continue;\n+              }\n+              workflow = yaml.parse(frontmatterMatch[1]);\n+            }\n+\n+            if (!workflow || !workflow.name || !workflow.description) {\n+              if (debug) console.log(`[DEBUG] collectSkills: skipped (missing name/description): ${workflowPath}`);\n+              continue;\n+            }\n+\n+            // Build path relative from module root\n+            const relativePath = path.relative(modulePath, dir);",
+        "comment_created_at": "2026-03-08T14:54:24+00:00",
+        "comment_author": "alexeyv",
+        "comment_body": "Fixed in 7427f033 \u2014 normalized `relativePath` to forward slashes with `.split(path.sep).join('/')` for cross-platform CSV consistency.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2811232028",
+    "pr_number": 1658,
+    "pr_file": "tools/cli/installers/lib/ide/codex.js",
+    "created_at": "2026-02-16T08:36:09+00:00",
+    "commented_code": "</agent-activation>\n `;",
+    "repo_full_name": "bmad-code-org/BMAD-METHOD",
+    "discussion_comments": [
+      {
+        "comment_id": "2811232028",
+        "repo_full_name": "bmad-code-org/BMAD-METHOD",
+        "pr_number": 1658,
+        "pr_file": "tools/cli/installers/lib/ide/codex.js",
+        "discussion_id": "2811232028",
+        "commented_code": "@@ -411,14 +460,12 @@ You must fully embody this agent's persona and follow all activation instruction\n </agent-activation>\n `;",
+        "comment_created_at": "2026-02-16T08:36:09+00:00",
+        "comment_author": "dracic",
+        "comment_body": "Should use explicit \\n escape sequences instead, matching the pattern already used in transformToSkillFormat at line 204.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2811711407",
+        "repo_full_name": "bmad-code-org/BMAD-METHOD",
+        "pr_number": 1658,
+        "pr_file": "tools/cli/installers/lib/ide/codex.js",
+        "discussion_id": "2811232028",
+        "commented_code": "@@ -411,14 +460,12 @@ You must fully embody this agent's persona and follow all activation instruction\n </agent-activation>\n `;",
+        "comment_created_at": "2026-02-16T10:29:59+00:00",
+        "comment_author": "dracic",
+        "comment_body": "```\r\n    const fm = yaml.stringify({ name: skillName, description: `${agentName} agent` }).trimEnd();\r\n    const skillContent = `---\\n${fm}\\n---\\n`\r\n      + '\\nYou must fully embody this agent\\'s persona and follow all activation instructions exactly as specified. NEVER break character until given an exit command.\\n'\r\n      + `\\n<agent-activation CRITICAL=\"TRUE\">\\n`\r\n      + `1. LOAD the FULL agent file from @${agentPath}\\n`\r\n      + '2. READ its entire contents - this contains the complete agent persona, menu, and instructions\\n'\r\n      + '3. FOLLOW every step in the <activation> section precisely\\n'\r\n      + '4. DISPLAY the welcome/greeting as instructed\\n'\r\n      + '5. PRESENT the numbered menu\\n'\r\n      + '6. WAIT for user input before proceeding\\n'\r\n      + '</agent-activation>\\n';\r\n\r\n    const skillPath = path.join(skillDir, 'SKILL.md');\r\n    const platformContent = os.EOL === '\\n' ? skillContent : skillContent.replace(/\\r?\\n/g, os.EOL);\r\n    await fs.writeFile(skillPath, platformContent, 'utf8');\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2811239367",
+    "pr_number": 1658,
+    "pr_file": "tools/cli/installers/lib/ide/codex.js",
+    "created_at": "2026-02-16T08:38:19+00:00",
+    "commented_code": "}\n \n   /**\n-   * Detect Codex installation by checking for BMAD prompt exports\n+   * Write artifacts as Agent Skills (agentskills.io format).\n+   * Each artifact becomes a directory containing SKILL.md.\n+   * @param {string} destDir - Base skills directory\n+   * @param {Array} artifacts - Artifacts to write\n+   * @param {string} artifactType - Type filter (e.g., 'agent-launcher', 'workflow-command', 'task')\n+   * @returns {number} Number of skills written\n+   */\n+  async writeSkillArtifacts(destDir, artifacts, artifactType) {\n+    let writtenCount = 0;\n+\n+    for (const artifact of artifacts) {\n+      // Filter by type if the artifact has a type field\n+      if (artifact.type && artifact.type !== artifactType) {\n+        continue;\n+      }\n+\n+      // Get the dash-format name (e.g., bmad-bmm-create-prd.md) and remove .md\n+      const flatName = toDashPath(artifact.relativePath);\n+      const skillName = flatName.replace(/\\.md$/, '');\n+\n+      // Create skill directory\n+      const skillDir = path.join(destDir, skillName);\n+      await fs.ensureDir(skillDir);\n+\n+      // Transform content: rewrite frontmatter for skills format\n+      const skillContent = this.transformToSkillFormat(artifact.content, skillName);\n+\n+      // Write SKILL.md",
+    "repo_full_name": "bmad-code-org/BMAD-METHOD",
+    "discussion_comments": [
+      {
+        "comment_id": "2811239367",
+        "repo_full_name": "bmad-code-org/BMAD-METHOD",
+        "pr_number": 1658,
+        "pr_file": "tools/cli/installers/lib/ide/codex.js",
+        "discussion_id": "2811239367",
+        "commented_code": "@@ -145,13 +153,82 @@ class CodexSetup extends BaseIdeSetup {\n   }\n \n   /**\n-   * Detect Codex installation by checking for BMAD prompt exports\n+   * Write artifacts as Agent Skills (agentskills.io format).\n+   * Each artifact becomes a directory containing SKILL.md.\n+   * @param {string} destDir - Base skills directory\n+   * @param {Array} artifacts - Artifacts to write\n+   * @param {string} artifactType - Type filter (e.g., 'agent-launcher', 'workflow-command', 'task')\n+   * @returns {number} Number of skills written\n+   */\n+  async writeSkillArtifacts(destDir, artifacts, artifactType) {\n+    let writtenCount = 0;\n+\n+    for (const artifact of artifacts) {\n+      // Filter by type if the artifact has a type field\n+      if (artifact.type && artifact.type !== artifactType) {\n+        continue;\n+      }\n+\n+      // Get the dash-format name (e.g., bmad-bmm-create-prd.md) and remove .md\n+      const flatName = toDashPath(artifact.relativePath);\n+      const skillName = flatName.replace(/\\.md$/, '');\n+\n+      // Create skill directory\n+      const skillDir = path.join(destDir, skillName);\n+      await fs.ensureDir(skillDir);\n+\n+      // Transform content: rewrite frontmatter for skills format\n+      const skillContent = this.transformToSkillFormat(artifact.content, skillName);\n+\n+      // Write SKILL.md",
+        "comment_created_at": "2026-02-16T08:38:19+00:00",
+        "comment_author": "dracic",
+        "comment_body": "Add `const platformContent = os.EOL === '\\n' ? skillContent : skillContent.replace(/\\r?\\n/g, os.EOL); `",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2811241990",
+    "pr_number": 1658,
+    "pr_file": "tools/cli/installers/lib/ide/codex.js",
+    "created_at": "2026-02-16T08:39:06+00:00",
+    "commented_code": "</agent-activation>\n `;\n \n-    // Use underscore format: bmad_custom_fred-commit-poet.md\n-    const fileName = customAgentDashName(agentName);\n-    const launcherPath = path.join(destDir, fileName);\n-    await fs.writeFile(launcherPath, launcherContent, 'utf8');\n+    const skillPath = path.join(skillDir, 'SKILL.md');",
+    "repo_full_name": "bmad-code-org/BMAD-METHOD",
+    "discussion_comments": [
+      {
+        "comment_id": "2811241990",
+        "repo_full_name": "bmad-code-org/BMAD-METHOD",
+        "pr_number": 1658,
+        "pr_file": "tools/cli/installers/lib/ide/codex.js",
+        "discussion_id": "2811241990",
+        "commented_code": "@@ -411,14 +460,12 @@ You must fully embody this agent's persona and follow all activation instruction\n </agent-activation>\n `;\n \n-    // Use underscore format: bmad_custom_fred-commit-poet.md\n-    const fileName = customAgentDashName(agentName);\n-    const launcherPath = path.join(destDir, fileName);\n-    await fs.writeFile(launcherPath, launcherContent, 'utf8');\n+    const skillPath = path.join(skillDir, 'SKILL.md');",
+        "comment_created_at": "2026-02-16T08:39:06+00:00",
+        "comment_author": "dracic",
+        "comment_body": "Addd `const platformContent = os.EOL === '\\n' ? skillContent : skillContent.replace(/\\r?\\n/g, os.EOL); ` before writing",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

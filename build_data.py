@@ -14,6 +14,7 @@ writes:
   raw/bundles/<domain>.md   every instruction in a domain, concatenated
   raw/index.json            machine-readable index of the whole corpus
   llms.txt                  domain-grouped index for LLM consumers
+  openapi.json              OpenAPI 3.1 description of the endpoints above
 
 Everything here is derived. Nothing outside `_reviewers/` is a source of truth,
 so the script is safe to re-run at any time and is expected to run in CI before
@@ -35,7 +36,11 @@ DATA_DIR = Path("_data")
 RAW_DIR = Path("raw")
 SEARCH_PATH = Path("assets/data/search.json")
 LLMS_PATH = Path("llms.txt")
+OPENAPI_PATH = Path("openapi.json")
 SITE_URL = "https://awesomereviewers.com"
+API_DOCS_URL = f"{SITE_URL}/api/"
+# Name of the site overview under raw/. No instruction may use it as a slug.
+SITE_OVERVIEW_SLUG = "site"
 
 # --------------------------------------------------------------------------- #
 # Domains
@@ -480,10 +485,74 @@ def entry_row(entry: dict) -> dict:
     }
 
 
+def build_site_overview(entries: list[dict], domains: list[dict]) -> str:
+    """The homepage as markdown: what this is, where everything is, one screen.
+
+    `llms.txt` lists all 5k instructions, which is the wrong thing to hand an
+    agent that has just landed on the site. This is the short version, and it is
+    what the homepage advertises as its markdown representation.
+    """
+    lines = [
+        "# Awesome Reviewers",
+        "",
+        "Expert engineering instructions for AI and infrastructure domains, distilled from code",
+        "review discussions in production open-source repositories. Each instruction is a",
+        "self-contained set of rules you can drop into an agent, harness or context broker as-is.",
+        "",
+        f"{len(entries)} instructions from "
+        f"{len({e['repository'] for e in entries if e['repository']})} repositories, "
+        f"across {len(domains)} domains. Last updated "
+        f"{max((e['updated'] for e in entries), default='')}.",
+        "",
+        "## Developer resources",
+        "",
+    ]
+    for resource in DEV_RESOURCES:
+        lines.append(
+            f"- [{resource['name']}]({SITE_URL}{resource['path']}) "
+            f"({resource['media_type']}) — {resource['description']}"
+        )
+
+    lines += [
+        "",
+        "## Domains",
+        "",
+        "| Domain | Instructions | Updated | Bundle |",
+        "| --- | --- | --- | --- |",
+    ]
+    for domain in domains:
+        lines.append(
+            f"| {domain['title']} | {domain['count']} | {domain['updated']} | "
+            f"[{domain['slug']}.md]({SITE_URL}/raw/bundles/{domain['slug']}.md) |"
+        )
+
+    lines += [
+        "",
+        "## Errors",
+        "",
+        f"RFC 9457 problem details, documented at {API_DOCS_URL}#errors.",
+        "",
+    ]
+    for problem in build_problems():
+        lines.append(f"- `{problem['code']}` ({problem['status']}) — {problem['resolution']}")
+
+    lines += ["", "Apache-2.0. Source: https://github.com/baz-scm/awesome-reviewers", ""]
+    return "\n".join(lines)
+
+
 def write_raw(entries: list[dict], domains: list[dict]) -> None:
     if RAW_DIR.exists():
         shutil.rmtree(RAW_DIR)
     (RAW_DIR / "bundles").mkdir(parents=True)
+
+    if any(entry["slug"] == SITE_OVERVIEW_SLUG for entry in entries):
+        raise SystemExit(
+            f"an instruction is slugged '{SITE_OVERVIEW_SLUG}', which collides with "
+            f"{RAW_DIR}/{SITE_OVERVIEW_SLUG}.md; rename the instruction"
+        )
+    (RAW_DIR / f"{SITE_OVERVIEW_SLUG}.md").write_text(
+        build_site_overview(entries, domains), encoding="utf-8"
+    )
 
     titles = {d["slug"]: d["title"] for d in DOMAINS}
     bundles: dict[str, list[str]] = defaultdict(list)
@@ -612,7 +681,549 @@ def write_domain_pages(domains: list[dict]) -> None:
     print(f"  wrote {len(domains)} domain pages")
 
 
-def write_llms(entries: list[dict], domains: list[dict]) -> None:
+# --------------------------------------------------------------------------- #
+# Machine interface: developer resources, error format, OpenAPI description
+# --------------------------------------------------------------------------- #
+
+# One entry per machine-readable file the site publishes. This list is the
+# single source of truth for the API page, llms.txt and robots.txt, so an
+# endpoint cannot be added in one place and forgotten in the others.
+DEV_RESOURCES: list[dict] = [
+    {
+        "name": "OpenAPI description",
+        "path": "/openapi.json",
+        "media_type": "application/vnd.oai.openapi+json;version=3.1",
+        "description": "OpenAPI 3.1 description of every endpoint listed here.",
+    },
+    {
+        "name": "API documentation",
+        "path": "/api/",
+        "media_type": "text/html",
+        "description": "Human-readable reference for the endpoints, error format and markdown variants.",
+    },
+    {
+        "name": "Site overview",
+        "path": "/raw/site.md",
+        "media_type": "text/markdown",
+        "description": "The homepage as markdown: what this is, the endpoints, the domains.",
+    },
+    {
+        "name": "Corpus index",
+        "path": "/raw/index.json",
+        "media_type": "application/json",
+        "description": "Every instruction: slug, title, description, domain, topic, language, source, updated, raw URL.",
+    },
+    {
+        "name": "Single instruction",
+        "path": "/raw/<slug>.md",
+        "media_type": "text/markdown",
+        "description": "One instruction as plain markdown, with a commented header carrying its metadata.",
+    },
+    {
+        "name": "Domain bundle",
+        "path": "/raw/bundles/<domain>.md",
+        "media_type": "text/markdown",
+        "description": "Every instruction in one domain, concatenated into a single markdown file.",
+    },
+    {
+        "name": "Source discussions",
+        "path": "/<slug>.json",
+        "media_type": "application/json",
+        "description": "The review discussions one instruction was derived from.",
+    },
+    {
+        "name": "Search index",
+        "path": "/assets/data/search.json",
+        "media_type": "application/json",
+        "description": "Column-oriented index used by the search box: smaller, truncated descriptions.",
+    },
+    {
+        "name": "LLM index",
+        "path": "/llms.txt",
+        "media_type": "text/plain",
+        "description": "Domain-grouped listing of the whole corpus with raw URLs.",
+    },
+    {
+        "name": "Sitemap",
+        "path": "/sitemap.xml",
+        "media_type": "application/xml",
+        "description": "Every HTML page on the site.",
+    },
+]
+
+# Error responses follow RFC 9457 (problem details for HTTP APIs). `code` and
+# `resolution` are extension members: the code is stable for matching, the
+# resolution says what to do next without reading prose.
+PROBLEM_TYPES: list[dict] = [
+    {
+        "code": "not_found",
+        "status": 404,
+        "title": "Resource not found",
+        "detail": "Nothing is published at this path.",
+        "resolution": (
+            f"Every published path is listed in {SITE_URL}/raw/index.json and "
+            f"{SITE_URL}/llms.txt. Look the slug up there and retry."
+        ),
+    },
+    {
+        "code": "not_acceptable",
+        "status": 406,
+        "title": "No acceptable representation",
+        "detail": "The Accept header rules out every representation of this resource.",
+        "resolution": (
+            "Send Accept: text/markdown for markdown, text/html for the rendered page, "
+            "application/json for the JSON endpoints, or */* to take whatever is served."
+        ),
+    },
+]
+
+
+def problem_type_url(code: str) -> str:
+    """The URI an RFC 9457 `type` member points at, resolvable to its docs."""
+    return f"{API_DOCS_URL}#error-{code.replace('_', '-')}"
+
+
+def build_problems() -> list[dict]:
+    return [{**problem, "type": problem_type_url(problem["code"])} for problem in PROBLEM_TYPES]
+
+
+def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dict:
+    """OpenAPI 3.1 description of the static endpoints the site publishes.
+
+    Everything here is a plain file served over HTTP: no key, no rate limit and
+    no method other than GET. The description exists so an agent can discover
+    the shape of the corpus without scraping the HTML.
+    """
+    example_slug = entries[0]["slug"] if entries else "example-instruction"
+    domain_slugs = [d["slug"] for d in domains]
+    problems = build_problems()
+
+    def error_response(status: int) -> dict:
+        problem = next(p for p in problems if p["status"] == status)
+        return {
+            "description": problem["title"],
+            "content": {
+                "application/problem+json": {
+                    "schema": {"$ref": "#/components/schemas/Problem"},
+                    "example": {
+                        "type": problem["type"],
+                        "title": problem["title"],
+                        "status": problem["status"],
+                        "detail": problem["detail"],
+                        "code": problem["code"],
+                        "resolution": problem["resolution"],
+                    },
+                },
+                "text/html": {
+                    "schema": {
+                        "type": "string",
+                        "description": (
+                            "Served to clients that accept HTML. The page carries the same "
+                            'problem details in a script element with id "problem", plus a '
+                            "markdown recovery block."
+                        ),
+                    }
+                },
+            },
+        }
+
+    def markdown_response(description: str) -> dict:
+        return {
+            "description": description,
+            "content": {"text/markdown": {"schema": {"type": "string"}}},
+        }
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "Awesome Reviewers API",
+            "version": version,
+            "summary": "Read-only endpoints for the Awesome Reviewers instruction corpus.",
+            "description": (
+                "Awesome Reviewers publishes expert engineering instructions for AI and "
+                "infrastructure domains, distilled from code review discussions in production "
+                "open-source repositories.\n\n"
+                "Every endpoint is a static file served over HTTPS. There is no key, no rate "
+                "limit and no method other than GET. Responses are immutable for a given build; "
+                "the `updated` field on each entry carries the date of the most recent review "
+                "comment behind it, so a scheduled job can diff against its last run instead of "
+                "refetching the corpus.\n\n"
+                "Errors follow RFC 9457 problem details."
+            ),
+            "termsOfService": f"{API_DOCS_URL}#terms",
+            "contact": {
+                "name": "Awesome Reviewers",
+                "url": "https://github.com/baz-scm/awesome-reviewers",
+            },
+            "license": {
+                "name": "Apache-2.0",
+                "identifier": "Apache-2.0",
+            },
+        },
+        "externalDocs": {
+            "description": "Awesome Reviewers API documentation",
+            "url": API_DOCS_URL,
+        },
+        "servers": [{"url": SITE_URL, "description": "Production"}],
+        "tags": [
+            {"name": "instructions", "description": "Single instructions and domain bundles."},
+            {"name": "indexes", "description": "Machine-readable indexes of the whole corpus."},
+            {"name": "discovery", "description": "Descriptions of the site itself."},
+        ],
+        "paths": {
+            "/raw/index.json": {
+                "get": {
+                    "operationId": "getIndex",
+                    "summary": "Machine-readable index of the whole corpus",
+                    "description": (
+                        "One row per instruction plus one row per domain. The `raw` field on each "
+                        "entry is the URL of that instruction as markdown."
+                    ),
+                    "tags": ["indexes"],
+                    "responses": {
+                        "200": {
+                            "description": "The corpus index",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/Index"}
+                                }
+                            },
+                        },
+                        "404": error_response(404),
+                    },
+                }
+            },
+            "/raw/site.md": {
+                "get": {
+                    "operationId": "getSiteOverview",
+                    "summary": "The homepage as markdown",
+                    "description": (
+                        "What the corpus is, the endpoints, and one row per domain with its "
+                        "instruction count and bundle URL. The short alternative to /llms.txt."
+                    ),
+                    "tags": ["discovery"],
+                    "responses": {
+                        "200": markdown_response("The site overview"),
+                        "406": error_response(406),
+                    },
+                }
+            },
+            "/raw/{slug}.md": {
+                "get": {
+                    "operationId": "getInstruction",
+                    "summary": "One instruction as markdown",
+                    "description": (
+                        "The instruction body, preceded by an HTML comment carrying its title, "
+                        "domain, topic, language, source repository, last-updated date and the "
+                        "URL of its page. Slugs come from `/raw/index.json`."
+                    ),
+                    "tags": ["instructions"],
+                    "parameters": [{"$ref": "#/components/parameters/Slug"}],
+                    "responses": {
+                        "200": markdown_response("The instruction"),
+                        "404": error_response(404),
+                        "406": error_response(406),
+                    },
+                }
+            },
+            "/raw/bundles/{domain}.md": {
+                "get": {
+                    "operationId": "getDomainBundle",
+                    "summary": "Every instruction in one domain, concatenated",
+                    "description": (
+                        "One markdown file per domain: a heading, the domain blurb, its counts and "
+                        "then every instruction in it, each with a source comment."
+                    ),
+                    "tags": ["instructions"],
+                    "parameters": [
+                        {
+                            "name": "domain",
+                            "in": "path",
+                            "required": True,
+                            "description": "Domain slug.",
+                            "schema": {"type": "string", "enum": domain_slugs},
+                            "example": domain_slugs[0] if domain_slugs else "ai-agents",
+                        }
+                    ],
+                    "responses": {
+                        "200": markdown_response("The domain bundle"),
+                        "404": error_response(404),
+                        "406": error_response(406),
+                    },
+                }
+            },
+            "/{slug}.json": {
+                "get": {
+                    "operationId": "getDiscussions",
+                    "summary": "The review discussions one instruction was derived from",
+                    "description": (
+                        "Provenance for a single instruction: the review threads it was distilled "
+                        "from, each with its comments, authors and timestamps."
+                    ),
+                    "tags": ["instructions"],
+                    "parameters": [{"$ref": "#/components/parameters/Slug"}],
+                    "responses": {
+                        "200": {
+                            "description": "The source discussions",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "array",
+                                        "items": {"$ref": "#/components/schemas/Discussion"},
+                                    }
+                                }
+                            },
+                        },
+                        "404": error_response(404),
+                    },
+                }
+            },
+            "/assets/data/search.json": {
+                "get": {
+                    "operationId": "getSearchIndex",
+                    "summary": "Compact column-oriented search index",
+                    "description": (
+                        "The index the search box fetches. Repeated values (domain, topic, "
+                        "language, repository) are interned: each entry holds their positions in "
+                        "the sibling arrays. Descriptions are truncated. Prefer `/raw/index.json` "
+                        "unless size matters."
+                    ),
+                    "tags": ["indexes"],
+                    "responses": {
+                        "200": {
+                            "description": "The search index",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/SearchIndex"}
+                                }
+                            },
+                        },
+                        "404": error_response(404),
+                    },
+                }
+            },
+            "/llms.txt": {
+                "get": {
+                    "operationId": "getLlmsTxt",
+                    "summary": "Domain-grouped index of the corpus for LLM consumers",
+                    "tags": ["indexes"],
+                    "responses": {
+                        "200": {
+                            "description": "The llms.txt index",
+                            "content": {"text/plain": {"schema": {"type": "string"}}},
+                        },
+                        "404": error_response(404),
+                    },
+                }
+            },
+            "/openapi.json": {
+                "get": {
+                    "operationId": "getOpenapi",
+                    "summary": "This description",
+                    "tags": ["discovery"],
+                    "responses": {
+                        "200": {
+                            "description": "The OpenAPI description",
+                            "content": {
+                                "application/vnd.oai.openapi+json;version=3.1": {
+                                    "schema": {"type": "object"}
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+            "/sitemap.xml": {
+                "get": {
+                    "operationId": "getSitemap",
+                    "summary": "Every HTML page on the site",
+                    "tags": ["discovery"],
+                    "responses": {
+                        "200": {
+                            "description": "The sitemap",
+                            "content": {"application/xml": {"schema": {"type": "string"}}},
+                        }
+                    },
+                }
+            },
+        },
+        "components": {
+            "parameters": {
+                "Slug": {
+                    "name": "slug",
+                    "in": "path",
+                    "required": True,
+                    "description": "Instruction slug, as published in /raw/index.json.",
+                    "schema": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+                    "example": example_slug,
+                }
+            },
+            "schemas": {
+                "Entry": {
+                    "type": "object",
+                    "description": "One instruction.",
+                    "required": ["slug", "title", "domain", "raw"],
+                    "properties": {
+                        "slug": {"type": "string", "example": example_slug},
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "repository": {
+                            "type": "string",
+                            "description": "Source repository, as owner/name.",
+                        },
+                        "domain": {"type": "string", "enum": domain_slugs},
+                        "topic": {"type": "string"},
+                        "language": {"type": "string"},
+                        "updated": {
+                            "type": "string",
+                            "format": "date",
+                            "description": "Date of the most recent review comment behind it.",
+                        },
+                        "comments": {"type": "integer", "minimum": 0},
+                        "stars": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Stars on the source repository when it was imported.",
+                        },
+                        "raw": {
+                            "type": "string",
+                            "format": "uri",
+                            "description": "URL of this instruction as markdown.",
+                        },
+                    },
+                },
+                "Domain": {
+                    "type": "object",
+                    "description": "One domain, with its bundle URL.",
+                    "required": ["slug", "title", "count", "bundle"],
+                    "properties": {
+                        "slug": {"type": "string", "enum": domain_slugs},
+                        "title": {"type": "string"},
+                        "count": {"type": "integer", "minimum": 0},
+                        "updated": {"type": "string", "format": "date"},
+                        "bundle": {"type": "string", "format": "uri"},
+                    },
+                },
+                "Index": {
+                    "type": "object",
+                    "required": ["generated", "count", "site", "domains", "entries"],
+                    "properties": {
+                        "generated": {
+                            "type": "string",
+                            "format": "date-time",
+                            "description": "When this index was built.",
+                        },
+                        "count": {"type": "integer", "minimum": 0},
+                        "site": {"type": "string", "format": "uri"},
+                        "domains": {
+                            "type": "array",
+                            "items": {"$ref": "#/components/schemas/Domain"},
+                        },
+                        "entries": {
+                            "type": "array",
+                            "items": {"$ref": "#/components/schemas/Entry"},
+                        },
+                    },
+                },
+                "SearchIndex": {
+                    "type": "object",
+                    "required": ["fields", "entries"],
+                    "properties": {
+                        "fields": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Column names, in the order each entry row holds them.",
+                        },
+                        "domains": {"type": "array", "items": {"type": "string"}},
+                        "topics": {"type": "array", "items": {"type": "string"}},
+                        "languages": {"type": "array", "items": {"type": "string"}},
+                        "repositories": {"type": "array", "items": {"type": "string"}},
+                        "entries": {
+                            "type": "array",
+                            "description": (
+                                "One row per instruction. Domain, topic, language and repository "
+                                "are indexes into the arrays above."
+                            ),
+                            "items": {"type": "array"},
+                        },
+                    },
+                },
+                "Discussion": {
+                    "type": "object",
+                    "description": "One review thread an instruction was derived from.",
+                    "properties": {
+                        "created_at": {"type": "string", "format": "date-time"},
+                        "discussion_comments": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "comment_author": {"type": "string"},
+                                    "comment_created_at": {
+                                        "type": "string",
+                                        "format": "date-time",
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+                "Problem": {
+                    "type": "object",
+                    "description": "RFC 9457 problem details, with `code` and `resolution` extensions.",
+                    "required": ["type", "title", "status"],
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "format": "uri",
+                            "description": "URI identifying the problem type; resolves to its documentation.",
+                            "enum": [p["type"] for p in problems],
+                        },
+                        "title": {"type": "string"},
+                        "status": {
+                            "type": "integer",
+                            "enum": [p["status"] for p in problems],
+                        },
+                        "detail": {"type": "string"},
+                        "instance": {
+                            "type": "string",
+                            "format": "uri-reference",
+                            "description": "The path that produced the error.",
+                        },
+                        "code": {
+                            "type": "string",
+                            "description": "Stable machine-readable code for this problem type.",
+                            "enum": [p["code"] for p in problems],
+                        },
+                        "resolution": {
+                            "type": "string",
+                            "description": "What to do next.",
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+
+def write_openapi(entries: list[dict], domains: list[dict], version: str) -> None:
+    write_json(OPENAPI_PATH, build_openapi(entries, domains, version))
+
+
+def write_api_data(version: str) -> None:
+    """Machine interface description the API page renders from."""
+    write_json(
+        DATA_DIR / "api.json",
+        {
+            "version": version,
+            "openapi": f"{SITE_URL}/openapi.json",
+            "resources": DEV_RESOURCES,
+            "errors": build_problems(),
+        },
+    )
+
+
+def build_llms(entries: list[dict], domains: list[dict]) -> list[str]:
     grouped: dict[str, list[dict]] = defaultdict(list)
     for entry in entries:
         grouped[entry["domain"]].append(entry)
@@ -628,11 +1239,35 @@ def write_llms(entries: list[dict], domains: list[dict]) -> None:
         f"Corpus: {len(entries)} instructions across {len(domains)} domains.",
         f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
         "",
-        "## Endpoints",
+        "## Awesome Reviewers API — developer resources",
         "",
-        f"- Machine index: {SITE_URL}/raw/index.json",
-        f"- Single instruction: {SITE_URL}/raw/<slug>.md",
-        f"- Whole domain: {SITE_URL}/raw/bundles/<domain>.md",
+        "Every endpoint is a static file served over HTTPS: GET only, no key, no rate limit.",
+        "",
+    ]
+
+    for resource in DEV_RESOURCES:
+        lines.append(
+            f"- [{resource['name']}]({SITE_URL}{resource['path']}) "
+            f"({resource['media_type']}) — {resource['description']}"
+        )
+
+    lines += [
+        "",
+        "Errors follow RFC 9457 problem details, with `code` and `resolution` extension members:",
+        "",
+    ]
+    for problem in build_problems():
+        lines.append(
+            f"- `{problem['code']}` ({problem['status']}, [{problem['type']}]({problem['type']})) — "
+            f"{problem['detail']} {problem['resolution']}"
+        )
+
+    lines += [
+        "",
+        "Markdown variants: an instruction page at /reviewers/<slug>/ is also published as",
+        f"{SITE_URL}/raw/<slug>.md, and a domain page at /domains/<domain>/ as",
+        f"{SITE_URL}/raw/bundles/<domain>.md. Each HTML page links its markdown variant with",
+        "<link rel=\"alternate\" type=\"text/markdown\">.",
         "",
     ]
 
@@ -652,7 +1287,11 @@ def write_llms(entries: list[dict], domains: list[dict]) -> None:
             )
         lines.append("")
 
-    LLMS_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return lines
+
+
+def write_llms(entries: list[dict], domains: list[dict]) -> None:
+    LLMS_PATH.write_text("\n".join(build_llms(entries, domains)) + "\n", encoding="utf-8")
     print(f"  wrote {LLMS_PATH} ({LLMS_PATH.stat().st_size / 1024:.0f} KB)")
 
 
@@ -706,6 +1345,11 @@ def main() -> None:
     write_domain_pages(domains)
     write_raw(entries, domains)
     write_llms(entries, domains)
+    # The corpus date, not the build date: the description only changes when the
+    # thing it describes does.
+    version = max(e["updated"] for e in entries)
+    write_openapi(entries, domains, version)
+    write_api_data(version)
 
 
 if __name__ == "__main__":

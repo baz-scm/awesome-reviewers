@@ -17,10 +17,10 @@ beyond Jekyll and one Python script.
   `comments_count`, `repository_stars`) plus the instruction body in markdown.
 - `<slug>.json` — the review discussions the instruction was derived from.
 
-Everything else is derived by `build_data.py` and is **not committed**: `_data/domains.json`,
-`_data/entries.json`, `_data/meta.json`, `_data/sources.json`, `assets/data/search.json`,
-`domains/*.html`, `raw/**`, `llms.txt`. Re-run `python build_data.py` after touching `_reviewers/`,
-and before the first local Jekyll build.
+Everything else is derived by `build_data.py` and is **not committed**: `_data/api.json`,
+`_data/domains.json`, `_data/entries.json`, `_data/meta.json`, `_data/sources.json`,
+`assets/data/search.json`, `domains/*.html`, `raw/**`, `llms.txt`, `openapi.json`. Re-run
+`python build_data.py` after touching `_reviewers/`, and before the first local Jekyll build.
 
 Dates are derived from discussion timestamps, never declared in front matter. Domain is derived from
 the source repository via the explicit map in `build_data.py`.
@@ -33,6 +33,21 @@ the source repository via the explicit map in `build_data.py`.
 - `_includes/row.html` — the one row component shared by the homepage, search results and domain pages.
 - `assets/css/site.scss` — the only stylesheet. No webfonts, no CSS framework.
 - `assets/js/site.js` — the only script. No dependencies.
+
+## Machine interface
+
+- `openapi.json` (OpenAPI 3.1), the `/api/` page, `llms.txt`, `robots.txt` and `README.md` all
+  describe the same endpoints. `DEV_RESOURCES` in `build_data.py` is the single source of truth;
+  add an endpoint there rather than in five places.
+- Errors follow RFC 9457 problem details. `PROBLEM_TYPES` in `build_data.py` defines them; every
+  `type` URI must resolve to an `#error-<code>` anchor on the `/api/` page.
+- `404.html` is what GitHub Pages serves for every missing path. It carries the recovery links, a
+  markdown recovery block and the same problem details in a `<script type="application/problem+json">`,
+  because a static host cannot return a JSON body with a 404 status.
+- `edge/` is an optional CDN worker that adds `Accept` negotiation and real JSON errors. It is
+  excluded from the Jekyll build and the site does not depend on it.
+- Tests: `python -m unittest discover -s tests -t .` and `node --test tests/worker.test.mjs`. Both
+  run in CI before `jekyll build`.
 
 ## Conventions
 

@@ -9,9 +9,11 @@ Each entry is a self-contained instruction — a rule, why it exists, and usuall
 from recurring reviewer feedback in one repository. They are plain markdown, so they drop into an
 agent, a review harness, a context broker, or a prompt you are assembling by hand.
 
-## Raw access
+## Awesome Reviewers API
 
-Everything is a static file. No key, no rate limit.
+Everything is a static file. No key, no rate limit, GET only.
+Reference: **[awesomereviewers.com/api/](https://awesomereviewers.com/api/)** ·
+description: **[/openapi.json](https://awesomereviewers.com/openapi.json)** (OpenAPI 3.1).
 
 ```bash
 # one instruction
@@ -25,10 +27,31 @@ curl https://awesomereviewers.com/raw/index.json
 
 # domain-grouped listing of the whole corpus
 curl https://awesomereviewers.com/llms.txt
+
+# the API surface itself
+curl https://awesomereviewers.com/openapi.json
 ```
+
+| Resource | Path | Type |
+| --- | --- | --- |
+| OpenAPI description | `/openapi.json` | `application/vnd.oai.openapi+json;version=3.1` |
+| API documentation | `/api/` | `text/html` |
+| Corpus index | `/raw/index.json` | `application/json` |
+| Single instruction | `/raw/<slug>.md` | `text/markdown` |
+| Domain bundle | `/raw/bundles/<domain>.md` | `text/markdown` |
+| Source discussions | `/<slug>.json` | `application/json` |
+| Search index | `/assets/data/search.json` | `application/json` |
+| LLM index | `/llms.txt` | `text/plain` |
+| Sitemap | `/sitemap.xml` | `application/xml` |
 
 Every instruction carries the date of the most recent review comment behind it, so a scheduled job
 can diff `/raw/index.json` against its last run instead of refetching everything.
+
+An instruction page at `/reviewers/<slug>/` is the same content as `/raw/<slug>.md`, and a domain
+page at `/domains/<domain>/` as `/raw/bundles/<domain>.md`; each page links its markdown with
+`<link rel="alternate" type="text/markdown">`, and every page links `/openapi.json` as
+`rel="service-desc"`. Errors follow [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem
+details — see [/api/#errors](https://awesomereviewers.com/api/#errors).
 
 ## Domains
 
@@ -62,12 +85,16 @@ assets/js/site.js      the site's only script
 index.html             search, domains, recently updated
 domains.html           domain overview          -> /domains/
 sources.html           source repositories      -> /sources/
-api.html               raw endpoint reference   -> /api/
+api.html               API reference            -> /api/
 methodology.html       how entries are derived  -> /methodology/
+404.html               recovery page, with markdown and problem+json bodies
+tests/                 machine-interface tests
+edge/                  optional CDN worker for Accept negotiation (not part of the site)
 ```
 
 Nothing outside `_reviewers/` is a source of truth. Domain stats, dates, indexes, raw endpoints,
-bundles, domain pages and `llms.txt` are all generated and are not committed — see `.gitignore`.
+bundles, domain pages, `llms.txt` and `openapi.json` are all generated and are not committed — see
+`.gitignore`.
 
 ## Local development
 
@@ -78,6 +105,15 @@ bundle exec jekyll serve
 ```
 
 `build_data.py` needs only the standard library. Re-run it after changing anything in `_reviewers/`.
+
+```bash
+python -m unittest discover -s tests -t .   # OpenAPI, error format, llms.txt, 404, discovery links
+node --test tests/worker.test.mjs           # the optional edge worker
+```
+
+Both suites use only their standard libraries. `pip install openapi-spec-validator` adds a
+validation of `openapi.json` against the OpenAPI 3.1 schema to the first suite; without it that one
+test skips, so the deploy pipeline never depends on a package index.
 
 ## Contributing
 

@@ -12,9 +12,13 @@ description: The Awesome Reviewers API — stable plain-text and JSON endpoints 
   <div class="wrap">
     <h1>Awesome Reviewers API</h1>
     <p class="intro__lead">
-      Everything on this site is a static file. No key, no rate limit, no client-side rendering
+      Everything on this site is a static file. No key, no authentication, no client-side rendering
       required. Fetch one instruction, a whole domain, or the index and pull what you need.
       Machine-readable description: <a href="{{ '/openapi.json' | relative_url }}"><code>/openapi.json</code></a>.
+      Interface version {{ api.api_version }} at
+      <a href="{{ '/v1/version.json' | relative_url }}"><code>{{ api.base_path }}</code></a>,
+      {{ api.versioning.stability }} — quickstart and policies on the
+      <a href="{{ '/developers/' | relative_url }}">developer portal</a>.
     </p>
   </div>
 </section>
@@ -58,15 +62,66 @@ curl -s {{ site.url }}/openapi.json | jq '.paths | keys'
 curl -s {{ site.url }}/openapi.json \
   | jq -r '.paths["/raw/bundles/{domain}.md"].get.parameters[0].schema.enum[]'</code></pre>
 
+    <h2 id="versioning">Versioning and deprecation</h2>
+    <p>
+      The interface is versioned in the URL path: <code>{{ api.base_path }}/**</code> keeps its
+      response shapes, and a breaking change ships as <code>/v2/**</code> beside it rather than
+      replacing anything in place. The unversioned paths (<code>/raw/**</code>,
+      <code>/llms.txt</code>, <code>/openapi.json</code>) predate the prefix and are maintained as
+      aliases of the v1 shapes. Two versions travel with the interface and answer different
+      questions: <code>api_version</code> ({{ api.api_version }}) is the shape,
+      <code>corpus_version</code> ({{ api.version }}) is the content.
+    </p>
+    <p>
+      Compatible, shipped without notice: {{ api.versioning.compatible_changes | join: '; ' }}.
+      Breaking, and therefore never done inside <code>{{ api.base_path }}</code>:
+      {{ api.versioning.breaking_changes | join: '; ' }}.
+    </p>
+    <p>
+      A retiring endpoint says so in its own responses:
+      <code>Deprecation</code> (<a href="https://www.rfc-editor.org/rfc/rfc9745" rel="noopener">RFC
+      9745</a>) carries the date the deprecation took effect, <code>Sunset</code>
+      (<a href="https://www.rfc-editor.org/rfc/rfc8594" rel="noopener">RFC 8594</a>) the date it
+      stops answering — never less than {{ api.versioning.sunset_notice_days }} days later — and a
+      <code>Link</code> with <code>rel="deprecation"</code> points at what replaced it. Live
+      deprecations are listed in
+      <a href="{{ '/v1/version.json' | relative_url }}"><code>/v1/version.json</code></a>, which is
+      the field to poll:
+      {% if api.deprecations == empty %}it is empty today — nothing here is deprecated{% else %}
+      {{ api.deprecations | size }} endpoint(s) are being retired{% endif %}.
+    </p>
+
+    <h2 id="rate-limits">Rate limits</h2>
+    <p>
+      The static origin does not throttle. Where the optional
+      <a href="https://github.com/baz-scm/awesome-reviewers/tree/main/edge" rel="noopener">edge
+      tier</a> is deployed in front of it, the quota is {{ api.rate_limit.quota }} requests per
+      {{ api.rate_limit.window_seconds }} seconds per {{ api.rate_limit.partition }}, advertised on
+      every response in the
+      <a href="https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-ratelimit-headers" rel="noopener">RateLimit
+      header fields</a>:
+    </p>
+    <pre><code>RateLimit-Policy: {{ api.rate_limit.policy }}
+RateLimit: "default";r=573;t=41</code></pre>
+    <p class="note">
+      Over the quota: <code>429</code> with <code>Retry-After</code> in seconds and a problem body of
+      type <a href="#error-rate-limited"><code>rate_limited</code></a>.
+      {{ api.rate_limit.advice }}
+    </p>
+
     <h2 id="errors">Errors</h2>
     <p>
       Error responses follow <a href="https://www.rfc-editor.org/rfc/rfc9457" rel="noopener">RFC
       9457</a> problem details, with two extension members: <code>code</code>, stable for matching,
-      and <code>resolution</code>, saying what to do next. Because the site is served as static
-      files, a client that asks for HTML gets the
+      and <code>resolution</code>, saying what to do next. Every type is also published as a
+      document you can read without provoking it —
+      <a href="{{ '/v1/errors/index.json' | relative_url }}"><code>/v1/errors/index.json</code></a>
+      for the catalogue, <code>/v1/errors/&lt;code&gt;.json</code> for one. Because the site is
+      served as static files, a client that asks for HTML gets the
       <a href="{{ '/404.html' | relative_url }}">404 page</a>, which carries the same problem
       details in a <code>&lt;script type="application/problem+json" id="problem"&gt;</code> element
-      and a markdown recovery block.
+      and a markdown recovery block, also served on its own at
+      <a href="{{ '/404.md' | relative_url }}"><code>/404.md</code></a>.
     </p>
     {% for error in api.errors %}
     <h3 id="error-{{ error.code | replace: '_', '-' }}">{{ error.status }} — {{ error.title }}</h3>
@@ -112,8 +167,86 @@ curl -s {{ site.url }}/openapi.json \
     </div>
     <p class="note">
       Static hosting cannot vary a response on the <code>Accept</code> header, so
-      <code>Accept: text/markdown</code> against an HTML page returns HTML. Follow the
-      <code>rel="alternate"</code> link, or rewrite the path, to get markdown.
+      <code>Accept: text/markdown</code> against an HTML page on this origin returns HTML. Follow the
+      <code>rel="alternate"</code> link, or rewrite the path, to get markdown. Behind the
+      <a href="https://github.com/baz-scm/awesome-reviewers/tree/main/edge" rel="noopener">edge
+      tier</a> the same URLs answer <code>Accept: text/markdown</code> directly, with
+      <code>Content-Type: text/markdown; charset=utf-8</code> and
+      <code>Vary: Accept</code> so caches keep the two variants apart, per
+      <a href="https://acceptmarkdown.com/start" rel="noopener">acceptmarkdown.com</a>.
+    </p>
+
+    <h2 id="json">JSON representations</h2>
+    <p>
+      Everything under <code>{{ api.base_path }}</code> is typed JSON, described by schema in
+      <a href="{{ '/openapi.json' | relative_url }}"><code>/openapi.json</code></a>: the corpus
+      index, the domains, the facets (every topic, language and repository with counts), the source
+      repositories, the error catalogue, and one document per instruction carrying its metadata, its
+      markdown body and its links. An instruction page also advertises its JSON with
+      <code>&lt;link rel="alternate" type="application/json"&gt;</code>.
+    </p>
+    <pre><code># the instruction behind a page, as JSON
+curl -s {{ site.url }}{{ api.base_path }}/instructions/{{ first.slug }}.json | jq '{title, domain, updated}'
+
+# every Python instruction about concurrency
+curl -s {{ site.url }}{{ api.base_path }}/index.json \
+  | jq -r '.entries[] | select(.language == "Python" and .topic == "Concurrency") | .json'
+
+# what the interface guarantees, and what may change
+curl -s {{ site.url }}{{ api.base_path }}/version.json | jq '.versioning, .rate_limit'</code></pre>
+
+    <h2 id="discovery">Discovery</h2>
+    <p>
+      Four files describe this interface, and every page links them, so a client that lands anywhere
+      can find the rest without crawling:
+    </p>
+    <div class="table__scroll">
+      <table class="table">
+        <thead><tr><th>File</th><th>What it is</th><th>Link relation</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><a href="{{ '/openapi.json' | relative_url }}"><code>/openapi.json</code></a></td>
+            <td class="note">OpenAPI 3.1 description of every endpoint</td>
+            <td class="note"><code>service-desc</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/v1/version.json' | relative_url }}"><code>/v1/version.json</code></a></td>
+            <td class="note">Version, versioning and deprecation policy, quota, resource list</td>
+            <td class="note"><code>service-meta</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/.well-known/api-catalog' | relative_url }}"><code>/.well-known/api-catalog</code></a></td>
+            <td class="note">RFC 9727 catalogue, as an RFC 9264 linkset</td>
+            <td class="note"><code>api-catalog</code></td>
+          </tr>
+          <tr>
+            <td><a href="{{ '/agents.md' | relative_url }}"><code>/agents.md</code></a></td>
+            <td class="note">When to use this corpus, when not to, and what to call</td>
+            <td class="note"><code>help</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">
+      Static hosting serves the extensionless catalogue without the <code>profile</code> media-type
+      parameter RFC 9727 recommends; the edge tier sets it, and the catalogue links RFC 9727 as
+      <code>describedby</code> either way.
+    </p>
+
+    <h2 id="cli">CLI</h2>
+    <p>
+      A single file, Python 3.9+, no dependencies — the same endpoints, with the paging and the
+      change detection already written:
+    </p>
+    <pre><code>curl -sSO {{ api.cli }}
+chmod +x awesome-reviewers.py
+./awesome-reviewers.py search "kv cache" --limit 5
+./awesome-reviewers.py bundle llm-infra -o rubric.md
+./awesome-reviewers.py sync ./corpus --domain security</code></pre>
+    <p class="note">
+      Source in <a href="https://github.com/baz-scm/awesome-reviewers/tree/main/cli" rel="noopener"><code>cli/</code></a>.
+      It is not on a package registry yet, so there is nothing to install — see the
+      <a href="{{ '/developers/' | relative_url }}">developer portal</a>.
     </p>
 
     <h2 id="examples">Examples</h2>
@@ -166,15 +299,33 @@ curl -s {{ site.url }}/raw/index.json \
 {
   "@context": "https://schema.org",
   "@type": "WebAPI",
+  "@id": "{{ site.url }}/#api",
   "name": "Awesome Reviewers API",
-  "description": "Read-only HTTP endpoints for the Awesome Reviewers instruction corpus: single instructions and domain bundles as markdown, plus JSON indexes.",
+  "description": "Read-only HTTP endpoints for the Awesome Reviewers instruction corpus: single instructions and domain bundles as markdown, typed JSON under /v1, plus JSON indexes. GET only, no key, no authentication.",
   "url": "{{ site.url }}/api/",
-  "documentation": ["{{ site.url }}/api/", "{{ site.url }}/openapi.json"],
+  "documentation": [
+    "{{ site.url }}/api/",
+    "{{ site.url }}/developers/",
+    "{{ site.url }}/openapi.json",
+    "{{ site.url }}/agents.md"
+  ],
   "termsOfService": "{{ site.url }}/api/#terms",
   "provider": {
     "@type": "Organization",
-    "name": "Awesome Reviewers",
-    "url": "{{ site.url }}"
+    "name": "Baz",
+    "legalName": "Baz Technologies, Inc.",
+    "url": "https://baz.co",
+    "address": {
+      "@type": "PostalAddress",
+      "addressLocality": "Boston",
+      "addressRegion": "MA",
+      "addressCountry": "US"
+    },
+    "contactPoint": {
+      "@type": "ContactPoint",
+      "contactType": "technical support",
+      "url": "https://github.com/baz-scm/awesome-reviewers/issues"
+    }
   },
   "potentialAction": {
     "@type": "ConsumeAction",

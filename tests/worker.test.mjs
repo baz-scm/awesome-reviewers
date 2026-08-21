@@ -14,8 +14,13 @@ import { fileURLToPath } from 'node:url';
 import test, { describe } from 'node:test';
 
 import {
+  CATALOG_PATH,
+  DEPRECATIONS,
   PROBLEMS,
+  RATE_LIMIT,
+  RATE_LIMIT_POLICY,
   appendVaryAccept,
+  deprecationHeaders,
   handle,
   isPassThrough,
   markdownTwin,
@@ -67,6 +72,13 @@ const SITE = {
   '/llms.txt': { body: '# Awesome Reviewers\n', type: 'text/plain' },
   '/raw/site.md': { body: '# Awesome Reviewers\n\n## Developer resources\n', type: 'text/markdown' },
   '/': { body: '<!DOCTYPE html><title>Awesome Reviewers</title>', type: 'text/html; charset=utf-8' },
+  '/developers/': {
+    body: '<!DOCTYPE html><title>Developers</title>',
+    type: 'text/html; charset=utf-8',
+  },
+  '/raw/developers.md': { body: '# Developers\n', type: 'text/markdown' },
+  '/404.md': { body: '# 404 Not Found\n\n## Recover\n', type: 'text/markdown' },
+  [CATALOG_PATH]: { body: '{"linkset":[]}', type: 'application/octet-stream' },
 };
 
 const get = (path, accept) =>
@@ -213,9 +225,9 @@ describe('negotiation end to end', () => {
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type'), /text\/html/);
     assert.equal(response.headers.get('vary'), 'Accept');
-    assert.equal(
+    assert.match(
       response.headers.get('link'),
-      '</raw/example-instruction.md>; rel="alternate"; type="text/markdown"',
+      /<\/raw\/example-instruction\.md>; rel="alternate"; type="text\/markdown"/,
     );
   });
 
@@ -238,8 +250,18 @@ describe('negotiation end to end', () => {
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type'), /text\/html/);
     assert.equal(response.headers.get('vary'), 'Accept');
-    assert.equal(response.headers.get('link'), null);
+    assert.doesNotMatch(response.headers.get('link'), /rel="alternate"/);
     assert.deepEqual(origin.seen, ['/methodology/'], 'no markdown twin to probe');
+  });
+
+  test('serves a prose page as the markdown it is authored in', async () => {
+    const origin = stubOrigin(SITE);
+    const response = await handle(get('/developers/', 'text/markdown'), origin);
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'text/markdown; charset=utf-8');
+    assert.equal(response.headers.get('content-location'), '/raw/developers.md');
+    assert.equal(await response.text(), '# Developers\n');
   });
 
   test('falls back to HTML when the markdown twin is missing but HTML is welcome', async () => {
@@ -331,6 +353,150 @@ describe('error responses', () => {
   });
 });
 
+describe('markdown 404s', () => {
+  test('returns the published recovery body with a 404 status', async () => {
+    const origin = stubOrigin(SITE);
+    const response = await handle(get('/reviewers/guessed-wrong/', 'text/markdown'), origin);
+
+    assert.equal(response.status, 404);
+    assert.equal(response.headers.get('content-type'), 'text/markdown; charset=utf-8');
+    assert.equal(response.headers.get('content-location'), '/404.md');
+    assert.equal(response.headers.get('vary'), 'Accept');
+    assert.match(await response.text(), /^# 404 Not Found/);
+  });
+
+  test('recovers a missing file too, not just a missing page', async () => {
+    const origin = stubOrigin(SITE);
+    const response = await handle(get('/raw/guessed-wrong.md', 'text/markdown'), origin);
+
+    assert.equal(response.status, 404);
+    assert.match(await response.text(), /## Recover/);
+  });
+
+  test('prefers problem details when the client asked for JSON first', async () => {
+    const origin = stubOrigin(SITE);
+    const response = await handle(
+      get('/nope/', 'application/json, text/markdown;q=0.5'),
+      origin,
+    );
+
+    assert.equal(response.status, 404);
+    assert.equal(response.headers.get('content-type'), 'application/problem+json; charset=utf-8');
+  });
+
+  test('falls back to the HTML page when the recovery body is missing', async () => {
+    const { '/404.md': _dropped, ...withoutRecovery } = SITE;
+    const origin = stubOrigin(withoutRecovery);
+    const response = await handle(get('/nope/', 'text/markdown, */*'), origin);
+
+    assert.equal(response.status, 404);
+    assert.match(response.headers.get('content-type'), /text\/html/);
+  });
+});
+
+describe('rate limits', () => {
+  const limiter = (success) => ({ RATE_LIMITER: { limit: async () => ({ success }) } });
+
+  test('advertises the policy on every response', async () => {
+    const origin = stubOrigin(SITE);
+    for (const path of ['/', '/reviewers/example-instruction/', '/openapi.json', '/nope/']) {
+      const response = await handle(get(path), origin);
+      assert.equal(response.headers.get('ratelimit-policy'), RATE_LIMIT_POLICY, path);
+    }
+  });
+
+  test('enforces nothing when no limiter is bound', async () => {
+    const origin = stubOrigin(SITE);
+    const response = await handle(get('/'), origin, {});
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('ratelimit'), null, 'no count it could honestly report');
+  });
+
+  test('passes the request through while the client is inside the quota', async () => {
+    const origin = stubOrigin(SITE);
+    const response = await handle(get('/'), origin, limiter(true));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('ratelimit-policy'), RATE_LIMIT_POLICY);
+  });
+
+  test('429s a client over the quota, with Retry-After and problem details', async () => {
+    const origin = stubOrigin(SITE);
+    const response = await handle(get('/', 'application/json'), origin, limiter(false));
+
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get('retry-after'), String(RATE_LIMIT.window));
+    assert.equal(response.headers.get('ratelimit'), `"${RATE_LIMIT.name}";r=0;t=${RATE_LIMIT.window}`);
+    assert.equal(response.headers.get('content-type'), 'application/problem+json; charset=utf-8');
+
+    const problem = await response.json();
+    assert.equal(problem.code, 'rate_limited');
+    assert.equal(problem.status, 429);
+    assert.deepEqual(problem.violated_policies, [RATE_LIMIT.name]);
+    assert.deepEqual(origin.seen, [], 'the origin is never asked');
+  });
+
+  test('429 is plain text for a client that did not ask for JSON', async () => {
+    const origin = stubOrigin(SITE);
+    const response = await handle(get('/', 'text/html'), origin, limiter(false));
+
+    assert.equal(response.status, 429);
+    assert.match(response.headers.get('content-type'), /text\/plain/);
+    assert.equal(response.headers.get('retry-after'), String(RATE_LIMIT.window));
+  });
+});
+
+describe('deprecation headers', () => {
+  const deprecations = [
+    {
+      path: '/raw/index.json',
+      deprecation: '2026-09-01',
+      sunset: '2027-03-01',
+      successor: '/v1/index.json',
+    },
+  ];
+
+  test('are absent while nothing is deprecated', () => {
+    assert.deepEqual(DEPRECATIONS, []);
+    assert.deepEqual(deprecationHeaders('/raw/index.json'), {});
+  });
+
+  test('carry an RFC 9745 date, an RFC 8594 date and a successor link', () => {
+    const headers = deprecationHeaders('/raw/index.json', deprecations);
+
+    assert.equal(headers.Deprecation, `@${Date.parse('2026-09-01T00:00:00Z') / 1000}`);
+    assert.equal(headers.Sunset, new Date('2027-03-01T00:00:00Z').toUTCString());
+    assert.equal(headers.Link, '</v1/index.json>; rel="deprecation"');
+    assert.ok(
+      Date.parse(headers.Sunset) - Date.parse('2026-09-01T00:00:00Z') >= 180 * 86400 * 1000,
+      'sunset is at least 180 days after deprecation',
+    );
+  });
+
+  test('leave every other path alone', () => {
+    assert.deepEqual(deprecationHeaders('/v1/index.json', deprecations), {});
+  });
+});
+
+describe('API catalogue', () => {
+  test('is typed as a linkset with the RFC 9727 profile', async () => {
+    const origin = stubOrigin(SITE);
+    const response = await handle(get(CATALOG_PATH, 'application/linkset+json'), origin);
+
+    assert.equal(response.status, 200);
+    assert.equal(
+      response.headers.get('content-type'),
+      'application/linkset+json;profile="https://www.rfc-editor.org/info/rfc9727"',
+    );
+    assert.deepEqual(await response.json(), { linkset: [] });
+  });
+
+  test('is linked from every response', async () => {
+    const origin = stubOrigin(SITE);
+    const response = await handle(get('/'), origin);
+    assert.match(response.headers.get('link'), /<\/\.well-known\/api-catalog>; rel="api-catalog"/);
+  });
+});
+
 describe('agreement with the published description', () => {
   test('the worker catalogue matches openapi.json', () => {
     let published;
@@ -363,6 +529,30 @@ describe('agreement with the published description', () => {
       assert.equal(documented.resolution, problem.resolution);
       assert.equal(documented.status, problem.status);
     }
+  });
+
+  test('the worker quota matches the published policy', () => {
+    const published = JSON.parse(readFileSync(new URL('openapi.json', ROOT), 'utf8'));
+    const limit = published['x-rate-limit'];
+
+    assert.equal(limit.policy, RATE_LIMIT_POLICY);
+    assert.equal(limit.quota, RATE_LIMIT.quota);
+    assert.equal(limit.window_seconds, RATE_LIMIT.window);
+    assert.equal(limit.on_exceeded.problem_type, problemTypeUrl('rate_limited'));
+  });
+
+  test('the worker deprecation list matches the published one', () => {
+    const version = JSON.parse(readFileSync(new URL('v1/version.json', ROOT), 'utf8'));
+    assert.deepEqual(version.deprecations, DEPRECATIONS);
+    assert.equal(version.versioning.sunset_notice_days, 180);
+  });
+
+  test('the negotiated pages are the ones the site publishes markdown for', () => {
+    const version = JSON.parse(readFileSync(new URL('v1/version.json', ROOT), 'utf8'));
+    assert.equal(version.api_catalog, `https://awesomereviewers.com${CATALOG_PATH}`);
+    assert.equal(markdownTwin('/developers/'), '/raw/developers.md');
+    assert.equal(markdownTwin('/privacy/'), '/raw/privacy.md');
+    assert.equal(markdownTwin('/methodology/'), null, 'no twin is published for it');
   });
 
   test('the site path fileURL resolves to a checkout root', () => {

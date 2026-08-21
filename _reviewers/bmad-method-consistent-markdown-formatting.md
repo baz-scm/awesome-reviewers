@@ -14,7 +14,7 @@ language: Markdown
 comments_count: 3
 repository_stars: 51859
 ---
-
+{% raw %}
 Make Markdown generation deterministic and parser-safe.
 
 1) Quote frontmatter/template variables
@@ -33,3 +33,4 @@ description: "{{description}}"
 - Gate formatting by running the formatter/linter via pre-commit or a pre-push hook (e.g., Husky) so running `validate` doesn’t produce large, unexpected diffs.
 
 Result: fewer parser-loading issues in templates and smaller, consistent diffs from formatting tooling.
+{% endraw %}

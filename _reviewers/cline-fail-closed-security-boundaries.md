@@ -1,39 +1,69 @@
 ---
-title: Fail-closed Security Boundaries
-description: 'Security-sensitive flows must be *fail-closed*: once identity/state/ownership
-  can’t be verified, do not proceed, do not silently transfer, and do not expand privileges.'
-repository: CLINE/CLINE
+title: Fail-Closed Security Boundaries
+description: 'Adopt a single secure-by-default rule-set: **authentication/authorization
+  gates must fail closed**, **secret-bearing data must never be logged**, and **sandbox/file
+  boundaries must be enforced with real paths and deny escape hatches**.'
+repository: ClInE/cLiNe
 label: Security
 language: TypeScript
-comments_count: 8
-repository_stars: 70837
+comments_count: 13
+repository_stars: 70838
 ---
 
-Security-sensitive flows must be *fail-closed*: once identity/state/ownership can’t be verified, do not proceed, do not silently transfer, and do not expand privileges.
+Adopt a single secure-by-default rule-set: **authentication/authorization gates must fail closed**, **secret-bearing data must never be logged**, and **sandbox/file boundaries must be enforced with real paths and deny escape hatches**.
 
-Apply these rules:
-1) **Auth callbacks and state checks must be un-bypassable**
-   - If a state/nonce mismatch occurs, only continue on an explicit allow-list user action (e.g. exact button label), and treat dismissal/Esc/close as **Cancel**.
-   - Do not make nonces session-lifetime constants; generate per request (or short-lived bounded set) so replay is not viable.
+Apply this checklist:
+1) **Auth/state mismatches must not proceed on implicit user dismissal**
+- Treat only explicit user confirmation (e.g. button text) as authorization.
+- Never accept a long-lived nonce as a CSRF/anti-forgery substitute; use per-request/short-lived state or a bounded set.
 
-   Example pattern:
-   ```ts
-   if (authService.authNonce !== state) {
-     const choice = await vscode.window.showWarningMessage(
-       "Auth response could not be verified. Continue?",
-       { modal: true },
-       "Store"
-     );
-     if (choice !== "Store") return; // dismiss == cancel
-   }
-   ```
+```ts
+// Fail-closed auth callback example
+if (authService.authNonce !== state) {
+  const result = await vscode.window.showWarningMessage(
+    `Could not verify auth state for ${uri.path}. Store token only if you started this sign-in.`,
+    { modal: true },
+    "Store",
+  );
+  if (result !== "Store") return; // undefined/dismiss => cancel
+}
+```
 
-2) **Security boundaries (capabilities, routing, sandboxes) must be explicit and constrained**
-   - Never pick the “first attached” client/tool as a fallback for capability ownership; require an explicit compatible takeover contract or fail with a clear message.
-   - For sandbox write permissions, validate resolved (real) paths and ensure read-write grants do **not** become writable volumes/roots/home or ancestors-of-home. If you can’t safely determine containment, deny the protected action.
+2) **Secrets must never appear in logs or error messages**
+- In production, log only safe types (e.g., message + numbers/booleans); never serialize arbitrary args that might include tokens/URLs.
+- Reduce any logged URL to `origin` (and ideally `origin + pathname` if you truly must keep path), stripping query/fragment/userinfo.
 
-3) **Secrets hygiene: production logging/output must not leak credentials**
-   - Redact URLs down to origin at call sites that may include OAuth codes/tokens/userinfo; in production, only log narrow types (e.g. error message + numbers/booleans) and avoid serializing arbitrary strings/objects/errors that may contain credentials.
-   - Treat “sensitive file” protections as security controls: cover common secret locations and keep regression tests for newly discovered secret patterns.
+```ts
+// Secret-safe URL log pattern
+function redactUrlForLog(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.origin === "null" ? `${u.protocol}<redacted>` : u.origin;
+  } catch {
+    return "<invalid url>";
+  }
+}
 
-These practices prevent the most common security regressions shown in the discussions: fail-open auth paths, silent capability retargeting, overly-broad sandbox write grants, and credential leakage through logs.
+logger.info(`Opening browser: ${redactUrlForLog(rawUrl)}`);
+```
+
+3) **Sandbox/file grants must be boundary-safe (fail closed)**
+- Resolve real filesystem paths (e.g., `realpath`) and verify grants are inside the intended workspace.
+- Deny read-write grants when the workspace root is a filesystem/volume root, home directory, or any ancestor outside your intended sandbox boundary.
+
+```ts
+// Boundary-safe grant example (conceptual)
+const realCwd = await realpath(cwd);
+if (isHomeOrAncestor(realCwd) || isVolumeRoot(realCwd)) {
+  throw new Error("Refusing unsafe sandbox write root");
+}
+```
+
+4) **Ownership/handshake takeovers must be explicit**
+- Do not “best-effort” re-route work to the first attached registrant when a capability owner is gone.
+- If the required owner disconnects/detaches, cancel/fail with a clear user message rather than changing behavior silently.
+
+5) **Avoid bypassable assumptions in security limits**
+- If output caps or policies are applied by names/identifiers, ensure they can’t be circumvented by custom names (prefer capability/tool identity over string matching when possible).
+
+If you can’t prove (1) fail-closed behavior, (2) secret-safe observability, and (3) boundary enforcement from code + tests, treat the change as insecure-by-default and require a redesign.

@@ -1,0 +1,148 @@
+[
+  {
+    "discussion_id": "4344179303",
+    "pr_number": 15217,
+    "pr_file": "apps/examples/desktop-app/sidecar/cloud-handoff.ts",
+    "created_at": "2026-10-22T03:10:44+00:00",
+    "commented_code": "+import { randomUUID } from \"node:crypto\";\n+import { buildCloudHandoffDashboardUrl, type ClineCore } from \"@cline/core\";\n+import {\n+\ttype CloudCreationOptions,\n+\tCloudSessionError,\n+\tloadCloudModels,\n+} from \"@cline/core/cloud\";\n+import type { MessageWithMetadata } from \"@cline/llms\";\n+import {\n+\ttype AgentMode,\n+\tcreateMediaBudgetState,\n+\tgetClineEnvironmentConfig,\n+\tvalidateAndReserveImageMedia,\n+} from \"@cline/shared\";\n+import {\n+\tapplyHandoffGit,\n+\ttype HandoffGitPlan,\n+\ttype HandoffGitPreview,\n+\tinspectHandoffGit,\n+\tpreviewHandoffGit,\n+\tverifyPublishedHandoffGit,\n+} from \"./cloud-handoff-git\";\n+import {\n+\ttype CloudSessionManager,\n+\tgetCloudSessionManager,\n+} from \"./cloud-sessions\";\n+import {\n+\tgetEnvironmentContext,\n+\tgetSessionRuntimeBinding,\n+\tgetSidecarContextOwner,\n+\tsendEvent,\n+} from \"./context\";\n+import { isCloudAgentsEnabled } from \"./feature-flags\";\n+import {\n+\treadReasoningEffort,\n+\treadWorkspacePath,\n+\tworkspacePathKey,\n+\tworkspacePathsOverlap,\n+} from \"./session-config\";\n+import type {\n+\tChatSessionCommandRequest,\n+\tJsonRecord,\n+\tSidecarContext,\n+} from \"./types\";\n+\n+type HandoffSnapshot = {\n+\tcloud: CloudSessionManager;\n+\tplan: HandoffGitPlan;\n+\tmessages: MessageWithMetadata[];\n+\tconfig: JsonRecord;\n+};\n+\n+const gitPlans = new WeakMap<SidecarContext, Map<string, HandoffSnapshot>>();\n+const gitPreparations = new WeakMap<\n+\tSidecarContext,\n+\tMap<string, \"capturing\" | \"changed\" | \"captured\">\n+>();\n+type HandoffRequest = {\n+\tid: string;\n+\tcloud: CloudSessionManager;\n+} & ({ status: \"running\" } | { status: \"complete\"; result: HandoffResult });\n+const handoffRequests = new WeakMap<\n+\tSidecarContext,\n+\tMap<string, HandoffRequest>\n+>();\n+const activeSendRequests = new WeakMap<SidecarContext, Map<string, number>>();\n+\n+export type HandoffResult = Awaited<ReturnType<typeof handleHandoffOnce>>;\n+export type PrepareHandoffResult =\n+\t| { gitPreparation: HandoffGitPreview }\n+\t| { previousHandoff: { handoffAttemptId: string; result: HandoffResult } };\n+\n+function assertCloudHandoffAvailable(): void {\n+\tif (!isCloudAgentsEnabled())\n+\t\tthrow new Error(\"Cloud sessions are not available for this account.\");\n+}\n+\n+async function assertHandoffIdle(\n+\tctx: SidecarContext,\n+\tmanager: ClineCore,\n+\tsessionId: string,\n+): Promise<void> {\n+\tif (hasActiveSessionSend(ctx, sessionId))\n+\t\tthrow new Error(\"Wait for the current send to finish before using /cloud.\");\n+\tconst live = ctx.liveSessions.get(sessionId);\n+\tconst persisted = await manager.get(sessionId);\n+\tif (!live && !persisted)\n+\t\tthrow new Error(`Session ${sessionId} was not found.`);\n+\tconst workspaceKey =\n+\t\tworkspacePathKey(live?.config) ?? workspacePathKey(persisted);\n+\tif (\n+\t\tworkspaceKey &&\n+\t\t[...ctx.restoringWorkspacePaths].some((locked) =>\n+\t\t\tworkspacePathsOverlap(workspaceKey, locked),\n+\t\t)\n+\t)\n+\t\tthrow new Error(\n+\t\t\t\"Wait for workspace preparation to finish before using /cloud.\",\n+\t\t);\n+\tif (\n+\t\tlive?.busy ||\n+\t\tlive?.transitioningProvider ||\n+\t\t[\"starting\", \"running\", \"stopping\"].includes(live?.status ?? \"\") ||\n+\t\tpersisted?.status === \"running\" ||\n+\t\tpersisted?.status === \"pending\"\n+\t)\n+\t\tthrow new Error(\"Wait for the current run to finish before using /cloud.\");\n+\tif (\n+\t\t(await manager.pendingPrompts.list({ sessionId })).length ||\n+\t\tlive?.promptsInQueue.length\n+\t)\n+\t\tthrow new Error(\"Remove queued prompts before using /cloud.\");\n+}\n+\n+async function prepareCloudHandoff(\n+\tctx: SidecarContext,\n+\trequest: ChatSessionCommandRequest,\n+) {\n+\tconst sessionId = request.sessionId?.trim();\n+\tif (!sessionId) throw new Error(\"sessionId is required\");\n+\tassertCloudHandoffAvailable();\n+\tconst manager = getSessionRuntimeBinding(ctx).sessionManager;\n+\tawait assertHandoffIdle(ctx, manager, sessionId);\n+\tconst persisted = await manager.get(sessionId);\n+\tconst config: JsonRecord = {\n+\t\tprovider: persisted?.provider,\n+\t\tmodel: persisted?.model,\n+\t\t...(ctx.liveSessions.get(sessionId)?.config ?? {}),\n+\t\t...(request.config ?? {}),\n+\t};\n+\tconst cwd = readWorkspacePath(config) ?? readWorkspacePath(persisted);\n+\tif (!cwd) throw new Error(\"Cloud handoff requires a workspace path.\");\n+\treturn { manager, config, cwd };\n+}\n+\n+function assertHandoffAccount(\n+\tctx: SidecarContext,\n+\tcloud: CloudSessionManager,\n+): void {\n+\tif (getSidecarContextOwner(ctx).cloudSessionManager !== cloud)\n+\t\tthrow new Error(\n+\t\t\t\"The cloud account changed. Run /cloud again to review the preparation plan.\",\n+\t\t);\n+}\n+\n+async function resolveCloudModel(\n+\tctx: SidecarContext,\n+\tcloud: CloudSessionManager,\n+\tconfig: JsonRecord,\n+\trepoUrl: string,\n+) {\n+\tassertHandoffAccount(ctx, cloud);\n+\tconst { organizationId } = await cloud.prepareHandoffRepository(repoUrl);",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4344179303",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15217,
+        "pr_file": "apps/examples/desktop-app/sidecar/cloud-handoff.ts",
+        "discussion_id": "4344179303",
+        "commented_code": "@@ -0,0 +1,464 @@\n+import { randomUUID } from \"node:crypto\";\n+import { buildCloudHandoffDashboardUrl, type ClineCore } from \"@cline/core\";\n+import {\n+\ttype CloudCreationOptions,\n+\tCloudSessionError,\n+\tloadCloudModels,\n+} from \"@cline/core/cloud\";\n+import type { MessageWithMetadata } from \"@cline/llms\";\n+import {\n+\ttype AgentMode,\n+\tcreateMediaBudgetState,\n+\tgetClineEnvironmentConfig,\n+\tvalidateAndReserveImageMedia,\n+} from \"@cline/shared\";\n+import {\n+\tapplyHandoffGit,\n+\ttype HandoffGitPlan,\n+\ttype HandoffGitPreview,\n+\tinspectHandoffGit,\n+\tpreviewHandoffGit,\n+\tverifyPublishedHandoffGit,\n+} from \"./cloud-handoff-git\";\n+import {\n+\ttype CloudSessionManager,\n+\tgetCloudSessionManager,\n+} from \"./cloud-sessions\";\n+import {\n+\tgetEnvironmentContext,\n+\tgetSessionRuntimeBinding,\n+\tgetSidecarContextOwner,\n+\tsendEvent,\n+} from \"./context\";\n+import { isCloudAgentsEnabled } from \"./feature-flags\";\n+import {\n+\treadReasoningEffort,\n+\treadWorkspacePath,\n+\tworkspacePathKey,\n+\tworkspacePathsOverlap,\n+} from \"./session-config\";\n+import type {\n+\tChatSessionCommandRequest,\n+\tJsonRecord,\n+\tSidecarContext,\n+} from \"./types\";\n+\n+type HandoffSnapshot = {\n+\tcloud: CloudSessionManager;\n+\tplan: HandoffGitPlan;\n+\tmessages: MessageWithMetadata[];\n+\tconfig: JsonRecord;\n+};\n+\n+const gitPlans = new WeakMap<SidecarContext, Map<string, HandoffSnapshot>>();\n+const gitPreparations = new WeakMap<\n+\tSidecarContext,\n+\tMap<string, \"capturing\" | \"changed\" | \"captured\">\n+>();\n+type HandoffRequest = {\n+\tid: string;\n+\tcloud: CloudSessionManager;\n+} & ({ status: \"running\" } | { status: \"complete\"; result: HandoffResult });\n+const handoffRequests = new WeakMap<\n+\tSidecarContext,\n+\tMap<string, HandoffRequest>\n+>();\n+const activeSendRequests = new WeakMap<SidecarContext, Map<string, number>>();\n+\n+export type HandoffResult = Awaited<ReturnType<typeof handleHandoffOnce>>;\n+export type PrepareHandoffResult =\n+\t| { gitPreparation: HandoffGitPreview }\n+\t| { previousHandoff: { handoffAttemptId: string; result: HandoffResult } };\n+\n+function assertCloudHandoffAvailable(): void {\n+\tif (!isCloudAgentsEnabled())\n+\t\tthrow new Error(\"Cloud sessions are not available for this account.\");\n+}\n+\n+async function assertHandoffIdle(\n+\tctx: SidecarContext,\n+\tmanager: ClineCore,\n+\tsessionId: string,\n+): Promise<void> {\n+\tif (hasActiveSessionSend(ctx, sessionId))\n+\t\tthrow new Error(\"Wait for the current send to finish before using /cloud.\");\n+\tconst live = ctx.liveSessions.get(sessionId);\n+\tconst persisted = await manager.get(sessionId);\n+\tif (!live && !persisted)\n+\t\tthrow new Error(`Session ${sessionId} was not found.`);\n+\tconst workspaceKey =\n+\t\tworkspacePathKey(live?.config) ?? workspacePathKey(persisted);\n+\tif (\n+\t\tworkspaceKey &&\n+\t\t[...ctx.restoringWorkspacePaths].some((locked) =>\n+\t\t\tworkspacePathsOverlap(workspaceKey, locked),\n+\t\t)\n+\t)\n+\t\tthrow new Error(\n+\t\t\t\"Wait for workspace preparation to finish before using /cloud.\",\n+\t\t);\n+\tif (\n+\t\tlive?.busy ||\n+\t\tlive?.transitioningProvider ||\n+\t\t[\"starting\", \"running\", \"stopping\"].includes(live?.status ?? \"\") ||\n+\t\tpersisted?.status === \"running\" ||\n+\t\tpersisted?.status === \"pending\"\n+\t)\n+\t\tthrow new Error(\"Wait for the current run to finish before using /cloud.\");\n+\tif (\n+\t\t(await manager.pendingPrompts.list({ sessionId })).length ||\n+\t\tlive?.promptsInQueue.length\n+\t)\n+\t\tthrow new Error(\"Remove queued prompts before using /cloud.\");\n+}\n+\n+async function prepareCloudHandoff(\n+\tctx: SidecarContext,\n+\trequest: ChatSessionCommandRequest,\n+) {\n+\tconst sessionId = request.sessionId?.trim();\n+\tif (!sessionId) throw new Error(\"sessionId is required\");\n+\tassertCloudHandoffAvailable();\n+\tconst manager = getSessionRuntimeBinding(ctx).sessionManager;\n+\tawait assertHandoffIdle(ctx, manager, sessionId);\n+\tconst persisted = await manager.get(sessionId);\n+\tconst config: JsonRecord = {\n+\t\tprovider: persisted?.provider,\n+\t\tmodel: persisted?.model,\n+\t\t...(ctx.liveSessions.get(sessionId)?.config ?? {}),\n+\t\t...(request.config ?? {}),\n+\t};\n+\tconst cwd = readWorkspacePath(config) ?? readWorkspacePath(persisted);\n+\tif (!cwd) throw new Error(\"Cloud handoff requires a workspace path.\");\n+\treturn { manager, config, cwd };\n+}\n+\n+function assertHandoffAccount(\n+\tctx: SidecarContext,\n+\tcloud: CloudSessionManager,\n+): void {\n+\tif (getSidecarContextOwner(ctx).cloudSessionManager !== cloud)\n+\t\tthrow new Error(\n+\t\t\t\"The cloud account changed. Run /cloud again to review the preparation plan.\",\n+\t\t);\n+}\n+\n+async function resolveCloudModel(\n+\tctx: SidecarContext,\n+\tcloud: CloudSessionManager,\n+\tconfig: JsonRecord,\n+\trepoUrl: string,\n+) {\n+\tassertHandoffAccount(ctx, cloud);\n+\tconst { organizationId } = await cloud.prepareHandoffRepository(repoUrl);",
+        "comment_created_at": "2026-10-22T03:10:44+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "`prepareHandoffRepository` isn't in `CLOUD_HUB_OPERATIONS` in #15205, so it won't be reachable through the Hub client. It's also called in both prepare and run (via `resolveCloudModel`), along with `loadCloudModels` and 8 `assertHandoffAccount` calls. Resolving once and carrying a scope token in the snapshot would remove most of the repeated checks.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4364262040",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15217,
+        "pr_file": "apps/examples/desktop-app/sidecar/cloud-handoff.ts",
+        "discussion_id": "4344179303",
+        "commented_code": "@@ -0,0 +1,464 @@\n+import { randomUUID } from \"node:crypto\";\n+import { buildCloudHandoffDashboardUrl, type ClineCore } from \"@cline/core\";\n+import {\n+\ttype CloudCreationOptions,\n+\tCloudSessionError,\n+\tloadCloudModels,\n+} from \"@cline/core/cloud\";\n+import type { MessageWithMetadata } from \"@cline/llms\";\n+import {\n+\ttype AgentMode,\n+\tcreateMediaBudgetState,\n+\tgetClineEnvironmentConfig,\n+\tvalidateAndReserveImageMedia,\n+} from \"@cline/shared\";\n+import {\n+\tapplyHandoffGit,\n+\ttype HandoffGitPlan,\n+\ttype HandoffGitPreview,\n+\tinspectHandoffGit,\n+\tpreviewHandoffGit,\n+\tverifyPublishedHandoffGit,\n+} from \"./cloud-handoff-git\";\n+import {\n+\ttype CloudSessionManager,\n+\tgetCloudSessionManager,\n+} from \"./cloud-sessions\";\n+import {\n+\tgetEnvironmentContext,\n+\tgetSessionRuntimeBinding,\n+\tgetSidecarContextOwner,\n+\tsendEvent,\n+} from \"./context\";\n+import { isCloudAgentsEnabled } from \"./feature-flags\";\n+import {\n+\treadReasoningEffort,\n+\treadWorkspacePath,\n+\tworkspacePathKey,\n+\tworkspacePathsOverlap,\n+} from \"./session-config\";\n+import type {\n+\tChatSessionCommandRequest,\n+\tJsonRecord,\n+\tSidecarContext,\n+} from \"./types\";\n+\n+type HandoffSnapshot = {\n+\tcloud: CloudSessionManager;\n+\tplan: HandoffGitPlan;\n+\tmessages: MessageWithMetadata[];\n+\tconfig: JsonRecord;\n+};\n+\n+const gitPlans = new WeakMap<SidecarContext, Map<string, HandoffSnapshot>>();\n+const gitPreparations = new WeakMap<\n+\tSidecarContext,\n+\tMap<string, \"capturing\" | \"changed\" | \"captured\">\n+>();\n+type HandoffRequest = {\n+\tid: string;\n+\tcloud: CloudSessionManager;\n+} & ({ status: \"running\" } | { status: \"complete\"; result: HandoffResult });\n+const handoffRequests = new WeakMap<\n+\tSidecarContext,\n+\tMap<string, HandoffRequest>\n+>();\n+const activeSendRequests = new WeakMap<SidecarContext, Map<string, number>>();\n+\n+export type HandoffResult = Awaited<ReturnType<typeof handleHandoffOnce>>;\n+export type PrepareHandoffResult =\n+\t| { gitPreparation: HandoffGitPreview }\n+\t| { previousHandoff: { handoffAttemptId: string; result: HandoffResult } };\n+\n+function assertCloudHandoffAvailable(): void {\n+\tif (!isCloudAgentsEnabled())\n+\t\tthrow new Error(\"Cloud sessions are not available for this account.\");\n+}\n+\n+async function assertHandoffIdle(\n+\tctx: SidecarContext,\n+\tmanager: ClineCore,\n+\tsessionId: string,\n+): Promise<void> {\n+\tif (hasActiveSessionSend(ctx, sessionId))\n+\t\tthrow new Error(\"Wait for the current send to finish before using /cloud.\");\n+\tconst live = ctx.liveSessions.get(sessionId);\n+\tconst persisted = await manager.get(sessionId);\n+\tif (!live && !persisted)\n+\t\tthrow new Error(`Session ${sessionId} was not found.`);\n+\tconst workspaceKey =\n+\t\tworkspacePathKey(live?.config) ?? workspacePathKey(persisted);\n+\tif (\n+\t\tworkspaceKey &&\n+\t\t[...ctx.restoringWorkspacePaths].some((locked) =>\n+\t\t\tworkspacePathsOverlap(workspaceKey, locked),\n+\t\t)\n+\t)\n+\t\tthrow new Error(\n+\t\t\t\"Wait for workspace preparation to finish before using /cloud.\",\n+\t\t);\n+\tif (\n+\t\tlive?.busy ||\n+\t\tlive?.transitioningProvider ||\n+\t\t[\"starting\", \"running\", \"stopping\"].includes(live?.status ?? \"\") ||\n+\t\tpersisted?.status === \"running\" ||\n+\t\tpersisted?.status === \"pending\"\n+\t)\n+\t\tthrow new Error(\"Wait for the current run to finish before using /cloud.\");\n+\tif (\n+\t\t(await manager.pendingPrompts.list({ sessionId })).length ||\n+\t\tlive?.promptsInQueue.length\n+\t)\n+\t\tthrow new Error(\"Remove queued prompts before using /cloud.\");\n+}\n+\n+async function prepareCloudHandoff(\n+\tctx: SidecarContext,\n+\trequest: ChatSessionCommandRequest,\n+) {\n+\tconst sessionId = request.sessionId?.trim();\n+\tif (!sessionId) throw new Error(\"sessionId is required\");\n+\tassertCloudHandoffAvailable();\n+\tconst manager = getSessionRuntimeBinding(ctx).sessionManager;\n+\tawait assertHandoffIdle(ctx, manager, sessionId);\n+\tconst persisted = await manager.get(sessionId);\n+\tconst config: JsonRecord = {\n+\t\tprovider: persisted?.provider,\n+\t\tmodel: persisted?.model,\n+\t\t...(ctx.liveSessions.get(sessionId)?.config ?? {}),\n+\t\t...(request.config ?? {}),\n+\t};\n+\tconst cwd = readWorkspacePath(config) ?? readWorkspacePath(persisted);\n+\tif (!cwd) throw new Error(\"Cloud handoff requires a workspace path.\");\n+\treturn { manager, config, cwd };\n+}\n+\n+function assertHandoffAccount(\n+\tctx: SidecarContext,\n+\tcloud: CloudSessionManager,\n+): void {\n+\tif (getSidecarContextOwner(ctx).cloudSessionManager !== cloud)\n+\t\tthrow new Error(\n+\t\t\t\"The cloud account changed. Run /cloud again to review the preparation plan.\",\n+\t\t);\n+}\n+\n+async function resolveCloudModel(\n+\tctx: SidecarContext,\n+\tcloud: CloudSessionManager,\n+\tconfig: JsonRecord,\n+\trepoUrl: string,\n+) {\n+\tassertHandoffAccount(ctx, cloud);\n+\tconst { organizationId } = await cloud.prepareHandoffRepository(repoUrl);",
+        "comment_created_at": "2026-10-23T21:10:46+00:00",
+        "comment_author": "johnwschoi",
+        "comment_body": "The missing Hub operation is fixed: `prepareHandoffRepository` is registered in `CLOUD_HUB_OPERATIONS`, validated by the Hub service, and exposed by `CloudHubClient`. The preparation snapshot also captures a `CloudHubScope`, which subsequent operations carry so they cannot silently switch accounts. Socket coverage exercises repository preparation, and account-scope tests cover changes during recovery. This addresses the RPC compatibility issue; it does not remove the repeated model/repository checks.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4331966109",
+    "pr_number": 15235,
+    "pr_file": "apps/vscode/webview-ui/src/hooks/useGitHubConnection.ts",
+    "created_at": "2026-10-21T01:03:05+00:00",
+    "commented_code": "if (!needsPolling) {\n \t\t\treturn\n \t\t}\n-\t\tconst timer = setInterval(() => void refresh(), DISCONNECTED_POLL_MS)\n-\t\tconst onFocus = () => void refresh()\n-\t\twindow.addEventListener(\"focus\", onFocus)\n+\t\t// Background re-checks stay silent; only the user's own refresh shows a spinner.\n+\t\tconst recheck = () => void load(true, true)",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4331966109",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15235,
+        "pr_file": "apps/vscode/webview-ui/src/hooks/useGitHubConnection.ts",
+        "discussion_id": "4331966109",
+        "commented_code": "@@ -89,14 +91,15 @@ export function useGitHubConnection(enabled: boolean) {\n \t\tif (!needsPolling) {\n \t\t\treturn\n \t\t}\n-\t\tconst timer = setInterval(() => void refresh(), DISCONNECTED_POLL_MS)\n-\t\tconst onFocus = () => void refresh()\n-\t\twindow.addEventListener(\"focus\", onFocus)\n+\t\t// Background re-checks stay silent; only the user's own refresh shows a spinner.\n+\t\tconst recheck = () => void load(true, true)",
+        "comment_created_at": "2026-10-21T01:03:05+00:00",
+        "comment_author": "dominiccooney",
+        "comment_body": "This is why boolean parameters are terrible. At the call site, it is impossible to know without scrolling what these mean; and if you mix them up, then no type error results.\n\nIt would be better to have something like:\n\n`load({ refresh: true, background: true })`\n\nYou can handle defaults with a splat like:\n\n```\nargs = { refresh: false, background: false, ...actualArgs }\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4332092901",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15235,
+        "pr_file": "apps/vscode/webview-ui/src/hooks/useGitHubConnection.ts",
+        "discussion_id": "4331966109",
+        "commented_code": "@@ -89,14 +91,15 @@ export function useGitHubConnection(enabled: boolean) {\n \t\tif (!needsPolling) {\n \t\t\treturn\n \t\t}\n-\t\tconst timer = setInterval(() => void refresh(), DISCONNECTED_POLL_MS)\n-\t\tconst onFocus = () => void refresh()\n-\t\twindow.addEventListener(\"focus\", onFocus)\n+\t\t// Background re-checks stay silent; only the user's own refresh shows a spinner.\n+\t\tconst recheck = () => void load(true, true)",
+        "comment_created_at": "2026-10-21T01:25:50+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Agreed, switched to an options object in 56021e0af: `load({ refresh: true, userInitiated: true })`, with defaults via destructuring (`{ refresh = false, userInitiated = false } = {}`), which does the same thing as the spread. The poll and focus listener now call `load({ refresh: true })`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4248147826",
+    "pr_number": 14986,
+    "pr_file": "sdk/packages/core/src/hub/runtime-host/hub-runtime-host.ts",
+    "created_at": "2026-10-12T12:48:24+00:00",
+    "commented_code": "{\n \t\t\t\tsessionId: input.sessionId,\n \t\t\t\tinput: input.prompt,\n+\t\t\t\tdisplayPrompt: input.displayPrompt,",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4248173998",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14986,
+        "pr_file": "sdk/packages/core/src/hub/runtime-host/hub-runtime-host.ts",
+        "discussion_id": "4248147826",
+        "commented_code": "@@ -1163,6 +1163,7 @@ export class HubRuntimeHost implements RuntimeHost {\n \t\t\t{\n \t\t\t\tsessionId: input.sessionId,\n \t\t\t\tinput: input.prompt,\n+\t\t\t\tdisplayPrompt: input.displayPrompt,",
+        "comment_created_at": "2026-10-12T12:48:24+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Agreed, this one's worth closing in the PR: the hub now accepts `displayPrompt` on input, so it should carry it back out. @dakjdakd \u2014 could you forward `displayPrompt` in the two event copies (`session-event-projector.ts` `pending_prompt_submitted` case and `HubRuntimeHost`'s `session.pending_prompt_submitted` case)? No shipped host hits this path today, but a field that goes in and never comes out is a trap for the next integrator.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4249805232",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14986,
+        "pr_file": "sdk/packages/core/src/hub/runtime-host/hub-runtime-host.ts",
+        "discussion_id": "4248147826",
+        "commented_code": "@@ -1163,6 +1163,7 @@ export class HubRuntimeHost implements RuntimeHost {\n \t\t\t{\n \t\t\t\tsessionId: input.sessionId,\n \t\t\t\tinput: input.prompt,\n+\t\t\t\tdisplayPrompt: input.displayPrompt,",
+        "comment_created_at": "2026-10-12T15:37:54+00:00",
+        "comment_author": "dakjdakd",
+        "comment_body": "Fixed in e6dd0b4.\n\nBoth submitted-event copies now forward `displayPrompt`: the server's `pending_prompt_submitted` projection into the Hub envelope, and `HubRuntimeHost`'s conversion back into a Core event. The expanded model prompt, delivery mode, image/file arrays, and attachment count are preserved alongside the original display text.\n\nThe regression sends a Core submitted event through the real server projector and HubRuntimeHost event handler and checks both payloads. It covers a separate display string, an explicitly empty display string, and an omitted field. The Hub runtime, run-handler, and pending-prompt suites pass (58 tests), the SDK build and Core typecheck including smoke checks pass, and the changed files pass Biome.\n\nThe PR is still Draft because GitHub does not grant my account permission to mark it ready for review. Could you mark it ready from the repository side once you've checked this follow-up?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4248816934",
+    "pr_number": 5524,
+    "pr_file": "src/api/providers/cline.ts",
+    "created_at": "2026-10-12T13:55:17+00:00",
+    "commented_code": "defaultHeaders: {\n \t\t\t\t\t\t\"HTTP-Referer\": \"https://cline.bot\",\n \t\t\t\t\t\t\"X-Title\": \"Cline\",\n-\t\t\t\t\t\t\"X-Task-ID\": this.options.taskId || \"\",\n+\t\t\t\t\t\t\"X-Task-ID\": this.options.ulid || \"\",",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4248816934",
+        "repo_full_name": "cline/cline",
+        "pr_number": 5524,
+        "pr_file": "src/api/providers/cline.ts",
+        "discussion_id": "4248816934",
+        "commented_code": "@@ -51,7 +51,7 @@ export class ClineHandler implements ApiHandler {\n \t\t\t\t\tdefaultHeaders: {\n \t\t\t\t\t\t\"HTTP-Referer\": \"https://cline.bot\",\n \t\t\t\t\t\t\"X-Title\": \"Cline\",\n-\t\t\t\t\t\t\"X-Task-ID\": this.options.taskId || \"\",\n+\t\t\t\t\t\t\"X-Task-ID\": this.options.ulid || \"\",",
+        "comment_created_at": "2026-10-12T13:55:17+00:00",
+        "comment_author": "BranchSun",
+        "comment_body": "\ud83d\udfe2 **bug** (low)\n\nThe value sent in the `X-Task-ID` request header changed from the task ID to the ulid while the header name (and therefore the contract the Cline backend sees) stayed the same. If the backend treats this header as a task identifier (attribution, rate limiting, server-side joins), the meaning of the header silently changed; for tasks that have no ulid the header is also now empty where it previously always carried a value. This is probably intended as part of \"ulid everywhere\", but the header name no longer describes its content.\n\n**\u5efa\u8bae**: Confirm with the backend owner which identifier this header is expected to carry, then either keep sending the task ID or rename the header (e.g. `X-Task-ULID`) so the contract stays unambiguous. If both ids are needed, send them as separate headers.\n\n**\u8bc1\u636e**: `\"X-Task-ID\": this.options.ulid || \"\",`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3866945712",
+    "pr_number": 13602,
+    "pr_file": "apps/vscode/src/core/controller/models/getLmStudioModels.ts",
+    "created_at": "2026-08-26T21:58:24+00:00",
+    "commented_code": "if (!URL.canParse(baseUrl)) {\n \t\t\treturn StringArray.create({ values: [] })\n \t\t}\n-\t\tconst endpoint = new URL(\"api/v0/models\", baseUrl)\n-\n+\t\tconst endpoint = new URL(\"api/v1/models\", baseUrl)",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "3867051146",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13602,
+        "pr_file": "apps/vscode/src/core/controller/models/getLmStudioModels.ts",
+        "discussion_id": "3866945712",
+        "commented_code": "@@ -15,11 +15,31 @@ export async function getLmStudioModels(_controller: Controller, request: String\n \t\tif (!URL.canParse(baseUrl)) {\n \t\t\treturn StringArray.create({ values: [] })\n \t\t}\n-\t\tconst endpoint = new URL(\"api/v0/models\", baseUrl)\n-\n+\t\tconst endpoint = new URL(\"api/v1/models\", baseUrl)",
+        "comment_created_at": "2026-08-26T21:58:24+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "Fixed in 5d0cbf351. The settings discovery path now strips a trailing slash and optional `/v1` before appending `/api/v1/models`, matching the runtime normalization. Added coverage for both `http://localhost:1234/v1/` and a reverse-proxy prefix (`https://example.com/lmstudio/v1`).",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

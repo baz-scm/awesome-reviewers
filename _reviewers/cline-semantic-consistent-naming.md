@@ -1,49 +1,50 @@
 ---
 title: Semantic, Consistent Naming
-description: Use naming that communicates meaning, follows established casing/provenance
-  rules, stays consistent across shared types and call sites, and makes the correct
-  API choice obvious.
-repository: CLINE/CLINE
+description: 'Use naming that is semantically precise, consistent with existing conventions,
+  and hard to misuse.
+
+
+  **Rules**
+
+  1. **Prefer existing vocabulary/types.** If the codebase already has a canonical
+  type or naming scheme, align to it (e.g., client identifiers should use the established
+  `ClientName` concept).'
+repository: CLINE/cline
 label: Naming Conventions
 language: TypeScript
-comments_count: 6
-repository_stars: 70837
+comments_count: 7
+repository_stars: 70839
 ---
 
-Use naming that communicates meaning, follows established casing/provenance rules, stays consistent across shared types and call sites, and makes the correct API choice obvious.
+Use naming that is semantically precise, consistent with existing conventions, and hard to misuse.
 
-Apply these rules:
+**Rules**
+1. **Prefer existing vocabulary/types.** If the codebase already has a canonical type or naming scheme, align to it (e.g., client identifiers should use the established `ClientName` concept).
+2. **Avoid vague booleans.** If a boolean represents a concept with more than “true/false semantics” (or requires guessing what false means), rename to the positive meaning or replace with a string/enum.
+3. **Make exported/public APIs self-selecting.** Public functions/types should clearly indicate when to call them. If multiple similar exports exist, consider exporting one obvious entry point; otherwise rename to strongly communicate the selection criteria.
+4. **Keep event/property identifiers consistent end-to-end.** If you rename an event property key (e.g., from `taskId` to `ulid`), update all call sites and ensure the same logical property doesn’t contain mixed identifier formats across events.
+5. **Avoid jargon in names and docs.** Use clear, positive language that matches the actual meaning; when domain terms are unavoidable, document what they mean and how callers should use them.
 
-- Prefer intent/state names over vague booleans
-  - Good: `userInitiated` instead of `background`.
-- Avoid boolean fields when the domain state needs explanation; model it as a positive, descriptive set of values
-  - Prefer string-literal unions (or enums) that say what the state *is*.
-- Standardize on shared identifier types across modules
-  - If a shared type exists (e.g., `ClientName`), don’t reintroduce parallel “client” names that drift.
-- When renaming identifiers/keys (especially telemetry), update every call site and keep event-property keys consistent
-  - Positional renames can typecheck while silently breaking downstream joins.
-- Make exported/public APIs easy to choose
-  - Prefer one exported “main” function; if multiple are public, ensure names strongly indicate which one callers should use.
-- Follow existing casing conventions based on provenance
-  - Example rule: keys provided by callers in a `context` object are camelCase; keys added by telemetry envelopes/global enrichment are snake_case.
-
-Example:
+**Examples**
+- Replace vague boolean with explicit meaning:
 ```ts
-// Prefer descriptive state over ambiguous booleans
+// Before: caller must infer what background=false means
+load(refresh, background)
+
+// After: name the intention/state
+load(userInitiated, /* ... */)
+```
+- Replace boolean domain with an explicit state:
+```ts
 type Entry = "run" | "continue";
-type PromptState = "seeded" | "written";
 
-interface AgentRunLifecycleContext {
+interface Ctx {
   entry?: Entry;
-  promptState?: PromptState;
-}
-
-// Prefer shared identifiers
-type ClientName = "cline-cli" | "cline-desktop" | "cline-vscode" | "cline-jetbrains";
-
-function buildRequest(client: ClientName) {
-  // ...
+  promptSeeded?: "seeded" | "written"; // or a clearer two-state enum if applicable
 }
 ```
-
-If a name change affects identifiers/keys, treat it like a breaking change: rename + update all producers/consumers together, then add/verify tests that assert the emitted keys.
+- Ensure event property keys are consistent across producers:
+```ts
+// If you emit ulid under `ulid`, every call site should pass ulid there.
+telemetry.capture({ properties: { ulid, /* ... */ } });
+```

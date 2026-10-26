@@ -1,0 +1,394 @@
+[
+  {
+    "discussion_id": "4122484530",
+    "pr_number": 14609,
+    "pr_file": "sdk/packages/core/src/runtime/host/local-runtime-host.ts",
+    "created_at": "2026-10-08T08:08:50+00:00",
+    "commented_code": "exitCode?: number | null,\n \t): Promise<void> {\n \t\tif (!session.artifacts) return;\n+\t\t// Turns aborted by teardown settle concurrently with it; their idle or\n+\t\t// running transitions must not overwrite the status teardown persists.\n+\t\tif (session.shuttingDown && isNonTerminalSessionStatus(status)) return;",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4216535627",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14609,
+        "pr_file": "sdk/packages/core/src/runtime/host/local-runtime-host.ts",
+        "discussion_id": "4122484530",
+        "commented_code": "@@ -2475,6 +2494,9 @@ export class LocalRuntimeHost implements RuntimeHost {\n \t\texitCode?: number | null,\n \t): Promise<void> {\n \t\tif (!session.artifacts) return;\n+\t\t// Turns aborted by teardown settle concurrently with it; their idle or\n+\t\t// running transitions must not overwrite the status teardown persists.\n+\t\tif (session.shuttingDown && isNonTerminalSessionStatus(status)) return;",
+        "comment_created_at": "2026-10-08T08:08:50+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Valid, and the window is wider than the comment says: `updateSessionStatus` in the persistence service retries a write whose status lock went stale, so when the two writes overlap the in-flight `running` fails its first attempt, re-reads the row and writes `running` on top of `cancelled`. The late writer always wins.\n\nFixed in \"serialize session status writes so teardown's status lands last\": status writes are chained per session on the same promise queue the compaction state already uses, so teardown's write waits for the in-flight one, and the shutting-down guard now runs when a write actually starts rather than when it is requested. The \"drained prompt whose turn was still preparing\" test now keeps the `running` write held across `stopSession` and asserts `cancelled` is not issued until it is released.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4253081612",
+    "pr_number": 14956,
+    "pr_file": "apps/examples/desktop-app/webview/hooks/use-source-control.ts",
+    "created_at": "2026-10-16T00:41:34+00:00",
+    "commented_code": "+\"use client\";\n+\n+import { useCallback, useEffect, useRef, useState } from \"react\";\n+import { desktopClient } from \"@/lib/desktop-client\";\n+\n+export type SourceControlStatus = \"M\" | \"A\" | \"D\" | \"R\" | \"?\" | \"U\";\n+\n+export type SourceControlFile = {\n+\t/** Repository-root-relative, forward slashes. */\n+\tpath: string;\n+\t/** Previous path of a staged rename or copy; unstaging must cover both. */\n+\toriginalPath?: string;\n+\tstatus: SourceControlStatus;\n+\tadditions: number | null;\n+\tdeletions: number | null;\n+};\n+\n+/** A file as changed by a past commit. */\n+export type CommitFile = {\n+\tpath: string;\n+\toriginalPath?: string;\n+\tstatus: SourceControlStatus;\n+\tadditions: number | null;\n+\tdeletions: number | null;\n+};\n+\n+export type SourceControlCommit = {\n+\tsha: string;\n+\tshortSha: string;\n+\tsubject: string;\n+\trelativeDate: string;\n+\tpushed: boolean;\n+};\n+\n+export type SourceControlState = {\n+\tenvironmentId: string;\n+\troot: string | null;\n+\tbranch: string | null;\n+\thasUpstream: boolean;\n+\tahead: number;\n+\tbehind: number;\n+\tstaged: SourceControlFile[];\n+\tunstaged: SourceControlFile[];\n+\tuntracked: SourceControlFile[];\n+\tcommits: SourceControlCommit[];\n+};\n+\n+export type SourceControlAction =\n+\t| { type: \"stage\"; paths: string[] }\n+\t| { type: \"unstage\"; paths: string[] }\n+\t| { type: \"discard\"; paths: string[]; untrackedPaths: string[] }\n+\t| { type: \"commit\"; message: string; push: boolean }\n+\t| { type: \"push\" }\n+\t| { type: \"pull\" };\n+\n+const POLL_INTERVAL_MS = 10_000;\n+\n+/** Paths `git restore --staged` needs to fully undo staging these files. */\n+export function unstagePaths(files: SourceControlFile[]): string[] {\n+\tconst paths: string[] = [];\n+\tfor (const file of files) {\n+\t\tpaths.push(file.path);\n+\t\tif (file.originalPath) paths.push(file.originalPath);\n+\t}\n+\treturn paths;\n+}\n+\n+/**\n+ * Repository state for the workspace panel. Refreshes on mount, on an\n+ * interval while the window is visible, on focus, and after every action;\n+ * callers can also bump `refreshKey` (e.g. when the agent edits files).\n+ */\n+export function useSourceControl({\n+\tenvironmentId,\n+\tcwd,\n+\tenabled,\n+\trefreshKey,\n+}: {\n+\tenvironmentId: string;\n+\tcwd: string;\n+\tenabled: boolean;\n+\trefreshKey?: string;\n+}) {\n+\tconst [state, setState] = useState<SourceControlState | null>(null);\n+\tconst [loading, setLoading] = useState(false);\n+\tconst [error, setError] = useState<string | null>(null);\n+\tconst [busy, setBusy] = useState(false);\n+\tconst requestRef = useRef(0);\n+\n+\tconst refresh = useCallback(async () => {\n+\t\tif (!enabled || !cwd) return;\n+\t\tconst requestId = ++requestRef.current;\n+\t\tsetLoading(true);\n+\t\ttry {\n+\t\t\tconst next = await desktopClient.invoke<SourceControlState>(\n+\t\t\t\t\"get_source_control_state\",\n+\t\t\t\t{ environmentId, cwd },\n+\t\t\t);\n+\t\t\tif (requestId !== requestRef.current) return;",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4289709548",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14956,
+        "pr_file": "apps/examples/desktop-app/webview/hooks/use-source-control.ts",
+        "discussion_id": "4253081612",
+        "commented_code": "@@ -0,0 +1,149 @@\n+\"use client\";\n+\n+import { useCallback, useEffect, useRef, useState } from \"react\";\n+import { desktopClient } from \"@/lib/desktop-client\";\n+\n+export type SourceControlStatus = \"M\" | \"A\" | \"D\" | \"R\" | \"?\" | \"U\";\n+\n+export type SourceControlFile = {\n+\t/** Repository-root-relative, forward slashes. */\n+\tpath: string;\n+\t/** Previous path of a staged rename or copy; unstaging must cover both. */\n+\toriginalPath?: string;\n+\tstatus: SourceControlStatus;\n+\tadditions: number | null;\n+\tdeletions: number | null;\n+};\n+\n+/** A file as changed by a past commit. */\n+export type CommitFile = {\n+\tpath: string;\n+\toriginalPath?: string;\n+\tstatus: SourceControlStatus;\n+\tadditions: number | null;\n+\tdeletions: number | null;\n+};\n+\n+export type SourceControlCommit = {\n+\tsha: string;\n+\tshortSha: string;\n+\tsubject: string;\n+\trelativeDate: string;\n+\tpushed: boolean;\n+};\n+\n+export type SourceControlState = {\n+\tenvironmentId: string;\n+\troot: string | null;\n+\tbranch: string | null;\n+\thasUpstream: boolean;\n+\tahead: number;\n+\tbehind: number;\n+\tstaged: SourceControlFile[];\n+\tunstaged: SourceControlFile[];\n+\tuntracked: SourceControlFile[];\n+\tcommits: SourceControlCommit[];\n+};\n+\n+export type SourceControlAction =\n+\t| { type: \"stage\"; paths: string[] }\n+\t| { type: \"unstage\"; paths: string[] }\n+\t| { type: \"discard\"; paths: string[]; untrackedPaths: string[] }\n+\t| { type: \"commit\"; message: string; push: boolean }\n+\t| { type: \"push\" }\n+\t| { type: \"pull\" };\n+\n+const POLL_INTERVAL_MS = 10_000;\n+\n+/** Paths `git restore --staged` needs to fully undo staging these files. */\n+export function unstagePaths(files: SourceControlFile[]): string[] {\n+\tconst paths: string[] = [];\n+\tfor (const file of files) {\n+\t\tpaths.push(file.path);\n+\t\tif (file.originalPath) paths.push(file.originalPath);\n+\t}\n+\treturn paths;\n+}\n+\n+/**\n+ * Repository state for the workspace panel. Refreshes on mount, on an\n+ * interval while the window is visible, on focus, and after every action;\n+ * callers can also bump `refreshKey` (e.g. when the agent edits files).\n+ */\n+export function useSourceControl({\n+\tenvironmentId,\n+\tcwd,\n+\tenabled,\n+\trefreshKey,\n+}: {\n+\tenvironmentId: string;\n+\tcwd: string;\n+\tenabled: boolean;\n+\trefreshKey?: string;\n+}) {\n+\tconst [state, setState] = useState<SourceControlState | null>(null);\n+\tconst [loading, setLoading] = useState(false);\n+\tconst [error, setError] = useState<string | null>(null);\n+\tconst [busy, setBusy] = useState(false);\n+\tconst requestRef = useRef(0);\n+\n+\tconst refresh = useCallback(async () => {\n+\t\tif (!enabled || !cwd) return;\n+\t\tconst requestId = ++requestRef.current;\n+\t\tsetLoading(true);\n+\t\ttry {\n+\t\t\tconst next = await desktopClient.invoke<SourceControlState>(\n+\t\t\t\t\"get_source_control_state\",\n+\t\t\t\t{ environmentId, cwd },\n+\t\t\t);\n+\t\t\tif (requestId !== requestRef.current) return;",
+        "comment_created_at": "2026-10-16T00:41:34+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Fixed in 3008cec: polls now join the status read in flight instead of superseding it, so a read slower than the interval still lands. Actions, agent edits, and background fetches request a forced refresh that queues exactly one fresh read behind the pending one, so results never predate the action. Test holds a status read across three poll ticks and checks it lands, then checks an action queues one more read.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4364986571",
+    "pr_number": 14632,
+    "pr_file": "sdk/packages/agents/src/agent-runtime.ts",
+    "created_at": "2026-10-24T01:34:30+00:00",
+    "commented_code": "}\n \t\t}\n \n+\t\tif (\n+\t\t\t!prepared.skipReason &&\n+\t\t\t!result.isError &&\n+\t\t\tprepared.tool?.successContext?.trim()\n+\t\t) {\n+\t\t\tthis.pendingHookContexts.push(\n+\t\t\t\tformatHookContextBlock(\n+\t\t\t\t\t{ source: \"ToolSuccess\", toolCall: prepared.toolCall },\n+\t\t\t\t\tprepared.tool.successContext,\n+\t\t\t\t),",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4365534028",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14632,
+        "pr_file": "sdk/packages/agents/src/agent-runtime.ts",
+        "discussion_id": "4364986571",
+        "commented_code": "@@ -2637,6 +2640,19 @@ export class AgentRuntime {\n \t\t\t}\n \t\t}\n \n+\t\tif (\n+\t\t\t!prepared.skipReason &&\n+\t\t\t!result.isError &&\n+\t\t\tprepared.tool?.successContext?.trim()\n+\t\t) {\n+\t\t\tthis.pendingHookContexts.push(\n+\t\t\t\tformatHookContextBlock(\n+\t\t\t\t\t{ source: \"ToolSuccess\", toolCall: prepared.toolCall },\n+\t\t\t\t\tprepared.tool.successContext,\n+\t\t\t\t),",
+        "comment_created_at": "2026-10-24T01:34:30+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Valid, fixed in 66177b8. This race predates the PR (a straggler's `PostToolUse` `appendContext` could already leak the same way), and `successContext` just added a second writer to the same buffer. Since the buffer is always replaced rather than cleared in place, `executePreparedTool` now captures `this.pendingHookContexts` when the tool starts and pushes both `PostToolUse` and `ToolSuccess` blocks there. A sibling that outlives a stopped run writes to that run's orphaned buffer instead of the current one. Added a regression test (parallel `slow` + `stopper`, then a second run that releases `slow` mid-tool) that fails before the change and passes after.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4247626613",
+    "pr_number": 14986,
+    "pr_file": "apps/vscode/src/sdk/sdk-interaction-coordinator.ts",
+    "created_at": "2026-10-12T11:44:02+00:00",
+    "commented_code": "return true\n \t}\n \n-\tresolvePendingAskQuestion(prompt: string | undefined): boolean {\n+\tasync resolvePendingAskQuestion(\n+\t\tprompt: string | undefined,\n+\t\timages?: string[],\n+\t\tfiles?: string[],\n+\t\tdeliverAttachments?: (isCurrent: () => boolean) => Promise<void>,\n+\t): Promise<boolean> {\n \t\tif (!this.pendingAskResolve) {\n \t\t\treturn false\n \t\t}\n \n \t\tconst resolve = this.pendingAskResolve\n+\t\tconst hasAttachments = !!(images?.length || files?.length)\n+\t\tif (hasAttachments && deliverAttachments) {\n+\t\t\tawait deliverAttachments(() => this.pendingAskResolve === resolve)",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4247626613",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14986,
+        "pr_file": "apps/vscode/src/sdk/sdk-interaction-coordinator.ts",
+        "discussion_id": "4247626613",
+        "commented_code": "@@ -237,22 +237,40 @@ export class SdkInteractionCoordinator {\n \t\treturn true\n \t}\n \n-\tresolvePendingAskQuestion(prompt: string | undefined): boolean {\n+\tasync resolvePendingAskQuestion(\n+\t\tprompt: string | undefined,\n+\t\timages?: string[],\n+\t\tfiles?: string[],\n+\t\tdeliverAttachments?: (isCurrent: () => boolean) => Promise<void>,\n+\t): Promise<boolean> {\n \t\tif (!this.pendingAskResolve) {\n \t\t\treturn false\n \t\t}\n \n \t\tconst resolve = this.pendingAskResolve\n+\t\tconst hasAttachments = !!(images?.length || files?.length)\n+\t\tif (hasAttachments && deliverAttachments) {\n+\t\t\tawait deliverAttachments(() => this.pendingAskResolve === resolve)",
+        "comment_created_at": "2026-10-12T11:44:02+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "**Please claim the answer before awaiting delivery.**\n\n`pendingAskResolve` is still set while `deliverAttachments` runs. `SdkController.askResponse` has already moved the phase to `streaming` and posted state, so the composer accepts another message during that window. That second message finds the same pending question and answers it; this call then sees `isCurrent() === false`, returns `true`, and `askResponse` returns \u2014 the first answer and its attachments are never sent and never echoed. The window is a few microtasks without mentions, and however long the fetch takes with `@url` mentions.\n\nSuggested shape:\n\n```ts\nconst resolve = this.pendingAskResolve\nif (!resolve) return false\nthis.pendingAskResolve = undefined // later submissions route as follow-ups\nconst hasAttachments = !!(images?.length || files?.length)\nconst responseText = prompt ?? \"\"\nlet echoLocally = responseText || hasAttachments\nif (hasAttachments && deliverAttachments) {\n\ttry {\n\t\tawait deliverAttachments()\n\t\techoLocally = false // core echoes the steered input\n\t} catch (error) {\n\t\tLogger.error(\"[SdkController] Failed to deliver question attachments:\", error)\n\t}\n}\nif (echoLocally) {\n\t// existing user_feedback append, now with images/files\n}\nthis.options.setTurnPhase?.(\"streaming\")\nresolve(responseText)\nreturn true\n```\n\nWith this, `isCurrent` and the \"never resolve a replacement question\" branch become unnecessary: nothing can replace a question that has already been claimed, and `clearPending` during delivery is harmless because the promise is resolved here regardless (a send into a torn-down session throws and lands in the catch). It also means a failed delivery answers the question with the text instead of leaving the run suspended, which is what `main` guarantees today. Please keep the session-identity check in the followup coordinator's callback \u2014 a mode-change rebuild reuses the session id.\n\nFor the test: start delivery with `resolveContextMentions` blocked, submit a second text-only message, and assert the second goes through `fireAndForgetSend` as a follow-up while the first still steers its attachments and resolves the question.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4247728328",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14986,
+        "pr_file": "apps/vscode/src/sdk/sdk-interaction-coordinator.ts",
+        "discussion_id": "4247626613",
+        "commented_code": "@@ -237,22 +237,40 @@ export class SdkInteractionCoordinator {\n \t\treturn true\n \t}\n \n-\tresolvePendingAskQuestion(prompt: string | undefined): boolean {\n+\tasync resolvePendingAskQuestion(\n+\t\tprompt: string | undefined,\n+\t\timages?: string[],\n+\t\tfiles?: string[],\n+\t\tdeliverAttachments?: (isCurrent: () => boolean) => Promise<void>,\n+\t): Promise<boolean> {\n \t\tif (!this.pendingAskResolve) {\n \t\t\treturn false\n \t\t}\n \n \t\tconst resolve = this.pendingAskResolve\n+\t\tconst hasAttachments = !!(images?.length || files?.length)\n+\t\tif (hasAttachments && deliverAttachments) {\n+\t\t\tawait deliverAttachments(() => this.pendingAskResolve === resolve)",
+        "comment_created_at": "2026-10-12T11:56:28+00:00",
+        "comment_author": "dakjdakd",
+        "comment_body": "Implemented in `84db143`.\n\nThe response is claimed before the first asynchronous delivery step, so a second submission cannot resolve the same question. It is routed through the normal follow-up path while the claimed response continues delivering its attachments. I kept the session identity check and retained a per-attempt validity token so cancellation, replacement questions, delivery failures, and retries remain safe: an old callback cannot become current again after a retry, and a failed attempt releases only its own claim.\n\nThe focused VS Code suites cover the overlap, cancellation, failure/retry, and stale-callback cases and pass; SDK typecheck also passes. The separate display fix keeps the original pending-question text in the submitted event while preserving the expanded model prompt.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4248920294",
+    "pr_number": 5177,
+    "pr_file": "src/core/task/index.ts",
+    "created_at": "2026-10-12T14:05:49+00:00",
+    "commented_code": "// Create a checkpoint commit and update clineMessages with a commitHash\n \t\t\tif (this.checkpointTracker) {\n-\t\t\t\tconst commitHash = await this.checkpointTracker.commit()\n-\t\t\t\tif (commitHash) {\n-\t\t\t\t\tawait this.say(\"checkpoint_created\")\n-\t\t\t\t\tconst lastCheckpointMessageIndex = findLastIndex(\n-\t\t\t\t\t\tthis.messageStateHandler.getClineMessages(),\n-\t\t\t\t\t\t(m) => m.say === \"checkpoint_created\",\n-\t\t\t\t\t)\n-\t\t\t\t\tif (lastCheckpointMessageIndex !== -1) {\n-\t\t\t\t\t\tawait this.messageStateHandler.updateClineMessage(lastCheckpointMessageIndex, {\n-\t\t\t\t\t\t\tlastCheckpointHash: commitHash,\n-\t\t\t\t\t\t})\n+\t\t\t\t// We are letting this run in a non-blocking way so that the UI doesn't freeze when creating checkpoints.\n+\t\t\t\t// We show that a checkpoint is created in the chatview, then in the background run the git operation (which can take multiple seconds for large shadow git repos), and once that's been completed update the previous checkpoint message with the newly created hash to be associated with.\n+\t\t\t\t// NOTE: the attempt completion flow is different in that it requires the latest checkpoint hash to be present before determining if it can present the 'see new changes' button. In ToolExecutor, when we call saveCheckpoint(true), we must make sure that the checkpoint hash is present in the last completion_result message before returning, since it is always followed by a addNewChangesFlagToLastCompletionResultMessage(), which calls doesLatestTaskCompletionHaveNewChanges() that uses the latest message hash to determine if there any changes since the last attempt_completion checkpoint.\n+\t\t\t\tawait this.say(\"checkpoint_created\")\n+\t\t\t\tthis.checkpointTracker.commit().then(async (commitHash) => {\n+\t\t\t\t\tif (commitHash) {\n+\t\t\t\t\t\tconst lastCheckpointMessageIndex = findLastIndex(\n+\t\t\t\t\t\t\tthis.messageStateHandler.getClineMessages(),\n+\t\t\t\t\t\t\t(m) => m.say === \"checkpoint_created\",",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4248920294",
+        "repo_full_name": "cline/cline",
+        "pr_number": 5177,
+        "pr_file": "src/core/task/index.ts",
+        "discussion_id": "4248920294",
+        "commented_code": "@@ -1315,19 +1315,23 @@ export class Task {\n \n \t\t\t// Create a checkpoint commit and update clineMessages with a commitHash\n \t\t\tif (this.checkpointTracker) {\n-\t\t\t\tconst commitHash = await this.checkpointTracker.commit()\n-\t\t\t\tif (commitHash) {\n-\t\t\t\t\tawait this.say(\"checkpoint_created\")\n-\t\t\t\t\tconst lastCheckpointMessageIndex = findLastIndex(\n-\t\t\t\t\t\tthis.messageStateHandler.getClineMessages(),\n-\t\t\t\t\t\t(m) => m.say === \"checkpoint_created\",\n-\t\t\t\t\t)\n-\t\t\t\t\tif (lastCheckpointMessageIndex !== -1) {\n-\t\t\t\t\t\tawait this.messageStateHandler.updateClineMessage(lastCheckpointMessageIndex, {\n-\t\t\t\t\t\t\tlastCheckpointHash: commitHash,\n-\t\t\t\t\t\t})\n+\t\t\t\t// We are letting this run in a non-blocking way so that the UI doesn't freeze when creating checkpoints.\n+\t\t\t\t// We show that a checkpoint is created in the chatview, then in the background run the git operation (which can take multiple seconds for large shadow git repos), and once that's been completed update the previous checkpoint message with the newly created hash to be associated with.\n+\t\t\t\t// NOTE: the attempt completion flow is different in that it requires the latest checkpoint hash to be present before determining if it can present the 'see new changes' button. In ToolExecutor, when we call saveCheckpoint(true), we must make sure that the checkpoint hash is present in the last completion_result message before returning, since it is always followed by a addNewChangesFlagToLastCompletionResultMessage(), which calls doesLatestTaskCompletionHaveNewChanges() that uses the latest message hash to determine if there any changes since the last attempt_completion checkpoint.\n+\t\t\t\tawait this.say(\"checkpoint_created\")\n+\t\t\t\tthis.checkpointTracker.commit().then(async (commitHash) => {\n+\t\t\t\t\tif (commitHash) {\n+\t\t\t\t\t\tconst lastCheckpointMessageIndex = findLastIndex(\n+\t\t\t\t\t\t\tthis.messageStateHandler.getClineMessages(),\n+\t\t\t\t\t\t\t(m) => m.say === \"checkpoint_created\",",
+        "comment_created_at": "2026-10-12T14:05:49+00:00",
+        "comment_author": "BranchSun",
+        "comment_body": "\ud83d\udfe1 **bug** (medium)\n\nThe `findLastIndex(..., m => m.say === \"checkpoint_created\")` lookup now runs inside the background promise (after `commit()` resolves) instead of while this call is still the newest checkpoint. Since commits are no longer awaited, two `saveCheckpoint()` calls can overlap \u2014 the agent routinely runs several tools back to back, and the comment you added notes a commit can take seconds on large shadow git repos. When the earlier commit resolves, this lookup finds the *newest* `checkpoint_created` message and writes its hash there, so the message that actually belongs to that commit stays without a `lastCheckpointHash`; if the commits resolve out of order, a message can even end up carrying a different checkpoint's hash. Both cases corrupt the per-message hash that 'Restore checkpoint' and `doesLatestTaskCompletionHaveNewChanges()` rely on.\n\n**\u5efa\u8bae**: Resolve the target message synchronously instead of by re-searching later: right after `await this.say(\"checkpoint_created\")` capture the message index/`ts` of the message you just created, and inside the `.then()` callback update exactly that captured message (re-validate it still exists). Alternatively serialize commits by chaining/storing the in-flight promise.\n\n**\u8bc1\u636e**: `(m) => m.say === \"checkpoint_created\",`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4248920301",
+    "pr_number": 5177,
+    "pr_file": "src/core/task/index.ts",
+    "created_at": "2026-10-12T14:05:49+00:00",
+    "commented_code": "// Create a checkpoint commit and update clineMessages with a commitHash\n \t\t\tif (this.checkpointTracker) {\n-\t\t\t\tconst commitHash = await this.checkpointTracker.commit()\n-\t\t\t\tif (commitHash) {\n-\t\t\t\t\tawait this.say(\"checkpoint_created\")\n-\t\t\t\t\tconst lastCheckpointMessageIndex = findLastIndex(\n-\t\t\t\t\t\tthis.messageStateHandler.getClineMessages(),\n-\t\t\t\t\t\t(m) => m.say === \"checkpoint_created\",\n-\t\t\t\t\t)\n-\t\t\t\t\tif (lastCheckpointMessageIndex !== -1) {\n-\t\t\t\t\t\tawait this.messageStateHandler.updateClineMessage(lastCheckpointMessageIndex, {\n-\t\t\t\t\t\t\tlastCheckpointHash: commitHash,\n-\t\t\t\t\t\t})\n+\t\t\t\t// We are letting this run in a non-blocking way so that the UI doesn't freeze when creating checkpoints.\n+\t\t\t\t// We show that a checkpoint is created in the chatview, then in the background run the git operation (which can take multiple seconds for large shadow git repos), and once that's been completed update the previous checkpoint message with the newly created hash to be associated with.\n+\t\t\t\t// NOTE: the attempt completion flow is different in that it requires the latest checkpoint hash to be present before determining if it can present the 'see new changes' button. In ToolExecutor, when we call saveCheckpoint(true), we must make sure that the checkpoint hash is present in the last completion_result message before returning, since it is always followed by a addNewChangesFlagToLastCompletionResultMessage(), which calls doesLatestTaskCompletionHaveNewChanges() that uses the latest message hash to determine if there any changes since the last attempt_completion checkpoint.\n+\t\t\t\tawait this.say(\"checkpoint_created\")",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4248920301",
+        "repo_full_name": "cline/cline",
+        "pr_number": 5177,
+        "pr_file": "src/core/task/index.ts",
+        "discussion_id": "4248920301",
+        "commented_code": "@@ -1315,19 +1315,23 @@ export class Task {\n \n \t\t\t// Create a checkpoint commit and update clineMessages with a commitHash\n \t\t\tif (this.checkpointTracker) {\n-\t\t\t\tconst commitHash = await this.checkpointTracker.commit()\n-\t\t\t\tif (commitHash) {\n-\t\t\t\t\tawait this.say(\"checkpoint_created\")\n-\t\t\t\t\tconst lastCheckpointMessageIndex = findLastIndex(\n-\t\t\t\t\t\tthis.messageStateHandler.getClineMessages(),\n-\t\t\t\t\t\t(m) => m.say === \"checkpoint_created\",\n-\t\t\t\t\t)\n-\t\t\t\t\tif (lastCheckpointMessageIndex !== -1) {\n-\t\t\t\t\t\tawait this.messageStateHandler.updateClineMessage(lastCheckpointMessageIndex, {\n-\t\t\t\t\t\t\tlastCheckpointHash: commitHash,\n-\t\t\t\t\t\t})\n+\t\t\t\t// We are letting this run in a non-blocking way so that the UI doesn't freeze when creating checkpoints.\n+\t\t\t\t// We show that a checkpoint is created in the chatview, then in the background run the git operation (which can take multiple seconds for large shadow git repos), and once that's been completed update the previous checkpoint message with the newly created hash to be associated with.\n+\t\t\t\t// NOTE: the attempt completion flow is different in that it requires the latest checkpoint hash to be present before determining if it can present the 'see new changes' button. In ToolExecutor, when we call saveCheckpoint(true), we must make sure that the checkpoint hash is present in the last completion_result message before returning, since it is always followed by a addNewChangesFlagToLastCompletionResultMessage(), which calls doesLatestTaskCompletionHaveNewChanges() that uses the latest message hash to determine if there any changes since the last attempt_completion checkpoint.\n+\t\t\t\tawait this.say(\"checkpoint_created\")",
+        "comment_created_at": "2026-10-12T14:05:49+00:00",
+        "comment_author": "BranchSun",
+        "comment_body": "\ud83d\udfe1 **bug** (medium)\n\nDropping `await this.checkpointTracker.commit()` means `saveCheckpoint()` can return before `lastCheckpointHash` has been written to the last `checkpoint_created` message. Your own NOTE states the attempt-completion flow needs that hash to be present: `ToolExecutor` calls `saveCheckpoint(true)` and is always followed by `addNewChangesFlagToLastCompletionResultMessage()` \u2192 `doesLatestTaskCompletionHaveNewChanges()`, which reads the latest checkpoint hash to decide whether to show the 'see new changes' button. With the commit now running in the background (and taking seconds on large repos), the hash is very likely still missing at that point, so the flag/button may silently stop appearing after `attempt_completion`.\n\n**\u5efa\u8bae**: Keep a handle to the commit promise and await it when the caller needs the hash before continuing, e.g. capture `const commitPromise = this.checkpointTracker.commit().then(...)` and then `if (isAttemptCompletionMessage) { await commitPromise }` so the existing `saveCheckpoint(true)` contract is preserved while normal checkpoints stay non-blocking. If this is already handled elsewhere, a short comment stating where would help.\n\n**\u8bc1\u636e**: `await this.say(\"checkpoint_created\")`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4104563419",
+    "pr_number": 14496,
+    "pr_file": "apps/vscode/src/sdk/sdk-session-rebuild-scheduler.ts",
+    "created_at": "2026-09-25T12:39:58+00:00",
+    "commented_code": "import { Logger } from \"@/shared/services/Logger\"\n import type { SdkSessionLifecycle } from \"./sdk-session-lifecycle\"\n \n-export type SessionRebuildReason = \"provider\" | \"mcpTools\" | \"terminalExecutionMode\"\n+export type SessionRebuildReason = \"provider\" | \"mcpTools\" | \"terminalExecutionMode\" | \"checkpoints\"\n \n export interface SdkSessionRebuildSchedulerOptions {\n \tsessions: Pick<SdkSessionLifecycle, \"getActiveSession\">\n }\n \n+export interface SessionRebuildContext {\n+\tisCurrent: () => boolean\n+}\n+\n+interface ScheduledRebuild {\n+\trun: (context: SessionRebuildContext) => Promise<void>\n+\tonCancel?: () => void\n+}\n+\n /** Serializes passive session rebuilds and drains them only while the session is idle. */\n export class SdkSessionRebuildScheduler {\n-\tprivate readonly pending = new Map<SessionRebuildReason, () => Promise<void>>()\n+\tprivate readonly pending = new Map<SessionRebuildReason, ScheduledRebuild>()\n \tprivate drainInFlight: Promise<void> | undefined\n+\tprivate activeReason: SessionRebuildReason | undefined\n+\tprivate activeRebuild: ScheduledRebuild | undefined\n+\tprivate settledWaiters: Array<{ reason?: SessionRebuildReason; resolve: () => void }> = []\n+\tprivate readonly cancellationGeneration = new Map<SessionRebuildReason, number>()\n \n \tconstructor(private readonly options: SdkSessionRebuildSchedulerOptions) {}\n \n-\trequest(reason: SessionRebuildReason, rebuild: () => Promise<void>): void {\n-\t\tthis.pending.set(reason, rebuild)\n+\trequest(reason: SessionRebuildReason, run: (context: SessionRebuildContext) => Promise<void>, onCancel?: () => void): void {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4104563419",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14496,
+        "pr_file": "apps/vscode/src/sdk/sdk-session-rebuild-scheduler.ts",
+        "discussion_id": "4104563419",
+        "commented_code": "@@ -1,26 +1,55 @@\n import { Logger } from \"@/shared/services/Logger\"\n import type { SdkSessionLifecycle } from \"./sdk-session-lifecycle\"\n \n-export type SessionRebuildReason = \"provider\" | \"mcpTools\" | \"terminalExecutionMode\"\n+export type SessionRebuildReason = \"provider\" | \"mcpTools\" | \"terminalExecutionMode\" | \"checkpoints\"\n \n export interface SdkSessionRebuildSchedulerOptions {\n \tsessions: Pick<SdkSessionLifecycle, \"getActiveSession\">\n }\n \n+export interface SessionRebuildContext {\n+\tisCurrent: () => boolean\n+}\n+\n+interface ScheduledRebuild {\n+\trun: (context: SessionRebuildContext) => Promise<void>\n+\tonCancel?: () => void\n+}\n+\n /** Serializes passive session rebuilds and drains them only while the session is idle. */\n export class SdkSessionRebuildScheduler {\n-\tprivate readonly pending = new Map<SessionRebuildReason, () => Promise<void>>()\n+\tprivate readonly pending = new Map<SessionRebuildReason, ScheduledRebuild>()\n \tprivate drainInFlight: Promise<void> | undefined\n+\tprivate activeReason: SessionRebuildReason | undefined\n+\tprivate activeRebuild: ScheduledRebuild | undefined\n+\tprivate settledWaiters: Array<{ reason?: SessionRebuildReason; resolve: () => void }> = []\n+\tprivate readonly cancellationGeneration = new Map<SessionRebuildReason, number>()\n \n \tconstructor(private readonly options: SdkSessionRebuildSchedulerOptions) {}\n \n-\trequest(reason: SessionRebuildReason, rebuild: () => Promise<void>): void {\n-\t\tthis.pending.set(reason, rebuild)\n+\trequest(reason: SessionRebuildReason, run: (context: SessionRebuildContext) => Promise<void>, onCancel?: () => void): void {",
+        "comment_created_at": "2026-09-25T12:39:58+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "`request()` coalesces a newer request into `pending`, but it doesn't invalidate an already-active rebuild for the same reason \u2014 `cancellationGeneration` only moves in `cancel()` (line 40). So the active run's `isCurrent()` stays `true`, and once it finishes the newer request rebuilds the session again.\n\nThere's a correctness window here, not just redundant work. If the active rebuild has already snapshotted its config when the newer setting arrives, it installs the superseded one; and for checkpoint rebuilds it can replay a deferred follow-up from the shared `checkpointTransition` before the newer rebuild applies the latest setting \u2014 so a real message can run under the old checkpoint config.\n\nI don't think bumping the generation here is a self-contained fix: the transition object is shared between the active and queued requests, and an invalidated rebuild returning from `replaceActiveSession()` can still clear `this.checkpointTransition` and stop the replacement. Either make a same-reason request explicitly supersede the active run with the transition ownership handled to match, or rename `isCurrent()` so it's clear it only means \"not cancelled\". A scheduler test for requesting a reason while that reason is actively rebuilding would pin whichever contract you pick.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4110684631",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14496,
+        "pr_file": "apps/vscode/src/sdk/sdk-session-rebuild-scheduler.ts",
+        "discussion_id": "4104563419",
+        "commented_code": "@@ -1,26 +1,55 @@\n import { Logger } from \"@/shared/services/Logger\"\n import type { SdkSessionLifecycle } from \"./sdk-session-lifecycle\"\n \n-export type SessionRebuildReason = \"provider\" | \"mcpTools\" | \"terminalExecutionMode\"\n+export type SessionRebuildReason = \"provider\" | \"mcpTools\" | \"terminalExecutionMode\" | \"checkpoints\"\n \n export interface SdkSessionRebuildSchedulerOptions {\n \tsessions: Pick<SdkSessionLifecycle, \"getActiveSession\">\n }\n \n+export interface SessionRebuildContext {\n+\tisCurrent: () => boolean\n+}\n+\n+interface ScheduledRebuild {\n+\trun: (context: SessionRebuildContext) => Promise<void>\n+\tonCancel?: () => void\n+}\n+\n /** Serializes passive session rebuilds and drains them only while the session is idle. */\n export class SdkSessionRebuildScheduler {\n-\tprivate readonly pending = new Map<SessionRebuildReason, () => Promise<void>>()\n+\tprivate readonly pending = new Map<SessionRebuildReason, ScheduledRebuild>()\n \tprivate drainInFlight: Promise<void> | undefined\n+\tprivate activeReason: SessionRebuildReason | undefined\n+\tprivate activeRebuild: ScheduledRebuild | undefined\n+\tprivate settledWaiters: Array<{ reason?: SessionRebuildReason; resolve: () => void }> = []\n+\tprivate readonly cancellationGeneration = new Map<SessionRebuildReason, number>()\n \n \tconstructor(private readonly options: SdkSessionRebuildSchedulerOptions) {}\n \n-\trequest(reason: SessionRebuildReason, rebuild: () => Promise<void>): void {\n-\t\tthis.pending.set(reason, rebuild)\n+\trequest(reason: SessionRebuildReason, run: (context: SessionRebuildContext) => Promise<void>, onCancel?: () => void): void {",
+        "comment_created_at": "2026-09-26T08:18:12+00:00",
+        "comment_author": "dominiccooney",
+        "comment_body": "Thanks \u2014 you were right on both counts, and the second one hid a real defect.\n\n`isCurrent()` in a78223a means exactly \"no newer request for the same reason has arrived\": `request()` stamps a per-reason generation, and a running rebuild's context reads it live. `cancel()` and the per-reason cancellation generation are gone; nothing could reach them because `runTaskTransition` waits for the drain first.\n\nThe shared `checkpointTransition` is gone too. Holding a follow-up outside Core's queue meant nothing rendered it: a message typed during a turn after toggling Checkpoints vanished from the chat until the turn ended (this is what the e2e was failing on across all three CI platforms). Follow-ups now always go to Core's queue. The scheduler treats a session with queued prompts as busy, since Core drains the queue the instant a turn ends, and a send that settles after Core already started the next queued turn no longer flips the session idle. There is a scheduler test for a same-reason request during an active rebuild, and coordinator tests for supersession before replacement.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4104563430",
+    "pr_number": 14496,
+    "pr_file": "apps/vscode/src/sdk/sdk-session-rebuild-scheduler.ts",
+    "created_at": "2026-09-25T12:39:58+00:00",
+    "commented_code": "this.drainInFlight = undefined\n \t\t\t}\n \t\t\tthis.drainIfIdle()\n+\t\t\tthis.resolveSettledWaitersIfSettled()\n \t\t}\n \t}\n \n+\t/**\n+\t * Moves the displayed task at the session-rebuild consistency boundary.\n+\t * Queued rebuilds belong to the outgoing session, so the transition drops\n+\t * them before ending that session. Rebuilds requested during the transition\n+\t * remain queued until the new task view is complete.\n+\t */\n+\tasync runTaskTransition<T>(operation: () => Promise<T>): Promise<T> {\n+\t\treturn this.runExclusive(async () => {\n+\t\t\tthis.cancelPending()\n+\t\t\treturn operation()\n+\t\t})\n+\t}\n+\n \tsessionBecameIdle(): void {\n \t\tthis.drainIfIdle()\n \t}\n \n-\tasync waitUntilSettled(): Promise<void> {\n-\t\twhile (this.drainInFlight) {\n-\t\t\tawait this.drainInFlight\n+\tasync waitUntilSettled(reason?: SessionRebuildReason): Promise<void> {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4104563430",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14496,
+        "pr_file": "apps/vscode/src/sdk/sdk-session-rebuild-scheduler.ts",
+        "discussion_id": "4104563430",
+        "commented_code": "@@ -40,17 +69,32 @@ export class SdkSessionRebuildScheduler {\n \t\t\t\tthis.drainInFlight = undefined\n \t\t\t}\n \t\t\tthis.drainIfIdle()\n+\t\t\tthis.resolveSettledWaitersIfSettled()\n \t\t}\n \t}\n \n+\t/**\n+\t * Moves the displayed task at the session-rebuild consistency boundary.\n+\t * Queued rebuilds belong to the outgoing session, so the transition drops\n+\t * them before ending that session. Rebuilds requested during the transition\n+\t * remain queued until the new task view is complete.\n+\t */\n+\tasync runTaskTransition<T>(operation: () => Promise<T>): Promise<T> {\n+\t\treturn this.runExclusive(async () => {\n+\t\t\tthis.cancelPending()\n+\t\t\treturn operation()\n+\t\t})\n+\t}\n+\n \tsessionBecameIdle(): void {\n \t\tthis.drainIfIdle()\n \t}\n \n-\tasync waitUntilSettled(): Promise<void> {\n-\t\twhile (this.drainInFlight) {\n-\t\t\tawait this.drainInFlight\n+\tasync waitUntilSettled(reason?: SessionRebuildReason): Promise<void> {",
+        "comment_created_at": "2026-09-25T12:39:58+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "`waitUntilSettled` has no production caller left \u2014 this PR removes the one that existed (`await this.sessionRebuilds.waitUntilSettled()` in `SdkController`), and the send path now goes through `handlePendingRebuilds`, which parks the follow-up and returns `\"deferred\"` rather than awaiting. Only the scheduler's own tests reference it now. Worth dropping unless a caller is coming: a test-only affordance on a production class tends to acquire one later without the concurrency implications getting re-examined.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4110684662",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14496,
+        "pr_file": "apps/vscode/src/sdk/sdk-session-rebuild-scheduler.ts",
+        "discussion_id": "4104563430",
+        "commented_code": "@@ -40,17 +69,32 @@ export class SdkSessionRebuildScheduler {\n \t\t\t\tthis.drainInFlight = undefined\n \t\t\t}\n \t\t\tthis.drainIfIdle()\n+\t\t\tthis.resolveSettledWaitersIfSettled()\n \t\t}\n \t}\n \n+\t/**\n+\t * Moves the displayed task at the session-rebuild consistency boundary.\n+\t * Queued rebuilds belong to the outgoing session, so the transition drops\n+\t * them before ending that session. Rebuilds requested during the transition\n+\t * remain queued until the new task view is complete.\n+\t */\n+\tasync runTaskTransition<T>(operation: () => Promise<T>): Promise<T> {\n+\t\treturn this.runExclusive(async () => {\n+\t\t\tthis.cancelPending()\n+\t\t\treturn operation()\n+\t\t})\n+\t}\n+\n \tsessionBecameIdle(): void {\n \t\tthis.drainIfIdle()\n \t}\n \n-\tasync waitUntilSettled(): Promise<void> {\n-\t\twhile (this.drainInFlight) {\n-\t\t\tawait this.drainInFlight\n+\tasync waitUntilSettled(reason?: SessionRebuildReason): Promise<void> {",
+        "comment_created_at": "2026-09-26T08:18:13+00:00",
+        "comment_author": "dominiccooney",
+        "comment_body": "Dropped in b3cb45d, along with `hasPendingRebuild` and the settled-waiter list. The follow-up path no longer awaits the scheduler at all; a running-turn follow-up goes straight to Core's queue and the rebuild waits for the queue to drain.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3846244484",
+    "pr_number": 13513,
+    "pr_file": "sdk/packages/llms/src/providers/middleware/retry-empty-response.ts",
+    "created_at": "2026-08-24T20:35:30+00:00",
+    "commented_code": "});\n \n \t\t\t\t\t\tif (retryDelayMs > 0) {\n-\t\t\t\t\t\t\tawait sleep(retryDelayMs);\n+\t\t\t\t\t\t\tawait sleep(retryDelayMs, cancelController.signal);\n+\t\t\t\t\t\t}\n+\t\t\t\t\t\tif (cancelled()) {\n+\t\t\t\t\t\t\treturn;\n \t\t\t\t\t\t}\n \t\t\t\t\t\ttry {\n \t\t\t\t\t\t\tresult = await doStream();",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "3847257140",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13513,
+        "pr_file": "sdk/packages/llms/src/providers/middleware/retry-empty-response.ts",
+        "discussion_id": "3846244484",
+        "commented_code": "@@ -450,7 +485,10 @@ export function createRetryEmptyResponseMiddleware(\n \t\t\t\t\t\t});\n \n \t\t\t\t\t\tif (retryDelayMs > 0) {\n-\t\t\t\t\t\t\tawait sleep(retryDelayMs);\n+\t\t\t\t\t\t\tawait sleep(retryDelayMs, cancelController.signal);\n+\t\t\t\t\t\t}\n+\t\t\t\t\t\tif (cancelled()) {\n+\t\t\t\t\t\t\treturn;\n \t\t\t\t\t\t}\n \t\t\t\t\t\ttry {\n \t\t\t\t\t\t\tresult = await doStream();",
+        "comment_created_at": "2026-08-24T20:35:30+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Valid catch \u2014 a cancel landing while a retry's `doStream()` was pending saw no active reader, and the freshly resolved stream was then drained unattended. Fixed by checking for cancellation at the top of each attempt and cancelling the fresh provider stream instead of attaching a reader; this also covers a cancel arriving before the pump's first read. Added a regression test (\"cancels a retry attempt whose doStream() resolves after the consumer cancelled\") that fails against the previous revision.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4033466676",
+    "pr_number": 13513,
+    "pr_file": "sdk/packages/llms/src/providers/middleware/retry-empty-response.ts",
+    "created_at": "2026-09-18T07:43:49+00:00",
+    "commented_code": "});\n \n \t\t\t\t\t\tif (retryDelayMs > 0) {\n-\t\t\t\t\t\t\tawait sleep(retryDelayMs);\n+\t\t\t\t\t\t\tawait sleep(retryDelayMs, cancelController.signal);\n+\t\t\t\t\t\t}\n+\t\t\t\t\t\tif (cancelled()) {\n+\t\t\t\t\t\t\treturn;\n \t\t\t\t\t\t}\n \t\t\t\t\t\ttry {\n \t\t\t\t\t\t\tresult = await doStream();",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4044796483",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13513,
+        "pr_file": "sdk/packages/llms/src/providers/middleware/retry-empty-response.ts",
+        "discussion_id": "4033466676",
+        "commented_code": "@@ -450,7 +499,10 @@ export function createRetryEmptyResponseMiddleware(\n \t\t\t\t\t\t});\n \n \t\t\t\t\t\tif (retryDelayMs > 0) {\n-\t\t\t\t\t\t\tawait sleep(retryDelayMs);\n+\t\t\t\t\t\t\tawait sleep(retryDelayMs, cancelController.signal);\n+\t\t\t\t\t\t}\n+\t\t\t\t\t\tif (cancelled()) {\n+\t\t\t\t\t\t\treturn;\n \t\t\t\t\t\t}\n \t\t\t\t\t\ttry {\n \t\t\t\t\t\t\tresult = await doStream();",
+        "comment_created_at": "2026-09-18T07:43:49+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Valid \u2014 fixed. Two notes for the record. First, this is pre-existing: `main`'s empty-response backoff sleeps with no signal at all and re-dials regardless; this PR made it visible by making the sibling network-retry path abort-aware. Second, the impact is smaller than a new provider generation starting: the re-dialed `doStream()` carries the request's already-aborted signal, so `fetch` rejects before opening a socket \u2014 the actual effect was the abort surfacing up to one backoff (250ms by default) late, via the re-dial's rejection rather than a clean check.\n\nThe empty path now sleeps on the merged abort/cancel signal and surfaces the abort before re-dialing, mirroring the network path \u2014 I kept the `controller.error(...)` + `return` idiom used there rather than the suggested `throw`, for consistency. Added a regression test (\"stops retrying when the user aborts during the empty-response backoff sleep\") that times out against the previous revision.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4274491959",
+    "pr_number": 15095,
+    "pr_file": "sdk/examples/plugins/next-turn/src/connectors/runners.ts",
+    "created_at": "2026-10-15T00:17:06+00:00",
+    "commented_code": "+import { PINNED_READ_TIMEOUT_MS, PLUGIN_NAME } from \"../config\";\n+import type { ToolRunner } from \"./pinned\";\n+\n+/**\n+ * The two ways a pinned read runs, both through the person's own Cline\n+ * connection and Cline's own code:\n+ *\n+ * - **MCP (K3):** the server's registration from Cline's MCP settings, and\n+ *   Cline's MCP client factory, which reads and refreshes the server's stored\n+ *   OAuth state under Cline's settings lock. Each read connects, calls one\n+ *   tool and disconnects, so a stdio server runs only for the read.\n+ * - **Composio (K2):** Cline's own Composio extension, whose tools carry the\n+ *   connector proxy call, the cross-process token lock, the beta flag and the\n+ *   account check. It is not exported at the pin (upstream ask U4); until it\n+ *   is, the runner says so and Read stays off.\n+ */\n+\n+export const COMPOSIO_READ_NEEDS_U4 =\n+\t\"Reading through Composio needs Cline to export its connector tools (upstream ask U4)\";\n+\n+function withTimeout<T>(\n+\twork: Promise<T>,\n+\tms: number,\n+\twhat: string,\n+): Promise<T> {\n+\tlet timer: ReturnType<typeof setTimeout> | undefined;\n+\tconst timeout = new Promise<never>((_, reject) => {\n+\t\ttimer = setTimeout(\n+\t\t\t() => reject(new Error(`${what} took longer than ${ms} ms`)),\n+\t\t\tms,\n+\t\t);\n+\t});\n+\treturn Promise.race([work, timeout]).finally(() => clearTimeout(timer));\n+}\n+\n+export type McpClientPort = {\n+\tconnect(): Promise<void>;\n+\tdisconnect(): Promise<void>;\n+\tcallTool(request: {\n+\t\tname: string;\n+\t\targuments?: Record<string, unknown>;\n+\t}): Promise<unknown>;\n+};\n+\n+export type McpRunnerDeps = {\n+\t/** The server's registration from Cline's MCP settings, or nothing when it is gone or disabled. */\n+\tregistration(serverName: string): Promise<unknown | undefined>;\n+\tclient(registration: unknown): Promise<McpClientPort>;\n+};\n+\n+export function mcpRunner(\n+\tserverName: string,\n+\tdeps: McpRunnerDeps,\n+\ttimeoutMs: number = PINNED_READ_TIMEOUT_MS,\n+): () => Promise<ToolRunner | { reason: string }> {\n+\treturn async () => {\n+\t\tconst registration = await deps.registration(serverName);\n+\t\tif (!registration)\n+\t\t\treturn {\n+\t\t\t\treason: `MCP server \"${serverName}\" is not in Cline's settings, or is disabled`,\n+\t\t\t};\n+\t\treturn async (tool, args) => {\n+\t\t\tconst client = await deps.client(registration);\n+\t\t\ttry {\n+\t\t\t\tawait withTimeout(\n+\t\t\t\t\tclient.connect(),\n+\t\t\t\t\ttimeoutMs,\n+\t\t\t\t\t`connecting to \"${serverName}\"`,\n+\t\t\t\t);",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4277663040",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15095,
+        "pr_file": "sdk/examples/plugins/next-turn/src/connectors/runners.ts",
+        "discussion_id": "4274491959",
+        "commented_code": "@@ -0,0 +1,159 @@\n+import { PINNED_READ_TIMEOUT_MS, PLUGIN_NAME } from \"../config\";\n+import type { ToolRunner } from \"./pinned\";\n+\n+/**\n+ * The two ways a pinned read runs, both through the person's own Cline\n+ * connection and Cline's own code:\n+ *\n+ * - **MCP (K3):** the server's registration from Cline's MCP settings, and\n+ *   Cline's MCP client factory, which reads and refreshes the server's stored\n+ *   OAuth state under Cline's settings lock. Each read connects, calls one\n+ *   tool and disconnects, so a stdio server runs only for the read.\n+ * - **Composio (K2):** Cline's own Composio extension, whose tools carry the\n+ *   connector proxy call, the cross-process token lock, the beta flag and the\n+ *   account check. It is not exported at the pin (upstream ask U4); until it\n+ *   is, the runner says so and Read stays off.\n+ */\n+\n+export const COMPOSIO_READ_NEEDS_U4 =\n+\t\"Reading through Composio needs Cline to export its connector tools (upstream ask U4)\";\n+\n+function withTimeout<T>(\n+\twork: Promise<T>,\n+\tms: number,\n+\twhat: string,\n+): Promise<T> {\n+\tlet timer: ReturnType<typeof setTimeout> | undefined;\n+\tconst timeout = new Promise<never>((_, reject) => {\n+\t\ttimer = setTimeout(\n+\t\t\t() => reject(new Error(`${what} took longer than ${ms} ms`)),\n+\t\t\tms,\n+\t\t);\n+\t});\n+\treturn Promise.race([work, timeout]).finally(() => clearTimeout(timer));\n+}\n+\n+export type McpClientPort = {\n+\tconnect(): Promise<void>;\n+\tdisconnect(): Promise<void>;\n+\tcallTool(request: {\n+\t\tname: string;\n+\t\targuments?: Record<string, unknown>;\n+\t}): Promise<unknown>;\n+};\n+\n+export type McpRunnerDeps = {\n+\t/** The server's registration from Cline's MCP settings, or nothing when it is gone or disabled. */\n+\tregistration(serverName: string): Promise<unknown | undefined>;\n+\tclient(registration: unknown): Promise<McpClientPort>;\n+};\n+\n+export function mcpRunner(\n+\tserverName: string,\n+\tdeps: McpRunnerDeps,\n+\ttimeoutMs: number = PINNED_READ_TIMEOUT_MS,\n+): () => Promise<ToolRunner | { reason: string }> {\n+\treturn async () => {\n+\t\tconst registration = await deps.registration(serverName);\n+\t\tif (!registration)\n+\t\t\treturn {\n+\t\t\t\treason: `MCP server \"${serverName}\" is not in Cline's settings, or is disabled`,\n+\t\t\t};\n+\t\treturn async (tool, args) => {\n+\t\t\tconst client = await deps.client(registration);\n+\t\t\ttry {\n+\t\t\t\tawait withTimeout(\n+\t\t\t\t\tclient.connect(),\n+\t\t\t\t\ttimeoutMs,\n+\t\t\t\t\t`connecting to \"${serverName}\"`,\n+\t\t\t\t);",
+        "comment_created_at": "2026-10-15T00:17:06+00:00",
+        "comment_author": "harrisonofcline",
+        "comment_body": "Fixed in `1544b995b`. The tool runner from `mcpRunner` in `runners.ts` now keeps the `connect()` promise. When that connect did not finish before the deadline, it disconnects again once the connect resolves, so a late connection is closed. The read still rejects at its deadline, and the connect attempt itself is not cancelled; `connectors.test.ts` covers this in \"a connection that comes up after the read gave up on it is closed\".",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3961692165",
+    "pr_number": 13524,
+    "pr_file": "sdk/packages/core/src/hooks/subprocess-runner.ts",
+    "created_at": "2026-09-08T19:53:34+00:00",
+    "commented_code": "parseError,\n \t\t\t\ttimedOut,\n \t\t\t});\n+\t\t};\n+\t\tchild.once(\"error\", (error) => {\n+\t\t\tif (timeoutId) clearTimeout(timeoutId);\n+\t\t\treject(formatSpawnError(error, command));\n \t\t});\n+\t\tchild.once(\"close\", (exitCode) => settle(exitCode));\n+\t\t// \"close\" waits for the stdio pipes to reach EOF, and a hook that spawned\n+\t\t// a background child sharing its stdout keeps the pipe open after the\n+\t\t// hook itself exits \u2014 without a fallback the caller would wait on that\n+\t\t// grandchild forever (the timeout's SIGKILL only reaches the direct\n+\t\t// child). Settle shortly after process exit with whatever output arrived;\n+\t\t// a resolved promise ignores the eventual \"close\".\n+\t\tif (!detached) {\n+\t\t\tchild.once(\"exit\", (exitCode) => {\n+\t\t\t\tconst fallback = setTimeout(() => settle(exitCode), 1_000);",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "3961692165",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13524,
+        "pr_file": "sdk/packages/core/src/hooks/subprocess-runner.ts",
+        "discussion_id": "3961692165",
+        "commented_code": "@@ -195,7 +222,24 @@ export async function runSubprocessEvent(\n \t\t\t\tparseError,\n \t\t\t\ttimedOut,\n \t\t\t});\n+\t\t};\n+\t\tchild.once(\"error\", (error) => {\n+\t\t\tif (timeoutId) clearTimeout(timeoutId);\n+\t\t\treject(formatSpawnError(error, command));\n \t\t});\n+\t\tchild.once(\"close\", (exitCode) => settle(exitCode));\n+\t\t// \"close\" waits for the stdio pipes to reach EOF, and a hook that spawned\n+\t\t// a background child sharing its stdout keeps the pipe open after the\n+\t\t// hook itself exits \u2014 without a fallback the caller would wait on that\n+\t\t// grandchild forever (the timeout's SIGKILL only reaches the direct\n+\t\t// child). Settle shortly after process exit with whatever output arrived;\n+\t\t// a resolved promise ignores the eventual \"close\".\n+\t\tif (!detached) {\n+\t\t\tchild.once(\"exit\", (exitCode) => {\n+\t\t\t\tconst fallback = setTimeout(() => settle(exitCode), 1_000);",
+        "comment_created_at": "2026-09-08T19:53:34+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "[P2] Clean up inherited pipes when the fallback settles. Resolving leaves stdout/stderr and their data listeners active. Reproduced: the hook returned after 1.02s, but Node stayed alive until its background child exited at 3.54s. A persistent child can keep the host alive and keep accumulating output. Add once-only pipe/listener and timer cleanup, with a test that checks host exit after settlement.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3961967858",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13524,
+        "pr_file": "sdk/packages/core/src/hooks/subprocess-runner.ts",
+        "discussion_id": "3961692165",
+        "commented_code": "@@ -195,7 +222,24 @@ export async function runSubprocessEvent(\n \t\t\t\tparseError,\n \t\t\t\ttimedOut,\n \t\t\t});\n+\t\t};\n+\t\tchild.once(\"error\", (error) => {\n+\t\t\tif (timeoutId) clearTimeout(timeoutId);\n+\t\t\treject(formatSpawnError(error, command));\n \t\t});\n+\t\tchild.once(\"close\", (exitCode) => settle(exitCode));\n+\t\t// \"close\" waits for the stdio pipes to reach EOF, and a hook that spawned\n+\t\t// a background child sharing its stdout keeps the pipe open after the\n+\t\t// hook itself exits \u2014 without a fallback the caller would wait on that\n+\t\t// grandchild forever (the timeout's SIGKILL only reaches the direct\n+\t\t// child). Settle shortly after process exit with whatever output arrived;\n+\t\t// a resolved promise ignores the eventual \"close\".\n+\t\tif (!detached) {\n+\t\t\tchild.once(\"exit\", (exitCode) => {\n+\t\t\t\tconst fallback = setTimeout(() => settle(exitCode), 1_000);",
+        "comment_created_at": "2026-09-08T20:27:59+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "good catch, thanks!\r\n\r\nThe fallback now drops stdin/stdout/stderr (listeners included) right after it settles so the grandchild can't keep the host alive or keep filling the buffers. \r\n\r\nAdded a test that counts the process's active pipe handles before and after \u2014 it fails on the old code (pipes stay until the grandchild exits) and passes now. Also, added a line to the hooks readme telling authors to give a backgrounded child its own stdio, since anything it writes to the inherited pipes after the hook exits is gone.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4276026803",
+    "pr_number": 15026,
+    "pr_file": "apps/vscode/src/sdk/sdk-mode-coordinator.ts",
+    "created_at": "2026-10-14T20:40:40+00:00",
+    "commented_code": "}\n \n \tasync togglePlanActMode(modeToSwitchTo: Mode, chatContent?: ChatContent): Promise<boolean> {\n-\t\tconst currentMode = this.options.stateManager.getGlobalSettingsKey(\"mode\")\n-\t\tif (currentMode === modeToSwitchTo) {\n-\t\t\treturn false\n-\t\t}\n+\t\t// Decide under the rebuild lock, after any session start in flight has\n+\t\t// settled. Starts and rebuilds detach the outgoing session before the\n+\t\t// replacement is active, so a toggle that looked during that window\n+\t\t// would see no session, flip only the setting, and leave the session\n+\t\t// that finishes starting on the other mode's tools.\n+\t\treturn this.options.rebuilds.runExclusive(async () => {\n+\t\t\tawait this.options.sessions.waitForSessionStarts()",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4276026803",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15026,
+        "pr_file": "apps/vscode/src/sdk/sdk-mode-coordinator.ts",
+        "discussion_id": "4276026803",
+        "commented_code": "@@ -111,17 +111,29 @@ export class SdkModeCoordinator {\n \t}\n \n \tasync togglePlanActMode(modeToSwitchTo: Mode, chatContent?: ChatContent): Promise<boolean> {\n-\t\tconst currentMode = this.options.stateManager.getGlobalSettingsKey(\"mode\")\n-\t\tif (currentMode === modeToSwitchTo) {\n-\t\t\treturn false\n-\t\t}\n+\t\t// Decide under the rebuild lock, after any session start in flight has\n+\t\t// settled. Starts and rebuilds detach the outgoing session before the\n+\t\t// replacement is active, so a toggle that looked during that window\n+\t\t// would see no session, flip only the setting, and leave the session\n+\t\t// that finishes starting on the other mode's tools.\n+\t\treturn this.options.rebuilds.runExclusive(async () => {\n+\t\t\tawait this.options.sessions.waitForSessionStarts()",
+        "comment_created_at": "2026-10-14T20:40:40+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "in practice, does this await take a while? I'm worried that a user will toggle the switch and the switch looks stuck for a second and the user tries switching back because they thinking something is broken",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4293833826",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15026,
+        "pr_file": "apps/vscode/src/sdk/sdk-mode-coordinator.ts",
+        "discussion_id": "4276026803",
+        "commented_code": "@@ -111,17 +111,29 @@ export class SdkModeCoordinator {\n \t}\n \n \tasync togglePlanActMode(modeToSwitchTo: Mode, chatContent?: ChatContent): Promise<boolean> {\n-\t\tconst currentMode = this.options.stateManager.getGlobalSettingsKey(\"mode\")\n-\t\tif (currentMode === modeToSwitchTo) {\n-\t\t\treturn false\n-\t\t}\n+\t\t// Decide under the rebuild lock, after any session start in flight has\n+\t\t// settled. Starts and rebuilds detach the outgoing session before the\n+\t\t// replacement is active, so a toggle that looked during that window\n+\t\t// would see no session, flip only the setting, and leave the session\n+\t\t// that finishes starting on the other mode's tools.\n+\t\treturn this.options.rebuilds.runExclusive(async () => {\n+\t\t\tawait this.options.sessions.waitForSessionStarts()",
+        "comment_created_at": "2026-10-16T10:51:00+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "good call. I measured it in local runs..\r\n\r\nAn idle toggle flips in about 85ms, same as main. The switch only waits if you click it while a session is still being set up: right after another switch, right after sending a new task\u2019s first message, or right after resuming a task from history. How long it waits is almost entirely the remote-config fetch every session start does:\r\n- fast API: a rebuild takes about 300ms\r\n- API delayed 1.5s: about 1.8s\r\n- API unresponsive: the fetch waits out its 10s timeout, so a rebuild takes about 10.3s, and a toggle landing mid-rebuild sat unflipped for 6.3s in my run\r\n\r\nI tried to play with other factors (repo size, a hundred rules, skills and workflows, long transcripts and MCP), and they barely moved it.\r\n\r\nFor comparison, those same three moments are exactly when main breaks. The switch flips instantly, but the session ends up in the other mode. A slow API makes that more likely in exactly the cases where this PR waits longer.\r\n\r\nSo **yes, the \u201cstuck\u201d switch is real on slow networks**. But I think the inconsistent state is the bigger problem. It\u2019s silent, it doesn\u2019t heal on its own (toggling back and forth didn\u2019t help the reporter), and it costs the user real work. The stuck switch is visible, ends on its own, and is safe: clicking again just asks for the same mode, and anything sent meanwhile waits and runs in the mode you end up seeing.\r\n\r\nFor the toggle itself, we could do this as a follow-up:\r\n1. Flip the switch immediately with a pending state (dimmed slider or a \u201cSwitching to Act\u2026\u201d tooltip), and flip it back with a short explanation if the switch fails. Maybe a notification only if the wait gets long, so it doesn\u2019t nag on every slow toggle\r\n2. Coalesce rapid toggles, so Plan then Act before the first rebuild starts only rebuilds once\r\n\r\nwdyt?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4297835806",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15026,
+        "pr_file": "apps/vscode/src/sdk/sdk-mode-coordinator.ts",
+        "discussion_id": "4276026803",
+        "commented_code": "@@ -111,17 +111,29 @@ export class SdkModeCoordinator {\n \t}\n \n \tasync togglePlanActMode(modeToSwitchTo: Mode, chatContent?: ChatContent): Promise<boolean> {\n-\t\tconst currentMode = this.options.stateManager.getGlobalSettingsKey(\"mode\")\n-\t\tif (currentMode === modeToSwitchTo) {\n-\t\t\treturn false\n-\t\t}\n+\t\t// Decide under the rebuild lock, after any session start in flight has\n+\t\t// settled. Starts and rebuilds detach the outgoing session before the\n+\t\t// replacement is active, so a toggle that looked during that window\n+\t\t// would see no session, flip only the setting, and leave the session\n+\t\t// that finishes starting on the other mode's tools.\n+\t\treturn this.options.rebuilds.runExclusive(async () => {\n+\t\t\tawait this.options.sessions.waitForSessionStarts()",
+        "comment_created_at": "2026-10-16T18:10:18+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "i think a pending state seems fine. seems more resilient to a person clicking the toggle twice in quick succession messing things up. can be follow up",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4312894538",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15026,
+        "pr_file": "apps/vscode/src/sdk/sdk-mode-coordinator.ts",
+        "discussion_id": "4276026803",
+        "commented_code": "@@ -111,17 +111,29 @@ export class SdkModeCoordinator {\n \t}\n \n \tasync togglePlanActMode(modeToSwitchTo: Mode, chatContent?: ChatContent): Promise<boolean> {\n-\t\tconst currentMode = this.options.stateManager.getGlobalSettingsKey(\"mode\")\n-\t\tif (currentMode === modeToSwitchTo) {\n-\t\t\treturn false\n-\t\t}\n+\t\t// Decide under the rebuild lock, after any session start in flight has\n+\t\t// settled. Starts and rebuilds detach the outgoing session before the\n+\t\t// replacement is active, so a toggle that looked during that window\n+\t\t// would see no session, flip only the setting, and leave the session\n+\t\t// that finishes starting on the other mode's tools.\n+\t\treturn this.options.rebuilds.runExclusive(async () => {\n+\t\t\tawait this.options.sessions.waitForSessionStarts()",
+        "comment_created_at": "2026-10-19T10:43:32+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "thanks! filed it as [CLINE-3646](https://linear.app/cline-bot/issue/CLINE-3646/planact-switch-looks-stuck-while-a-session-is-being-set-up)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4261560922",
+    "pr_number": 13799,
+    "pr_file": "apps/vscode/src/sdk/account-service.ts",
+    "created_at": "2026-10-14T02:33:15+00:00",
+    "commented_code": "}\n \n \t/**\n-\t * Switches the active account to the specified organization or personal account.\n+\t * Switches the active account to the specified organization, or to the\n+\t * personal account when none is given. This is the only path that changes\n+\t * the account. Switches are serialised: one requested while another is in\n+\t * flight waits for it, then decides against the account as it is then, so\n+\t * a caller that read a stale account cannot tear down cloud state it does\n+\t * not need to. The account changes when this resolves; when the cached\n+\t * account changes, its cloud state is gone before the request is sent.\n \t */\n-\tasync switchAccount(organizationId?: string): Promise<void> {\n-\t\ttry {\n-\t\t\tawait this.authenticatedRequest<string>(CLINE_API_ENDPOINT.ACTIVE_ACCOUNT, {\n-\t\t\t\tmethod: \"PUT\",\n-\t\t\t\theaders: {\n-\t\t\t\t\t\"Content-Type\": \"application/json\",\n-\t\t\t\t},\n-\t\t\t\tdata: {\n-\t\t\t\t\torganizationId: organizationId || null,\n-\t\t\t\t},\n-\t\t\t})\n-\t\t\tconst activeOrgId = this._authService.getActiveOrganizationId()\n-\t\t\tif (activeOrgId !== organizationId) {\n+\tswitchAccount(organizationId?: string): Promise<void> {\n+\t\tconst previous = this.pendingSwitch ?? Promise.resolve()\n+\t\tconst switching = previous.then(\n+\t\t\t() => this.switchAccountNow(organizationId),\n+\t\t\t() => this.switchAccountNow(organizationId),\n+\t\t)\n+\t\tthis.pendingSwitch = switching\n+\t\treturn switching.finally(() => {\n+\t\t\tif (this.pendingSwitch === switching) this.pendingSwitch = undefined\n+\t\t})\n+\t}\n+\n+\tprivate async switchAccountNow(organizationId: string | undefined): Promise<void> {\n+\t\t// The server's active account is shared by every client on this login, so\n+\t\t// another client may have moved it; the request is always sent to restore\n+\t\t// it. The cloud state held here was scoped by the cached account, so it\n+\t\t// is torn down only when that cached account changes.\n+\t\tconst changesCachedAccount = (this._authService.getActiveOrganizationId() ?? undefined) !== (organizationId || undefined)\n+\t\tconst change = async () => {\n+\t\t\ttry {\n+\t\t\t\tawait this.authenticatedRequest<string>(CLINE_API_ENDPOINT.ACTIVE_ACCOUNT, {\n+\t\t\t\t\tmethod: \"PUT\",\n+\t\t\t\t\t// No client deadline: the server can still commit a PUT the client gave\n+\t\t\t\t\t// up on, and only its answer triggers the auth refresh below that brings\n+\t\t\t\t\t// this window onto the new account. setUserOrganization bounds the UI wait.\n+\t\t\t\t\ttimeout: 0,",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4266171903",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13799,
+        "pr_file": "apps/vscode/src/sdk/account-service.ts",
+        "discussion_id": "4261560922",
+        "commented_code": "@@ -256,29 +270,56 @@ export class ClineAccountService {\n \t}\n \n \t/**\n-\t * Switches the active account to the specified organization or personal account.\n+\t * Switches the active account to the specified organization, or to the\n+\t * personal account when none is given. This is the only path that changes\n+\t * the account. Switches are serialised: one requested while another is in\n+\t * flight waits for it, then decides against the account as it is then, so\n+\t * a caller that read a stale account cannot tear down cloud state it does\n+\t * not need to. The account changes when this resolves; when the cached\n+\t * account changes, its cloud state is gone before the request is sent.\n \t */\n-\tasync switchAccount(organizationId?: string): Promise<void> {\n-\t\ttry {\n-\t\t\tawait this.authenticatedRequest<string>(CLINE_API_ENDPOINT.ACTIVE_ACCOUNT, {\n-\t\t\t\tmethod: \"PUT\",\n-\t\t\t\theaders: {\n-\t\t\t\t\t\"Content-Type\": \"application/json\",\n-\t\t\t\t},\n-\t\t\t\tdata: {\n-\t\t\t\t\torganizationId: organizationId || null,\n-\t\t\t\t},\n-\t\t\t})\n-\t\t\tconst activeOrgId = this._authService.getActiveOrganizationId()\n-\t\t\tif (activeOrgId !== organizationId) {\n+\tswitchAccount(organizationId?: string): Promise<void> {\n+\t\tconst previous = this.pendingSwitch ?? Promise.resolve()\n+\t\tconst switching = previous.then(\n+\t\t\t() => this.switchAccountNow(organizationId),\n+\t\t\t() => this.switchAccountNow(organizationId),\n+\t\t)\n+\t\tthis.pendingSwitch = switching\n+\t\treturn switching.finally(() => {\n+\t\t\tif (this.pendingSwitch === switching) this.pendingSwitch = undefined\n+\t\t})\n+\t}\n+\n+\tprivate async switchAccountNow(organizationId: string | undefined): Promise<void> {\n+\t\t// The server's active account is shared by every client on this login, so\n+\t\t// another client may have moved it; the request is always sent to restore\n+\t\t// it. The cloud state held here was scoped by the cached account, so it\n+\t\t// is torn down only when that cached account changes.\n+\t\tconst changesCachedAccount = (this._authService.getActiveOrganizationId() ?? undefined) !== (organizationId || undefined)\n+\t\tconst change = async () => {\n+\t\t\ttry {\n+\t\t\t\tawait this.authenticatedRequest<string>(CLINE_API_ENDPOINT.ACTIVE_ACCOUNT, {\n+\t\t\t\t\tmethod: \"PUT\",\n+\t\t\t\t\t// No client deadline: the server can still commit a PUT the client gave\n+\t\t\t\t\t// up on, and only its answer triggers the auth refresh below that brings\n+\t\t\t\t\t// this window onto the new account. setUserOrganization bounds the UI wait.\n+\t\t\t\t\ttimeout: 0,",
+        "comment_created_at": "2026-10-14T02:33:15+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Intentional, keeping this. #14971 removed the deadline on purpose: the server can commit the switch after the client gives up, and only its answer triggers the auth refresh that moves this window onto the new account. With a client deadline, the UI stayed on the old account while billing used the new one. `main` has never had a deadline on this PUT either. The UI wait is still capped at 10 seconds by `setUserOrganization`. The only new effect is that a later switch queues behind one the server never answers, which takes a server or proxy that hangs without failing. We'll revisit if that shows up in practice.\n",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

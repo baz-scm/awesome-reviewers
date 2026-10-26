@@ -1,0 +1,178 @@
+[
+  {
+    "discussion_id": "3852042847",
+    "pr_number": 11203,
+    "pr_file": "apps/vscode/src/sdk/sdk-provider-change-coordinator.ts",
+    "created_at": "2026-08-25T13:13:46+00:00",
+    "commented_code": "`[SdkController] Active provider changed for ${mode}: ${previousProvider ?? \"none\"} -> ${nextProvider ?? \"none\"}`,\n \t\t)\n \n-\t\tthis.options.rebuilds.request(\"provider\", () => this.restartActiveSessionForProviderChange())\n+\t\tthis.options.rebuilds.request(\"provider\", () => this.performRestartActiveSessionForProviderChange(activeSession))\n \t}\n \n \tasync restartActiveSessionForProviderChange(): Promise<void> {\n \t\tawait this.performRestartActiveSessionForProviderChange()\n \t}\n \n-\tprivate async performRestartActiveSessionForProviderChange(): Promise<void> {\n-\t\tconst activeSession = this.options.sessions.getActiveSession()\n-\t\tif (!activeSession) {\n+\t/**\n+\t * Retains provider-field edits while any coordinator replaces the active\n+\t * session. Calls may nest because the provider coordinator owns the wider\n+\t * rebuild while SdkSessionLifecycle owns the exact reference-free gap.\n+\t */\n+\thandleActiveSessionReplacementStarted(activeSession: ActiveSession): void {\n+\t\tthis.beginActiveSessionReplacement(activeSession, false)\n+\t}\n+\n+\tprivate beginActiveSessionReplacement(activeSession: ActiveSession, providerOwned: boolean): void {\n+\t\tconst current = this.sessionReplacementInFlight\n+\t\tif (current?.activeSession === activeSession) {\n+\t\t\tcurrent.providerOwned ||= providerOwned\n+\t\t\tcurrent.depth += 1\n \t\t\treturn\n \t\t}\n \n+\t\tconst mode = this.getCurrentMode()\n+\t\tthis.sessionReplacementInFlight = {\n+\t\t\tactiveSession,\n+\t\t\tmode,\n+\t\t\tprovider: providerForMode(this.options.stateManager.getApiConfiguration(), mode),\n+\t\t\tversionAtStart: this.providerConnectionChangeVersion,\n+\t\t\tproviderOwned,\n+\t\t\tdepth: 1,\n+\t\t}\n+\t}\n+\n+\thandleActiveSessionReplacementFinished(replacementSession: ActiveSession | undefined): void {\n+\t\tconst context = this.sessionReplacementInFlight\n+\t\tif (!context) {\n+\t\t\treturn\n+\t\t}\n+\n+\t\tif (replacementSession) {\n+\t\t\tcontext.replacementSession = replacementSession\n+\t\t}\n+\t\tcontext.depth -= 1\n+\t\tif (context.depth > 0) {\n+\t\t\treturn\n+\t\t}\n+\n+\t\tthis.sessionReplacementInFlight = undefined\n+\t\tthis.rebindProviderEditAfterReplacement(context, context.replacementSession)\n+\t}\n+\n+\t/**\n+\t * Applies connection-scoped provider settings to a suspended live session.\n+\t * The scheduled rebuild is intentionally retained: once the turn becomes\n+\t * idle it still refreshes session-wide fields that an in-place connection update\n+\t * cannot change (for example system-prompt/model metadata).\n+\t */\n+\tasync applyPendingConnectionUpdateBeforeModelRequest(): Promise<void> {\n+\t\tconst apply = this.providerConnectionApplyTail.then(() => this.performPendingConnectionUpdate())\n+\t\tthis.providerConnectionApplyTail = apply.catch(() => {})\n+\t\tawait apply\n+\t}\n+\n+\tprivate async performPendingConnectionUpdate(): Promise<void> {\n+\t\twhile (true) {\n+\t\t\tconst pending = this.pendingProviderFieldUpdate\n+\t\t\tif (!pending || pending.version <= this.appliedProviderConnectionVersion) return\n+\t\t\tif (this.classifyPendingProviderFieldUpdate(pending) !== \"current\") return\n+\n+\t\t\tconst cwd = await this.options.getWorkspaceRoot()\n+\t\t\tconst workspaceStatus = this.classifyPendingProviderFieldUpdate(pending)\n+\t\t\tif (workspaceStatus === \"superseded\") continue\n+\t\t\tif (workspaceStatus === \"invalid\") return\n+\t\t\tconst config = await this.options.sessionConfigBuilder.build({ cwd, mode: pending.mode })\n+\t\t\tconst buildStatus = this.classifyPendingProviderFieldUpdate(pending)\n+\t\t\tif (buildStatus === \"superseded\") continue\n+\t\t\tif (buildStatus === \"invalid\") return\n+\t\t\tif (toLegacyApiProvider(config.providerId) !== pending.provider) return\n+\n+\t\t\tconst updateSuspendedConnection = pending.activeSession.sdkHost.updateSuspendedSessionConnection\n+\t\t\tif (!updateSuspendedConnection) {\n+\t\t\t\tthrow new Error(\"Active SDK host cannot update suspended provider settings\")\n+\t\t\t}\n+\n+\t\t\tconst hasReasoningConfig =\n+\t\t\t\tconfig.thinking !== undefined || config.reasoningEffort !== undefined || config.thinkingBudgetTokens !== undefined\n+\t\t\tconst update: ConnectionUpdate = {\n+\t\t\t\tapiKey: config.apiKey ?? \"\",\n+\t\t\t\tbaseUrl: config.baseUrl ?? \"\",",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "3853307597",
+        "repo_full_name": "cline/cline",
+        "pr_number": 11203,
+        "pr_file": "apps/vscode/src/sdk/sdk-provider-change-coordinator.ts",
+        "discussion_id": "3852042847",
+        "commented_code": "@@ -59,22 +170,154 @@ export class SdkProviderChangeCoordinator {\n \t\t\t`[SdkController] Active provider changed for ${mode}: ${previousProvider ?? \"none\"} -> ${nextProvider ?? \"none\"}`,\n \t\t)\n \n-\t\tthis.options.rebuilds.request(\"provider\", () => this.restartActiveSessionForProviderChange())\n+\t\tthis.options.rebuilds.request(\"provider\", () => this.performRestartActiveSessionForProviderChange(activeSession))\n \t}\n \n \tasync restartActiveSessionForProviderChange(): Promise<void> {\n \t\tawait this.performRestartActiveSessionForProviderChange()\n \t}\n \n-\tprivate async performRestartActiveSessionForProviderChange(): Promise<void> {\n-\t\tconst activeSession = this.options.sessions.getActiveSession()\n-\t\tif (!activeSession) {\n+\t/**\n+\t * Retains provider-field edits while any coordinator replaces the active\n+\t * session. Calls may nest because the provider coordinator owns the wider\n+\t * rebuild while SdkSessionLifecycle owns the exact reference-free gap.\n+\t */\n+\thandleActiveSessionReplacementStarted(activeSession: ActiveSession): void {\n+\t\tthis.beginActiveSessionReplacement(activeSession, false)\n+\t}\n+\n+\tprivate beginActiveSessionReplacement(activeSession: ActiveSession, providerOwned: boolean): void {\n+\t\tconst current = this.sessionReplacementInFlight\n+\t\tif (current?.activeSession === activeSession) {\n+\t\t\tcurrent.providerOwned ||= providerOwned\n+\t\t\tcurrent.depth += 1\n \t\t\treturn\n \t\t}\n \n+\t\tconst mode = this.getCurrentMode()\n+\t\tthis.sessionReplacementInFlight = {\n+\t\t\tactiveSession,\n+\t\t\tmode,\n+\t\t\tprovider: providerForMode(this.options.stateManager.getApiConfiguration(), mode),\n+\t\t\tversionAtStart: this.providerConnectionChangeVersion,\n+\t\t\tproviderOwned,\n+\t\t\tdepth: 1,\n+\t\t}\n+\t}\n+\n+\thandleActiveSessionReplacementFinished(replacementSession: ActiveSession | undefined): void {\n+\t\tconst context = this.sessionReplacementInFlight\n+\t\tif (!context) {\n+\t\t\treturn\n+\t\t}\n+\n+\t\tif (replacementSession) {\n+\t\t\tcontext.replacementSession = replacementSession\n+\t\t}\n+\t\tcontext.depth -= 1\n+\t\tif (context.depth > 0) {\n+\t\t\treturn\n+\t\t}\n+\n+\t\tthis.sessionReplacementInFlight = undefined\n+\t\tthis.rebindProviderEditAfterReplacement(context, context.replacementSession)\n+\t}\n+\n+\t/**\n+\t * Applies connection-scoped provider settings to a suspended live session.\n+\t * The scheduled rebuild is intentionally retained: once the turn becomes\n+\t * idle it still refreshes session-wide fields that an in-place connection update\n+\t * cannot change (for example system-prompt/model metadata).\n+\t */\n+\tasync applyPendingConnectionUpdateBeforeModelRequest(): Promise<void> {\n+\t\tconst apply = this.providerConnectionApplyTail.then(() => this.performPendingConnectionUpdate())\n+\t\tthis.providerConnectionApplyTail = apply.catch(() => {})\n+\t\tawait apply\n+\t}\n+\n+\tprivate async performPendingConnectionUpdate(): Promise<void> {\n+\t\twhile (true) {\n+\t\t\tconst pending = this.pendingProviderFieldUpdate\n+\t\t\tif (!pending || pending.version <= this.appliedProviderConnectionVersion) return\n+\t\t\tif (this.classifyPendingProviderFieldUpdate(pending) !== \"current\") return\n+\n+\t\t\tconst cwd = await this.options.getWorkspaceRoot()\n+\t\t\tconst workspaceStatus = this.classifyPendingProviderFieldUpdate(pending)\n+\t\t\tif (workspaceStatus === \"superseded\") continue\n+\t\t\tif (workspaceStatus === \"invalid\") return\n+\t\t\tconst config = await this.options.sessionConfigBuilder.build({ cwd, mode: pending.mode })\n+\t\t\tconst buildStatus = this.classifyPendingProviderFieldUpdate(pending)\n+\t\t\tif (buildStatus === \"superseded\") continue\n+\t\t\tif (buildStatus === \"invalid\") return\n+\t\t\tif (toLegacyApiProvider(config.providerId) !== pending.provider) return\n+\n+\t\t\tconst updateSuspendedConnection = pending.activeSession.sdkHost.updateSuspendedSessionConnection\n+\t\t\tif (!updateSuspendedConnection) {\n+\t\t\t\tthrow new Error(\"Active SDK host cannot update suspended provider settings\")\n+\t\t\t}\n+\n+\t\t\tconst hasReasoningConfig =\n+\t\t\t\tconfig.thinking !== undefined || config.reasoningEffort !== undefined || config.thinkingBudgetTokens !== undefined\n+\t\t\tconst update: ConnectionUpdate = {\n+\t\t\t\tapiKey: config.apiKey ?? \"\",\n+\t\t\t\tbaseUrl: config.baseUrl ?? \"\",",
+        "comment_created_at": "2026-08-25T13:13:46+00:00",
+        "comment_author": "Yurii201811",
+        "comment_body": "I fixed this in 54ee82110. Clearing a custom base URL now sends an explicit `baseUrl: null` reset through the live connection contract. Core rebuilds provider configuration after removing the stale custom URL, so LM Studio returns to its manifest default while an empty string remains a distinct literal value. Regression coverage exercises the custom-to-default transition and transport parsing.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4213704976",
+    "pr_number": 13799,
+    "pr_file": "apps/vscode/src/sdk/SdkController.ts",
+    "created_at": "2026-10-08T02:50:31+00:00",
+    "commented_code": "* return immediately so the webview stays responsive.\n \t */\n \tasync askResponse(prompt?: string, images?: string[], files?: string[]): Promise<void> {\n-\t\t// The sign-in retry answers only the next response to the task that\n-\t\t// showed the error; a task opened since then does not inherit it.\n-\t\tconst retry = this.pendingClineAuthRetry\n-\t\tthis.pendingClineAuthRetry = undefined\n+\t\t// A start retry answers only the next response to the task that showed\n+\t\t// the error; a task opened since then does not inherit it.\n+\t\tconst retry = this.pendingStartRetry\n+\t\tthis.pendingStartRetry = undefined\n \t\tif (retry && retry.task === this.task) {\n \t\t\tconst askResponse = this.task.taskState.askResponse\n \t\t\tif (askResponse === \"yesButtonClicked\") {\n-\t\t\t\tawait this.initTask(retry.prompt, images, files)\n+\t\t\t\tawait this.initTask(retry.prompt, images ?? retry.images, files, undefined, undefined, retry.cloudTarget)",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4214102045",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13799,
+        "pr_file": "apps/vscode/src/sdk/SdkController.ts",
+        "discussion_id": "4213704976",
+        "commented_code": "@@ -1509,25 +1636,58 @@ export class Controller {\n \t * return immediately so the webview stays responsive.\n \t */\n \tasync askResponse(prompt?: string, images?: string[], files?: string[]): Promise<void> {\n-\t\t// The sign-in retry answers only the next response to the task that\n-\t\t// showed the error; a task opened since then does not inherit it.\n-\t\tconst retry = this.pendingClineAuthRetry\n-\t\tthis.pendingClineAuthRetry = undefined\n+\t\t// A start retry answers only the next response to the task that showed\n+\t\t// the error; a task opened since then does not inherit it.\n+\t\tconst retry = this.pendingStartRetry\n+\t\tthis.pendingStartRetry = undefined\n \t\tif (retry && retry.task === this.task) {\n \t\t\tconst askResponse = this.task.taskState.askResponse\n \t\t\tif (askResponse === \"yesButtonClicked\") {\n-\t\t\t\tawait this.initTask(retry.prompt, images, files)\n+\t\t\t\tawait this.initTask(retry.prompt, images ?? retry.images, files, undefined, undefined, retry.cloudTarget)",
+        "comment_created_at": "2026-10-08T02:50:31+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Valid, fixed in the latest push. A Retry click carries no attachments of its own: protobuf decodes the omitted `images` field as `[]`, so `images ?? retry.images` kept the empty list. The retry now uses `images?.length ? images : retry.images`, so the failed start's attachments go to the retried sandbox unless the response actually carries some. Covered by `keeps the original attachments when Retry arrives with the webview's empty image list` in `SdkController.test.ts`, which sends Retry with `[]` and fails without the fix.\n\nThe same push merges `main` into this branch (the only conflict was in `state-keys.ts`, where `main` removed the focus-chain setting next to the new cloud keys). On the merged result, the full extension type check, vitest (1,452), `test:cloud` (23), the bun unit tests and the webview tests (584) all pass.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4154529022",
+    "pr_number": 13799,
+    "pr_file": "apps/vscode/src/sdk/SdkController.ts",
+    "created_at": "2026-10-08T02:50:33+00:00",
+    "commented_code": "* return immediately so the webview stays responsive.\n \t */\n \tasync askResponse(prompt?: string, images?: string[], files?: string[]): Promise<void> {\n-\t\t// The sign-in retry answers only the next response to the task that\n-\t\t// showed the error; a task opened since then does not inherit it.\n-\t\tconst retry = this.pendingClineAuthRetry\n-\t\tthis.pendingClineAuthRetry = undefined\n+\t\t// A start retry answers only the next response to the task that showed\n+\t\t// the error; a task opened since then does not inherit it.\n+\t\tconst retry = this.pendingStartRetry\n+\t\tthis.pendingStartRetry = undefined\n \t\tif (retry && retry.task === this.task) {\n \t\t\tconst askResponse = this.task.taskState.askResponse\n \t\t\tif (askResponse === \"yesButtonClicked\") {\n-\t\t\t\tawait this.initTask(retry.prompt, images, files)\n+\t\t\t\tawait this.initTask(retry.prompt, images ?? retry.images, files, undefined, undefined, retry.cloudTarget)",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4214102155",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13799,
+        "pr_file": "apps/vscode/src/sdk/SdkController.ts",
+        "discussion_id": "4154529022",
+        "commented_code": "@@ -1509,25 +1632,58 @@ export class Controller {\n \t * return immediately so the webview stays responsive.\n \t */\n \tasync askResponse(prompt?: string, images?: string[], files?: string[]): Promise<void> {\n-\t\t// The sign-in retry answers only the next response to the task that\n-\t\t// showed the error; a task opened since then does not inherit it.\n-\t\tconst retry = this.pendingClineAuthRetry\n-\t\tthis.pendingClineAuthRetry = undefined\n+\t\t// A start retry answers only the next response to the task that showed\n+\t\t// the error; a task opened since then does not inherit it.\n+\t\tconst retry = this.pendingStartRetry\n+\t\tthis.pendingStartRetry = undefined\n \t\tif (retry && retry.task === this.task) {\n \t\t\tconst askResponse = this.task.taskState.askResponse\n \t\t\tif (askResponse === \"yesButtonClicked\") {\n-\t\t\t\tawait this.initTask(retry.prompt, images, files)\n+\t\t\t\tawait this.initTask(retry.prompt, images ?? retry.images, files, undefined, undefined, retry.cloudTarget)",
+        "comment_created_at": "2026-10-08T02:50:33+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Valid, fixed in the latest push. A Retry click carries no attachments of its own: protobuf decodes the omitted `images` field as `[]`, so `images ?? retry.images` kept the empty list. The retry now uses `images?.length ? images : retry.images`, so the failed start's attachments go to the retried sandbox unless the response actually carries some. Covered by `keeps the original attachments when Retry arrives with the webview's empty image list` in `SdkController.test.ts`, which sends Retry with `[]` and fails without the fix.\n\nThe same push merges `main` into this branch (the only conflict was in `state-keys.ts`, where `main` removed the focus-chain setting next to the new cloud keys). On the merged result, the full extension type check, vitest (1,452), `test:cloud` (23), the bun unit tests and the webview tests (584) all pass.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4069103913",
+    "pr_number": 14206,
+    "pr_file": "apps/examples/desktop-app/webview/hooks/chat-session/helpers.ts",
+    "created_at": "2026-09-22T06:51:02+00:00",
+    "commented_code": "* Code's \"OAuth session expired and could not be refreshed\" needs a fresh\n  * sign-in in the `claude` CLI itself.\n  */\n-export function resolveCredentialFailureHint(providerId: string): string {\n-\tconst cli = resolveProviderLocalCli(providerId);\n+export function resolveCredentialFailureHint(\n+\tproviderId: string,\n+\tauth?: ProviderAuthInfo,\n+): string {\n+\tconst cli = auth?.providerId === providerId ? auth.localCli : undefined;",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4069103913",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14206,
+        "pr_file": "apps/examples/desktop-app/webview/hooks/chat-session/helpers.ts",
+        "discussion_id": "4069103913",
+        "commented_code": "@@ -253,8 +251,11 @@ export function resolveCredentialError(\n  * Code's \"OAuth session expired and could not be refreshed\" needs a fresh\n  * sign-in in the `claude` CLI itself.\n  */\n-export function resolveCredentialFailureHint(providerId: string): string {\n-\tconst cli = resolveProviderLocalCli(providerId);\n+export function resolveCredentialFailureHint(\n+\tproviderId: string,\n+\tauth?: ProviderAuthInfo,\n+): string {\n+\tconst cli = auth?.providerId === providerId ? auth.localCli : undefined;",
+        "comment_created_at": "2026-09-22T06:51:02+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "This used to resolve local-CLI status from the provider registry; it now requires matching `providerAuth`. When those facts are absent or don't match the selected provider it silently becomes \"not a local-CLI provider\" \u2014 a `claude-code` user gets \"Check your model connection in Settings \u2192 API Providers\" rather than \"Sign in again with the `claude` CLI\". `resolveCredentialFailureAction` at line 291 has the same gate and returns an \"Open API providers\" action instead of `null`.\n\nThe live paths try to keep these facts synchronized, so the happy path is covered \u2014 it's the fallback that changed. Preserving built-in auth behaviour when catalog facts aren't available, or making \"unknown auth\" an explicit state rather than a silent negative, would keep this correct without reaching back into `@cline/llms`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4069103923",
+    "pr_number": 14206,
+    "pr_file": "apps/examples/desktop-app/webview/hooks/chat-session/helpers.ts",
+    "created_at": "2026-09-22T06:51:02+00:00",
+    "commented_code": "}\n \t// OAuth and local-auth providers (Claude Code, Codex CLI) keep their\n \t// credentials outside the webview config and never read an API key.\n-\tconst capabilities = getProviderCollectionSync(\n-\t\tnormalizeProviderId(providerId),\n-\t)?.provider.capabilities;\n+\tconst capabilities =\n+\t\tconfig.providerAuth?.providerId === config.provider",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4069103923",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14206,
+        "pr_file": "apps/examples/desktop-app/webview/hooks/chat-session/helpers.ts",
+        "discussion_id": "4069103923",
+        "commented_code": "@@ -234,9 +231,10 @@ export function resolveCredentialError(\n \t}\n \t// OAuth and local-auth providers (Claude Code, Codex CLI) keep their\n \t// credentials outside the webview config and never read an API key.\n-\tconst capabilities = getProviderCollectionSync(\n-\t\tnormalizeProviderId(providerId),\n-\t)?.provider.capabilities;\n+\tconst capabilities =\n+\t\tconfig.providerAuth?.providerId === config.provider",
+        "comment_created_at": "2026-09-22T06:51:02+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Same failure mode, different consequence. This replaced `getProviderCollectionSync(...).provider.capabilities` with `config.providerAuth`, so when that's missing or doesn't match `config.provider` the capability check is skipped entirely. A catalog-declared OAuth or local-auth provider outside the hard-coded `OAUTH_MANAGED_PROVIDERS` set then falls through to the missing-API-key path and gets reported as missing a key it never reads.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4065245357",
+    "pr_number": 14356,
+    "pr_file": "sdk/packages/core/src/hub/runtime-host/hub-runtime-host.ts",
+    "created_at": "2026-09-21T20:11:22+00:00",
+    "commented_code": "title?: string | null;\n \t\t},\n \t): Promise<{ updated: boolean }> {\n-\t\tconst metadata: Record<string, unknown> = {\n-\t\t\t...(updates.metadata ?? {}),\n-\t\t};\n-\t\tif (typeof updates.prompt === \"string\") {\n-\t\t\tmetadata.prompt = updates.prompt;\n-\t\t}\n-\t\tif (typeof updates.title === \"string\") {\n-\t\t\tmetadata.title = updates.title;\n-\t\t}\n+\t\t// Forward prompt/title as their own fields: the persistence layer only\n+\t\t// treats an explicit `title` as a rename and otherwise keeps the stored\n+\t\t// one, so folding it into `metadata.title` would silently drop renames.\n \t\tconst reply = await this.client.command(\"session.update\", {\n \t\t\tsessionId,\n-\t\t\tmetadata,\n+\t\t\t...(updates.prompt !== undefined ? { prompt: updates.prompt } : {}),\n+\t\t\t...(updates.metadata !== undefined ? { metadata: updates.metadata } : {}),",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4065995837",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14356,
+        "pr_file": "sdk/packages/core/src/hub/runtime-host/hub-runtime-host.ts",
+        "discussion_id": "4065245357",
+        "commented_code": "@@ -1410,18 +1410,14 @@ export class HubRuntimeHost implements RuntimeHost {\n \t\t\ttitle?: string | null;\n \t\t},\n \t): Promise<{ updated: boolean }> {\n-\t\tconst metadata: Record<string, unknown> = {\n-\t\t\t...(updates.metadata ?? {}),\n-\t\t};\n-\t\tif (typeof updates.prompt === \"string\") {\n-\t\t\tmetadata.prompt = updates.prompt;\n-\t\t}\n-\t\tif (typeof updates.title === \"string\") {\n-\t\t\tmetadata.title = updates.title;\n-\t\t}\n+\t\t// Forward prompt/title as their own fields: the persistence layer only\n+\t\t// treats an explicit `title` as a rename and otherwise keeps the stored\n+\t\t// one, so folding it into `metadata.title` would silently drop renames.\n \t\tconst reply = await this.client.command(\"session.update\", {\n \t\t\tsessionId,\n-\t\t\tmetadata,\n+\t\t\t...(updates.prompt !== undefined ? { prompt: updates.prompt } : {}),\n+\t\t\t...(updates.metadata !== undefined ? { metadata: updates.metadata } : {}),",
+        "comment_created_at": "2026-09-21T20:11:22+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Fair catch. Before this PR a `metadata: null` clear was encoded as `{}` and the daemon wiped the record; my rewrite sent a literal `null`, which `asPlainRecord` decodes as omitted, so the clear became a no-op. No desktop or CLI caller passes `metadata: null` over the hub today, but it was a semantic change this diff introduced, so restored the `{}` encoding in 3e428e6dc and added a test for it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4266722636",
+    "pr_number": 15011,
+    "pr_file": "sdk/packages/shared/src/agent.ts",
+    "created_at": "2026-10-14T04:18:41+00:00",
+    "commented_code": "export interface AgentRunLifecycleContext {\n \tsnapshot: AgentRuntimeStateSnapshot;\n+\t/**\n+\t * How the run was entered. `run` starts a new user turn; `continue` resumes\n+\t * without one. Only set for `beforeRun`.",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4266722636",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15011,
+        "pr_file": "sdk/packages/shared/src/agent.ts",
+        "discussion_id": "4266722636",
+        "commented_code": "@@ -458,6 +458,17 @@ export interface AgentAfterToolResult {\n \n export interface AgentRunLifecycleContext {\n \tsnapshot: AgentRuntimeStateSnapshot;\n+\t/**\n+\t * How the run was entered. `run` starts a new user turn; `continue` resumes\n+\t * without one. Only set for `beforeRun`.",
+        "comment_created_at": "2026-10-14T04:18:41+00:00",
+        "comment_author": "dominiccooney",
+        "comment_body": "In general, it is better if we can reflect the \"only set for `beforeRun`\" in a TypeScript shape which has `{foo: \"beforeRun\", entry: \"run\" | \"continue\", ...}` so the rest of the system can use these fields in a typesafe way. Also possible to lift a property out of an object by construction to relate these fields with some other state. (Does that make sense? TL;DR, can we use the type system here to communicate \"only set for `beforeRun`\" and benefit from checking?)",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4203499651",
+    "pr_number": 14791,
+    "pr_file": "apps/vscode/src/sdk/cloud-session-host.ts",
+    "created_at": "2026-10-07T05:45:32+00:00",
+    "commented_code": "return this.agentStatus\n \t}\n \n+\t/**\n+\t * Resolves once the sandbox has started a turn this host sent, i.e. the\n+\t * prompt now lives in the sandbox rather than only in this process.\n+\t */\n+\twhenTurnAccepted(): Promise<void> {\n+\t\tif (!this.turnAccepted) {\n+\t\t\tlet resolve!: () => void\n+\t\t\tconst promise = new Promise<void>((done) => {\n+\t\t\t\tresolve = done\n+\t\t\t})\n+\t\t\tthis.turnAccepted = { promise, resolve }\n+\t\t}\n+\t\treturn this.turnAccepted.promise\n+\t}\n+\n+\tprivate acceptTurn(): void {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4203499651",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14791,
+        "pr_file": "apps/vscode/src/sdk/cloud-session-host.ts",
+        "discussion_id": "4203499651",
+        "commented_code": "@@ -159,6 +162,27 @@ export class CloudSessionHost implements SdkSessionHost {\n \t\treturn this.agentStatus\n \t}\n \n+\t/**\n+\t * Resolves once the sandbox has started a turn this host sent, i.e. the\n+\t * prompt now lives in the sandbox rather than only in this process.\n+\t */\n+\twhenTurnAccepted(): Promise<void> {\n+\t\tif (!this.turnAccepted) {\n+\t\t\tlet resolve!: () => void\n+\t\t\tconst promise = new Promise<void>((done) => {\n+\t\t\t\tresolve = done\n+\t\t\t})\n+\t\t\tthis.turnAccepted = { promise, resolve }\n+\t\t}\n+\t\treturn this.turnAccepted.promise\n+\t}\n+\n+\tprivate acceptTurn(): void {",
+        "comment_created_at": "2026-10-07T05:45:32+00:00",
+        "comment_author": "dominiccooney",
+        "comment_body": "We probably almost always call this, so we could simplify the whole thing by always initializing `turnAccepted` in the constructor, make that type non-null and avoid some ?s, and avoid the conditional in `whenTurnAccepted`.\n\nStylistically, think `turnAccepted.then(...)` or `await turnAccepted` read better than `whenTurnAccepted().then(...)` or `await whenTurnAccepted`, so consider renaming `whenTurnAccepted`.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,640 @@
+[
+  {
+    "discussion_id": "1160711340",
+    "pr_number": 113883,
+    "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+    "created_at": "2023-04-07T13:44:10+00:00",
+    "commented_code": "containerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "1160711340",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1160711340",
+        "commented_code": "@@ -775,13 +775,26 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \t\t\tcontainerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+        "comment_created_at": "2023-04-07T13:44:10+00:00",
+        "comment_author": "smarterclayton",
+        "comment_body": "I don't understand why this is necessary - killContainer is taking a context and cancellation there should be sufficient.\r\n\r\nIs there evidence it doesn't work?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1160731603",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1160711340",
+        "commented_code": "@@ -775,13 +775,26 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \t\t\tcontainerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+        "comment_created_at": "2023-04-07T14:15:04+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "If you use only the context as before, it does not work.\r\nThis is because here the goroutines are used in this for loop to interact with the CRI. If the first deletion takes longer, even if ctx is called to exit, it will still be blocked here (because the exit signal is not received and goroutines are blocked in the link with the CRI). Until the CRI returns a successful deletion, no results will be returned. I've tested this locally.\r\n\r\nSo I used killContainerCompletedSignal scheme. The change of mind is to remove the blocking of goroutines. Let the blocking process appear in the select rather than in the goroutines interacting with the CRI. Because select is controllable. This will lead to two situations\r\n1. If all containers do not receive ctx.Done() on the normal exit then it will go to line 791 of the code, will continue to execute in the same way as before. Otherwise, it will block in the select.\r\n2. If in the process of blocking, received ctx.Done() signal, then it will directly record the error message and return the result. This will allow the second delete command to be executed.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1167085424",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1160711340",
+        "commented_code": "@@ -775,13 +775,26 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \t\t\tcontainerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+        "comment_created_at": "2023-04-14T17:00:55+00:00",
+        "comment_author": "smarterclayton",
+        "comment_body": "The first paragraph confuses me.\r\n\r\nWhen ctx is cancelled, killContainer should exit rapidly.  Is this not the case?  If it isn't, we should be fixing the bugs at that level (not in this method)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1167342697",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1160711340",
+        "commented_code": "@@ -775,13 +775,26 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \t\t\tcontainerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+        "comment_created_at": "2023-04-15T00:18:53+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "> The first paragraph confuses me.\r\n> \r\n> When ctx is cancelled, killContainer should exit rapidly. Is this not the case? If it isn't, we should be fixing the bugs at that level (not in this method)\r\n\r\nAs I understand it, although the killContainer function passes ctx, but without <-ctx.Done() to receive the exit value, the CRI in blocking will not end, right?\r\nIf even killContainer receives the exit signal from ctx, it should return some result information. So my change is to better be able to return the latest information back",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1167344602",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1160711340",
+        "commented_code": "@@ -775,13 +775,26 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \t\t\tcontainerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+        "comment_created_at": "2023-04-15T00:25:13+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "> The first paragraph confuses me.\r\n> \r\n> When ctx is cancelled, killContainer should exit rapidly. Is this not the case? If it isn't, we should be fixing the bugs at that level (not in this method)\r\n\r\nMaybe I misled you with my previous statement. The correct code logic should be\r\nThe ctx passed in killContainer is not able to receive the ctx.cancel signal. It must be received by <-ctx.Done() to do so. Otherwise it still can't exit goroutines\r\n\"The signal of ctx.cancel needs to be received by ctx.Done. and not goroutines\"",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1167348822",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1160711340",
+        "commented_code": "@@ -775,13 +775,26 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \t\t\tcontainerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+        "comment_created_at": "2023-04-15T00:51:32+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "> The first paragraph confuses me.\r\n\r\nkillContainerCompletedSignal I may not have made it clear to you what this structure does.\r\nBecause according to the original code, m.killContainer(ctx, ...) And this is a goroutines inside a for. you have to make sure that all containers are executed.\r\nThe killContainerCompletedSignal is to ensure that all for containers are executed successfully when no ctx.Done is received. Without adding this, the original code wg.wait() would keep blocking and we would not be able to successfully receive ctx.Done.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1167350494",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1160711340",
+        "commented_code": "@@ -775,13 +775,26 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \t\t\tcontainerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+        "comment_created_at": "2023-04-15T01:02:44+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "\r\n>  Is this not the case? If it isn't, we should be fixing the bugs at that level (not in this method)\r\n\r\nIn the current case, killContainer does not exit quickly when ctx is cancelled.\r\nIf you think you shouldn't do ctx.Done in the current method, you should receive ctx.Done in the killContainer function, but this is a grpc call to CRI, and I don't know what this function is in\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1167352105",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1160711340",
+        "commented_code": "@@ -775,13 +775,26 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \t\t\tcontainerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+        "comment_created_at": "2023-04-15T01:15:26+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": ">  we should be fixing the bugs at that level (not in this method)\r\n\r\nAnd a small doubt. If not in this method to solve it. If you return directly, here containerResult<-killcontainerResult will not make much sense\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1169269674",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1160711340",
+        "commented_code": "@@ -775,13 +775,26 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \t\t\tcontainerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+        "comment_created_at": "2023-04-17T21:09:43+00:00",
+        "comment_author": "smarterclayton",
+        "comment_body": "> In the current case, killContainer does not exit quickly when ctx is cancelled.\r\n\r\nIn that case, we need to change the `killContainer` method so that it does exit quickly when ctx is cancelled.  The expectation is when ctx is cancelled that all methods return quickly - whether that's the CRI (which takes ctx as an argument and should stop the current request) or the methods themselves if they do particularly long loops.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1169398657",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1160711340",
+        "commented_code": "@@ -775,13 +775,26 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \t\t\tcontainerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+        "comment_created_at": "2023-04-18T01:25:09+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "> killContainer\r\n\r\nSo what should we do now, move this ctx.Done reception to the killContainer method or move it to the CRI side?\r\nYou can look at line 745 of this file, which is where the killContainer method eventually calls the StopContainer method (which eventually blocks here). So do we copy the current code after 745? Or do we solve it at the CRI?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1169401453",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1160711340",
+        "commented_code": "@@ -775,13 +775,26 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \t\t\tcontainerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+        "comment_created_at": "2023-04-18T01:31:52+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "> goroutines\r\n\r\nBut I think it might be more appropriate to put it in the killContainersWithSyncResult now (since the goroutines are already executed) If we put it in the killContainer function, then we need to modify the StopContainer function to make it goroutines. No matter where the change is made, there must be goroutines to execute and to receive ctx.Done() to do so.\r\nIf we put it in CRI, we need goroutines to execute and receive the ctx.Done signal\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1222410003",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1160711340",
+        "commented_code": "@@ -775,13 +775,26 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \t\t\tcontainerResults <- killContainerResult\n \t\t}(container)\n \t}\n-\twg.Wait()\n-\tclose(containerResults)\n+\tkillContainerCompletedSignal := make(chan struct{}, 1)",
+        "comment_created_at": "2023-06-08T03:29:36+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "> In that case, we need to change the `killContainer` method so that it does exit quickly when ctx is cancelled. The expectation is when ctx is cancelled that all methods return quickly\r\n\r\n@smarterclayton Hi, I recently looked at this part of the code in detail again.\r\nI misunderstood what you meant before (It had to be changed at CRI level). It turns out that you meant \"change it in the killContainer function\".\r\nThis is the latest result of the change I made in the killContainer function and tested it.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1163923431",
+    "pr_number": 113883,
+    "pr_file": "pkg/kubelet/kubelet.go",
+    "created_at": "2023-04-12T10:11:26+00:00",
+    "commented_code": "// during eviction). This method is not guaranteed to be called if a pod is force deleted from the\n // configuration and the kubelet is restarted - SyncTerminatingRuntimePod handles those orphaned\n // pods.\n-func (kl *Kubelet) SyncTerminatingPod(_ context.Context, pod *v1.Pod, podStatus *kubecontainer.PodStatus, gracePeriod *int64, podStatusFn func(*v1.PodStatus)) error {",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "1163923431",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kubelet.go",
+        "discussion_id": "1163923431",
+        "commented_code": "@@ -1918,7 +1918,7 @@ func (kl *Kubelet) SyncPod(_ context.Context, updateType kubetypes.SyncPodType,\n // during eviction). This method is not guaranteed to be called if a pod is force deleted from the\n // configuration and the kubelet is restarted - SyncTerminatingRuntimePod handles those orphaned\n // pods.\n-func (kl *Kubelet) SyncTerminatingPod(_ context.Context, pod *v1.Pod, podStatus *kubecontainer.PodStatus, gracePeriod *int64, podStatusFn func(*v1.PodStatus)) error {",
+        "comment_created_at": "2023-04-12T10:11:26+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "@smarterclayton \r\nI have a question here and need your confirmation\r\nPrevious versions have passed in a ctx that was passed in pod_workers.go to be executed by ctx.Done().\r\nBut version 1.27 removed the ctx acceptance parameter, and lines 1936-1941 of the code recreated the ctx. Can this ctx accept ctx.Done() from pod_workers.go?\r\n\r\nI think the ctx should be added back here.\r\nTracing forward, you can look at status.cancelFn() in pod_workers.go at line 966. This is where you can guarantee the end of blocking on the first delete",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1167082187",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kubelet.go",
+        "discussion_id": "1163923431",
+        "commented_code": "@@ -1918,7 +1918,7 @@ func (kl *Kubelet) SyncPod(_ context.Context, updateType kubetypes.SyncPodType,\n // during eviction). This method is not guaranteed to be called if a pod is force deleted from the\n // configuration and the kubelet is restarted - SyncTerminatingRuntimePod handles those orphaned\n // pods.\n-func (kl *Kubelet) SyncTerminatingPod(_ context.Context, pod *v1.Pod, podStatus *kubecontainer.PodStatus, gracePeriod *int64, podStatusFn func(*v1.PodStatus)) error {",
+        "comment_created_at": "2023-04-14T16:58:50+00:00",
+        "comment_author": "smarterclayton",
+        "comment_body": "Yes, the intent was that we would pass ctx down to the Sync*Pod methods, and that the pod workers would cancel the context when they wanted to stop invoking the method and move to another type.  We couldn't implement the whole approach at first (needed new features) and now are incrementally adding it back through PRs like yours and #115644 .\r\n\r\nIt is appropriate for you to pass it here, and for all methods in this call to use the passed context as the parent (including tracing)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1167340134",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kubelet.go",
+        "discussion_id": "1163923431",
+        "commented_code": "@@ -1918,7 +1918,7 @@ func (kl *Kubelet) SyncPod(_ context.Context, updateType kubetypes.SyncPodType,\n // during eviction). This method is not guaranteed to be called if a pod is force deleted from the\n // configuration and the kubelet is restarted - SyncTerminatingRuntimePod handles those orphaned\n // pods.\n-func (kl *Kubelet) SyncTerminatingPod(_ context.Context, pod *v1.Pod, podStatus *kubecontainer.PodStatus, gracePeriod *int64, podStatusFn func(*v1.PodStatus)) error {",
+        "comment_created_at": "2023-04-15T00:06:07+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "> It is appropriate for you to pass it here, and for all methods in this call to use the passed context as the parent (including tracing)\r\nok, then here I'll add back the ctx\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1544677975",
+    "pr_number": 113883,
+    "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+    "created_at": "2024-03-29T16:33:42+00:00",
+    "commented_code": "klog.V(2).InfoS(\"Killing container with a grace period\", \"pod\", klog.KObj(pod), \"podUID\", pod.UID,\n \t\t\"containerName\", containerName, \"containerID\", containerID.String(), \"gracePeriod\", gracePeriod)\n \n-\terr := m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\tvar err error\n+\tdone := make(chan struct{})\n+\tgo func() {\n+\t\tdefer close(done)\n+\t\terr = m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\n+\t}()\n+\tselect {\n+\tcase <-ctx.Done():\n+\t\terr = errors.New(\"container receives the ctx.Done signal and cancels the deletion\")",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "1544677975",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1544677975",
+        "commented_code": "@@ -770,7 +770,20 @@ func (m *kubeGenericRuntimeManager) killContainer(ctx context.Context, pod *v1.P\n \tklog.V(2).InfoS(\"Killing container with a grace period\", \"pod\", klog.KObj(pod), \"podUID\", pod.UID,\n \t\t\"containerName\", containerName, \"containerID\", containerID.String(), \"gracePeriod\", gracePeriod)\n \n-\terr := m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\tvar err error\n+\tdone := make(chan struct{})\n+\tgo func() {\n+\t\tdefer close(done)\n+\t\terr = m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\n+\t}()\n+\tselect {\n+\tcase <-ctx.Done():\n+\t\terr = errors.New(\"container receives the ctx.Done signal and cancels the deletion\")",
+        "comment_created_at": "2024-03-29T16:33:42+00:00",
+        "comment_author": "haircommander",
+        "comment_body": "How about:\r\n```\r\nStopContainer request cancelled by caller\r\n```\r\nor something. My fundamental problem with the error is that technically here it's the this process that caught the ctx.Done, not the container",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1545524691",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1544677975",
+        "commented_code": "@@ -770,7 +770,20 @@ func (m *kubeGenericRuntimeManager) killContainer(ctx context.Context, pod *v1.P\n \tklog.V(2).InfoS(\"Killing container with a grace period\", \"pod\", klog.KObj(pod), \"podUID\", pod.UID,\n \t\t\"containerName\", containerName, \"containerID\", containerID.String(), \"gracePeriod\", gracePeriod)\n \n-\terr := m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\tvar err error\n+\tdone := make(chan struct{})\n+\tgo func() {\n+\t\tdefer close(done)\n+\t\terr = m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\n+\t}()\n+\tselect {\n+\tcase <-ctx.Done():\n+\t\terr = errors.New(\"container receives the ctx.Done signal and cancels the deletion\")",
+        "comment_created_at": "2024-03-31T02:06:03+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "> or something. My fundamental problem with the error is that technically here it's the this process that caught the ctx.Done, not the container\r\n\r\nYes, you're right, I'll change it here\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2070483301",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1544677975",
+        "commented_code": "@@ -770,7 +770,20 @@ func (m *kubeGenericRuntimeManager) killContainer(ctx context.Context, pod *v1.P\n \tklog.V(2).InfoS(\"Killing container with a grace period\", \"pod\", klog.KObj(pod), \"podUID\", pod.UID,\n \t\t\"containerName\", containerName, \"containerID\", containerID.String(), \"gracePeriod\", gracePeriod)\n \n-\terr := m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\tvar err error\n+\tdone := make(chan struct{})\n+\tgo func() {\n+\t\tdefer close(done)\n+\t\terr = m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\n+\t}()\n+\tselect {\n+\tcase <-ctx.Done():\n+\t\terr = errors.New(\"container receives the ctx.Done signal and cancels the deletion\")",
+        "comment_created_at": "2025-05-01T16:30:35+00:00",
+        "comment_author": "haircommander",
+        "comment_body": "this seems to still be outstanding",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2070491392",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1544677975",
+        "commented_code": "@@ -770,7 +770,20 @@ func (m *kubeGenericRuntimeManager) killContainer(ctx context.Context, pod *v1.P\n \tklog.V(2).InfoS(\"Killing container with a grace period\", \"pod\", klog.KObj(pod), \"podUID\", pod.UID,\n \t\t\"containerName\", containerName, \"containerID\", containerID.String(), \"gracePeriod\", gracePeriod)\n \n-\terr := m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\tvar err error\n+\tdone := make(chan struct{})\n+\tgo func() {\n+\t\tdefer close(done)\n+\t\terr = m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\n+\t}()\n+\tselect {\n+\tcase <-ctx.Done():\n+\t\terr = errors.New(\"container receives the ctx.Done signal and cancels the deletion\")",
+        "comment_created_at": "2025-05-01T16:38:09+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "> this seems to still be outstanding\r\n\r\ncase <-ctx.Done()\r\nHere is the key, here the exit signal from pod_workres.go sending ctx.done will be received to come. If the exit signal is received, the blocking is canceled; otherwise, the blocking continues until CRI-O returns the message",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2070505712",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1544677975",
+        "commented_code": "@@ -770,7 +770,20 @@ func (m *kubeGenericRuntimeManager) killContainer(ctx context.Context, pod *v1.P\n \tklog.V(2).InfoS(\"Killing container with a grace period\", \"pod\", klog.KObj(pod), \"podUID\", pod.UID,\n \t\t\"containerName\", containerName, \"containerID\", containerID.String(), \"gracePeriod\", gracePeriod)\n \n-\terr := m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\tvar err error\n+\tdone := make(chan struct{})\n+\tgo func() {\n+\t\tdefer close(done)\n+\t\terr = m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\n+\t}()\n+\tselect {\n+\tcase <-ctx.Done():\n+\t\terr = errors.New(\"container receives the ctx.Done signal and cancels the deletion\")",
+        "comment_created_at": "2025-05-01T16:51:59+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "> this seems to still be outstanding\r\n\r\n[[](url)](https://github.com/kubernetes/kubernetes/blob/master/pkg/kubelet/pod_workers.go#L971)\r\nIt is here that status.cancelFn() is executed. Then the ctx passes all the way to the current file, select this ctx.done to unblock it",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1546357837",
+    "pr_number": 113883,
+    "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+    "created_at": "2024-04-01T13:55:59+00:00",
+    "commented_code": "klog.V(2).InfoS(\"Killing container with a grace period\", \"pod\", klog.KObj(pod), \"podUID\", pod.UID,\n \t\t\"containerName\", containerName, \"containerID\", containerID.String(), \"gracePeriod\", gracePeriod)\n \n-\terr := m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\tvar err error\n+\tdone := make(chan struct{})",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "1546357837",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1546357837",
+        "commented_code": "@@ -770,7 +770,20 @@ func (m *kubeGenericRuntimeManager) killContainer(ctx context.Context, pod *v1.P\n \tklog.V(2).InfoS(\"Killing container with a grace period\", \"pod\", klog.KObj(pod), \"podUID\", pod.UID,\n \t\t\"containerName\", containerName, \"containerID\", containerID.String(), \"gracePeriod\", gracePeriod)\n \n-\terr := m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\tvar err error\n+\tdone := make(chan struct{})",
+        "comment_created_at": "2024-04-01T13:55:59+00:00",
+        "comment_author": "haircommander",
+        "comment_body": "one more nit. I Think it's racy to have err set in the go func and out here. Maybe this should be a chan error, and send the error on it, then the condition below can be `case err = <-done:`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1547182430",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "1546357837",
+        "commented_code": "@@ -770,7 +770,20 @@ func (m *kubeGenericRuntimeManager) killContainer(ctx context.Context, pod *v1.P\n \tklog.V(2).InfoS(\"Killing container with a grace period\", \"pod\", klog.KObj(pod), \"podUID\", pod.UID,\n \t\t\"containerName\", containerName, \"containerID\", containerID.String(), \"gracePeriod\", gracePeriod)\n \n-\terr := m.runtimeService.StopContainer(ctx, containerID.ID, gracePeriod)\n+\tvar err error\n+\tdone := make(chan struct{})",
+        "comment_created_at": "2024-04-02T06:03:08+00:00",
+        "comment_author": "Seaiii",
+        "comment_body": "ok,The test has passed.\r\nInside case, if !ok, then skip it, otherwise, if you get an err error, then return it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4371628018",
+    "pr_number": 113883,
+    "pr_file": "pkg/kubelet/kubelet.go",
+    "created_at": "2026-10-25T17:04:27+00:00",
+    "commented_code": "p := kubecontainer.ConvertPodStatusToRunningPod(kl.getRuntime().Type(), podStatus)\n \tif err := kl.killPod(ctx, pod, p, gracePeriod); err != nil {\n+\t\t// A shortened grace period deliberately cancels this sync so the pod\n+\t\t// worker can process the queued update with the new deadline.\n+\t\tif ctxErr := ctx.Err(); ctxErr != nil {",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "4371628018",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 113883,
+        "pr_file": "pkg/kubelet/kubelet.go",
+        "discussion_id": "4371628018",
+        "commented_code": "@@ -2389,6 +2387,11 @@ func (kl *Kubelet) SyncTerminatingPod(ctx context.Context, pod *v1.Pod, podStatu\n \n \tp := kubecontainer.ConvertPodStatusToRunningPod(kl.getRuntime().Type(), podStatus)\n \tif err := kl.killPod(ctx, pod, p, gracePeriod); err != nil {\n+\t\t// A shortened grace period deliberately cancels this sync so the pod\n+\t\t// worker can process the queued update with the new deadline.\n+\t\tif ctxErr := ctx.Err(); ctxErr != nil {",
+        "comment_created_at": "2026-10-25T17:04:27+00:00",
+        "comment_author": "HirazawaUi",
+        "comment_body": "Could we make terminationOrdering.waitForTurn() honor context cancellation too? When the main container\u2019s StopContainer() is canceled, killContainer() returns before calling containerTerminated(). The sidecar keeps waiting on that notification or the original grace-period timer, which blocks wg.Wait() and prevents the worker from processing the shorter grace period. The ordering wait needs to exit on cancellation without treating the main container as stopped.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3468228523",
+    "pr_number": 139991,
+    "pr_file": "staging/src/k8s.io/client-go/tools/leaderelection/leaderelection.go",
+    "created_at": "2026-06-24T15:19:39+00:00",
+    "commented_code": "if !le.acquire(ctx) {\n \t\treturn // ctx signalled done\n \t}\n+\n \tctx, cancel := context.WithCancel(ctx)\n \tdefer cancel()\n-\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\n+\tif !le.config.ReleaseOnCancel {\n+\t\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\t\tle.renew(ctx)\n+\t\treturn\n+\t}\n+\n+\t// When ReleaseOnCancel is set, we need to make sure OnStartedLeading returns before we release the lock\n+\t// to ensure there is no business logic running while the lock is already released.\n+\tvar wg sync.WaitGroup\n+\twg.Go(func() {\n+\t\tle.config.Callbacks.OnStartedLeading(ctx)\n+\t})\n \tle.renew(ctx)\n+\twg.Wait()",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "3468228523",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139991,
+        "pr_file": "staging/src/k8s.io/client-go/tools/leaderelection/leaderelection.go",
+        "discussion_id": "3468228523",
+        "commented_code": "@@ -215,10 +215,25 @@ func (le *LeaderElector) Run(ctx context.Context) {\n \tif !le.acquire(ctx) {\n \t\treturn // ctx signalled done\n \t}\n+\n \tctx, cancel := context.WithCancel(ctx)\n \tdefer cancel()\n-\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\n+\tif !le.config.ReleaseOnCancel {\n+\t\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\t\tle.renew(ctx)\n+\t\treturn\n+\t}\n+\n+\t// When ReleaseOnCancel is set, we need to make sure OnStartedLeading returns before we release the lock\n+\t// to ensure there is no business logic running while the lock is already released.\n+\tvar wg sync.WaitGroup\n+\twg.Go(func() {\n+\t\tle.config.Callbacks.OnStartedLeading(ctx)\n+\t})\n \tle.renew(ctx)\n+\twg.Wait()",
+        "comment_created_at": "2026-06-24T15:19:39+00:00",
+        "comment_author": "Jefftree",
+        "comment_body": "I'm a bit iffy on this. Works great for KCM because we've validated the behavior. However, this changes the behavior for every controller using release on cancel and there's no guarantee that they're graceful. Despite this being the \"correct\" approach, I'd like to avoid possibility of causing regression with out of tree controllers making assumptions. I think we permanently block here if OnStartedLeading does not return gracefully? \n\nI was trying to solve this problem in a similar way earlier if you have any thoughts (will use your PR going forward) https://github.com/kubernetes/kubernetes/pull/139504#discussion_r3357209735",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3473172498",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139991,
+        "pr_file": "staging/src/k8s.io/client-go/tools/leaderelection/leaderelection.go",
+        "discussion_id": "3468228523",
+        "commented_code": "@@ -215,10 +215,25 @@ func (le *LeaderElector) Run(ctx context.Context) {\n \tif !le.acquire(ctx) {\n \t\treturn // ctx signalled done\n \t}\n+\n \tctx, cancel := context.WithCancel(ctx)\n \tdefer cancel()\n-\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\n+\tif !le.config.ReleaseOnCancel {\n+\t\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\t\tle.renew(ctx)\n+\t\treturn\n+\t}\n+\n+\t// When ReleaseOnCancel is set, we need to make sure OnStartedLeading returns before we release the lock\n+\t// to ensure there is no business logic running while the lock is already released.\n+\tvar wg sync.WaitGroup\n+\twg.Go(func() {\n+\t\tle.config.Callbacks.OnStartedLeading(ctx)\n+\t})\n \tle.renew(ctx)\n+\twg.Wait()",
+        "comment_created_at": "2026-06-25T09:06:57+00:00",
+        "comment_author": "tchap",
+        "comment_body": "I don't think there is a pretty way to solve this, because there are only two correct options:\r\n\r\n1. You block until OnStartedLeading returns and then release the lock.\r\n2. OnStartedLeading does not return and you don't release the lock.\r\n\r\nThis is saying the same thing from two different perspectives anyway.\r\n\r\nRegarding 2., actually you need to keep renewing as long as OnStartedLeading is running, even when the context is already cancelled, so stuck OnStartedRunning means that you never release the lock anyway.\r\n\r\nSo the scenario that would break is that your OnStartedLeading never returns on context cancelled, this blocks and OnStoppedLeading is never called, so even having os.Exit there won't save you.\r\n\r\nOn the other hand, the worst case scenario is that your controller gets stuck and the container/pod is eventually killed after the timeout, so I am wondering whether that's too much of a problem.\r\n\r\nThe thing is, controllers written in the way that would get blocked after merging this actually don't enforce only a single instance running at a time, because you release before OnStartedLeading exits, so actually the whole LE is broken, which I find much more severe than potentially hitting this issue and having the controller block. It simply uncovers real bugs. This mostly only works because people call os.Exit in OnStoppedLeading or something.\r\n\r\nWe should really put a clear contract in place regarding the LE library, which is not the case now. You can break LE by simply writing the callbacks in a certain way, which I find really bad.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3473332004",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139991,
+        "pr_file": "staging/src/k8s.io/client-go/tools/leaderelection/leaderelection.go",
+        "discussion_id": "3468228523",
+        "commented_code": "@@ -215,10 +215,25 @@ func (le *LeaderElector) Run(ctx context.Context) {\n \tif !le.acquire(ctx) {\n \t\treturn // ctx signalled done\n \t}\n+\n \tctx, cancel := context.WithCancel(ctx)\n \tdefer cancel()\n-\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\n+\tif !le.config.ReleaseOnCancel {\n+\t\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\t\tle.renew(ctx)\n+\t\treturn\n+\t}\n+\n+\t// When ReleaseOnCancel is set, we need to make sure OnStartedLeading returns before we release the lock\n+\t// to ensure there is no business logic running while the lock is already released.\n+\tvar wg sync.WaitGroup\n+\twg.Go(func() {\n+\t\tle.config.Callbacks.OnStartedLeading(ctx)\n+\t})\n \tle.renew(ctx)\n+\twg.Wait()",
+        "comment_created_at": "2026-06-25T09:33:28+00:00",
+        "comment_author": "tchap",
+        "comment_body": "Like, ideally we would not only wait for OnStartedLeading when ReleaseOnCancel is set, but every time so that the API is consistent. But I was trying to introduce as little potential damage as possible.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3474423095",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139991,
+        "pr_file": "staging/src/k8s.io/client-go/tools/leaderelection/leaderelection.go",
+        "discussion_id": "3468228523",
+        "commented_code": "@@ -215,10 +215,25 @@ func (le *LeaderElector) Run(ctx context.Context) {\n \tif !le.acquire(ctx) {\n \t\treturn // ctx signalled done\n \t}\n+\n \tctx, cancel := context.WithCancel(ctx)\n \tdefer cancel()\n-\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\n+\tif !le.config.ReleaseOnCancel {\n+\t\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\t\tle.renew(ctx)\n+\t\treturn\n+\t}\n+\n+\t// When ReleaseOnCancel is set, we need to make sure OnStartedLeading returns before we release the lock\n+\t// to ensure there is no business logic running while the lock is already released.\n+\tvar wg sync.WaitGroup\n+\twg.Go(func() {\n+\t\tle.config.Callbacks.OnStartedLeading(ctx)\n+\t})\n \tle.renew(ctx)\n+\twg.Wait()",
+        "comment_created_at": "2026-06-25T12:39:46+00:00",
+        "comment_author": "tchap",
+        "comment_body": "I would basically say that this library follows an unwritten rule that OnStartedLeading terminates immediately when the context is cancelled, otherwise I can't imagine how the whole LE thing could ever work, so this would be only codifying that rule...",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3493438655",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139991,
+        "pr_file": "staging/src/k8s.io/client-go/tools/leaderelection/leaderelection.go",
+        "discussion_id": "3468228523",
+        "commented_code": "@@ -215,10 +215,25 @@ func (le *LeaderElector) Run(ctx context.Context) {\n \tif !le.acquire(ctx) {\n \t\treturn // ctx signalled done\n \t}\n+\n \tctx, cancel := context.WithCancel(ctx)\n \tdefer cancel()\n-\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\n+\tif !le.config.ReleaseOnCancel {\n+\t\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\t\tle.renew(ctx)\n+\t\treturn\n+\t}\n+\n+\t// When ReleaseOnCancel is set, we need to make sure OnStartedLeading returns before we release the lock\n+\t// to ensure there is no business logic running while the lock is already released.\n+\tvar wg sync.WaitGroup\n+\twg.Go(func() {\n+\t\tle.config.Callbacks.OnStartedLeading(ctx)\n+\t})\n \tle.renew(ctx)\n+\twg.Wait()",
+        "comment_created_at": "2026-06-29T17:05:00+00:00",
+        "comment_author": "jpbetz",
+        "comment_body": "Good catch. I agree there's a real ordering problem here. `ReleaseOnCancel` makes it possible for the system go split-brain, since today `release()` runs before `OnStartedLeading` has been told to stop.\n\nYour approach of draining `OnStartedLeading` before releasing is the right shape. But this PR can deadlocks on the common \"lost the lease while still running\" path. `renew()` only cancels its own internal child context, so the context handed to `OnStartedLeading` is never cancelled, and `Run()` can block in `wg.Wait()` forever even for well-behaved callbacks (the lease is never released and `OnStoppedLeading` never fires).\n\nLet's do:\n- Cancel the context that `OnStartedLeading` was given before `wg.Wait()`, so the callback is actually signalled to stop, then drained, then release().\n- Add or update a test so that `OnStartedLeading` blocks on `<-ctx.Done()` and leadership is lost via renewal failure without cancelling the parent context, asserting `Run()` returns within a timeout (this is the case the current test misses, since it drives loss by cancelling the parent). A second assertion that `release()` happens strictly after the callback returns would lock in the ordering guarantee too.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3498211032",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139991,
+        "pr_file": "staging/src/k8s.io/client-go/tools/leaderelection/leaderelection.go",
+        "discussion_id": "3468228523",
+        "commented_code": "@@ -215,10 +215,25 @@ func (le *LeaderElector) Run(ctx context.Context) {\n \tif !le.acquire(ctx) {\n \t\treturn // ctx signalled done\n \t}\n+\n \tctx, cancel := context.WithCancel(ctx)\n \tdefer cancel()\n-\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\n+\tif !le.config.ReleaseOnCancel {\n+\t\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\t\tle.renew(ctx)\n+\t\treturn\n+\t}\n+\n+\t// When ReleaseOnCancel is set, we need to make sure OnStartedLeading returns before we release the lock\n+\t// to ensure there is no business logic running while the lock is already released.\n+\tvar wg sync.WaitGroup\n+\twg.Go(func() {\n+\t\tle.config.Callbacks.OnStartedLeading(ctx)\n+\t})\n \tle.renew(ctx)\n+\twg.Wait()",
+        "comment_created_at": "2026-06-30T11:03:40+00:00",
+        "comment_author": "tchap",
+        "comment_body": "Added the cancel call and the requested test.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3501661729",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139991,
+        "pr_file": "staging/src/k8s.io/client-go/tools/leaderelection/leaderelection.go",
+        "discussion_id": "3468228523",
+        "commented_code": "@@ -215,10 +215,25 @@ func (le *LeaderElector) Run(ctx context.Context) {\n \tif !le.acquire(ctx) {\n \t\treturn // ctx signalled done\n \t}\n+\n \tctx, cancel := context.WithCancel(ctx)\n \tdefer cancel()\n-\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\n+\tif !le.config.ReleaseOnCancel {\n+\t\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\t\tle.renew(ctx)\n+\t\treturn\n+\t}\n+\n+\t// When ReleaseOnCancel is set, we need to make sure OnStartedLeading returns before we release the lock\n+\t// to ensure there is no business logic running while the lock is already released.\n+\tvar wg sync.WaitGroup\n+\twg.Go(func() {\n+\t\tle.config.Callbacks.OnStartedLeading(ctx)\n+\t})\n \tle.renew(ctx)\n+\twg.Wait()",
+        "comment_created_at": "2026-06-30T20:31:06+00:00",
+        "comment_author": "Jefftree",
+        "comment_body": "Thanks! Correctness part looks to be fully covered.\r\n\r\nAround your prior point for codifying the contract, I think we should also update documentation around the expectation when ReleaseOnCancel is set (OnStartedLeading should terminate)\r\n\r\n> I would basically say that this library follows an unwritten rule that OnStartedLeading terminates immediately when the context is cancelled, otherwise I can't imagine how the whole LE thing could ever work, so this would be only codifying that rule...\r\n\r\nFor this point, if an uninformed consumer had\r\n\r\n```\r\nOnStartedLeading: func() { startControllers(ctx) // does not return after ctx cancellceation }\r\nOnStoppedLeading: func() { klog.FlushAndExit() }\r\n```\r\n\r\nthey would still be protected before, because OnStartedLeading happened in a goroutine and OnStoppedLeading is always hit without waiting for started to finish and terminates the controller. However, that means they were never guaranteed mutual exclusion BUT with an eventual consistent system, this isn't that noticeable for less critical controllers. I think what we're doing by enforcing OnStartedLeading is fair to establish mutual exclusion. I like that we're keeping the old behavior for non `ReleaseOnCancel` controllers. \r\n\r\nIMO we should also call this out explicitly in the release notes. ",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3504686813",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139991,
+        "pr_file": "staging/src/k8s.io/client-go/tools/leaderelection/leaderelection.go",
+        "discussion_id": "3468228523",
+        "commented_code": "@@ -215,10 +215,25 @@ func (le *LeaderElector) Run(ctx context.Context) {\n \tif !le.acquire(ctx) {\n \t\treturn // ctx signalled done\n \t}\n+\n \tctx, cancel := context.WithCancel(ctx)\n \tdefer cancel()\n-\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\n+\tif !le.config.ReleaseOnCancel {\n+\t\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\t\tle.renew(ctx)\n+\t\treturn\n+\t}\n+\n+\t// When ReleaseOnCancel is set, we need to make sure OnStartedLeading returns before we release the lock\n+\t// to ensure there is no business logic running while the lock is already released.\n+\tvar wg sync.WaitGroup\n+\twg.Go(func() {\n+\t\tle.config.Callbacks.OnStartedLeading(ctx)\n+\t})\n \tle.renew(ctx)\n+\twg.Wait()",
+        "comment_created_at": "2026-07-01T09:19:03+00:00",
+        "comment_author": "tchap",
+        "comment_body": "Documented this in 09b3ee53764",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3504699145",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139991,
+        "pr_file": "staging/src/k8s.io/client-go/tools/leaderelection/leaderelection.go",
+        "discussion_id": "3468228523",
+        "commented_code": "@@ -215,10 +215,25 @@ func (le *LeaderElector) Run(ctx context.Context) {\n \tif !le.acquire(ctx) {\n \t\treturn // ctx signalled done\n \t}\n+\n \tctx, cancel := context.WithCancel(ctx)\n \tdefer cancel()\n-\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\n+\tif !le.config.ReleaseOnCancel {\n+\t\tgo le.config.Callbacks.OnStartedLeading(ctx)\n+\t\tle.renew(ctx)\n+\t\treturn\n+\t}\n+\n+\t// When ReleaseOnCancel is set, we need to make sure OnStartedLeading returns before we release the lock\n+\t// to ensure there is no business logic running while the lock is already released.\n+\tvar wg sync.WaitGroup\n+\twg.Go(func() {\n+\t\tle.config.Callbacks.OnStartedLeading(ctx)\n+\t})\n \tle.renew(ctx)\n+\twg.Wait()",
+        "comment_created_at": "2026-07-01T09:21:10+00:00",
+        "comment_author": "tchap",
+        "comment_body": "Release note updated.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4369115220",
+    "pr_number": 143363,
+    "pr_file": "pkg/kubelet/volumemanager/populator/desired_state_of_world_populator_test.go",
+    "created_at": "2026-10-25T00:41:00+00:00",
+    "commented_code": "}\n }\n \n+// lockedPodStateProvider lets a test change pod state while Run is reading it.\n+type lockedPodStateProvider struct {\n+\tlock  sync.Mutex\n+\tstate fakePodStateProvider\n+}\n+\n+func (p *lockedPodStateProvider) ShouldPodContainersBeTerminating(uid kubetypes.UID) bool {\n+\tp.lock.Lock()\n+\tdefer p.lock.Unlock()\n+\treturn p.state.ShouldPodContainersBeTerminating(uid)\n+}\n+\n+func (p *lockedPodStateProvider) ShouldPodRuntimeBeRemoved(uid kubetypes.UID) bool {\n+\tp.lock.Lock()\n+\tdefer p.lock.Unlock()\n+\treturn p.state.ShouldPodRuntimeBeRemoved(uid)\n+}\n+\n+func (p *lockedPodStateProvider) markRemoved(uid kubetypes.UID) {\n+\tp.lock.Lock()\n+\tdefer p.lock.Unlock()\n+\tp.state.removed = map[kubetypes.UID]struct{}{uid: {}}\n+}\n+\n+// Like a static etcd pod being replaced while the local API server hangs.\n+func TestRunRemovesDeletedPodWhilePVCGetHangs(t *testing.T) {\n+\ttCtx := ktesting.Init(t)\n+\tdswp, _, terminatedPod, volumeName, _ := prepareDSWPWithPodPV(t)\n+\tpodState := &lockedPodStateProvider{}\n+\tdswp.podStateProvider = podState\n+\n+\tgetStarted := make(chan struct{})\n+\tvar startedOnce sync.Once\n+\trelease := make(chan struct{})\n+\tdefer close(release)",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "4369115220",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 143363,
+        "pr_file": "pkg/kubelet/volumemanager/populator/desired_state_of_world_populator_test.go",
+        "discussion_id": "4369115220",
+        "commented_code": "@@ -322,6 +326,95 @@ func TestFindAndAddNewPods_FindAndRemoveDeletedPods(t *testing.T) {\n \t}\n }\n \n+// lockedPodStateProvider lets a test change pod state while Run is reading it.\n+type lockedPodStateProvider struct {\n+\tlock  sync.Mutex\n+\tstate fakePodStateProvider\n+}\n+\n+func (p *lockedPodStateProvider) ShouldPodContainersBeTerminating(uid kubetypes.UID) bool {\n+\tp.lock.Lock()\n+\tdefer p.lock.Unlock()\n+\treturn p.state.ShouldPodContainersBeTerminating(uid)\n+}\n+\n+func (p *lockedPodStateProvider) ShouldPodRuntimeBeRemoved(uid kubetypes.UID) bool {\n+\tp.lock.Lock()\n+\tdefer p.lock.Unlock()\n+\treturn p.state.ShouldPodRuntimeBeRemoved(uid)\n+}\n+\n+func (p *lockedPodStateProvider) markRemoved(uid kubetypes.UID) {\n+\tp.lock.Lock()\n+\tdefer p.lock.Unlock()\n+\tp.state.removed = map[kubetypes.UID]struct{}{uid: {}}\n+}\n+\n+// Like a static etcd pod being replaced while the local API server hangs.\n+func TestRunRemovesDeletedPodWhilePVCGetHangs(t *testing.T) {\n+\ttCtx := ktesting.Init(t)\n+\tdswp, _, terminatedPod, volumeName, _ := prepareDSWPWithPodPV(t)\n+\tpodState := &lockedPodStateProvider{}\n+\tdswp.podStateProvider = podState\n+\n+\tgetStarted := make(chan struct{})\n+\tvar startedOnce sync.Once\n+\trelease := make(chan struct{})\n+\tdefer close(release)",
+        "comment_created_at": "2026-10-25T00:41:00+00:00",
+        "comment_author": "sunnylovestiramisu",
+        "comment_body": "The deferred calls run in reverse order: `cancel()` runs first, then `close(release)`. The fake clientset ignores the context, so the `Run` goroutine stays blocked in this reactor until `release` is closed. It then keeps running after the test has returned, still logging through the `ktesting` logger tied to `t`. That can panic with \"Log in goroutine after Test has completed\" or race with test cleanup.\n\nCould we wait for `Run` to return before the test exits? For example:\n```go\ndone := make(chan struct{})\ngo func() { defer close(done); dswp.Run(ctx, sourcesReady) }()\n...\n// at the end, or in t.Cleanup:\ncancel()\nclose(release)\n<-done\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4369832345",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 143363,
+        "pr_file": "pkg/kubelet/volumemanager/populator/desired_state_of_world_populator_test.go",
+        "discussion_id": "4369115220",
+        "commented_code": "@@ -322,6 +326,95 @@ func TestFindAndAddNewPods_FindAndRemoveDeletedPods(t *testing.T) {\n \t}\n }\n \n+// lockedPodStateProvider lets a test change pod state while Run is reading it.\n+type lockedPodStateProvider struct {\n+\tlock  sync.Mutex\n+\tstate fakePodStateProvider\n+}\n+\n+func (p *lockedPodStateProvider) ShouldPodContainersBeTerminating(uid kubetypes.UID) bool {\n+\tp.lock.Lock()\n+\tdefer p.lock.Unlock()\n+\treturn p.state.ShouldPodContainersBeTerminating(uid)\n+}\n+\n+func (p *lockedPodStateProvider) ShouldPodRuntimeBeRemoved(uid kubetypes.UID) bool {\n+\tp.lock.Lock()\n+\tdefer p.lock.Unlock()\n+\treturn p.state.ShouldPodRuntimeBeRemoved(uid)\n+}\n+\n+func (p *lockedPodStateProvider) markRemoved(uid kubetypes.UID) {\n+\tp.lock.Lock()\n+\tdefer p.lock.Unlock()\n+\tp.state.removed = map[kubetypes.UID]struct{}{uid: {}}\n+}\n+\n+// Like a static etcd pod being replaced while the local API server hangs.\n+func TestRunRemovesDeletedPodWhilePVCGetHangs(t *testing.T) {\n+\ttCtx := ktesting.Init(t)\n+\tdswp, _, terminatedPod, volumeName, _ := prepareDSWPWithPodPV(t)\n+\tpodState := &lockedPodStateProvider{}\n+\tdswp.podStateProvider = podState\n+\n+\tgetStarted := make(chan struct{})\n+\tvar startedOnce sync.Once\n+\trelease := make(chan struct{})\n+\tdefer close(release)",
+        "comment_created_at": "2026-10-25T05:54:17+00:00",
+        "comment_author": "falconlee236",
+        "comment_body": "Done, thanks. Run now returns before the test ends.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3472348366",
+    "pr_number": 139657,
+    "pr_file": "pkg/controller/controller_utils.go",
+    "created_at": "2026-06-25T06:32:42+00:00",
+    "commented_code": "}\n }\n \n+// ExpectationsClock is the default clock used for new controller expectations.\n+// Can be overridden during testing to simulate timeouts without real-world sleep.\n+var ExpectationsClock clock.Clock = clock.RealClock{}",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "3472348366",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139657,
+        "pr_file": "pkg/controller/controller_utils.go",
+        "discussion_id": "3472348366",
+        "commented_code": "@@ -310,9 +315,21 @@ func (e *ControlleeExpectations) MarshalLog() interface{} {\n \t}\n }\n \n+// ExpectationsClock is the default clock used for new controller expectations.\n+// Can be overridden during testing to simulate timeouts without real-world sleep.\n+var ExpectationsClock clock.Clock = clock.RealClock{}",
+        "comment_created_at": "2026-06-25T06:32:42+00:00",
+        "comment_author": "BenTheElder",
+        "comment_body": "### Concurrency Hazards with Global Clock Mutation\n\nUsing a global package-level `ExpectationsClock` is a pragmatic compromise to avoid breaking and changing all controller constructor signatures in Kubernetes.\n\nHowever, because the test fixture mutates this global variable, **these robustness tests must never be run in parallel with other tests in the same process** (e.g., using `t.Parallel()`), as it will cause unpredictable clock skews and flakes in concurrent tests. Please ensure this is heavily documented and that these tests are never marked parallel.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3477523367",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139657,
+        "pr_file": "pkg/controller/controller_utils.go",
+        "discussion_id": "3472348366",
+        "commented_code": "@@ -310,9 +315,21 @@ func (e *ControlleeExpectations) MarshalLog() interface{} {\n \t}\n }\n \n+// ExpectationsClock is the default clock used for new controller expectations.\n+// Can be overridden during testing to simulate timeouts without real-world sleep.\n+var ExpectationsClock clock.Clock = clock.RealClock{}",
+        "comment_created_at": "2026-06-25T20:42:50+00:00",
+        "comment_author": "michaelasp",
+        "comment_body": "Good point, added a description. I don't see an easy way to fix this without refactoring controllers entirely though.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4366358787",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139657,
+        "pr_file": "pkg/controller/controller_utils.go",
+        "discussion_id": "3472348366",
+        "commented_code": "@@ -310,9 +315,21 @@ func (e *ControlleeExpectations) MarshalLog() interface{} {\n \t}\n }\n \n+// ExpectationsClock is the default clock used for new controller expectations.\n+// Can be overridden during testing to simulate timeouts without real-world sleep.\n+var ExpectationsClock clock.Clock = clock.RealClock{}",
+        "comment_created_at": "2026-10-24T07:14:19+00:00",
+        "comment_author": "BenTheElder",
+        "comment_body": "FWIW refactoring controllers is potentially on the table",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4366346444",
+    "pr_number": 139657,
+    "pr_file": "test/utils/robustness/clock.go",
+    "created_at": "2026-10-24T07:08:20+00:00",
+    "commented_code": "+/*\n+Copyright The Kubernetes Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package robustness\n+\n+import (\n+\t\"context\"\n+\t\"time\"\n+\n+\t\"k8s.io/utils/clock\"\n+)\n+\n+// ShiftTime advances a wrapped clock by Offset.\n+type ShiftTime struct {\n+\tOffset time.Duration\n+}\n+\n+func (a ShiftTime) ApplyClock() time.Duration {\n+\treturn a.Offset\n+}\n+\n+// FaultInjectingClock wraps k8s.io/utils/clock.Clock and intercepts Now() and Since().\n+type FaultInjectingClock struct {\n+\tclock.Clock\n+\tregistry *FaultRegistry\n+\tname     string\n+}\n+\n+// NewFaultInjectingClock creates a wrapped clock.Clock hooked to the registry.\n+func NewFaultInjectingClock(realClock clock.Clock, registry *FaultRegistry, name string) clock.Clock {\n+\treturn &FaultInjectingClock{\n+\t\tClock:    realClock,\n+\t\tregistry: registry,\n+\t\tname:     name,\n+\t}\n+}\n+\n+func (c *FaultInjectingClock) Now() time.Time {\n+\trealNow := c.Clock.Now()\n+\tshift := c.registry.ResolveClock(context.Background(), ClockFacts{Clock: c.name})",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "4366346444",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139657,
+        "pr_file": "test/utils/robustness/clock.go",
+        "discussion_id": "4366346444",
+        "commented_code": "@@ -0,0 +1,59 @@\n+/*\n+Copyright The Kubernetes Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package robustness\n+\n+import (\n+\t\"context\"\n+\t\"time\"\n+\n+\t\"k8s.io/utils/clock\"\n+)\n+\n+// ShiftTime advances a wrapped clock by Offset.\n+type ShiftTime struct {\n+\tOffset time.Duration\n+}\n+\n+func (a ShiftTime) ApplyClock() time.Duration {\n+\treturn a.Offset\n+}\n+\n+// FaultInjectingClock wraps k8s.io/utils/clock.Clock and intercepts Now() and Since().\n+type FaultInjectingClock struct {\n+\tclock.Clock\n+\tregistry *FaultRegistry\n+\tname     string\n+}\n+\n+// NewFaultInjectingClock creates a wrapped clock.Clock hooked to the registry.\n+func NewFaultInjectingClock(realClock clock.Clock, registry *FaultRegistry, name string) clock.Clock {\n+\treturn &FaultInjectingClock{\n+\t\tClock:    realClock,\n+\t\tregistry: registry,\n+\t\tname:     name,\n+\t}\n+}\n+\n+func (c *FaultInjectingClock) Now() time.Time {\n+\trealNow := c.Clock.Now()\n+\tshift := c.registry.ResolveClock(context.Background(), ClockFacts{Clock: c.name})",
+        "comment_created_at": "2026-10-24T07:08:20+00:00",
+        "comment_author": "BenTheElder",
+        "comment_body": "The clock, indexer and queue hooks all resolve with `context.Background()`, and `validateFaultDomain` allows a `BlockingFault` at any site, so an `InjectDelay` here can't be cancelled by fixture teardown and can keep controller workers blocked past the end of the subtest. Can we plumb the fixture context through the wrappers?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4369490308",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 139657,
+        "pr_file": "test/utils/robustness/clock.go",
+        "discussion_id": "4366346444",
+        "commented_code": "@@ -0,0 +1,59 @@\n+/*\n+Copyright The Kubernetes Authors.\n+\n+Licensed under the Apache License, Version 2.0 (the \"License\");\n+you may not use this file except in compliance with the License.\n+You may obtain a copy of the License at\n+\n+    http://www.apache.org/licenses/LICENSE-2.0\n+\n+Unless required by applicable law or agreed to in writing, software\n+distributed under the License is distributed on an \"AS IS\" BASIS,\n+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n+See the License for the specific language governing permissions and\n+limitations under the License.\n+*/\n+\n+package robustness\n+\n+import (\n+\t\"context\"\n+\t\"time\"\n+\n+\t\"k8s.io/utils/clock\"\n+)\n+\n+// ShiftTime advances a wrapped clock by Offset.\n+type ShiftTime struct {\n+\tOffset time.Duration\n+}\n+\n+func (a ShiftTime) ApplyClock() time.Duration {\n+\treturn a.Offset\n+}\n+\n+// FaultInjectingClock wraps k8s.io/utils/clock.Clock and intercepts Now() and Since().\n+type FaultInjectingClock struct {\n+\tclock.Clock\n+\tregistry *FaultRegistry\n+\tname     string\n+}\n+\n+// NewFaultInjectingClock creates a wrapped clock.Clock hooked to the registry.\n+func NewFaultInjectingClock(realClock clock.Clock, registry *FaultRegistry, name string) clock.Clock {\n+\treturn &FaultInjectingClock{\n+\t\tClock:    realClock,\n+\t\tregistry: registry,\n+\t\tname:     name,\n+\t}\n+}\n+\n+func (c *FaultInjectingClock) Now() time.Time {\n+\trealNow := c.Clock.Now()\n+\tshift := c.registry.ResolveClock(context.Background(), ClockFacts{Clock: c.name})",
+        "comment_created_at": "2026-10-25T03:14:31+00:00",
+        "comment_author": "michaelasp",
+        "comment_body": "Yep, done!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2588579281",
+    "pr_number": 134163,
+    "pr_file": "pkg/kubelet/util/manager/watch_based_manager.go",
+    "created_at": "2025-12-04T11:03:02+00:00",
+    "commented_code": "clock         clock.Clock\n \tmaxIdleTime   time.Duration\n \n+\tctx    context.Context",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "2588579281",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 134163,
+        "pr_file": "pkg/kubelet/util/manager/watch_based_manager.go",
+        "discussion_id": "2588579281",
+        "commented_code": "@@ -166,6 +172,9 @@ type objectCache struct {\n \tclock         clock.Clock\n \tmaxIdleTime   time.Duration\n \n+\tctx    context.Context",
+        "comment_created_at": "2025-12-04T11:03:02+00:00",
+        "comment_author": "bart0sh",
+        "comment_body": "Storing context in a struct is an anti-pattern, please consider passing it as an argument instead.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2613520085",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 134163,
+        "pr_file": "pkg/kubelet/util/manager/watch_based_manager.go",
+        "discussion_id": "2588579281",
+        "commented_code": "@@ -166,6 +172,9 @@ type objectCache struct {\n \tclock         clock.Clock\n \tmaxIdleTime   time.Duration\n \n+\tctx    context.Context",
+        "comment_created_at": "2025-12-12T09:23:09+00:00",
+        "comment_author": "tico88612",
+        "comment_body": "I will take a look on this (seems not easy), only rebase not fix yet.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2879947201",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 134163,
+        "pr_file": "pkg/kubelet/util/manager/watch_based_manager.go",
+        "discussion_id": "2588579281",
+        "commented_code": "@@ -166,6 +172,9 @@ type objectCache struct {\n \tclock         clock.Clock\n \tmaxIdleTime   time.Duration\n \n+\tctx    context.Context",
+        "comment_created_at": "2026-03-03T18:46:28+00:00",
+        "comment_author": "tico88612",
+        "comment_body": "I've removed the stored `ctx` and `cancel` from the `objectCache` struct. Now `shutdownWhenStopped` and `startRecycleIdleWatch` both receive ctx as a function parameter.\r\n\r\nHowever, I found that `AddReference` doesn't allow modifying the passed context, so we might need to change the interface. I expect the scope of these changes to be quite large. I will add a `context.TODO()` first.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3615004654",
+    "pr_number": 140133,
+    "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+    "created_at": "2026-07-20T14:24:04+00:00",
+    "commented_code": "return\n }\n \n+// killRestartableInitContainerWithSyncResult terminates a restartable init\n+// container (sidecar) during pod termination while honoring the KEP-753 ordering.\n+// Until the sidecar's ordered turn arrives, it is restarted whenever it exits on\n+// its own, so it keeps running for the duration of the pod's graceful shutdown\n+// (KEP-4438). Once the turn arrives, the instance that is currently live (which\n+// may be a restarted one) is gracefully terminated within the remaining grace\n+// budget \u2014 so a restarted sidecar still receives an ordered SIGTERM rather than\n+// being SIGKILLed only when the sandbox is torn down.\n+//\n+// Both premature-exit detection and turn detection are event-driven: exits are\n+// observed from the PLEG-maintained pod cache (m.podCache.GetNewerThan) rather\n+// than by polling the runtime, and the turn is observed from the termination\n+// ordering (waitTurn). This is the architecture intended to carry forward to beta.\n+func (m *kubeGenericRuntimeManager) killRestartableInitContainerWithSyncResult(\n+\tctx context.Context, pod *v1.Pod, runningPod *kubecontainer.Pod,\n+\tsnapshot *kubecontainer.Container, spec *v1.Container,\n+\tgracePeriod int64, ordering *terminationOrdering,\n+) *kubecontainer.SyncResult {\n+\tlogger := klog.FromContext(ctx)\n+\tresult := kubecontainer.NewSyncResult(kubecontainer.KillContainer, spec.Name)\n+\n+\t// Mirror killContainer's grace accounting: the preStop hook, the wait for this\n+\t// container's ordered turn, and the final stop all draw from the same budget so\n+\t// the pod stays within its termination grace period.\n+\n+\t// Run the preStop hook up front, exactly as the generic kill path does, so its\n+\t// timing is unchanged for sidecars. It runs once, on the instance that is live\n+\t// at the start of termination.\n+\tif snapshot != nil && spec.Lifecycle != nil && spec.Lifecycle.PreStop != nil && gracePeriod > 0 {\n+\t\tgracePeriod -= m.executePreStopHook(ctx, pod, snapshot.ID, spec, gracePeriod)\n+\t}\n+\n+\t// Wait for this sidecar's ordered turn, restarting it if it exits prematurely so\n+\t// it keeps running until then. The wait is bounded by the remaining grace period\n+\t// (as the generic waitForTurn path is), so the pod cannot get stuck terminating\n+\t// if a prerequisite container never reports as terminated (e.g. its stop errored).\n+\twaitStart := time.Now()\n+\tdeadline := time.NewTimer(time.Duration(gracePeriod) * time.Second)\n+\tdefer deadline.Stop()\n+\n+\t// waitCtx bounds the event-driven helpers (turn watcher and status watcher) to\n+\t// this wait; cancelling it stops them once we proceed to the final stop.\n+\twaitCtx, cancelWait := context.WithCancel(ctx)\n+\tdefer cancelWait()\n+\tturnCh := ordering.waitTurn(waitCtx, spec.Name)\n+\tstatusCh := m.watchPodStatus(waitCtx, runningPod)\n+\n+\t// Tracks the exited instance we last restarted, so we restart at most once per\n+\t// exit despite the lag before a new instance becomes visible in the cache.\n+\tvar lastHandledExitedID kubecontainer.ContainerID\n+waitLoop:\n+\tfor !ordering.allPrereqsMet(spec.Name) {\n+\t\tselect {\n+\t\tcase <-ctx.Done():\n+\t\t\t// Pod-level context cancelled; stop waiting and terminate best-effort.\n+\t\t\tbreak waitLoop\n+\t\tcase <-deadline.C:\n+\t\t\t// Grace period expired before our turn arrived; proceed to stop.\n+\t\t\tbreak waitLoop\n+\t\tcase <-turnCh:\n+\t\t\t// Our ordered turn arrived (all prerequisites terminated).\n+\t\t\tbreak waitLoop\n+\t\tcase status := <-statusCh:\n+\t\t\t// A PLEG cache update for this pod; restart the sidecar if it has\n+\t\t\t// exited before its turn.\n+\t\t\tif status == nil || ordering.allPrereqsMet(spec.Name) {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tlastHandledExitedID = m.restartSidecarDuringTerminationIfExited(ctx, pod, spec, gracePeriod, lastHandledExitedID, status)\n+\t\t}\n+\t}\n+\tcancelWait()\n+\tgracePeriod -= int64(time.Since(waitStart).Seconds())\n+\n+\t// always give the container a minimal shutdown window to avoid unnecessary SIGKILLs\n+\tif gracePeriod < minimumGracePeriodInSeconds {\n+\t\tgracePeriod = minimumGracePeriodInSeconds\n+\t}\n+\n+\t// Our turn has arrived: gracefully stop whatever instance is currently live.\n+\t// Resolving the live container ID here (rather than reusing the snapshot taken\n+\t// before any restart) is what lets a restarted sidecar receive an ordered\n+\t// SIGTERM instead of being SIGKILLed only when the sandbox is torn down. The\n+\t// preStop hook already ran above, so it is not repeated here.\n+\tfallback := kubecontainer.ContainerID{}\n+\tif snapshot != nil {\n+\t\tfallback = snapshot.ID\n+\t}\n+\tliveID := m.liveContainerID(runningPod, spec.Name, fallback)\n+\t// An extra sidecar (already exited at termination start, dispatched with a nil\n+\t// snapshot) may have no live instance to stop; only issue StopContainer when a\n+\t// live ID is resolvable. The ordering is still advanced below so dependents\n+\t// unblock.\n+\tif !liveID.IsEmpty() {\n+\t\tm.recordContainerEvent(ctx, pod, spec, liveID.ID, v1.EventTypeNormal, events.KillingContainer, \"%v\", fmt.Sprintf(\"Stopping container %s\", spec.Name))\n+\t\tlogger.V(2).Info(\"Killing restartable init container with a grace period\", \"pod\", klog.KObj(pod), \"podUID\", runningPod.ID,\n+\t\t\t\"containerName\", spec.Name, \"containerID\", liveID.String(), \"gracePeriod\", gracePeriod)\n+\t\tif err := m.runtimeService.StopContainer(ctx, liveID.ID, gracePeriod); err != nil && !crierror.IsNotFound(err) {\n+\t\t\tresult.Fail(kubecontainer.ErrKillContainer, err.Error())\n+\t\t\tlogger.Error(err, \"Kill restartable init container failed\", \"pod\", klog.KRef(runningPod.Namespace, runningPod.Name),\n+\t\t\t\t\"podUID\", runningPod.ID, \"containerName\", spec.Name, \"containerID\", liveID.String())\n+\t\t\treturn result\n+\t\t}\n+\t}\n+\tordering.containerTerminated(spec.Name)\n+\treturn result\n+}\n+\n+// watchPodStatus returns a channel that delivers this pod's status each time PLEG\n+// updates the cache for it, until ctx is cancelled. It is the event-driven\n+// alternative to polling GetPodStatus: kubecontainer.Cache.GetNewerThan blocks\n+// until the cache holds a status newer than the last one seen, so no CRI calls are\n+// issued from here \u2014 PLEG's existing relist/event stream feeds the cache. The\n+// channel is buffered by one; the consumer always acts on the newest delivered\n+// status.\n+//\n+// The goroutine may outlive ctx cancellation by up to one PLEG update (GetNewerThan\n+// cannot itself be cancelled), then observes ctx and returns \u2014 a bounded, one-off\n+// leak per terminating sidecar.\n+func (m *kubeGenericRuntimeManager) watchPodStatus(ctx context.Context, runningPod *kubecontainer.Pod) <-chan *kubecontainer.PodStatus {\n+\tch := make(chan *kubecontainer.PodStatus, 1)\n+\tgo func() {\n+\t\tdefer close(ch)\n+\t\tvar lastSeen time.Time // zero: the first call returns the current cached status\n+\t\tfor {\n+\t\t\tstatus, err := m.podCache.GetNewerThan(runningPod.ID, lastSeen)\n+\t\t\tif ctx.Err() != nil {\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tif err != nil {\n+\t\t\t\t// Rare; avoid a hot loop by only asking for statuses newer than now.\n+\t\t\t\tlastSeen = time.Now()\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tlastSeen = status.TimeStamp",
+    "repo_full_name": "kubernetes/kubernetes",
+    "discussion_comments": [
+      {
+        "comment_id": "3615004654",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 140133,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "3615004654",
+        "commented_code": "@@ -965,6 +1035,234 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \treturn\n }\n \n+// killRestartableInitContainerWithSyncResult terminates a restartable init\n+// container (sidecar) during pod termination while honoring the KEP-753 ordering.\n+// Until the sidecar's ordered turn arrives, it is restarted whenever it exits on\n+// its own, so it keeps running for the duration of the pod's graceful shutdown\n+// (KEP-4438). Once the turn arrives, the instance that is currently live (which\n+// may be a restarted one) is gracefully terminated within the remaining grace\n+// budget \u2014 so a restarted sidecar still receives an ordered SIGTERM rather than\n+// being SIGKILLed only when the sandbox is torn down.\n+//\n+// Both premature-exit detection and turn detection are event-driven: exits are\n+// observed from the PLEG-maintained pod cache (m.podCache.GetNewerThan) rather\n+// than by polling the runtime, and the turn is observed from the termination\n+// ordering (waitTurn). This is the architecture intended to carry forward to beta.\n+func (m *kubeGenericRuntimeManager) killRestartableInitContainerWithSyncResult(\n+\tctx context.Context, pod *v1.Pod, runningPod *kubecontainer.Pod,\n+\tsnapshot *kubecontainer.Container, spec *v1.Container,\n+\tgracePeriod int64, ordering *terminationOrdering,\n+) *kubecontainer.SyncResult {\n+\tlogger := klog.FromContext(ctx)\n+\tresult := kubecontainer.NewSyncResult(kubecontainer.KillContainer, spec.Name)\n+\n+\t// Mirror killContainer's grace accounting: the preStop hook, the wait for this\n+\t// container's ordered turn, and the final stop all draw from the same budget so\n+\t// the pod stays within its termination grace period.\n+\n+\t// Run the preStop hook up front, exactly as the generic kill path does, so its\n+\t// timing is unchanged for sidecars. It runs once, on the instance that is live\n+\t// at the start of termination.\n+\tif snapshot != nil && spec.Lifecycle != nil && spec.Lifecycle.PreStop != nil && gracePeriod > 0 {\n+\t\tgracePeriod -= m.executePreStopHook(ctx, pod, snapshot.ID, spec, gracePeriod)\n+\t}\n+\n+\t// Wait for this sidecar's ordered turn, restarting it if it exits prematurely so\n+\t// it keeps running until then. The wait is bounded by the remaining grace period\n+\t// (as the generic waitForTurn path is), so the pod cannot get stuck terminating\n+\t// if a prerequisite container never reports as terminated (e.g. its stop errored).\n+\twaitStart := time.Now()\n+\tdeadline := time.NewTimer(time.Duration(gracePeriod) * time.Second)\n+\tdefer deadline.Stop()\n+\n+\t// waitCtx bounds the event-driven helpers (turn watcher and status watcher) to\n+\t// this wait; cancelling it stops them once we proceed to the final stop.\n+\twaitCtx, cancelWait := context.WithCancel(ctx)\n+\tdefer cancelWait()\n+\tturnCh := ordering.waitTurn(waitCtx, spec.Name)\n+\tstatusCh := m.watchPodStatus(waitCtx, runningPod)\n+\n+\t// Tracks the exited instance we last restarted, so we restart at most once per\n+\t// exit despite the lag before a new instance becomes visible in the cache.\n+\tvar lastHandledExitedID kubecontainer.ContainerID\n+waitLoop:\n+\tfor !ordering.allPrereqsMet(spec.Name) {\n+\t\tselect {\n+\t\tcase <-ctx.Done():\n+\t\t\t// Pod-level context cancelled; stop waiting and terminate best-effort.\n+\t\t\tbreak waitLoop\n+\t\tcase <-deadline.C:\n+\t\t\t// Grace period expired before our turn arrived; proceed to stop.\n+\t\t\tbreak waitLoop\n+\t\tcase <-turnCh:\n+\t\t\t// Our ordered turn arrived (all prerequisites terminated).\n+\t\t\tbreak waitLoop\n+\t\tcase status := <-statusCh:\n+\t\t\t// A PLEG cache update for this pod; restart the sidecar if it has\n+\t\t\t// exited before its turn.\n+\t\t\tif status == nil || ordering.allPrereqsMet(spec.Name) {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tlastHandledExitedID = m.restartSidecarDuringTerminationIfExited(ctx, pod, spec, gracePeriod, lastHandledExitedID, status)\n+\t\t}\n+\t}\n+\tcancelWait()\n+\tgracePeriod -= int64(time.Since(waitStart).Seconds())\n+\n+\t// always give the container a minimal shutdown window to avoid unnecessary SIGKILLs\n+\tif gracePeriod < minimumGracePeriodInSeconds {\n+\t\tgracePeriod = minimumGracePeriodInSeconds\n+\t}\n+\n+\t// Our turn has arrived: gracefully stop whatever instance is currently live.\n+\t// Resolving the live container ID here (rather than reusing the snapshot taken\n+\t// before any restart) is what lets a restarted sidecar receive an ordered\n+\t// SIGTERM instead of being SIGKILLed only when the sandbox is torn down. The\n+\t// preStop hook already ran above, so it is not repeated here.\n+\tfallback := kubecontainer.ContainerID{}\n+\tif snapshot != nil {\n+\t\tfallback = snapshot.ID\n+\t}\n+\tliveID := m.liveContainerID(runningPod, spec.Name, fallback)\n+\t// An extra sidecar (already exited at termination start, dispatched with a nil\n+\t// snapshot) may have no live instance to stop; only issue StopContainer when a\n+\t// live ID is resolvable. The ordering is still advanced below so dependents\n+\t// unblock.\n+\tif !liveID.IsEmpty() {\n+\t\tm.recordContainerEvent(ctx, pod, spec, liveID.ID, v1.EventTypeNormal, events.KillingContainer, \"%v\", fmt.Sprintf(\"Stopping container %s\", spec.Name))\n+\t\tlogger.V(2).Info(\"Killing restartable init container with a grace period\", \"pod\", klog.KObj(pod), \"podUID\", runningPod.ID,\n+\t\t\t\"containerName\", spec.Name, \"containerID\", liveID.String(), \"gracePeriod\", gracePeriod)\n+\t\tif err := m.runtimeService.StopContainer(ctx, liveID.ID, gracePeriod); err != nil && !crierror.IsNotFound(err) {\n+\t\t\tresult.Fail(kubecontainer.ErrKillContainer, err.Error())\n+\t\t\tlogger.Error(err, \"Kill restartable init container failed\", \"pod\", klog.KRef(runningPod.Namespace, runningPod.Name),\n+\t\t\t\t\"podUID\", runningPod.ID, \"containerName\", spec.Name, \"containerID\", liveID.String())\n+\t\t\treturn result\n+\t\t}\n+\t}\n+\tordering.containerTerminated(spec.Name)\n+\treturn result\n+}\n+\n+// watchPodStatus returns a channel that delivers this pod's status each time PLEG\n+// updates the cache for it, until ctx is cancelled. It is the event-driven\n+// alternative to polling GetPodStatus: kubecontainer.Cache.GetNewerThan blocks\n+// until the cache holds a status newer than the last one seen, so no CRI calls are\n+// issued from here \u2014 PLEG's existing relist/event stream feeds the cache. The\n+// channel is buffered by one; the consumer always acts on the newest delivered\n+// status.\n+//\n+// The goroutine may outlive ctx cancellation by up to one PLEG update (GetNewerThan\n+// cannot itself be cancelled), then observes ctx and returns \u2014 a bounded, one-off\n+// leak per terminating sidecar.\n+func (m *kubeGenericRuntimeManager) watchPodStatus(ctx context.Context, runningPod *kubecontainer.Pod) <-chan *kubecontainer.PodStatus {\n+\tch := make(chan *kubecontainer.PodStatus, 1)\n+\tgo func() {\n+\t\tdefer close(ch)\n+\t\tvar lastSeen time.Time // zero: the first call returns the current cached status\n+\t\tfor {\n+\t\t\tstatus, err := m.podCache.GetNewerThan(runningPod.ID, lastSeen)\n+\t\t\tif ctx.Err() != nil {\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tif err != nil {\n+\t\t\t\t// Rare; avoid a hot loop by only asking for statuses newer than now.\n+\t\t\t\tlastSeen = time.Now()\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tlastSeen = status.TimeStamp",
+        "comment_created_at": "2026-07-20T14:24:04+00:00",
+        "comment_author": "HirazawaUi",
+        "comment_body": "`status.TimeStamp` is not a safe cursor for `GetNewerThan`.\n\nAt `t0`, the watcher receives a status whose `TimeStamp` is `t0` and assigns it to `lastSeen`.\n\nAt `t1`, a normal PLEG relist advances the cache\u2019s global or observed timestamp to `t1` without changing the stored `PodStatus`. `GetNewerThan(t0)` therefore returns the same status, still carrying `TimeStamp=t0`.\n\nThe watcher assigns `t0` to `lastSeen` again, while the cache remains newer at `t1`. From then on, every `GetNewerThan(t0)` returns immediately. \n\n/cc @tallclair to get more accurate thoughts.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3615360060",
+        "repo_full_name": "kubernetes/kubernetes",
+        "pr_number": 140133,
+        "pr_file": "pkg/kubelet/kuberuntime/kuberuntime_container.go",
+        "discussion_id": "3615004654",
+        "commented_code": "@@ -965,6 +1035,234 @@ func (m *kubeGenericRuntimeManager) killContainersWithSyncResult(ctx context.Con\n \treturn\n }\n \n+// killRestartableInitContainerWithSyncResult terminates a restartable init\n+// container (sidecar) during pod termination while honoring the KEP-753 ordering.\n+// Until the sidecar's ordered turn arrives, it is restarted whenever it exits on\n+// its own, so it keeps running for the duration of the pod's graceful shutdown\n+// (KEP-4438). Once the turn arrives, the instance that is currently live (which\n+// may be a restarted one) is gracefully terminated within the remaining grace\n+// budget \u2014 so a restarted sidecar still receives an ordered SIGTERM rather than\n+// being SIGKILLed only when the sandbox is torn down.\n+//\n+// Both premature-exit detection and turn detection are event-driven: exits are\n+// observed from the PLEG-maintained pod cache (m.podCache.GetNewerThan) rather\n+// than by polling the runtime, and the turn is observed from the termination\n+// ordering (waitTurn). This is the architecture intended to carry forward to beta.\n+func (m *kubeGenericRuntimeManager) killRestartableInitContainerWithSyncResult(\n+\tctx context.Context, pod *v1.Pod, runningPod *kubecontainer.Pod,\n+\tsnapshot *kubecontainer.Container, spec *v1.Container,\n+\tgracePeriod int64, ordering *terminationOrdering,\n+) *kubecontainer.SyncResult {\n+\tlogger := klog.FromContext(ctx)\n+\tresult := kubecontainer.NewSyncResult(kubecontainer.KillContainer, spec.Name)\n+\n+\t// Mirror killContainer's grace accounting: the preStop hook, the wait for this\n+\t// container's ordered turn, and the final stop all draw from the same budget so\n+\t// the pod stays within its termination grace period.\n+\n+\t// Run the preStop hook up front, exactly as the generic kill path does, so its\n+\t// timing is unchanged for sidecars. It runs once, on the instance that is live\n+\t// at the start of termination.\n+\tif snapshot != nil && spec.Lifecycle != nil && spec.Lifecycle.PreStop != nil && gracePeriod > 0 {\n+\t\tgracePeriod -= m.executePreStopHook(ctx, pod, snapshot.ID, spec, gracePeriod)\n+\t}\n+\n+\t// Wait for this sidecar's ordered turn, restarting it if it exits prematurely so\n+\t// it keeps running until then. The wait is bounded by the remaining grace period\n+\t// (as the generic waitForTurn path is), so the pod cannot get stuck terminating\n+\t// if a prerequisite container never reports as terminated (e.g. its stop errored).\n+\twaitStart := time.Now()\n+\tdeadline := time.NewTimer(time.Duration(gracePeriod) * time.Second)\n+\tdefer deadline.Stop()\n+\n+\t// waitCtx bounds the event-driven helpers (turn watcher and status watcher) to\n+\t// this wait; cancelling it stops them once we proceed to the final stop.\n+\twaitCtx, cancelWait := context.WithCancel(ctx)\n+\tdefer cancelWait()\n+\tturnCh := ordering.waitTurn(waitCtx, spec.Name)\n+\tstatusCh := m.watchPodStatus(waitCtx, runningPod)\n+\n+\t// Tracks the exited instance we last restarted, so we restart at most once per\n+\t// exit despite the lag before a new instance becomes visible in the cache.\n+\tvar lastHandledExitedID kubecontainer.ContainerID\n+waitLoop:\n+\tfor !ordering.allPrereqsMet(spec.Name) {\n+\t\tselect {\n+\t\tcase <-ctx.Done():\n+\t\t\t// Pod-level context cancelled; stop waiting and terminate best-effort.\n+\t\t\tbreak waitLoop\n+\t\tcase <-deadline.C:\n+\t\t\t// Grace period expired before our turn arrived; proceed to stop.\n+\t\t\tbreak waitLoop\n+\t\tcase <-turnCh:\n+\t\t\t// Our ordered turn arrived (all prerequisites terminated).\n+\t\t\tbreak waitLoop\n+\t\tcase status := <-statusCh:\n+\t\t\t// A PLEG cache update for this pod; restart the sidecar if it has\n+\t\t\t// exited before its turn.\n+\t\t\tif status == nil || ordering.allPrereqsMet(spec.Name) {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tlastHandledExitedID = m.restartSidecarDuringTerminationIfExited(ctx, pod, spec, gracePeriod, lastHandledExitedID, status)\n+\t\t}\n+\t}\n+\tcancelWait()\n+\tgracePeriod -= int64(time.Since(waitStart).Seconds())\n+\n+\t// always give the container a minimal shutdown window to avoid unnecessary SIGKILLs\n+\tif gracePeriod < minimumGracePeriodInSeconds {\n+\t\tgracePeriod = minimumGracePeriodInSeconds\n+\t}\n+\n+\t// Our turn has arrived: gracefully stop whatever instance is currently live.\n+\t// Resolving the live container ID here (rather than reusing the snapshot taken\n+\t// before any restart) is what lets a restarted sidecar receive an ordered\n+\t// SIGTERM instead of being SIGKILLed only when the sandbox is torn down. The\n+\t// preStop hook already ran above, so it is not repeated here.\n+\tfallback := kubecontainer.ContainerID{}\n+\tif snapshot != nil {\n+\t\tfallback = snapshot.ID\n+\t}\n+\tliveID := m.liveContainerID(runningPod, spec.Name, fallback)\n+\t// An extra sidecar (already exited at termination start, dispatched with a nil\n+\t// snapshot) may have no live instance to stop; only issue StopContainer when a\n+\t// live ID is resolvable. The ordering is still advanced below so dependents\n+\t// unblock.\n+\tif !liveID.IsEmpty() {\n+\t\tm.recordContainerEvent(ctx, pod, spec, liveID.ID, v1.EventTypeNormal, events.KillingContainer, \"%v\", fmt.Sprintf(\"Stopping container %s\", spec.Name))\n+\t\tlogger.V(2).Info(\"Killing restartable init container with a grace period\", \"pod\", klog.KObj(pod), \"podUID\", runningPod.ID,\n+\t\t\t\"containerName\", spec.Name, \"containerID\", liveID.String(), \"gracePeriod\", gracePeriod)\n+\t\tif err := m.runtimeService.StopContainer(ctx, liveID.ID, gracePeriod); err != nil && !crierror.IsNotFound(err) {\n+\t\t\tresult.Fail(kubecontainer.ErrKillContainer, err.Error())\n+\t\t\tlogger.Error(err, \"Kill restartable init container failed\", \"pod\", klog.KRef(runningPod.Namespace, runningPod.Name),\n+\t\t\t\t\"podUID\", runningPod.ID, \"containerName\", spec.Name, \"containerID\", liveID.String())\n+\t\t\treturn result\n+\t\t}\n+\t}\n+\tordering.containerTerminated(spec.Name)\n+\treturn result\n+}\n+\n+// watchPodStatus returns a channel that delivers this pod's status each time PLEG\n+// updates the cache for it, until ctx is cancelled. It is the event-driven\n+// alternative to polling GetPodStatus: kubecontainer.Cache.GetNewerThan blocks\n+// until the cache holds a status newer than the last one seen, so no CRI calls are\n+// issued from here \u2014 PLEG's existing relist/event stream feeds the cache. The\n+// channel is buffered by one; the consumer always acts on the newest delivered\n+// status.\n+//\n+// The goroutine may outlive ctx cancellation by up to one PLEG update (GetNewerThan\n+// cannot itself be cancelled), then observes ctx and returns \u2014 a bounded, one-off\n+// leak per terminating sidecar.\n+func (m *kubeGenericRuntimeManager) watchPodStatus(ctx context.Context, runningPod *kubecontainer.Pod) <-chan *kubecontainer.PodStatus {\n+\tch := make(chan *kubecontainer.PodStatus, 1)\n+\tgo func() {\n+\t\tdefer close(ch)\n+\t\tvar lastSeen time.Time // zero: the first call returns the current cached status\n+\t\tfor {\n+\t\t\tstatus, err := m.podCache.GetNewerThan(runningPod.ID, lastSeen)\n+\t\t\tif ctx.Err() != nil {\n+\t\t\t\treturn\n+\t\t\t}\n+\t\t\tif err != nil {\n+\t\t\t\t// Rare; avoid a hot loop by only asking for statuses newer than now.\n+\t\t\t\tlastSeen = time.Now()\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tlastSeen = status.TimeStamp",
+        "comment_created_at": "2026-07-20T15:13:27+00:00",
+        "comment_author": "matthyx",
+        "comment_body": "Fixed to follow `pod_workers` (`lastSyncTime = clock.Now()`): the cursor is now wall-clock captured before each call, so it wakes at most once per relist but still catches an exit immediately. Added a regression test that spins on the old cursor and passes with the fix.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

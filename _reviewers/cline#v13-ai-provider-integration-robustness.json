@@ -1,0 +1,102 @@
+[
+  {
+    "discussion_id": "4247960146",
+    "pr_number": 14520,
+    "pr_file": "sdk/packages/shared/src/llms/tokens.ts",
+    "created_at": "2026-10-12T13:04:58+00:00",
+    "commented_code": "return Math.max(1, Math.ceil(chars / CHARS_PER_TOKEN));\n }\n \n+/**\n+ * Flat per-image token cost used in place of the char-based estimate for an\n+ * image block's base64 payload. Real vision-model costs depend on pixel\n+ * dimensions, not encoded byte size, and top out around ~1.6k tokens even\n+ * for a large image; this sits comfortably above typical per-image cost\n+ * without scaling with the base64 string length.\n+ */\n+export const ESTIMATED_TOKENS_PER_IMAGE = 1_600;\n+\n export interface TokenEstimatedRequest {\n \tsystemPrompt?: string;\n \tmessages: readonly unknown[];\n \ttools?: readonly unknown[];\n }\n \n+/**\n+ * Build a JSON.stringify replacer that blanks an image node's base64\n+ * payload wherever it's nested in the serialized value, so it's never\n+ * billed at CHARS_PER_TOKEN. Two image shapes reach this replacer:\n+ * `ImageContent { type: \"image\", data: string }` (compaction's\n+ * `MessageWithMetadata`) and `AgentImagePart { type: \"image\", image:\n+ * string | Uint8Array | ArrayBuffer | URL }` (the gateway's\n+ * `AgentMessage`). Returns the replacer alongside an `imageCount`\n+ * accessor so the caller can add a flat per-image token cost back in\n+ * afterwards.\n+ */\n+export function createImageAwareReplacer(): {\n+\treplacer: (key: string, value: unknown) => unknown;\n+\timageCount: () => number;\n+} {\n+\tlet count = 0;\n+\tconst replacer = (_key: string, value: unknown): unknown => {\n+\t\tif (\n+\t\t\tvalue === null ||\n+\t\t\ttypeof value !== \"object\" ||\n+\t\t\t(value as { type?: unknown }).type !== \"image\"\n+\t\t) {\n+\t\t\treturn value;\n+\t\t}\n+\t\tconst record = value as Record<string, unknown>;\n+\t\tif (typeof record.data === \"string\") {\n+\t\t\tcount += 1;\n+\t\t\treturn { ...record, data: \"\" };\n+\t\t}\n+\t\tif (\"image\" in record) {\n+\t\t\tcount += 1;\n+\t\t\treturn { ...record, image: \"\" };",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4248329089",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14520,
+        "pr_file": "sdk/packages/shared/src/llms/tokens.ts",
+        "discussion_id": "4247960146",
+        "commented_code": "@@ -11,12 +11,59 @@ export function estimateTokens(chars: number): number {\n \treturn Math.max(1, Math.ceil(chars / CHARS_PER_TOKEN));\n }\n \n+/**\n+ * Flat per-image token cost used in place of the char-based estimate for an\n+ * image block's base64 payload. Real vision-model costs depend on pixel\n+ * dimensions, not encoded byte size, and top out around ~1.6k tokens even\n+ * for a large image; this sits comfortably above typical per-image cost\n+ * without scaling with the base64 string length.\n+ */\n+export const ESTIMATED_TOKENS_PER_IMAGE = 1_600;\n+\n export interface TokenEstimatedRequest {\n \tsystemPrompt?: string;\n \tmessages: readonly unknown[];\n \ttools?: readonly unknown[];\n }\n \n+/**\n+ * Build a JSON.stringify replacer that blanks an image node's base64\n+ * payload wherever it's nested in the serialized value, so it's never\n+ * billed at CHARS_PER_TOKEN. Two image shapes reach this replacer:\n+ * `ImageContent { type: \"image\", data: string }` (compaction's\n+ * `MessageWithMetadata`) and `AgentImagePart { type: \"image\", image:\n+ * string | Uint8Array | ArrayBuffer | URL }` (the gateway's\n+ * `AgentMessage`). Returns the replacer alongside an `imageCount`\n+ * accessor so the caller can add a flat per-image token cost back in\n+ * afterwards.\n+ */\n+export function createImageAwareReplacer(): {\n+\treplacer: (key: string, value: unknown) => unknown;\n+\timageCount: () => number;\n+} {\n+\tlet count = 0;\n+\tconst replacer = (_key: string, value: unknown): unknown => {\n+\t\tif (\n+\t\t\tvalue === null ||\n+\t\t\ttypeof value !== \"object\" ||\n+\t\t\t(value as { type?: unknown }).type !== \"image\"\n+\t\t) {\n+\t\t\treturn value;\n+\t\t}\n+\t\tconst record = value as Record<string, unknown>;\n+\t\tif (typeof record.data === \"string\") {\n+\t\t\tcount += 1;\n+\t\t\treturn { ...record, data: \"\" };\n+\t\t}\n+\t\tif (\"image\" in record) {\n+\t\t\tcount += 1;\n+\t\t\treturn { ...record, image: \"\" };",
+        "comment_created_at": "2026-10-12T13:04:58+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Declining this one. No code path produces an image-shaped object inside tool arguments or tool schemas, so this is a theoretical under-count. If it ever occurred, the budget scaling from the provider's actual input count (compaction.ts, `underestimateFactor`) and overflow recovery already bound the damage. Scoping the replacer per path isn't worth the complexity.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4307781249",
+    "pr_number": 15176,
+    "pr_file": "sdk/packages/core/src/services/providers/model-source.ts",
+    "created_at": "2026-10-18T16:27:05+00:00",
+    "commented_code": "-function parseModelIdList(input: unknown): string[] {\n+/**\n+ * A model advertised by a provider's model-list endpoint. Provider catalogs\n+ * commonly include limits next to the id (OpenAI `context_length`, vLLM,\n+ * LM Studio, etc.); keeping them avoids dropping back to a 128K default.\n+ */\n+export interface ModelSourceEntry {\n+\tid: string;\n+\tname?: string;\n+\tcontextWindow?: number;\n+\tmaxInputTokens?: number;\n+\tmaxTokens?: number;\n+}\n+\n+function asRecord(value: unknown): Record<string, unknown> | undefined {\n+\treturn value && typeof value === \"object\" && !Array.isArray(value)\n+\t\t? (value as Record<string, unknown>)\n+\t\t: undefined;\n+}\n+\n+function firstString(...values: unknown[]): string | undefined {\n+\tfor (const value of values) {\n+\t\tif (typeof value === \"string\" && value.trim()) {\n+\t\t\treturn value.trim();\n+\t\t}\n+\t}\n+\treturn undefined;\n+}\n+\n+function firstPositiveInteger(...values: unknown[]): number | undefined {\n+\tfor (const value of values) {\n+\t\tif (typeof value === \"number\" && Number.isFinite(value) && value > 0) {\n+\t\t\treturn Math.trunc(value);\n+\t\t}\n+\t}\n+\treturn undefined;\n+}\n+\n+function toModelSourceEntry(item: unknown): ModelSourceEntry | undefined {\n+\tif (typeof item === \"string\") {\n+\t\tconst id = item.trim();\n+\t\treturn id ? { id } : undefined;\n+\t}\n+\tconst entry = asRecord(item);\n+\tif (!entry) return undefined;\n+\tconst id = firstString(entry.id, entry.name, entry.model);\n+\tif (!id) return undefined;\n+\tconst contextWindow = firstPositiveInteger(\n+\t\tentry.context_length,",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4307781249",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15176,
+        "pr_file": "sdk/packages/core/src/services/providers/model-source.ts",
+        "discussion_id": "4307781249",
+        "commented_code": "@@ -1,26 +1,98 @@\n-function parseModelIdList(input: unknown): string[] {\n+/**\n+ * A model advertised by a provider's model-list endpoint. Provider catalogs\n+ * commonly include limits next to the id (OpenAI `context_length`, vLLM,\n+ * LM Studio, etc.); keeping them avoids dropping back to a 128K default.\n+ */\n+export interface ModelSourceEntry {\n+\tid: string;\n+\tname?: string;\n+\tcontextWindow?: number;\n+\tmaxInputTokens?: number;\n+\tmaxTokens?: number;\n+}\n+\n+function asRecord(value: unknown): Record<string, unknown> | undefined {\n+\treturn value && typeof value === \"object\" && !Array.isArray(value)\n+\t\t? (value as Record<string, unknown>)\n+\t\t: undefined;\n+}\n+\n+function firstString(...values: unknown[]): string | undefined {\n+\tfor (const value of values) {\n+\t\tif (typeof value === \"string\" && value.trim()) {\n+\t\t\treturn value.trim();\n+\t\t}\n+\t}\n+\treturn undefined;\n+}\n+\n+function firstPositiveInteger(...values: unknown[]): number | undefined {\n+\tfor (const value of values) {\n+\t\tif (typeof value === \"number\" && Number.isFinite(value) && value > 0) {\n+\t\t\treturn Math.trunc(value);\n+\t\t}\n+\t}\n+\treturn undefined;\n+}\n+\n+function toModelSourceEntry(item: unknown): ModelSourceEntry | undefined {\n+\tif (typeof item === \"string\") {\n+\t\tconst id = item.trim();\n+\t\treturn id ? { id } : undefined;\n+\t}\n+\tconst entry = asRecord(item);\n+\tif (!entry) return undefined;\n+\tconst id = firstString(entry.id, entry.name, entry.model);\n+\tif (!id) return undefined;\n+\tconst contextWindow = firstPositiveInteger(\n+\t\tentry.context_length,",
+        "comment_created_at": "2026-10-18T16:27:05+00:00",
+        "comment_author": "notlakshitha",
+        "comment_body": "vLLM's `/v1/models` reports the window as `max_model_len` (it's on its ModelCard), so a vLLM source still falls back to 128K even though the comment at the top lists vLLM. Worth adding `entry.max_model_len` here?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4119770223",
+    "pr_number": 14602,
+    "pr_file": "sdk/packages/llms/src/providers/vendors/bedrock.wire.test.ts",
+    "created_at": "2026-09-28T08:13:39+00:00",
+    "commented_code": "// `@ai-sdk/amazon-bedrock` adapter (bedrock.test.ts mocks the constructor).\n // Each case streams one turn through the gateway with a stubbed fetch and\n // asserts on the `additionalModelRequestFields` the adapter put on the\n-// Converse request. They pin the reason for the adapter floor of 5.0.65:\n-// OpenAI models reached through inference profiles (`us.openai.*`,\n-// `global.openai.*`) must get `reasoning.effort`, the field Bedrock accepts,\n-// not the generic `reasoningConfig` that older adapters emitted for any id\n-// they did not recognise (cline/cline#14451, vercel/ai#19403).\n+// Converse request. Together they pin the adapter floor:\n+//\n+//   1. OpenAI models reached through inference profiles (`us.openai.*`,\n+//      `global.openai.*`) get `reasoning.effort`, the field Bedrock accepts,\n+//      not the generic `reasoningConfig` that adapters before 5.0.65 emitted\n+//      for any id they did not recognise (cline/cline#14451, vercel/ai#19403);\n+//   2. models the adapter cannot classify get no reasoning fields at all,\n+//      instead of a `reasoningConfig` Bedrock rejects for models without\n+//      reasoning support \u2014 adapters before 5.0.96 sent it for every\n+//      non-Anthropic id (cline/cline#14095, vercel/ai#21487);\n+//   3. the families the adapter does classify keep their native shapes from\n+//      the id alone even when the catalog does not list the model, so a\n+//      catalog that lags a model launch never switches thinking off.\n+//\n+// Cases that would only assert the adapter's translation for an id it\n+// classifies belong to the adapter's own suite and are deliberately absent.",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4119925849",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14602,
+        "pr_file": "sdk/packages/llms/src/providers/vendors/bedrock.wire.test.ts",
+        "discussion_id": "4119770223",
+        "commented_code": "@@ -2,11 +2,22 @@\n // `@ai-sdk/amazon-bedrock` adapter (bedrock.test.ts mocks the constructor).\n // Each case streams one turn through the gateway with a stubbed fetch and\n // asserts on the `additionalModelRequestFields` the adapter put on the\n-// Converse request. They pin the reason for the adapter floor of 5.0.65:\n-// OpenAI models reached through inference profiles (`us.openai.*`,\n-// `global.openai.*`) must get `reasoning.effort`, the field Bedrock accepts,\n-// not the generic `reasoningConfig` that older adapters emitted for any id\n-// they did not recognise (cline/cline#14451, vercel/ai#19403).\n+// Converse request. Together they pin the adapter floor:\n+//\n+//   1. OpenAI models reached through inference profiles (`us.openai.*`,\n+//      `global.openai.*`) get `reasoning.effort`, the field Bedrock accepts,\n+//      not the generic `reasoningConfig` that adapters before 5.0.65 emitted\n+//      for any id they did not recognise (cline/cline#14451, vercel/ai#19403);\n+//   2. models the adapter cannot classify get no reasoning fields at all,\n+//      instead of a `reasoningConfig` Bedrock rejects for models without\n+//      reasoning support \u2014 adapters before 5.0.96 sent it for every\n+//      non-Anthropic id (cline/cline#14095, vercel/ai#21487);\n+//   3. the families the adapter does classify keep their native shapes from\n+//      the id alone even when the catalog does not list the model, so a\n+//      catalog that lags a model launch never switches thinking off.\n+//\n+// Cases that would only assert the adapter's translation for an id it\n+// classifies belong to the adapter's own suite and are deliberately absent.",
+        "comment_created_at": "2026-09-28T08:13:39+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Intentional. That case exercised none of Cline's routing; it only pinned how `@ai-sdk/amazon-bedrock` translates an id it classifies itself, which belongs to the adapter's own suite. The remaining cases pin what goes through Cline's resolver, catalog lookup and portable-reasoning path, and the live run in the PR body records Nova 2 Lite's accepted request shape.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4096513267",
+    "pr_number": 14476,
+    "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+    "created_at": "2026-09-24T17:28:39+00:00",
+    "commented_code": "+import type {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4096513267",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+        "discussion_id": "4096513267",
+        "commented_code": "@@ -0,0 +1,55 @@\n+import type {",
+        "comment_created_at": "2026-09-24T17:28:39+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "is this pattern present elsewhere in the codebase? seems like special handling for bedrock which I'd like to avoid if possible",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4096559232",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+        "discussion_id": "4096513267",
+        "commented_code": "@@ -0,0 +1,55 @@\n+import type {",
+        "comment_created_at": "2026-09-24T17:33:55+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "what do you think about making a pr upstream to the ai-sdk itself to fix the bedrock adapter so that it doesn't accidentally send reasoning. seems like the better place for the fix to live",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,36 +1,28 @@
 ---
 title: Semantic Naming Standards
-description: "Adopt naming rules that make intent, ownership, and contracts obvious.\n\
-  \n- Use positive, descriptive state names instead of vague booleans.\n  - Prefer\
-  \ enums/string unions over `flag: boolean` when the meaning is “seeded vs written\
-  \ vs …”."
-repository: ClInE/cLiNe
+description: 'Use names that encode the *actual meaning* and follow the project’s
+  *identifier contracts/conventions*.
+
+
+  - **Avoid vague booleans/flags**: rename to what the value *means*, not what it
+  excludes.'
+repository: Cline/Cline
 label: Naming Conventions
 language: TypeScript
-comments_count: 7
-repository_stars: 70838
+comments_count: 8
+repository_stars: 70840
 ---
 
-Adopt naming rules that make intent, ownership, and contracts obvious.
+Use names that encode the *actual meaning* and follow the project’s *identifier contracts/conventions*.
 
-- Use positive, descriptive state names instead of vague booleans.
-  - Prefer enums/string unions over `flag: boolean` when the meaning is “seeded vs written vs …”.
-  - Rename parameters to reflect intent (e.g., `userInitiated` vs `background`).
+- **Avoid vague booleans/flags**: rename to what the value *means*, not what it excludes.
+  - Bad: `load(refresh, background)`
+  - Good: `load(refresh, userInitiated)`
+- **Don’t model domain states as booleans**: if it’s really “seeded vs written vs …”, use a string union/enum (e.g. `entry?: "run" | "continue"`).
+- **Keep shared names aligned with shared types/contracts**: if there is a canonical type (e.g. `ClientName`), don’t invent parallel strings.
+- **Treat event/telemetry property keys as schema contracts**: renaming `taskId`→`ulid` requires updating *all* call sites and auditing consumers that join on the old key.
+- **Name public APIs to reduce ambiguity**: either expose one obvious entry point, or make the names clearly indicate which one to call (and add decisive comments if both must remain public).
+- **Apply casing conventions by identifier origin** (when applicable): e.g. caller-supplied `context` keys use `camelCase`, while envelope/global-enrichment keys use `snake_case`.
+- **Eliminate magic values**: extract important numeric timings into named constants and document their purpose.
 
-  ```ts
-  type Entry = "run" | "continue";
-  type EntryContext = { entry?: Entry; promptSeeded?: boolean /* or replace with positive state */ };
-  ```
-
-- Encode “who created the field” in naming/casing when systems mix sources.
-  - Example rule: keys supplied by the caller in a `context` object use `camelCase`; keys added by the telemetry envelope/global enrichment use `snake_case`.
-
-- For public helpers, make the right function hard to mis-pick.
-  - If two exported functions can be confused, prefer a single obvious “most common” export.
-  - Otherwise, rename so the call-site choice is self-evident (and back it with docs).
-
-- Avoid internal jargon names; if you must use domain terms, document them.
-  - Names like “dangling pointer” should either be replaced with conventional wording or explained with a clear “what it means / why it exists / how to call it correctly”.
-
-- Treat externally consumed names/keys (telemetry event properties, schema field names, IDs) as contracts.
-  - When renaming properties/parameters (e.g., `taskId` → `ulid`), update all call sites and verify event-schema joins. Positional arguments can compile while still sending the wrong semantic identifier.
+Following these rules prevents “looks-like-it-compiles-but-is-wrong” naming drift and makes identifiers self-explanatory for future call sites.

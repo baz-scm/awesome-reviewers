@@ -112,28 +112,6 @@
     ]
   },
   {
-    "discussion_id": "4205466706",
-    "pr_number": 14105,
-    "pr_file": "sdk/packages/core/src/services/storage/provider-settings-last-used.ts",
-    "created_at": "2026-10-07T09:51:43+00:00",
-    "commented_code": "+import { getProviderAuthHandler } from \"../../auth/provider-auth-registry\";",
-    "repo_full_name": "cline/cline",
-    "discussion_comments": [
-      {
-        "comment_id": "4205466706",
-        "repo_full_name": "cline/cline",
-        "pr_number": 14105,
-        "pr_file": "sdk/packages/core/src/services/storage/provider-settings-last-used.ts",
-        "discussion_id": "4205466706",
-        "commented_code": "@@ -0,0 +1,166 @@\n+import { getProviderAuthHandler } from \"../../auth/provider-auth-registry\";",
-        "comment_created_at": "2026-10-07T09:51:43+00:00",
-        "comment_author": "dominiccooney",
-        "comment_body": "This file uses a *lot* of jargon: *pointer*, *save*, *dangling* which aren't conventional (there's no *dangling pointers* in the C sense in this TypeScript...) People have to read the implementation to guess what is going on.\n\nIf we're lazy, we should at least add file-level comment explaining what you mean by *pointer*, *save*, *dangling*, etc.\n\nIf we're not lazy, we should carefully pick some words so the meaning people *assume* coincides perfectly/well enough with what really matters.\n\nI would try to tell a positive story in each function, roughly following the template:\n\n- What this function does.\n- Why this function does this, or at *least* who uses it.\n- Caveats about how to call it correctly.\n\nI will try to give an example below.",
-        "pr_file_module": null
-      }
-    ]
-  },
-  {
     "discussion_id": "4205496397",
     "pr_number": 14105,
     "pr_file": "sdk/packages/core/src/services/storage/provider-settings-last-used.ts",
@@ -197,6 +175,62 @@
         "comment_created_at": "2026-08-17T10:49:12+00:00",
         "comment_author": "mkondratek",
         "comment_body": "You're right and I was wrong here \u2014 this is the case I described as deliberate in the previous round, and my justification does not hold up.\n\nMy argument was that a recovery retry happens within one turn, so keeping the turn's first reason is the more useful attribution. That conflates two different things: the turn's history versus the cause of *this* failure. When the recovery attempt dies in `prepareTurn`, a hook, or stream setup, the event pairs a setup-failure message with a finish reason from a request that was superseded \u2014 so anyone splitting failures by `finishReason` counts it as a finish-reason-`error` failure when the actual killer had no finish reason at all. That is exactly the \"confident wrong cause\" I used to justify the earlier fixes, and I was carving out an exception to my own rule.\n\nCleared per model attempt as well, so the two resets cover different windows:\n\n- turn boundary \u2014 failures before any attempt begins, notably the `turn-started` emit\n- per attempt \u2014 a superseded attempt inside one turn\n\nThe overflow cause is not lost: it is carried by `lastError`/`lastErrorClass` (`context_window_exceeded`), which is where a context-window cause belongs rather than in a finish-reason dimension.\n\nRegression test added and verified to fail without the per-attempt clear. Agents suite 74/74, typecheck clean, biome clean.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3892202510",
+    "pr_number": 13340,
+    "pr_file": "sdk/packages/agents/src/agent-runtime.ts",
+    "created_at": "2026-08-31T06:34:03+00:00",
+    "commented_code": "return !turn.message.content.some((part) => part.type === \"tool-call\");\n \t}\n \n+\tprivate isRecoverableMaxTokensTurn(turn: {\n+\t\tmessage: AgentMessage;\n+\t\tfinishReason: AgentModelFinishReason;\n+\t}): boolean {\n+\t\tif (\n+\t\t\tturn.finishReason !== \"max-tokens\" ||\n+\t\t\tthis.maxTokensRecoveryAttempted ||\n+\t\t\t!this.config.prepareTurn\n+\t\t) {\n+\t\t\treturn false;\n+\t\t}\n+\t\t// A truncated turn that produced tool calls proceeds through the normal\n+\t\t// loop, which executes them; only text-only truncations are terminal\n+\t\t// and worth a recovery attempt.\n+\t\treturn !turn.message.content.some((part) => part.type === \"tool-call\");\n+\t}\n+\n+\t/**\n+\t * A response cut off at the output-token limit is often a symptom of a\n+\t * nearly-full context: local OpenAI-compatible servers (llama.cpp, ollama,\n+\t * LM Studio) cap generation at whatever context remains, regardless of the\n+\t * requested output budget. Compacting the conversation frees that room, so\n+\t * one forced compaction + retry rescues those turns. When compaction has\n+\t * nothing to remove the original turn is returned, so the loop surfaces the\n+\t * max-tokens error with the partial content already persisted.\n+\t *\n+\t * The retried turn is handed back unjudged: the run loop remains the only\n+\t * place that decides whether a turn is acceptable. Telemetry here is purely\n+\t * observational \u2014 `started`, then `retried` with the retry's finish reason\n+\t * when the attempt ran, or `failed` when it could not \u2014 so it never claims\n+\t * anything about the run outcome and cannot contradict it.\n+\t */\n+\tprivate async retryTruncatedTurnWithCompaction(first: {\n+\t\tmessage: AgentMessage;\n+\t\tfinishReason: AgentModelFinishReason;\n+\t}): Promise<{\n+\t\tmessage: AgentMessage;\n+\t\tfinishReason: AgentModelFinishReason;\n+\t}> {\n+\t\tthis.maxTokensRecoveryAttempted = true;\n+\t\tconst noticeMetadata = {\n+\t\t\tkind: \"max_tokens_recovery\",\n+\t\t\treason: \"max_tokens_recovery\",\n+\t\t\titeration: this.state.iteration,\n+\t\t};\n+\t\tthis.captureTaskLifecycle(TASK_MAX_TOKENS_RECOVERY_EVENT, {\n+\t\t\tphase: \"started\",\n+\t\t});\n+\t\tlet retry: { message: AgentMessage; finishReason: AgentModelFinishReason };\n+\t\ttry {\n+\t\t\t// Emitted inside the try so a throwing listener still funnels\n+\t\t\t// through the terminal-phase catch below.\n+\t\t\tawait this.emit({\n+\t\t\t\ttype: \"status-notice\",\n+\t\t\t\tsnapshot: this.snapshot(),\n+\t\t\t\tmessage:\n+\t\t\t\t\t\"response hit the output token limit \u2014 compacting and retrying\",\n+\t\t\t\tmetadata: { ...noticeMetadata, phase: \"started\" },\n+\t\t\t});\n+\t\t\tretry = await this.generateAssistantMessage({\n+\t\t\t\toverflowRecovery: true,\n+\t\t\t});\n+\t\t} catch (error) {\n+\t\t\tif (error instanceof ContextWindowOverflowError) {\n+\t\t\t\t// Nothing to compact \u2014 keep the truncated turn so the loop\n+\t\t\t\t// surfaces the max-tokens error rather than an overflow error.\n+\t\t\t\tthis.captureTaskLifecycle(TASK_MAX_TOKENS_RECOVERY_EVENT, {\n+\t\t\t\t\tphase: \"failed\",\n+\t\t\t\t\teventType: \"nothing_to_compact\",\n+\t\t\t\t});\n+\t\t\t\tawait this.emit({\n+\t\t\t\t\ttype: \"status-notice\",\n+\t\t\t\t\tsnapshot: this.snapshot(),\n+\t\t\t\t\tmessage: \"output-token-limit recovery failed: nothing to compact\",\n+\t\t\t\t\tmetadata: { ...noticeMetadata, phase: \"failed\" },\n+\t\t\t\t});\n+\t\t\t\treturn first;\n+\t\t\t}\n+\t\t\t// Close the recovery's telemetry before rethrowing so every started\n+\t\t\t// phase has a terminal phase; the thrown error itself is surfaced by\n+\t\t\t// the run's own failure path, so no notice here.\n+\t\t\tthis.captureTaskLifecycle(TASK_MAX_TOKENS_RECOVERY_EVENT, {\n+\t\t\t\tphase: \"failed\",\n+\t\t\t\teventType: \"recovery_threw\",\n+\t\t\t});\n+\t\t\tthrow error;\n+\t\t}\n+\t\t// `retried` states only that the compaction and retry ran \u2014 it makes no\n+\t\t// claim about the run, which may still reject this turn. The retry's\n+\t\t// finish reason rides along as an observed fact; pair it with the run\n+\t\t// outcome to see what became of the turn.\n+\t\tthis.captureTaskLifecycle(TASK_MAX_TOKENS_RECOVERY_EVENT, {\n+\t\t\tphase: \"retried\",\n+\t\t\teventType: retry.finishReason,\n+\t\t});",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "3892211892",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13340,
+        "pr_file": "sdk/packages/agents/src/agent-runtime.ts",
+        "discussion_id": "3892202510",
+        "commented_code": "@@ -1017,6 +1028,104 @@ export class AgentRuntime {\n \t\treturn !turn.message.content.some((part) => part.type === \"tool-call\");\n \t}\n \n+\tprivate isRecoverableMaxTokensTurn(turn: {\n+\t\tmessage: AgentMessage;\n+\t\tfinishReason: AgentModelFinishReason;\n+\t}): boolean {\n+\t\tif (\n+\t\t\tturn.finishReason !== \"max-tokens\" ||\n+\t\t\tthis.maxTokensRecoveryAttempted ||\n+\t\t\t!this.config.prepareTurn\n+\t\t) {\n+\t\t\treturn false;\n+\t\t}\n+\t\t// A truncated turn that produced tool calls proceeds through the normal\n+\t\t// loop, which executes them; only text-only truncations are terminal\n+\t\t// and worth a recovery attempt.\n+\t\treturn !turn.message.content.some((part) => part.type === \"tool-call\");\n+\t}\n+\n+\t/**\n+\t * A response cut off at the output-token limit is often a symptom of a\n+\t * nearly-full context: local OpenAI-compatible servers (llama.cpp, ollama,\n+\t * LM Studio) cap generation at whatever context remains, regardless of the\n+\t * requested output budget. Compacting the conversation frees that room, so\n+\t * one forced compaction + retry rescues those turns. When compaction has\n+\t * nothing to remove the original turn is returned, so the loop surfaces the\n+\t * max-tokens error with the partial content already persisted.\n+\t *\n+\t * The retried turn is handed back unjudged: the run loop remains the only\n+\t * place that decides whether a turn is acceptable. Telemetry here is purely\n+\t * observational \u2014 `started`, then `retried` with the retry's finish reason\n+\t * when the attempt ran, or `failed` when it could not \u2014 so it never claims\n+\t * anything about the run outcome and cannot contradict it.\n+\t */\n+\tprivate async retryTruncatedTurnWithCompaction(first: {\n+\t\tmessage: AgentMessage;\n+\t\tfinishReason: AgentModelFinishReason;\n+\t}): Promise<{\n+\t\tmessage: AgentMessage;\n+\t\tfinishReason: AgentModelFinishReason;\n+\t}> {\n+\t\tthis.maxTokensRecoveryAttempted = true;\n+\t\tconst noticeMetadata = {\n+\t\t\tkind: \"max_tokens_recovery\",\n+\t\t\treason: \"max_tokens_recovery\",\n+\t\t\titeration: this.state.iteration,\n+\t\t};\n+\t\tthis.captureTaskLifecycle(TASK_MAX_TOKENS_RECOVERY_EVENT, {\n+\t\t\tphase: \"started\",\n+\t\t});\n+\t\tlet retry: { message: AgentMessage; finishReason: AgentModelFinishReason };\n+\t\ttry {\n+\t\t\t// Emitted inside the try so a throwing listener still funnels\n+\t\t\t// through the terminal-phase catch below.\n+\t\t\tawait this.emit({\n+\t\t\t\ttype: \"status-notice\",\n+\t\t\t\tsnapshot: this.snapshot(),\n+\t\t\t\tmessage:\n+\t\t\t\t\t\"response hit the output token limit \u2014 compacting and retrying\",\n+\t\t\t\tmetadata: { ...noticeMetadata, phase: \"started\" },\n+\t\t\t});\n+\t\t\tretry = await this.generateAssistantMessage({\n+\t\t\t\toverflowRecovery: true,\n+\t\t\t});\n+\t\t} catch (error) {\n+\t\t\tif (error instanceof ContextWindowOverflowError) {\n+\t\t\t\t// Nothing to compact \u2014 keep the truncated turn so the loop\n+\t\t\t\t// surfaces the max-tokens error rather than an overflow error.\n+\t\t\t\tthis.captureTaskLifecycle(TASK_MAX_TOKENS_RECOVERY_EVENT, {\n+\t\t\t\t\tphase: \"failed\",\n+\t\t\t\t\teventType: \"nothing_to_compact\",\n+\t\t\t\t});\n+\t\t\t\tawait this.emit({\n+\t\t\t\t\ttype: \"status-notice\",\n+\t\t\t\t\tsnapshot: this.snapshot(),\n+\t\t\t\t\tmessage: \"output-token-limit recovery failed: nothing to compact\",\n+\t\t\t\t\tmetadata: { ...noticeMetadata, phase: \"failed\" },\n+\t\t\t\t});\n+\t\t\t\treturn first;\n+\t\t\t}\n+\t\t\t// Close the recovery's telemetry before rethrowing so every started\n+\t\t\t// phase has a terminal phase; the thrown error itself is surfaced by\n+\t\t\t// the run's own failure path, so no notice here.\n+\t\t\tthis.captureTaskLifecycle(TASK_MAX_TOKENS_RECOVERY_EVENT, {\n+\t\t\t\tphase: \"failed\",\n+\t\t\t\teventType: \"recovery_threw\",\n+\t\t\t});\n+\t\t\tthrow error;\n+\t\t}\n+\t\t// `retried` states only that the compaction and retry ran \u2014 it makes no\n+\t\t// claim about the run, which may still reject this turn. The retry's\n+\t\t// finish reason rides along as an observed fact; pair it with the run\n+\t\t// outcome to see what became of the turn.\n+\t\tthis.captureTaskLifecycle(TASK_MAX_TOKENS_RECOVERY_EVENT, {\n+\t\t\tphase: \"retried\",\n+\t\t\teventType: retry.finishReason,\n+\t\t});",
+        "comment_created_at": "2026-08-31T06:34:03+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "By design \u2014 this phase no longer judges the turn; the loop is the only thing that decides whether it's acceptable, and re-adding a success/failure verdict here is the duplication removed in the previous commit. That said, completed clearly invited exactly this reading, so it's renamed to retried: it states only that the compaction and retry ran, with the retry's finish reason alongside as an observed fact. Pair with the run outcome to see what became of the turn.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4019147773",
+    "pr_number": 13524,
+    "pr_file": "sdk/packages/core/src/hooks/subprocess-runner.ts",
+    "created_at": "2026-09-15T18:55:04+00:00",
+    "commented_code": "parseError,\n \t\t\t\ttimedOut,\n \t\t\t});\n+\t\t};\n+\t\tchild.once(\"error\", (error) => {\n+\t\t\tclearTimers();\n+\t\t\treject(formatSpawnError(error, command));\n \t\t});\n+\t\tchild.once(\"close\", (exitCode) => settle(exitCode));\n+\t\t// \"close\" waits for the stdio pipes to reach EOF, and a hook that spawned\n+\t\t// a background child sharing its stdout keeps the pipe open after the\n+\t\t// hook itself exits \u2014 without a fallback the caller would wait on that\n+\t\t// grandchild forever (the timeout's SIGKILL only reaches the direct\n+\t\t// child). Settle shortly after process exit with whatever output arrived,\n+\t\t// then drop the pipes: resolving alone would leave them (and their data\n+\t\t// listeners) attached for as long as the grandchild lives, keeping the\n+\t\t// host alive and accumulating output. Destroying them also lets the\n+\t\t// child's own \"close\" fire, which the settled promise then ignores.\n+\t\tif (!detached) {\n+\t\t\tchild.once(\"exit\", (exitCode) => {\n+\t\t\t\texitFallback = setTimeout(() => {\n+\t\t\t\t\tsettle(exitCode);\n+\t\t\t\t\treleaseStdio(child);",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4019147773",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13524,
+        "pr_file": "sdk/packages/core/src/hooks/subprocess-runner.ts",
+        "discussion_id": "4019147773",
+        "commented_code": "@@ -195,7 +247,30 @@ export async function runSubprocessEvent(\n \t\t\t\tparseError,\n \t\t\t\ttimedOut,\n \t\t\t});\n+\t\t};\n+\t\tchild.once(\"error\", (error) => {\n+\t\t\tclearTimers();\n+\t\t\treject(formatSpawnError(error, command));\n \t\t});\n+\t\tchild.once(\"close\", (exitCode) => settle(exitCode));\n+\t\t// \"close\" waits for the stdio pipes to reach EOF, and a hook that spawned\n+\t\t// a background child sharing its stdout keeps the pipe open after the\n+\t\t// hook itself exits \u2014 without a fallback the caller would wait on that\n+\t\t// grandchild forever (the timeout's SIGKILL only reaches the direct\n+\t\t// child). Settle shortly after process exit with whatever output arrived,\n+\t\t// then drop the pipes: resolving alone would leave them (and their data\n+\t\t// listeners) attached for as long as the grandchild lives, keeping the\n+\t\t// host alive and accumulating output. Destroying them also lets the\n+\t\t// child's own \"close\" fire, which the settled promise then ignores.\n+\t\tif (!detached) {\n+\t\t\tchild.once(\"exit\", (exitCode) => {\n+\t\t\t\texitFallback = setTimeout(() => {\n+\t\t\t\t\tsettle(exitCode);\n+\t\t\t\t\treleaseStdio(child);",
+        "comment_created_at": "2026-09-15T18:55:04+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "Nonblocking maintainability suggestion: please extract the 1_000 fallback delay into a named constant and document that it is a grace period for draining output after process exit. Keep releaseStdio paired with fallback settlement: resolving the promise alone leaves inherited pipes open. The cleanup itself is useful and should stay.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4044737599",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13524,
+        "pr_file": "sdk/packages/core/src/hooks/subprocess-runner.ts",
+        "discussion_id": "4019147773",
+        "commented_code": "@@ -195,7 +247,30 @@ export async function runSubprocessEvent(\n \t\t\t\tparseError,\n \t\t\t\ttimedOut,\n \t\t\t});\n+\t\t};\n+\t\tchild.once(\"error\", (error) => {\n+\t\t\tclearTimers();\n+\t\t\treject(formatSpawnError(error, command));\n \t\t});\n+\t\tchild.once(\"close\", (exitCode) => settle(exitCode));\n+\t\t// \"close\" waits for the stdio pipes to reach EOF, and a hook that spawned\n+\t\t// a background child sharing its stdout keeps the pipe open after the\n+\t\t// hook itself exits \u2014 without a fallback the caller would wait on that\n+\t\t// grandchild forever (the timeout's SIGKILL only reaches the direct\n+\t\t// child). Settle shortly after process exit with whatever output arrived,\n+\t\t// then drop the pipes: resolving alone would leave them (and their data\n+\t\t// listeners) attached for as long as the grandchild lives, keeping the\n+\t\t// host alive and accumulating output. Destroying them also lets the\n+\t\t// child's own \"close\" fire, which the settled promise then ignores.\n+\t\tif (!detached) {\n+\t\t\tchild.once(\"exit\", (exitCode) => {\n+\t\t\t\texitFallback = setTimeout(() => {\n+\t\t\t\t\tsettle(exitCode);\n+\t\t\t\t\treleaseStdio(child);",
+        "comment_created_at": "2026-09-18T07:34:24+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "makes sense. done ",
         "pr_file_module": null
       }
     ]

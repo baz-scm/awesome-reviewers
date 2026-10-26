@@ -1,0 +1,262 @@
+[
+  {
+    "discussion_id": "3920199006",
+    "pr_number": 334150,
+    "pr_file": "src/vs/workbench/contrib/chat/browser/telemetry/chatEditorTopologyTelemetry.ts",
+    "created_at": "2026-09-03T01:27:39+00:00",
+    "commented_code": "+/*---------------------------------------------------------------------------------------------\n+ *  Copyright (c) Microsoft Corporation. All rights reserved.\n+ *  Licensed under the MIT License. See License.txt in the project root for license information.\n+ *--------------------------------------------------------------------------------------------*/\n+\n+import { RunOnceScheduler } from '../../../../../base/common/async.js';\n+import { Disposable } from '../../../../../base/common/lifecycle.js';\n+import { ITelemetryService } from '../../../../../platform/telemetry/common/telemetry.js';\n+import { IWorkbenchContribution, WorkbenchPhase, registerWorkbenchContribution2 } from '../../../../common/contributions.js';\n+import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';\n+import { IEditorGroupsService } from '../../../../services/editor/common/editorGroupsService.js';\n+import { IEditorService } from '../../../../services/editor/common/editorService.js';\n+import { ChatEditorInput } from '../widgetHosts/editor/chatEditorInput.js';\n+\n+/** Countable editor state for one editor group. */\n+export interface IChatEditorTopologyGroup {\n+\treadonly editorTypeIds: readonly string[];\n+\treadonly activeEditorTypeId: string | undefined;\n+}\n+\n+/** Count-only topology of the main editor part. */\n+export interface IChatEditorTopologySnapshot {\n+\treadonly openChatEditorCount: number;\n+\treadonly visibleChatEditorCount: number;\n+\treadonly chatEditorGroupCount: number;\n+\treadonly visibleEditorCount: number;\n+\treadonly editorGroupCount: number;\n+}\n+\n+/** Computes the count-only topology of Chat Editors in the supplied groups. */\n+export function computeChatEditorTopologySnapshot(groups: readonly IChatEditorTopologyGroup[]): IChatEditorTopologySnapshot {\n+\tlet openChatEditorCount = 0;\n+\tlet visibleChatEditorCount = 0;\n+\tlet chatEditorGroupCount = 0;\n+\tlet visibleEditorCount = 0;\n+\n+\tfor (const group of groups) {\n+\t\tconst groupChatEditorCount = group.editorTypeIds.filter(typeId => typeId === ChatEditorInput.TypeID).length;\n+\t\topenChatEditorCount += groupChatEditorCount;\n+\t\tchatEditorGroupCount += groupChatEditorCount > 0 ? 1 : 0;\n+\t\tvisibleEditorCount += group.activeEditorTypeId === undefined ? 0 : 1;\n+\t\tvisibleChatEditorCount += group.activeEditorTypeId === ChatEditorInput.TypeID ? 1 : 0;\n+\t}\n+\n+\treturn {\n+\t\topenChatEditorCount,\n+\t\tvisibleChatEditorCount,\n+\t\tchatEditorGroupCount,\n+\t\tvisibleEditorCount,\n+\t\teditorGroupCount: groups.length,\n+\t};\n+}\n+\n+/** Returns whether a distinct topology involving Chat Editors should be logged. */\n+export function shouldLogChatEditorTopologySnapshot(previous: IChatEditorTopologySnapshot | undefined, current: IChatEditorTopologySnapshot): boolean {\n+\tif (previous\n+\t\t&& previous.openChatEditorCount === current.openChatEditorCount\n+\t\t&& previous.visibleChatEditorCount === current.visibleChatEditorCount\n+\t\t&& previous.chatEditorGroupCount === current.chatEditorGroupCount\n+\t\t&& previous.visibleEditorCount === current.visibleEditorCount\n+\t\t&& previous.editorGroupCount === current.editorGroupCount) {\n+\t\treturn false;\n+\t}\n+\n+\treturn current.openChatEditorCount > 0 || (previous?.openChatEditorCount ?? 0) > 0;\n+}\n+\n+type ChatEditorTopologyClassification = {\n+\topenChatEditorCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Number of Chat Editors open in the main editor part, including inactive tabs.' };\n+\tvisibleChatEditorCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Number of Chat Editors simultaneously visible as the active editor in a main editor group.' };\n+\tchatEditorGroupCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Number of main editor groups containing at least one Chat Editor.' };\n+\tvisibleEditorCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Number of main editor groups with a visible active editor.' };\n+\teditorGroupCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Total number of main editor groups.' };\n+\towner: 'bryanchen-d';\n+\tcomment: 'Tracks count-only main editor topology snapshots while Chat Editors are open to measure simultaneous multi-Chat layouts.';\n+};\n+\n+export class ChatEditorTopologyTelemetry extends Disposable implements IWorkbenchContribution {\n+\n+\tstatic readonly ID = 'workbench.contrib.chatEditorTopologyTelemetry';\n+\n+\tprivate readonly logScheduler = this._register(new RunOnceScheduler(() => this.logCurrentSnapshot(), 100));\n+\tprivate previousSnapshot: IChatEditorTopologySnapshot | undefined;\n+\n+\tconstructor(\n+\t\t@IEditorService private readonly editorService: IEditorService,\n+\t\t@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,\n+\t\t@ITelemetryService private readonly telemetryService: ITelemetryService,\n+\t\t@IWorkbenchEnvironmentService environmentService: IWorkbenchEnvironmentService,\n+\t) {\n+\t\tsuper();\n+\n+\t\tif (environmentService.isSessionsWindow) {\n+\t\t\treturn;\n+\t\t}\n+\n+\t\tvoid this.initialize();\n+\t}\n+\n+\tprivate async initialize(): Promise<void> {\n+\t\tconst mainPart = this.editorGroupsService.mainPart;\n+\t\tawait mainPart.whenRestored;\n+\t\tif (this._store.isDisposed) {\n+\t\t\treturn;\n+\t\t}\n+\n+\t\tconst scheduleLog = () => this.logScheduler.schedule();\n+\t\tthis._register(this.editorService.onDidEditorsChange(scheduleLog));\n+\t\tthis._register(this.editorService.onDidVisibleEditorsChange(scheduleLog));\n+\t\tthis._register(mainPart.onDidAddGroup(scheduleLog));\n+\t\tthis._register(mainPart.onDidRemoveGroup(scheduleLog));\n+\n+\t\tthis.logCurrentSnapshot();\n+\t}\n+\n+\tprivate logCurrentSnapshot(): void {\n+\t\tconst snapshot = computeChatEditorTopologySnapshot(this.editorGroupsService.mainPart.groups.map(group => ({\n+\t\t\teditorTypeIds: group.editors.map(editor => editor.typeId),\n+\t\t\tactiveEditorTypeId: group.activeEditor?.typeId,",
+    "repo_full_name": "microsoft/vscode",
+    "discussion_comments": [
+      {
+        "comment_id": "3920199006",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 334150,
+        "pr_file": "src/vs/workbench/contrib/chat/browser/telemetry/chatEditorTopologyTelemetry.ts",
+        "discussion_id": "3920199006",
+        "commented_code": "@@ -0,0 +1,132 @@\n+/*---------------------------------------------------------------------------------------------\n+ *  Copyright (c) Microsoft Corporation. All rights reserved.\n+ *  Licensed under the MIT License. See License.txt in the project root for license information.\n+ *--------------------------------------------------------------------------------------------*/\n+\n+import { RunOnceScheduler } from '../../../../../base/common/async.js';\n+import { Disposable } from '../../../../../base/common/lifecycle.js';\n+import { ITelemetryService } from '../../../../../platform/telemetry/common/telemetry.js';\n+import { IWorkbenchContribution, WorkbenchPhase, registerWorkbenchContribution2 } from '../../../../common/contributions.js';\n+import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';\n+import { IEditorGroupsService } from '../../../../services/editor/common/editorGroupsService.js';\n+import { IEditorService } from '../../../../services/editor/common/editorService.js';\n+import { ChatEditorInput } from '../widgetHosts/editor/chatEditorInput.js';\n+\n+/** Countable editor state for one editor group. */\n+export interface IChatEditorTopologyGroup {\n+\treadonly editorTypeIds: readonly string[];\n+\treadonly activeEditorTypeId: string | undefined;\n+}\n+\n+/** Count-only topology of the main editor part. */\n+export interface IChatEditorTopologySnapshot {\n+\treadonly openChatEditorCount: number;\n+\treadonly visibleChatEditorCount: number;\n+\treadonly chatEditorGroupCount: number;\n+\treadonly visibleEditorCount: number;\n+\treadonly editorGroupCount: number;\n+}\n+\n+/** Computes the count-only topology of Chat Editors in the supplied groups. */\n+export function computeChatEditorTopologySnapshot(groups: readonly IChatEditorTopologyGroup[]): IChatEditorTopologySnapshot {\n+\tlet openChatEditorCount = 0;\n+\tlet visibleChatEditorCount = 0;\n+\tlet chatEditorGroupCount = 0;\n+\tlet visibleEditorCount = 0;\n+\n+\tfor (const group of groups) {\n+\t\tconst groupChatEditorCount = group.editorTypeIds.filter(typeId => typeId === ChatEditorInput.TypeID).length;\n+\t\topenChatEditorCount += groupChatEditorCount;\n+\t\tchatEditorGroupCount += groupChatEditorCount > 0 ? 1 : 0;\n+\t\tvisibleEditorCount += group.activeEditorTypeId === undefined ? 0 : 1;\n+\t\tvisibleChatEditorCount += group.activeEditorTypeId === ChatEditorInput.TypeID ? 1 : 0;\n+\t}\n+\n+\treturn {\n+\t\topenChatEditorCount,\n+\t\tvisibleChatEditorCount,\n+\t\tchatEditorGroupCount,\n+\t\tvisibleEditorCount,\n+\t\teditorGroupCount: groups.length,\n+\t};\n+}\n+\n+/** Returns whether a distinct topology involving Chat Editors should be logged. */\n+export function shouldLogChatEditorTopologySnapshot(previous: IChatEditorTopologySnapshot | undefined, current: IChatEditorTopologySnapshot): boolean {\n+\tif (previous\n+\t\t&& previous.openChatEditorCount === current.openChatEditorCount\n+\t\t&& previous.visibleChatEditorCount === current.visibleChatEditorCount\n+\t\t&& previous.chatEditorGroupCount === current.chatEditorGroupCount\n+\t\t&& previous.visibleEditorCount === current.visibleEditorCount\n+\t\t&& previous.editorGroupCount === current.editorGroupCount) {\n+\t\treturn false;\n+\t}\n+\n+\treturn current.openChatEditorCount > 0 || (previous?.openChatEditorCount ?? 0) > 0;\n+}\n+\n+type ChatEditorTopologyClassification = {\n+\topenChatEditorCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Number of Chat Editors open in the main editor part, including inactive tabs.' };\n+\tvisibleChatEditorCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Number of Chat Editors simultaneously visible as the active editor in a main editor group.' };\n+\tchatEditorGroupCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Number of main editor groups containing at least one Chat Editor.' };\n+\tvisibleEditorCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Number of main editor groups with a visible active editor.' };\n+\teditorGroupCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Total number of main editor groups.' };\n+\towner: 'bryanchen-d';\n+\tcomment: 'Tracks count-only main editor topology snapshots while Chat Editors are open to measure simultaneous multi-Chat layouts.';\n+};\n+\n+export class ChatEditorTopologyTelemetry extends Disposable implements IWorkbenchContribution {\n+\n+\tstatic readonly ID = 'workbench.contrib.chatEditorTopologyTelemetry';\n+\n+\tprivate readonly logScheduler = this._register(new RunOnceScheduler(() => this.logCurrentSnapshot(), 100));\n+\tprivate previousSnapshot: IChatEditorTopologySnapshot | undefined;\n+\n+\tconstructor(\n+\t\t@IEditorService private readonly editorService: IEditorService,\n+\t\t@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,\n+\t\t@ITelemetryService private readonly telemetryService: ITelemetryService,\n+\t\t@IWorkbenchEnvironmentService environmentService: IWorkbenchEnvironmentService,\n+\t) {\n+\t\tsuper();\n+\n+\t\tif (environmentService.isSessionsWindow) {\n+\t\t\treturn;\n+\t\t}\n+\n+\t\tvoid this.initialize();\n+\t}\n+\n+\tprivate async initialize(): Promise<void> {\n+\t\tconst mainPart = this.editorGroupsService.mainPart;\n+\t\tawait mainPart.whenRestored;\n+\t\tif (this._store.isDisposed) {\n+\t\t\treturn;\n+\t\t}\n+\n+\t\tconst scheduleLog = () => this.logScheduler.schedule();\n+\t\tthis._register(this.editorService.onDidEditorsChange(scheduleLog));\n+\t\tthis._register(this.editorService.onDidVisibleEditorsChange(scheduleLog));\n+\t\tthis._register(mainPart.onDidAddGroup(scheduleLog));\n+\t\tthis._register(mainPart.onDidRemoveGroup(scheduleLog));\n+\n+\t\tthis.logCurrentSnapshot();\n+\t}\n+\n+\tprivate logCurrentSnapshot(): void {\n+\t\tconst snapshot = computeChatEditorTopologySnapshot(this.editorGroupsService.mainPart.groups.map(group => ({\n+\t\t\teditorTypeIds: group.editors.map(editor => editor.typeId),\n+\t\t\tactiveEditorTypeId: group.activeEditor?.typeId,",
+        "comment_created_at": "2026-09-03T01:27:39+00:00",
+        "comment_author": "dmitrivMS",
+        "comment_body": "AI Review: When an editor group is maximized, sibling groups remain in `mainPart.groups` with their `activeEditor` populated even though GridView hides them. This mapping therefore keeps counting hidden siblings in `visibleEditorCount` and `visibleChatEditorCount` (for example, two active Chat Editors still report 2 when only one is displayed). Maximizing/restoring also emits `onDidChangeGroupMaximized`, which this contribution does not subscribe to, so no corrected snapshot is logged. Please subscribe to that event and compute visible counts from only displayed groups while retaining all groups for open/group totals; add a maximization regression test.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3927184552",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 334150,
+        "pr_file": "src/vs/workbench/contrib/chat/browser/telemetry/chatEditorTopologyTelemetry.ts",
+        "discussion_id": "3920199006",
+        "commented_code": "@@ -0,0 +1,132 @@\n+/*---------------------------------------------------------------------------------------------\n+ *  Copyright (c) Microsoft Corporation. All rights reserved.\n+ *  Licensed under the MIT License. See License.txt in the project root for license information.\n+ *--------------------------------------------------------------------------------------------*/\n+\n+import { RunOnceScheduler } from '../../../../../base/common/async.js';\n+import { Disposable } from '../../../../../base/common/lifecycle.js';\n+import { ITelemetryService } from '../../../../../platform/telemetry/common/telemetry.js';\n+import { IWorkbenchContribution, WorkbenchPhase, registerWorkbenchContribution2 } from '../../../../common/contributions.js';\n+import { IWorkbenchEnvironmentService } from '../../../../services/environment/common/environmentService.js';\n+import { IEditorGroupsService } from '../../../../services/editor/common/editorGroupsService.js';\n+import { IEditorService } from '../../../../services/editor/common/editorService.js';\n+import { ChatEditorInput } from '../widgetHosts/editor/chatEditorInput.js';\n+\n+/** Countable editor state for one editor group. */\n+export interface IChatEditorTopologyGroup {\n+\treadonly editorTypeIds: readonly string[];\n+\treadonly activeEditorTypeId: string | undefined;\n+}\n+\n+/** Count-only topology of the main editor part. */\n+export interface IChatEditorTopologySnapshot {\n+\treadonly openChatEditorCount: number;\n+\treadonly visibleChatEditorCount: number;\n+\treadonly chatEditorGroupCount: number;\n+\treadonly visibleEditorCount: number;\n+\treadonly editorGroupCount: number;\n+}\n+\n+/** Computes the count-only topology of Chat Editors in the supplied groups. */\n+export function computeChatEditorTopologySnapshot(groups: readonly IChatEditorTopologyGroup[]): IChatEditorTopologySnapshot {\n+\tlet openChatEditorCount = 0;\n+\tlet visibleChatEditorCount = 0;\n+\tlet chatEditorGroupCount = 0;\n+\tlet visibleEditorCount = 0;\n+\n+\tfor (const group of groups) {\n+\t\tconst groupChatEditorCount = group.editorTypeIds.filter(typeId => typeId === ChatEditorInput.TypeID).length;\n+\t\topenChatEditorCount += groupChatEditorCount;\n+\t\tchatEditorGroupCount += groupChatEditorCount > 0 ? 1 : 0;\n+\t\tvisibleEditorCount += group.activeEditorTypeId === undefined ? 0 : 1;\n+\t\tvisibleChatEditorCount += group.activeEditorTypeId === ChatEditorInput.TypeID ? 1 : 0;\n+\t}\n+\n+\treturn {\n+\t\topenChatEditorCount,\n+\t\tvisibleChatEditorCount,\n+\t\tchatEditorGroupCount,\n+\t\tvisibleEditorCount,\n+\t\teditorGroupCount: groups.length,\n+\t};\n+}\n+\n+/** Returns whether a distinct topology involving Chat Editors should be logged. */\n+export function shouldLogChatEditorTopologySnapshot(previous: IChatEditorTopologySnapshot | undefined, current: IChatEditorTopologySnapshot): boolean {\n+\tif (previous\n+\t\t&& previous.openChatEditorCount === current.openChatEditorCount\n+\t\t&& previous.visibleChatEditorCount === current.visibleChatEditorCount\n+\t\t&& previous.chatEditorGroupCount === current.chatEditorGroupCount\n+\t\t&& previous.visibleEditorCount === current.visibleEditorCount\n+\t\t&& previous.editorGroupCount === current.editorGroupCount) {\n+\t\treturn false;\n+\t}\n+\n+\treturn current.openChatEditorCount > 0 || (previous?.openChatEditorCount ?? 0) > 0;\n+}\n+\n+type ChatEditorTopologyClassification = {\n+\topenChatEditorCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Number of Chat Editors open in the main editor part, including inactive tabs.' };\n+\tvisibleChatEditorCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Number of Chat Editors simultaneously visible as the active editor in a main editor group.' };\n+\tchatEditorGroupCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Number of main editor groups containing at least one Chat Editor.' };\n+\tvisibleEditorCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Number of main editor groups with a visible active editor.' };\n+\teditorGroupCount: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; isMeasurement: true; comment: 'Total number of main editor groups.' };\n+\towner: 'bryanchen-d';\n+\tcomment: 'Tracks count-only main editor topology snapshots while Chat Editors are open to measure simultaneous multi-Chat layouts.';\n+};\n+\n+export class ChatEditorTopologyTelemetry extends Disposable implements IWorkbenchContribution {\n+\n+\tstatic readonly ID = 'workbench.contrib.chatEditorTopologyTelemetry';\n+\n+\tprivate readonly logScheduler = this._register(new RunOnceScheduler(() => this.logCurrentSnapshot(), 100));\n+\tprivate previousSnapshot: IChatEditorTopologySnapshot | undefined;\n+\n+\tconstructor(\n+\t\t@IEditorService private readonly editorService: IEditorService,\n+\t\t@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,\n+\t\t@ITelemetryService private readonly telemetryService: ITelemetryService,\n+\t\t@IWorkbenchEnvironmentService environmentService: IWorkbenchEnvironmentService,\n+\t) {\n+\t\tsuper();\n+\n+\t\tif (environmentService.isSessionsWindow) {\n+\t\t\treturn;\n+\t\t}\n+\n+\t\tvoid this.initialize();\n+\t}\n+\n+\tprivate async initialize(): Promise<void> {\n+\t\tconst mainPart = this.editorGroupsService.mainPart;\n+\t\tawait mainPart.whenRestored;\n+\t\tif (this._store.isDisposed) {\n+\t\t\treturn;\n+\t\t}\n+\n+\t\tconst scheduleLog = () => this.logScheduler.schedule();\n+\t\tthis._register(this.editorService.onDidEditorsChange(scheduleLog));\n+\t\tthis._register(this.editorService.onDidVisibleEditorsChange(scheduleLog));\n+\t\tthis._register(mainPart.onDidAddGroup(scheduleLog));\n+\t\tthis._register(mainPart.onDidRemoveGroup(scheduleLog));\n+\n+\t\tthis.logCurrentSnapshot();\n+\t}\n+\n+\tprivate logCurrentSnapshot(): void {\n+\t\tconst snapshot = computeChatEditorTopologySnapshot(this.editorGroupsService.mainPart.groups.map(group => ({\n+\t\t\teditorTypeIds: group.editors.map(editor => editor.typeId),\n+\t\t\tactiveEditorTypeId: group.activeEditor?.typeId,",
+        "comment_created_at": "2026-09-03T17:50:12+00:00",
+        "comment_author": "bryanchen-d",
+        "comment_body": "Addressed in 8275eeab4c3. Open/group totals still use all main-part groups, while visible counts now exclude hidden siblings when `mainPart.hasMaximizedGroup()` is true. The contribution subscribes to `onDidChangeGroupMaximized`, and the telemetry test covers two open Chat Editors with only the maximized group counted as visible.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4291381956",
+    "pr_number": 335465,
+    "pr_file": "src/vs/workbench/contrib/terminalContrib/chatAgentTools/test/electron-browser/treeSitterCommandParser.test.ts",
+    "created_at": "2026-10-16T05:58:00+00:00",
+    "commented_code": "parser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, '$env:FOO=\"bar\"; git status'),\n \t\t\t\tparser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, '[System.Environment]::SetEnvironmentVariable(\"FOO\", \"bar\"); git status'),\n \t\t\t\tparser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, 'git log --format=\"%h|%s\" -5'),\n+\t\t\t\tparser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, 'git diff -- package.json pnpm-lock.yaml'),\n+\t\t\t\tparser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, 'npm exec -- tsc --noEmit --pretty false'),",
+    "repo_full_name": "microsoft/vscode",
+    "discussion_comments": [
+      {
+        "comment_id": "4291381956",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 335465,
+        "pr_file": "src/vs/workbench/contrib/terminalContrib/chatAgentTools/test/electron-browser/treeSitterCommandParser.test.ts",
+        "discussion_id": "4291381956",
+        "commented_code": "@@ -249,10 +254,14 @@ suite('TreeSitterCommandParser', () => {\n \t\t\t\tparser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, '$env:FOO=\"bar\"; git status'),\n \t\t\t\tparser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, '[System.Environment]::SetEnvironmentVariable(\"FOO\", \"bar\"); git status'),\n \t\t\t\tparser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, 'git log --format=\"%h|%s\" -5'),\n+\t\t\t\tparser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, 'git diff -- package.json pnpm-lock.yaml'),\n+\t\t\t\tparser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, 'npm exec -- tsc --noEmit --pretty false'),",
+        "comment_created_at": "2026-10-16T05:58:00+00:00",
+        "comment_author": "anthonykim1",
+        "comment_body": "Could you add cases that should stay faithful or keep failing closed, so this can't silently loosen later?\n\n```ts\nparser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, 'git diff --'),\nparser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, 'git status; --'),\nparser.extractAutoApprovalSubCommands(TreeSitterCommandParserLanguage.PowerShell, '-- git status'),\n```\n\n```ts\n{ subCommands: ['git diff --'], hasUnanalyzableSyntax: false },\n{ subCommands: ['git status'], hasUnanalyzableSyntax: true },\n{ subCommands: ['git status'], hasUnanalyzableSyntax: true },\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3885800794",
+    "pr_number": 320898,
+    "pr_file": "src/vs/workbench/contrib/codeEditor/browser/find/simpleFindWidget.ts",
+    "created_at": "2026-08-29T06:17:08+00:00",
+    "commented_code": "await this.updateResultCount();\n \t\t\t\t}\n \t\t\t\tthis.updateButtons(this._foundMatch);\n-\t\t\t\tthis.focusFindBox();\n+\t\t\t\tif (!options.checkImeCompletionState || !e.fromCompositionEnd) {",
+    "repo_full_name": "microsoft/vscode",
+    "discussion_comments": [
+      {
+        "comment_id": "3885800794",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 320898,
+        "pr_file": "src/vs/workbench/contrib/codeEditor/browser/find/simpleFindWidget.ts",
+        "discussion_id": "3885800794",
+        "commented_code": "@@ -130,7 +130,9 @@ export abstract class SimpleFindWidget extends Widget implements IVerticalSashLa\n \t\t\t\t\tawait this.updateResultCount();\n \t\t\t\t}\n \t\t\t\tthis.updateButtons(this._foundMatch);\n-\t\t\t\tthis.focusFindBox();\n+\t\t\t\tif (!options.checkImeCompletionState || !e.fromCompositionEnd) {",
+        "comment_created_at": "2026-08-29T06:17:08+00:00",
+        "comment_author": "dmitrivMS",
+        "comment_body": "AI Review: Nit: Could we add focused browser coverage for both new focus-suppression paths? `compositionend` should update search without the next-button/input focus bounce, while a `hasFindResult` callback after a new `compositionstart` should also leave focus untouched. A deterministic `WebviewFindWidget` test can use a mock delegate, count focus/blur events, and retain a normal-input control assertion. There is currently no automated coverage for either path.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3941207677",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 320898,
+        "pr_file": "src/vs/workbench/contrib/codeEditor/browser/find/simpleFindWidget.ts",
+        "discussion_id": "3885800794",
+        "commented_code": "@@ -130,7 +130,9 @@ export abstract class SimpleFindWidget extends Widget implements IVerticalSashLa\n \t\t\t\t\tawait this.updateResultCount();\n \t\t\t\t}\n \t\t\t\tthis.updateButtons(this._foundMatch);\n-\t\t\t\tthis.focusFindBox();\n+\t\t\t\tif (!options.checkImeCompletionState || !e.fromCompositionEnd) {",
+        "comment_created_at": "2026-09-05T16:11:15+00:00",
+        "comment_author": "wibaek",
+        "comment_body": "Added focused browser coverage in 554413076ac:\r\n\r\n- `compositionend` updates search without the next-button/input focus bounce.\r\n- `hasFindResult` arriving after a new `compositionstart` leaves focus unchanged.\r\n- Normal input still updates search and restores focus.\r\n\r\nThe tests use a mock delegate and record actual DOM focus/blur events. All three pass in Chromium and WebKit.\r\n\r\nI also verified that removing each focus-suppression guard independently causes its corresponding regression test to fail.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3942365288",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 320898,
+        "pr_file": "src/vs/workbench/contrib/codeEditor/browser/find/simpleFindWidget.ts",
+        "discussion_id": "3885800794",
+        "commented_code": "@@ -130,7 +130,9 @@ export abstract class SimpleFindWidget extends Widget implements IVerticalSashLa\n \t\t\t\t\tawait this.updateResultCount();\n \t\t\t\t}\n \t\t\t\tthis.updateButtons(this._foundMatch);\n-\t\t\t\tthis.focusFindBox();\n+\t\t\t\tif (!options.checkImeCompletionState || !e.fromCompositionEnd) {",
+        "comment_created_at": "2026-09-05T23:17:43+00:00",
+        "comment_author": "dmitrivMS",
+        "comment_body": "@wibaek The tests are failing it seems...",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3942955139",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 320898,
+        "pr_file": "src/vs/workbench/contrib/codeEditor/browser/find/simpleFindWidget.ts",
+        "discussion_id": "3885800794",
+        "commented_code": "@@ -130,7 +130,9 @@ export abstract class SimpleFindWidget extends Widget implements IVerticalSashLa\n \t\t\t\t\tawait this.updateResultCount();\n \t\t\t\t}\n \t\t\t\tthis.updateButtons(this._foundMatch);\n-\t\t\t\tthis.focusFindBox();\n+\t\t\t\tif (!options.checkImeCompletionState || !e.fromCompositionEnd) {",
+        "comment_created_at": "2026-09-06T04:43:20+00:00",
+        "comment_author": "wibaek",
+        "comment_body": "\ud83d\ude2e",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3090892467",
+    "pr_number": 310499,
+    "pr_file": "src/vs/workbench/contrib/chat/test/common/plugins/pluginMarketplaceService.test.ts",
+    "created_at": "2026-04-16T05:27:29+00:00",
+    "commented_code": "assert.strictEqual(getPluginSourceLabel({ kind: PluginSourceKind.Pip, package: 'my-plugin', version: '2.0' }), 'my-plugin==2.0');\n \t});\n });\n+\n+/**\n+ * Minimal in-memory file service used to simulate `installed.json` and\n+ * marketplace definition files on disk during hydration tests.\n+ */\n+class HydrationTestFileService {\n+\tprivate readonly _files = new Map<string, string>();\n+\tprivate readonly _folders = new Set<string>();\n+\n+\tasync exists(resource: URI): Promise<boolean> {\n+\t\tconst key = resource.toString();\n+\t\treturn this._files.has(key) || this._folders.has(key);\n+\t}\n+\n+\tasync readFile(resource: URI): Promise<{ value: VSBuffer }> {\n+\t\tconst key = resource.toString();\n+\t\tconst value = this._files.get(key);\n+\t\tif (value === undefined) {\n+\t\t\tthrow new Error(`Missing file: ${key}`);\n+\t\t}\n+\t\treturn { value: VSBuffer.fromString(value) };\n+\t}\n+\n+\tasync writeFile(_resource: URI, _content: VSBuffer): Promise<unknown> {\n+\t\t// Writes are not needed for hydration tests; swallow them.\n+\t\treturn {};\n+\t}\n+\n+\tasync createFolder(resource: URI): Promise<unknown> {\n+\t\tthis._folders.add(resource.toString());\n+\t\treturn {};\n+\t}\n+\n+\tcreateWatcher(): IFileSystemWatcher {\n+\t\treturn { onDidChange: Event.None, dispose: () => { } };\n+\t}\n+\n+\tsetFile(resource: URI, content: string): void {\n+\t\tthis._files.set(resource.toString(), content);\n+\t}\n+}",
+    "repo_full_name": "microsoft/vscode",
+    "discussion_comments": [
+      {
+        "comment_id": "3090944786",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 310499,
+        "pr_file": "src/vs/workbench/contrib/chat/test/common/plugins/pluginMarketplaceService.test.ts",
+        "discussion_id": "3090892467",
+        "commented_code": "@@ -522,3 +524,264 @@ suite('getPluginSourceLabel', () => {\n \t\tassert.strictEqual(getPluginSourceLabel({ kind: PluginSourceKind.Pip, package: 'my-plugin', version: '2.0' }), 'my-plugin==2.0');\n \t});\n });\n+\n+/**\n+ * Minimal in-memory file service used to simulate `installed.json` and\n+ * marketplace definition files on disk during hydration tests.\n+ */\n+class HydrationTestFileService {\n+\tprivate readonly _files = new Map<string, string>();\n+\tprivate readonly _folders = new Set<string>();\n+\n+\tasync exists(resource: URI): Promise<boolean> {\n+\t\tconst key = resource.toString();\n+\t\treturn this._files.has(key) || this._folders.has(key);\n+\t}\n+\n+\tasync readFile(resource: URI): Promise<{ value: VSBuffer }> {\n+\t\tconst key = resource.toString();\n+\t\tconst value = this._files.get(key);\n+\t\tif (value === undefined) {\n+\t\t\tthrow new Error(`Missing file: ${key}`);\n+\t\t}\n+\t\treturn { value: VSBuffer.fromString(value) };\n+\t}\n+\n+\tasync writeFile(_resource: URI, _content: VSBuffer): Promise<unknown> {\n+\t\t// Writes are not needed for hydration tests; swallow them.\n+\t\treturn {};\n+\t}\n+\n+\tasync createFolder(resource: URI): Promise<unknown> {\n+\t\tthis._folders.add(resource.toString());\n+\t\treturn {};\n+\t}\n+\n+\tcreateWatcher(): IFileSystemWatcher {\n+\t\treturn { onDidChange: Event.None, dispose: () => { } };\n+\t}\n+\n+\tsetFile(resource: URI, content: string): void {\n+\t\tthis._files.set(resource.toString(), content);\n+\t}\n+}",
+        "comment_created_at": "2026-04-16T05:27:29+00:00",
+        "comment_author": "kondoaki",
+        "comment_body": "Addressed in 0ae6fdbe9d9 \u2014 the hand-rolled `HydrationTestFileService` is gone. The hydration suite now builds a real `FileService` backed by `InMemoryFileSystemProvider` (same setup as `workspacePluginSettingsService.test.ts`), seeds `installed.json` and the marketplace manifest via `fileService.writeFile`, and drops the `as unknown as IFileService` cast entirely. If `FileBackedInstalledPluginsStore` starts calling additional `IFileService` APIs, these tests will exercise them through the real surface.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3857388085",
+    "pr_number": 322043,
+    "pr_file": "src/vs/workbench/contrib/chat/browser/aiCustomization/toolsListWidget.ts",
+    "created_at": "2026-08-25T21:04:26+00:00",
+    "commented_code": "}\n \n \t\tconst count = DOM.append(row, $('span.tools-list-row-count'));\n+\t\tif (vm.readOnly) {\n+\t\t\tDOM.append(row, $('span.tools-list-always-available')).textContent = localize('toolsAlwaysAvailable', \"Always Available\");\n+\t\t}\n+\t\tconst extension = this._resolveExtensionForToolSet(ts);\n+\t\tlet moreButton: HTMLButtonElement | undefined;\n+\t\tif (extension) {\n+\t\t\tconst moreLabel = localize('toolsSetMoreActions', \"More actions for {0}\", setName);\n+\t\t\tmoreButton = DOM.append(row, $('button.tools-list-more-action')) as HTMLButtonElement;",
+    "repo_full_name": "microsoft/vscode",
+    "discussion_comments": [
+      {
+        "comment_id": "3857388085",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 322043,
+        "pr_file": "src/vs/workbench/contrib/chat/browser/aiCustomization/toolsListWidget.ts",
+        "discussion_id": "3857388085",
+        "commented_code": "@@ -617,31 +668,37 @@ export class ToolsListWidget extends Disposable {\n \t\t}\n \n \t\tconst count = DOM.append(row, $('span.tools-list-row-count'));\n+\t\tif (vm.readOnly) {\n+\t\t\tDOM.append(row, $('span.tools-list-always-available')).textContent = localize('toolsAlwaysAvailable', \"Always Available\");\n+\t\t}\n+\t\tconst extension = this._resolveExtensionForToolSet(ts);\n+\t\tlet moreButton: HTMLButtonElement | undefined;\n+\t\tif (extension) {\n+\t\t\tconst moreLabel = localize('toolsSetMoreActions', \"More actions for {0}\", setName);\n+\t\t\tmoreButton = DOM.append(row, $('button.tools-list-more-action')) as HTMLButtonElement;",
+        "comment_created_at": "2026-08-25T21:04:26+00:00",
+        "comment_author": "sbatten",
+        "comment_body": "\ud83e\udd16 **[P1] This More button cannot be activated from the keyboard.** It remains a native tab stop, but Enter/Space bubbles to `_onTreeKeyDown`, which resolves the parent row, clicks the enablement toggle, and calls `preventDefault()`. That suppresses the button's native click, so keyboard users toggle the tool set instead of opening this menu. The former row context-menu path was also removed. Please ignore keyboard events from interactive descendants and restore a keyboard/context-menu action path.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3866363544",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 322043,
+        "pr_file": "src/vs/workbench/contrib/chat/browser/aiCustomization/toolsListWidget.ts",
+        "discussion_id": "3857388085",
+        "commented_code": "@@ -617,31 +668,37 @@ export class ToolsListWidget extends Disposable {\n \t\t}\n \n \t\tconst count = DOM.append(row, $('span.tools-list-row-count'));\n+\t\tif (vm.readOnly) {\n+\t\t\tDOM.append(row, $('span.tools-list-always-available')).textContent = localize('toolsAlwaysAvailable', \"Always Available\");\n+\t\t}\n+\t\tconst extension = this._resolveExtensionForToolSet(ts);\n+\t\tlet moreButton: HTMLButtonElement | undefined;\n+\t\tif (extension) {\n+\t\t\tconst moreLabel = localize('toolsSetMoreActions', \"More actions for {0}\", setName);\n+\t\t\tmoreButton = DOM.append(row, $('button.tools-list-more-action')) as HTMLButtonElement;",
+        "comment_created_at": "2026-08-26T20:13:13+00:00",
+        "comment_author": "hawkticehurst",
+        "comment_body": "Valid and helpful. The event-path analysis was precise: Enter/Space from the nested More button reached the tree handler, which acted on the parent row and prevented the native button click. I addressed it by limiting tree keyboard handling to events whose target is the row itself, with a regression test covering descendant controls. A useful improvement would be to include the minimal expected keyboard test sequence (focus More -> press Enter/Space -> menu opens; tool-set enablement is unchanged), which would make the acceptance criteria immediately executable.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3867408130",
+    "pr_number": 322043,
+    "pr_file": "src/vs/workbench/contrib/chat/test/browser/aiCustomization/embeddedAgentPluginDetail.test.ts",
+    "created_at": "2026-08-26T23:08:45+00:00",
+    "commented_code": "+/*---------------------------------------------------------------------------------------------\n+ *  Copyright (c) Microsoft Corporation. All rights reserved.\n+ *  Licensed under the MIT License. See License.txt in the project root for license information.\n+ *--------------------------------------------------------------------------------------------*/\n+\n+import assert from 'assert';\n+import { VSBuffer, bufferToStream } from '../../../../../../base/common/buffer.js';\n+import { Event } from '../../../../../../base/common/event.js';\n+import { URI } from '../../../../../../base/common/uri.js';\n+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../../base/test/common/utils.js';\n+import { IRequestContext } from '../../../../../../base/parts/request/common/request.js';\n+import { IFileService } from '../../../../../../platform/files/common/files.js';\n+import { IRequestService } from '../../../../../../platform/request/common/request.js';\n+import { mock } from '../../../../../../base/test/common/mock.js';\n+import { AgentPluginItemKind, IMarketplacePluginItem } from '../../../browser/agentPluginEditor/agentPluginItems.js';\n+import { getPluginVersion, loadPluginReadme, PluginReadmeRenderGuard } from '../../../browser/aiCustomization/embeddedAgentPluginDetail.js';\n+import { MarketplaceType, PluginSourceKind } from '../../../common/plugins/pluginMarketplaceService.js';\n+import { parseMarketplaceReference } from '../../../common/plugins/marketplaceReference.js';\n+\n+class StatusRequestService extends mock<IRequestService>() {\n+\toverride readonly onDidCompleteRequest = Event.None;\n+\treadonly requests: string[] = [];\n+\n+\tconstructor(\n+\t\tprivate readonly statusCode: number,\n+\t\tprivate readonly body: string,\n+\t) {\n+\t\tsuper();\n+\t}\n+\n+\toverride async request(options: { readonly url?: string }): Promise<IRequestContext> {\n+\t\tthis.requests.push(options.url ?? '');\n+\t\treturn {\n+\t\t\tres: { statusCode: this.statusCode, headers: {} },\n+\t\t\tstream: bufferToStream(VSBuffer.fromString(this.body)),\n+\t\t};\n+\t}\n+}\n+\n+function createMarketplaceItem(readmeUri: URI): IMarketplacePluginItem {\n+\treturn {\n+\t\tkind: AgentPluginItemKind.Marketplace,\n+\t\tname: 'example',\n+\t\tdescription: 'Example plugin',\n+\t\tversion: '1.2.3',\n+\t\tsource: 'plugins/example',\n+\t\tsourceDescriptor: { kind: PluginSourceKind.RelativePath, path: 'plugins/example' },\n+\t\tmarketplace: 'owner/repo',\n+\t\tmarketplaceReference: parseMarketplaceReference('owner/repo')!,\n+\t\tmarketplaceType: MarketplaceType.Copilot,\n+\t\treadmeUri,\n+\t};\n+}\n+\n+suite('embeddedAgentPluginDetail', () => {\n+\tensureNoDisposablesAreLeakedInTestSuite();\n+\n+\tconst fileService = new class extends mock<IFileService>() { }();\n+\n+\ttest('invalidates overlapping renders for the same plugin', () => {\n+\t\tconst guard = new PluginReadmeRenderGuard();\n+\t\tconst first = guard.begin();\n+\t\tconst second = guard.begin();\n+\n+\t\tassert.deepStrictEqual({\n+\t\t\tfirstCurrent: guard.isCurrent(first),\n+\t\t\tsecondCurrent: guard.isCurrent(second),\n+\t\t}, {\n+\t\t\tfirstCurrent: false,\n+\t\t\tsecondCurrent: true,\n+\t\t});\n+\n+\t\ttest('reads marketplace plugin versions', () => {",
+    "repo_full_name": "microsoft/vscode",
+    "discussion_comments": [
+      {
+        "comment_id": "3867408130",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 322043,
+        "pr_file": "src/vs/workbench/contrib/chat/test/browser/aiCustomization/embeddedAgentPluginDetail.test.ts",
+        "discussion_id": "3867408130",
+        "commented_code": "@@ -0,0 +1,117 @@\n+/*---------------------------------------------------------------------------------------------\n+ *  Copyright (c) Microsoft Corporation. All rights reserved.\n+ *  Licensed under the MIT License. See License.txt in the project root for license information.\n+ *--------------------------------------------------------------------------------------------*/\n+\n+import assert from 'assert';\n+import { VSBuffer, bufferToStream } from '../../../../../../base/common/buffer.js';\n+import { Event } from '../../../../../../base/common/event.js';\n+import { URI } from '../../../../../../base/common/uri.js';\n+import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../../base/test/common/utils.js';\n+import { IRequestContext } from '../../../../../../base/parts/request/common/request.js';\n+import { IFileService } from '../../../../../../platform/files/common/files.js';\n+import { IRequestService } from '../../../../../../platform/request/common/request.js';\n+import { mock } from '../../../../../../base/test/common/mock.js';\n+import { AgentPluginItemKind, IMarketplacePluginItem } from '../../../browser/agentPluginEditor/agentPluginItems.js';\n+import { getPluginVersion, loadPluginReadme, PluginReadmeRenderGuard } from '../../../browser/aiCustomization/embeddedAgentPluginDetail.js';\n+import { MarketplaceType, PluginSourceKind } from '../../../common/plugins/pluginMarketplaceService.js';\n+import { parseMarketplaceReference } from '../../../common/plugins/marketplaceReference.js';\n+\n+class StatusRequestService extends mock<IRequestService>() {\n+\toverride readonly onDidCompleteRequest = Event.None;\n+\treadonly requests: string[] = [];\n+\n+\tconstructor(\n+\t\tprivate readonly statusCode: number,\n+\t\tprivate readonly body: string,\n+\t) {\n+\t\tsuper();\n+\t}\n+\n+\toverride async request(options: { readonly url?: string }): Promise<IRequestContext> {\n+\t\tthis.requests.push(options.url ?? '');\n+\t\treturn {\n+\t\t\tres: { statusCode: this.statusCode, headers: {} },\n+\t\t\tstream: bufferToStream(VSBuffer.fromString(this.body)),\n+\t\t};\n+\t}\n+}\n+\n+function createMarketplaceItem(readmeUri: URI): IMarketplacePluginItem {\n+\treturn {\n+\t\tkind: AgentPluginItemKind.Marketplace,\n+\t\tname: 'example',\n+\t\tdescription: 'Example plugin',\n+\t\tversion: '1.2.3',\n+\t\tsource: 'plugins/example',\n+\t\tsourceDescriptor: { kind: PluginSourceKind.RelativePath, path: 'plugins/example' },\n+\t\tmarketplace: 'owner/repo',\n+\t\tmarketplaceReference: parseMarketplaceReference('owner/repo')!,\n+\t\tmarketplaceType: MarketplaceType.Copilot,\n+\t\treadmeUri,\n+\t};\n+}\n+\n+suite('embeddedAgentPluginDetail', () => {\n+\tensureNoDisposablesAreLeakedInTestSuite();\n+\n+\tconst fileService = new class extends mock<IFileService>() { }();\n+\n+\ttest('invalidates overlapping renders for the same plugin', () => {\n+\t\tconst guard = new PluginReadmeRenderGuard();\n+\t\tconst first = guard.begin();\n+\t\tconst second = guard.begin();\n+\n+\t\tassert.deepStrictEqual({\n+\t\t\tfirstCurrent: guard.isCurrent(first),\n+\t\t\tsecondCurrent: guard.isCurrent(second),\n+\t\t}, {\n+\t\t\tfirstCurrent: false,\n+\t\t\tsecondCurrent: true,\n+\t\t});\n+\n+\t\ttest('reads marketplace plugin versions', () => {",
+        "comment_created_at": "2026-08-26T23:08:45+00:00",
+        "comment_author": "sbatten",
+        "comment_body": "\ud83e\udd16 **[P2] This test is declared while another test is executing, so Mocha never runs it.** `reads marketplace plugin versions` needs to be a sibling under the suite, not nested inside `invalidates overlapping renders`. CI stays green because this assertion is never collected; move the closing brace so the version test is registered during suite definition.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3817759218",
+    "pr_number": 331691,
+    "pr_file": "src/vs/editor/contrib/inlineCompletions/browser/model/inlineCompletionsModel.ts",
+    "created_at": "2026-08-20T00:30:48+00:00",
+    "commented_code": "}));\n \t\t}).recomputeInitiallyAndOnChange(this._store);\n \n+\t\tconst providerAvailabilityChangeEvents = inlineCompletionProviders.map(providers => [...new Set(providers.map(provider => provider.onDidChangeAvailability).filter(isDefined))]);\n+\t\tmapObservableArrayCached(this, providerAvailabilityChangeEvents, (event, store) => {\n+\t\t\tstore.add(event(() => {\n+\t\t\t\tif (!this.shouldHandleProviderChange()) {\n+\t\t\t\t\treturn;\n+\t\t\t\t}\n+\n+\t\t\t\tconst providerBecameAvailable = inlineCompletionProviders.get().some(provider =>\n+\t\t\t\t\tprovider.onDidChangeAvailability === event\n+\t\t\t\t\t&& provider.isAvailable?.({ triggerKind: InlineCompletionTriggerKind.Automatic }) !== false\n+\t\t\t\t);\n+\t\t\t\tif (!providerBecameAvailable) {\n+\t\t\t\t\treturn;\n+\t\t\t\t}\n+\n+\t\t\t\ttransaction(tx => {\n+\t\t\t\t\tthis._providerAvailabilityChangeSignal.trigger(tx);\n+\t\t\t\t\tthis.trigger(tx);",
+    "repo_full_name": "microsoft/vscode",
+    "discussion_comments": [
+      {
+        "comment_id": "3817759218",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 331691,
+        "pr_file": "src/vs/editor/contrib/inlineCompletions/browser/model/inlineCompletionsModel.ts",
+        "discussion_id": "3817759218",
+        "commented_code": "@@ -250,9 +245,40 @@ export class InlineCompletionsModel extends Disposable {\n \t\t\t}));\n \t\t}).recomputeInitiallyAndOnChange(this._store);\n \n+\t\tconst providerAvailabilityChangeEvents = inlineCompletionProviders.map(providers => [...new Set(providers.map(provider => provider.onDidChangeAvailability).filter(isDefined))]);\n+\t\tmapObservableArrayCached(this, providerAvailabilityChangeEvents, (event, store) => {\n+\t\t\tstore.add(event(() => {\n+\t\t\t\tif (!this.shouldHandleProviderChange()) {\n+\t\t\t\t\treturn;\n+\t\t\t\t}\n+\n+\t\t\t\tconst providerBecameAvailable = inlineCompletionProviders.get().some(provider =>\n+\t\t\t\t\tprovider.onDidChangeAvailability === event\n+\t\t\t\t\t&& provider.isAvailable?.({ triggerKind: InlineCompletionTriggerKind.Automatic }) !== false\n+\t\t\t\t);\n+\t\t\t\tif (!providerBecameAvailable) {\n+\t\t\t\t\treturn;\n+\t\t\t\t}\n+\n+\t\t\t\ttransaction(tx => {\n+\t\t\t\t\tthis._providerAvailabilityChangeSignal.trigger(tx);\n+\t\t\t\t\tthis.trigger(tx);",
+        "comment_created_at": "2026-08-20T00:30:48+00:00",
+        "comment_author": "dmitrivMS",
+        "comment_body": "AI Review: This availability callback can reactivate a stopped completion session. The listener exists before any request, and `trigger()` unconditionally sets `_isActive`, so an unmetered transition may fetch and show suggestions before the first user trigger or after Escape cleared the session. Please fire only `_providerAvailabilityChangeSignal` here; the existing active-session precondition will still refresh active work without reviving an inactive model. Coverage before the first request and after `stop()` would catch this.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3825398126",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 331691,
+        "pr_file": "src/vs/editor/contrib/inlineCompletions/browser/model/inlineCompletionsModel.ts",
+        "discussion_id": "3817759218",
+        "commented_code": "@@ -250,9 +245,40 @@ export class InlineCompletionsModel extends Disposable {\n \t\t\t}));\n \t\t}).recomputeInitiallyAndOnChange(this._store);\n \n+\t\tconst providerAvailabilityChangeEvents = inlineCompletionProviders.map(providers => [...new Set(providers.map(provider => provider.onDidChangeAvailability).filter(isDefined))]);\n+\t\tmapObservableArrayCached(this, providerAvailabilityChangeEvents, (event, store) => {\n+\t\t\tstore.add(event(() => {\n+\t\t\t\tif (!this.shouldHandleProviderChange()) {\n+\t\t\t\t\treturn;\n+\t\t\t\t}\n+\n+\t\t\t\tconst providerBecameAvailable = inlineCompletionProviders.get().some(provider =>\n+\t\t\t\t\tprovider.onDidChangeAvailability === event\n+\t\t\t\t\t&& provider.isAvailable?.({ triggerKind: InlineCompletionTriggerKind.Automatic }) !== false\n+\t\t\t\t);\n+\t\t\t\tif (!providerBecameAvailable) {\n+\t\t\t\t\treturn;\n+\t\t\t\t}\n+\n+\t\t\t\ttransaction(tx => {\n+\t\t\t\t\tthis._providerAvailabilityChangeSignal.trigger(tx);\n+\t\t\t\t\tthis.trigger(tx);",
+        "comment_created_at": "2026-08-20T21:14:05+00:00",
+        "comment_author": "dmitrivMS",
+        "comment_body": "Fixed in 8474b6eaab4. The availability listener now fires only `_providerAvailabilityChangeSignal`; it no longer calls `trigger()`, so it cannot set `_isActive`. The existing derived fetch precondition refreshes active sessions only. Coverage verifies transitions neither fetch before the first trigger nor reactivate after `stop()`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3836266302",
+    "pr_number": 332123,
+    "pr_file": "src/vs/sessions/contrib/layout/browser/singlePane/singlePaneDockedTabsCoordinator.ts",
+    "created_at": "2026-08-22T18:39:02+00:00",
+    "commented_code": "// --- Reconcile --------------------------------------------------------\n \n \tprivate async _reconcile(generation: number): Promise<void> {\n-\t\tif (generation !== this._generation || !this._pending) {\n+\t\tif (generation !== this._generation || !this._pending || this._ctx.isRestoringSessionLayout) {",
+    "repo_full_name": "microsoft/vscode",
+    "discussion_comments": [
+      {
+        "comment_id": "3836735978",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 332123,
+        "pr_file": "src/vs/sessions/contrib/layout/browser/singlePane/singlePaneDockedTabsCoordinator.ts",
+        "discussion_id": "3836266302",
+        "commented_code": "@@ -309,7 +312,7 @@ export class SinglePaneDockedTabsCoordinator extends Disposable {\n \t// --- Reconcile --------------------------------------------------------\n \n \tprivate async _reconcile(generation: number): Promise<void> {\n-\t\tif (generation !== this._generation || !this._pending) {\n+\t\tif (generation !== this._generation || !this._pending || this._ctx.isRestoringSessionLayout) {",
+        "comment_created_at": "2026-08-22T18:39:02+00:00",
+        "comment_author": "wenma531",
+        "comment_body": "The regression test starts the restore before switching sessions, so queueReconcile returns early and this _reconcile guard is never exercised. The path this guard is intended to protect\u2014work queued immediately before a restore starts\u2014could regress while the test remains green. Please add a case that queues reconciliation first, starts a gated restore before the sequencer callback runs, and verifies replacement waits for restore end.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3837052197",
+        "repo_full_name": "microsoft/vscode",
+        "pr_number": 332123,
+        "pr_file": "src/vs/sessions/contrib/layout/browser/singlePane/singlePaneDockedTabsCoordinator.ts",
+        "discussion_id": "3836266302",
+        "commented_code": "@@ -309,7 +312,7 @@ export class SinglePaneDockedTabsCoordinator extends Disposable {\n \t// --- Reconcile --------------------------------------------------------\n \n \tprivate async _reconcile(generation: number): Promise<void> {\n-\t\tif (generation !== this._generation || !this._pending) {\n+\t\tif (generation !== this._generation || !this._pending || this._ctx.isRestoringSessionLayout) {",
+        "comment_created_at": "2026-08-22T21:27:11+00:00",
+        "comment_author": "wenma531",
+        "comment_body": "queueReconcile returns early and this _reconcile guard",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

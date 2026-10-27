@@ -1,0 +1,420 @@
+[
+  {
+    "discussion_id": "3528858789",
+    "pr_number": 36936,
+    "pr_file": "packages/shared/binaryToComparableString.js",
+    "created_at": "2026-07-06T12:29:18+00:00",
+    "commented_code": "export default function binaryToComparableString(\n   view: $ArrayBufferView,\n ): string {\n-  return String.fromCharCode.apply(\n-    String,\n-    new Uint8Array(view.buffer, view.byteOffset, view.byteLength),\n-  );\n+  // String.fromCharCode.apply(String, largeArray) throws a RangeError when the\n+  // array exceeds the JavaScript engine's call-argument limit (~65535 in most\n+  // engines). Process the bytes in chunks to avoid this.\n+  const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);\n+  const chunkSize = 8192;\n+  let result = '';\n+  for (let i = 0; i < bytes.length; i += chunkSize) {\n+    result += String.fromCharCode.apply(\n+      String,\n+      bytes.subarray(i, i + chunkSize),",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "3528858789",
+        "repo_full_name": "react/react",
+        "pr_number": 36936,
+        "pr_file": "packages/shared/binaryToComparableString.js",
+        "discussion_id": "3528858789",
+        "commented_code": "@@ -12,8 +12,17 @@\n export default function binaryToComparableString(\n   view: $ArrayBufferView,\n ): string {\n-  return String.fromCharCode.apply(\n-    String,\n-    new Uint8Array(view.buffer, view.byteOffset, view.byteLength),\n-  );\n+  // String.fromCharCode.apply(String, largeArray) throws a RangeError when the\n+  // array exceeds the JavaScript engine's call-argument limit (~65535 in most\n+  // engines). Process the bytes in chunks to avoid this.\n+  const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);\n+  const chunkSize = 8192;\n+  let result = '';\n+  for (let i = 0; i < bytes.length; i += chunkSize) {\n+    result += String.fromCharCode.apply(\n+      String,\n+      bytes.subarray(i, i + chunkSize),",
+        "comment_created_at": "2026-07-06T12:29:18+00:00",
+        "comment_author": "eps1lon",
+        "comment_body": "This seems rather wasteful to allocate new arrays over and over just to use as arguments.\n\nWouldn't `TextDecoder.decode` automatically make sure we use the fastest possible implementation?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3530787252",
+        "repo_full_name": "react/react",
+        "pr_number": 36936,
+        "pr_file": "packages/shared/binaryToComparableString.js",
+        "discussion_id": "3528858789",
+        "commented_code": "@@ -12,8 +12,17 @@\n export default function binaryToComparableString(\n   view: $ArrayBufferView,\n ): string {\n-  return String.fromCharCode.apply(\n-    String,\n-    new Uint8Array(view.buffer, view.byteOffset, view.byteLength),\n-  );\n+  // String.fromCharCode.apply(String, largeArray) throws a RangeError when the\n+  // array exceeds the JavaScript engine's call-argument limit (~65535 in most\n+  // engines). Process the bytes in chunks to avoid this.\n+  const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);\n+  const chunkSize = 8192;\n+  let result = '';\n+  for (let i = 0; i < bytes.length; i += chunkSize) {\n+    result += String.fromCharCode.apply(\n+      String,\n+      bytes.subarray(i, i + chunkSize),",
+        "comment_created_at": "2026-07-06T17:13:42+00:00",
+        "comment_author": "sleitor",
+        "comment_body": "Good call \u2014 switched to a module-level `TextDecoder('latin1')` singleton in 489ba74. Uses the engine's native implementation, eliminates both the chunk-loop allocations and the explicit subarray calls.\n\nI went with `'latin1'` (Windows-1252 in WHATWG encoding spec) rather than the default UTF-8 to keep the mapping bijective \u2014 UTF-8 would produce replacement characters (U+FFFD) for byte sequences that aren't valid UTF-8, which could cause distinct binary values to compare equal. Windows-1252 maps every byte value 0\u2013255 to a unique code point, so the comparable-string guarantee holds for taint tracking.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3913148189",
+    "pr_number": 37289,
+    "pr_file": "packages/react-reconciler/src/__tests__/ReactCache-test.js",
+    "created_at": "2026-09-02T10:28:45+00:00",
+    "commented_code": ");\n   });\n \n+  it('does not capture a stack for the completion abort reason (#37288)', async () => {\n+    let renderedCacheSignal = null;\n+\n+    let resolve;\n+    const promise = new Promise(r => (resolve = r));\n+\n+    async function Test() {\n+      renderedCacheSignal = cacheSignal();\n+      await promise;\n+      return 'Hi';\n+    }\n+\n+    const controller = new AbortController();\n+    const errors = [];\n+    const result = ReactNoopFlightServer.render(<Test />, {\n+      signal: controller.signal,\n+      onError(x) {\n+        errors.push(x);\n+      },\n+    });\n+    expect(renderedCacheSignal.aborted).toBe(false);\n+    await resolve();\n+    await 0;\n+    await 0;\n+\n+    expect(await ReactNoopFlightClient.read(result)).toBe('Hi');\n+\n+    expect(errors).toEqual([]);\n+    expect(renderedCacheSignal.aborted).toBe(true);\n+    expect(renderedCacheSignal.reason.message).toContain(\n+      'This render completed successfully.',\n+    );\n+    // The completion reason must not capture a stack. A captured stack retains the\n+    // completed render's cache scope for the request's lifetime and leaks RSC\n+    // responses under load. See #37288.\n+    const stackFrames = (renderedCacheSignal.reason.stack || '')\n+      .split('\n')\n+      .filter(line => /^\\s*at\\s/.test(line));\n+    expect(stackFrames).toEqual([]);",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "3913148189",
+        "repo_full_name": "react/react",
+        "pr_number": 37289,
+        "pr_file": "packages/react-reconciler/src/__tests__/ReactCache-test.js",
+        "discussion_id": "3913148189",
+        "commented_code": "@@ -263,6 +263,47 @@ describe('ReactCache', () => {\n     );\n   });\n \n+  it('does not capture a stack for the completion abort reason (#37288)', async () => {\n+    let renderedCacheSignal = null;\n+\n+    let resolve;\n+    const promise = new Promise(r => (resolve = r));\n+\n+    async function Test() {\n+      renderedCacheSignal = cacheSignal();\n+      await promise;\n+      return 'Hi';\n+    }\n+\n+    const controller = new AbortController();\n+    const errors = [];\n+    const result = ReactNoopFlightServer.render(<Test />, {\n+      signal: controller.signal,\n+      onError(x) {\n+        errors.push(x);\n+      },\n+    });\n+    expect(renderedCacheSignal.aborted).toBe(false);\n+    await resolve();\n+    await 0;\n+    await 0;\n+\n+    expect(await ReactNoopFlightClient.read(result)).toBe('Hi');\n+\n+    expect(errors).toEqual([]);\n+    expect(renderedCacheSignal.aborted).toBe(true);\n+    expect(renderedCacheSignal.reason.message).toContain(\n+      'This render completed successfully.',\n+    );\n+    // The completion reason must not capture a stack. A captured stack retains the\n+    // completed render's cache scope for the request's lifetime and leaks RSC\n+    // responses under load. See #37288.\n+    const stackFrames = (renderedCacheSignal.reason.stack || '')\n+      .split('\\n')\n+      .filter(line => /^\\s*at\\s/.test(line));\n+    expect(stackFrames).toEqual([]);",
+        "comment_created_at": "2026-09-02T10:28:45+00:00",
+        "comment_author": "eps1lon",
+        "comment_body": "The test makes it impossible to check if the leak is in React because the app code is leaking the signal itself. What is the real-world scenario that reproduces a memory leak? Is that still happening on the latest version on `main`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3915805169",
+        "repo_full_name": "react/react",
+        "pr_number": 37289,
+        "pr_file": "packages/react-reconciler/src/__tests__/ReactCache-test.js",
+        "discussion_id": "3913148189",
+        "commented_code": "@@ -263,6 +263,47 @@ describe('ReactCache', () => {\n     );\n   });\n \n+  it('does not capture a stack for the completion abort reason (#37288)', async () => {\n+    let renderedCacheSignal = null;\n+\n+    let resolve;\n+    const promise = new Promise(r => (resolve = r));\n+\n+    async function Test() {\n+      renderedCacheSignal = cacheSignal();\n+      await promise;\n+      return 'Hi';\n+    }\n+\n+    const controller = new AbortController();\n+    const errors = [];\n+    const result = ReactNoopFlightServer.render(<Test />, {\n+      signal: controller.signal,\n+      onError(x) {\n+        errors.push(x);\n+      },\n+    });\n+    expect(renderedCacheSignal.aborted).toBe(false);\n+    await resolve();\n+    await 0;\n+    await 0;\n+\n+    expect(await ReactNoopFlightClient.read(result)).toBe('Hi');\n+\n+    expect(errors).toEqual([]);\n+    expect(renderedCacheSignal.aborted).toBe(true);\n+    expect(renderedCacheSignal.reason.message).toContain(\n+      'This render completed successfully.',\n+    );\n+    // The completion reason must not capture a stack. A captured stack retains the\n+    // completed render's cache scope for the request's lifetime and leaks RSC\n+    // responses under load. See #37288.\n+    const stackFrames = (renderedCacheSignal.reason.stack || '')\n+      .split('\\n')\n+      .filter(line => /^\\s*at\\s/.test(line));\n+    expect(stackFrames).toEqual([]);",
+        "comment_created_at": "2026-09-02T15:32:02+00:00",
+        "comment_author": "santhoshsathish94",
+        "comment_body": "Thanks \u2014 this is a fair concern. I think there are two separate things to distinguish here: what the React regression test is proving, and what the end-to-end reproduction is proving.\n\nThe test in this PR is intentionally a narrow regression test for the React invariant: the completion `cacheSignal()` abort reason should not capture a stack. It goes through the Flight completion path and verifies that the actual reason stored on `signal.reason` has no stack frames. It is not intended to be the leak reproducer by itself.\n\nThe real-world reproduction is the one from vercel/next.js#84648. The workload does not retain the `cacheSignal` from application code; it uses a dynamic server component with a slow upstream and clients disconnecting while the render is in progress. Under sustained high concurrency, retained heap grows after forced GC. The same workload was independently reproduced on Next 16.3.1 / 16.2.12 with React 19.2.8 and Node 24.\n\nThe strongest evidence there is the A/B with `--stack-trace-limit=0`: without the flag, retained heap after the load rounds was 407\u20132264 MB; with it, 68\u2013157 MB. The two sets did not overlap, and the `stackTraceLimit=0` arm showed no accumulating trend across rounds. This is what led me to the React `new Error()` / captured CallSites retention path rather than application-level retention.\n\nI also agree that suppressing the stack globally does not isolate this exact React call site, since it affects other stack-producing paths as well. That is why I'm treating the A/B as evidence that captured stacks are the dominant retained cost on this client-abort path, rather than as a proof that only this single `new Error()` is responsible.\n\nFor the second question, the issue is still reproducible on currently published React/Next versions; #84648 contains the recent independent reproductions. I can also run the shared repro against current React `main` to make that comparison explicit.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3594212542",
+    "pr_number": 36995,
+    "pr_file": "packages/react-server/src/ReactFlightServerConfigDebugNode.js",
+    "created_at": "2026-07-16T09:28:02+00:00",
+    "commented_code": "destroy(asyncId: number): void {\n         // If we needed the meta data from this operation we should have already\n         // extracted it or it should be part of a chain of triggers.\n+        const node = pendingOperations.get(asyncId);\n+        if (node !== undefined) {\n+          // Sever the outgoing references to allow GC of the old ancestry chain.\n+          // The node itself may still be alive if referenced by newer nodes via\n+          // their previous/awaited fields, but once this async resource is\n+          // destroyed, its own ancestors are no longer needed. Without this,\n+          // long-lived async workloads (streaming SSR, WebSocket connections,\n+          // etc.) would retain an ever-growing linked list of ancestor nodes\n+          // through these strong references, causing unbounded memory growth.",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "3594212542",
+        "repo_full_name": "react/react",
+        "pr_number": 36995,
+        "pr_file": "packages/react-server/src/ReactFlightServerConfigDebugNode.js",
+        "discussion_id": "3594212542",
+        "commented_code": "@@ -334,6 +334,19 @@ export function initAsyncDebugInfo(): void {\n       destroy(asyncId: number): void {\n         // If we needed the meta data from this operation we should have already\n         // extracted it or it should be part of a chain of triggers.\n+        const node = pendingOperations.get(asyncId);\n+        if (node !== undefined) {\n+          // Sever the outgoing references to allow GC of the old ancestry chain.\n+          // The node itself may still be alive if referenced by newer nodes via\n+          // their previous/awaited fields, but once this async resource is\n+          // destroyed, its own ancestors are no longer needed. Without this,\n+          // long-lived async workloads (streaming SSR, WebSocket connections,\n+          // etc.) would retain an ever-growing linked list of ancestor nodes\n+          // through these strong references, causing unbounded memory growth.",
+        "comment_created_at": "2026-07-16T09:28:02+00:00",
+        "comment_author": "eps1lon",
+        "comment_body": "The breaks intentional behavior explained in https://github.com/react/react/pull/37037. Unfortunately, we didn't have a test. #37037 should highlight that this needs a different fix/feature consideration than just cutting the chain.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3594642530",
+        "repo_full_name": "react/react",
+        "pr_number": 36995,
+        "pr_file": "packages/react-server/src/ReactFlightServerConfigDebugNode.js",
+        "discussion_id": "3594212542",
+        "commented_code": "@@ -334,6 +334,19 @@ export function initAsyncDebugInfo(): void {\n       destroy(asyncId: number): void {\n         // If we needed the meta data from this operation we should have already\n         // extracted it or it should be part of a chain of triggers.\n+        const node = pendingOperations.get(asyncId);\n+        if (node !== undefined) {\n+          // Sever the outgoing references to allow GC of the old ancestry chain.\n+          // The node itself may still be alive if referenced by newer nodes via\n+          // their previous/awaited fields, but once this async resource is\n+          // destroyed, its own ancestors are no longer needed. Without this,\n+          // long-lived async workloads (streaming SSR, WebSocket connections,\n+          // etc.) would retain an ever-growing linked list of ancestor nodes\n+          // through these strong references, causing unbounded memory growth.",
+        "comment_created_at": "2026-07-16T10:29:53+00:00",
+        "comment_author": "JNTMTMTM",
+        "comment_body": "@eps1lon You're right  my previous change that severs previous/awaited directly in the destroy hook breaks the intentional behavior the new test validates. The strong reference chain is deliberately kept so that I/O nodes remain reachable for debug info emission even after intermediate Promises are garbage-collected.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3594648506",
+        "repo_full_name": "react/react",
+        "pr_number": 36995,
+        "pr_file": "packages/react-server/src/ReactFlightServerConfigDebugNode.js",
+        "discussion_id": "3594212542",
+        "commented_code": "@@ -334,6 +334,19 @@ export function initAsyncDebugInfo(): void {\n       destroy(asyncId: number): void {\n         // If we needed the meta data from this operation we should have already\n         // extracted it or it should be part of a chain of triggers.\n+        const node = pendingOperations.get(asyncId);\n+        if (node !== undefined) {\n+          // Sever the outgoing references to allow GC of the old ancestry chain.\n+          // The node itself may still be alive if referenced by newer nodes via\n+          // their previous/awaited fields, but once this async resource is\n+          // destroyed, its own ancestors are no longer needed. Without this,\n+          // long-lived async workloads (streaming SSR, WebSocket connections,\n+          // etc.) would retain an ever-growing linked list of ancestor nodes\n+          // through these strong references, causing unbounded memory growth.",
+        "comment_created_at": "2026-07-16T10:30:44+00:00",
+        "comment_author": "JNTMTMTM",
+        "comment_body": "Introduce WeakRefs to the ancestry chain?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3815551619",
+    "pr_number": 37147,
+    "pr_file": "packages/react-server/src/ReactFlightServer.js",
+    "created_at": "2026-08-19T18:09:09+00:00",
+    "commented_code": "}\n }\n \n+function serializeImportString(request: Request, value: string): string {\n+  if (\n+    value.length < MIN_DEDUPLICATED_IMPORT_STRING_LENGTH ||\n+    value.length > MAX_DEDUPLICATED_IMPORT_STRING_LENGTH",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "3815551619",
+        "repo_full_name": "react/react",
+        "pr_number": 37147,
+        "pr_file": "packages/react-server/src/ReactFlightServer.js",
+        "discussion_id": "3815551619",
+        "commented_code": "@@ -3594,6 +3483,42 @@ function escapeStringValue(value: string): string {\n   }\n }\n \n+function serializeImportString(request: Request, value: string): string {\n+  if (\n+    value.length < MIN_DEDUPLICATED_IMPORT_STRING_LENGTH ||\n+    value.length > MAX_DEDUPLICATED_IMPORT_STRING_LENGTH",
+        "comment_created_at": "2026-08-19T18:09:09+00:00",
+        "comment_author": "gnoff",
+        "comment_body": "I was thinking the total size would be limited to 32KiB. if a server is under load this could eat up quite a bit of memory in degenerate cases. We could just do a fixed size and drop the count limit. or we could compute a much smaller max size so that the implied total is much closer to 32KiB",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3835326856",
+    "pr_number": 37147,
+    "pr_file": "packages/react-server/src/ReactFlightServer.js",
+    "created_at": "2026-08-22T05:59:12+00:00",
+    "commented_code": "}\n }\n \n+function serializeImportString(request: Request, value: string): string {\n+  if (value.length < MIN_DEDUPLICATED_IMPORT_STRING_LENGTH) {",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "3835326856",
+        "repo_full_name": "react/react",
+        "pr_number": 37147,
+        "pr_file": "packages/react-server/src/ReactFlightServer.js",
+        "discussion_id": "3835326856",
+        "commented_code": "@@ -3594,6 +3621,41 @@ function escapeStringValue(value: string): string {\n   }\n }\n \n+function serializeImportString(request: Request, value: string): string {\n+  if (value.length < MIN_DEDUPLICATED_IMPORT_STRING_LENGTH) {",
+        "comment_created_at": "2026-08-22T05:59:12+00:00",
+        "comment_author": "gnoff",
+        "comment_body": "maybe worth commenting that this only has a minimum because we expect high reuse on import strings and we expect them to be reasonably bounded in size. If we generalize this deduping to all strings we must also consider that very large strings should probably be excluded from deduplication",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3836256895",
+        "repo_full_name": "react/react",
+        "pr_number": 37147,
+        "pr_file": "packages/react-server/src/ReactFlightServer.js",
+        "discussion_id": "3835326856",
+        "commented_code": "@@ -3594,6 +3621,41 @@ function escapeStringValue(value: string): string {\n   }\n }\n \n+function serializeImportString(request: Request, value: string): string {\n+  if (value.length < MIN_DEDUPLICATED_IMPORT_STRING_LENGTH) {",
+        "comment_created_at": "2026-08-22T14:35:16+00:00",
+        "comment_author": "gaearon",
+        "comment_body": "added",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3674709918",
+    "pr_number": 36944,
+    "pr_file": "packages/react-devtools-shared/src/devtools/views/Profiler/ProfilerContext.js",
+    "created_at": "2026-07-29T13:30:14+00:00",
+    "commented_code": "selectPrevCommitIndex,\n   } = useCommitFilteringAndNavigation(commitData);\n \n+  // Fibers in the selected commit matching `text`, in tree order.\n+  // Always scoped to the current commit, never the whole trace.\n+  const findMatches = useCallback(\n+    (text: string): Array<SearchResult> => {\n+      if (\n+        text === '' ||\n+        rootID === null ||\n+        selectedCommitIndex === null ||\n+        !didRecordCommits\n+      ) {\n+        return [];\n+      }\n+\n+      const commitTree = profilerStore.profilingCache.getCommitTree({\n+        commitIndex: selectedCommitIndex,\n+        rootID,\n+      });\n+      const regExp = createRegExp(text);\n+      const matches: Array<SearchResult> = [];\n+      const walk = (id: number) => {\n+        const node = commitTree.nodes.get(id);\n+        if (node == null) {\n+          return;\n+        }\n+        const {displayName, hocDisplayNames, key} = node;\n+        if (\n+          (displayName !== null && regExp.test(displayName)) ||\n+          (hocDisplayNames !== null &&\n+            hocDisplayNames.some(name => regExp.test(name))) ||\n+          (key !== null && regExp.test(String(key)))\n+        ) {\n+          matches.push({id, name: displayName});\n+        }\n+        node.children.forEach(walk);\n+      };\n+      walk(commitTree.rootID);\n+      return matches;\n+    },\n+    [rootID, selectedCommitIndex, didRecordCommits, profilerStore],\n+  );\n+\n+  // Keep the controlled input update synchronous (see setSearchText), but\n+  // derive matches from a *deferred* value so the tree walk runs at transition\n+  // priority and never blocks typing. Deriving via a memo also keeps results\n+  // scoped to the current commit for free (findMatches tracks selectedCommitIndex).\n+  const deferredSearchText = useDeferredValue(searchText);\n+  const searchResults = useMemo<Array<SearchResult>>(\n+    () => findMatches(deferredSearchText),\n+    [findMatches, deferredSearchText],\n+  );\n+\n+  const setSearchText = useCallback((text: string) => {\n+    // Synchronous so the input stays responsive; searchResults recomputes off\n+    // the deferred value at transition priority.\n+    setSearchTextState(text);\n+    setSearchIndex(text === '' ? -1 : 0);\n+  }, []);\n+\n+  const goToNextSearchResult = useCallback(() => {\n+    setSearchIndex(prevIndex => {\n+      const count = searchResults.length;\n+      if (count === 0) {\n+        return -1;\n+      }\n+      return prevIndex < 0 || prevIndex >= count ? 0 : (prevIndex + 1) % count;\n+    });\n+  }, [searchResults.length]);\n+\n+  const goToPreviousSearchResult = useCallback(() => {\n+    setSearchIndex(prevIndex => {\n+      const count = searchResults.length;\n+      if (count === 0) {\n+        return -1;\n+      }\n+      const current = prevIndex < 0 || prevIndex >= count ? count : prevIndex;\n+      return current <= 0 ? count - 1 : current - 1;\n+    });\n+  }, [searchResults.length]);\n+\n+  const goToSearchResult = useCallback(\n+    (index: number) => setSearchIndex(index),\n+    [],\n+  );\n+\n+  // Selection follows the current (results, index). Because results are\n+  // produced at transition priority, selection reacts to them here rather than\n+  // in the input handler; this also re-selects the match after switching\n+  // commits, and clears a stale selection when a query has no matches.\n+  useEffect(() => {\n+    if (searchResults.length === 0) {\n+      if (deferredSearchText !== '') {\n+        selectFiber(null, null);\n+      }\n+      return;\n+    }\n+    const index =\n+      searchIndex < 0 || searchIndex >= searchResults.length ? 0 : searchIndex;\n+    const match = searchResults[index];\n+    selectFiber(match.id, match.name);\n+  }, [searchResults, searchIndex, deferredSearchText, selectFiber]);",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "3674709918",
+        "repo_full_name": "react/react",
+        "pr_number": 36944,
+        "pr_file": "packages/react-devtools-shared/src/devtools/views/Profiler/ProfilerContext.js",
+        "discussion_id": "3674709918",
+        "commented_code": "@@ -250,6 +274,115 @@ function ProfilerContextController({children}: Props): React.Node {\n     selectPrevCommitIndex,\n   } = useCommitFilteringAndNavigation(commitData);\n \n+  // Fibers in the selected commit matching `text`, in tree order.\n+  // Always scoped to the current commit, never the whole trace.\n+  const findMatches = useCallback(\n+    (text: string): Array<SearchResult> => {\n+      if (\n+        text === '' ||\n+        rootID === null ||\n+        selectedCommitIndex === null ||\n+        !didRecordCommits\n+      ) {\n+        return [];\n+      }\n+\n+      const commitTree = profilerStore.profilingCache.getCommitTree({\n+        commitIndex: selectedCommitIndex,\n+        rootID,\n+      });\n+      const regExp = createRegExp(text);\n+      const matches: Array<SearchResult> = [];\n+      const walk = (id: number) => {\n+        const node = commitTree.nodes.get(id);\n+        if (node == null) {\n+          return;\n+        }\n+        const {displayName, hocDisplayNames, key} = node;\n+        if (\n+          (displayName !== null && regExp.test(displayName)) ||\n+          (hocDisplayNames !== null &&\n+            hocDisplayNames.some(name => regExp.test(name))) ||\n+          (key !== null && regExp.test(String(key)))\n+        ) {\n+          matches.push({id, name: displayName});\n+        }\n+        node.children.forEach(walk);\n+      };\n+      walk(commitTree.rootID);\n+      return matches;\n+    },\n+    [rootID, selectedCommitIndex, didRecordCommits, profilerStore],\n+  );\n+\n+  // Keep the controlled input update synchronous (see setSearchText), but\n+  // derive matches from a *deferred* value so the tree walk runs at transition\n+  // priority and never blocks typing. Deriving via a memo also keeps results\n+  // scoped to the current commit for free (findMatches tracks selectedCommitIndex).\n+  const deferredSearchText = useDeferredValue(searchText);\n+  const searchResults = useMemo<Array<SearchResult>>(\n+    () => findMatches(deferredSearchText),\n+    [findMatches, deferredSearchText],\n+  );\n+\n+  const setSearchText = useCallback((text: string) => {\n+    // Synchronous so the input stays responsive; searchResults recomputes off\n+    // the deferred value at transition priority.\n+    setSearchTextState(text);\n+    setSearchIndex(text === '' ? -1 : 0);\n+  }, []);\n+\n+  const goToNextSearchResult = useCallback(() => {\n+    setSearchIndex(prevIndex => {\n+      const count = searchResults.length;\n+      if (count === 0) {\n+        return -1;\n+      }\n+      return prevIndex < 0 || prevIndex >= count ? 0 : (prevIndex + 1) % count;\n+    });\n+  }, [searchResults.length]);\n+\n+  const goToPreviousSearchResult = useCallback(() => {\n+    setSearchIndex(prevIndex => {\n+      const count = searchResults.length;\n+      if (count === 0) {\n+        return -1;\n+      }\n+      const current = prevIndex < 0 || prevIndex >= count ? count : prevIndex;\n+      return current <= 0 ? count - 1 : current - 1;\n+    });\n+  }, [searchResults.length]);\n+\n+  const goToSearchResult = useCallback(\n+    (index: number) => setSearchIndex(index),\n+    [],\n+  );\n+\n+  // Selection follows the current (results, index). Because results are\n+  // produced at transition priority, selection reacts to them here rather than\n+  // in the input handler; this also re-selects the match after switching\n+  // commits, and clears a stale selection when a query has no matches.\n+  useEffect(() => {\n+    if (searchResults.length === 0) {\n+      if (deferredSearchText !== '') {\n+        selectFiber(null, null);\n+      }\n+      return;\n+    }\n+    const index =\n+      searchIndex < 0 || searchIndex >= searchResults.length ? 0 : searchIndex;\n+    const match = searchResults[index];\n+    selectFiber(match.id, match.name);\n+  }, [searchResults, searchIndex, deferredSearchText, selectFiber]);",
+        "comment_created_at": "2026-07-29T13:30:14+00:00",
+        "comment_author": "hoxyq",
+        "comment_body": "This is not good, we are using `useEffect` here as an escape hatch. Also, because we are using `useEffect`, this happens after browser already painted, it would cause UI thrashing: for one frame we would show some Fiber selected, while results are empty.\n\nWe should do these state updates directly in a render function. More info here - https://react.dev/learn/you-might-not-need-an-effect#chains-of-computations.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3676653582",
+        "repo_full_name": "react/react",
+        "pr_number": 36944,
+        "pr_file": "packages/react-devtools-shared/src/devtools/views/Profiler/ProfilerContext.js",
+        "discussion_id": "3674709918",
+        "commented_code": "@@ -250,6 +274,115 @@ function ProfilerContextController({children}: Props): React.Node {\n     selectPrevCommitIndex,\n   } = useCommitFilteringAndNavigation(commitData);\n \n+  // Fibers in the selected commit matching `text`, in tree order.\n+  // Always scoped to the current commit, never the whole trace.\n+  const findMatches = useCallback(\n+    (text: string): Array<SearchResult> => {\n+      if (\n+        text === '' ||\n+        rootID === null ||\n+        selectedCommitIndex === null ||\n+        !didRecordCommits\n+      ) {\n+        return [];\n+      }\n+\n+      const commitTree = profilerStore.profilingCache.getCommitTree({\n+        commitIndex: selectedCommitIndex,\n+        rootID,\n+      });\n+      const regExp = createRegExp(text);\n+      const matches: Array<SearchResult> = [];\n+      const walk = (id: number) => {\n+        const node = commitTree.nodes.get(id);\n+        if (node == null) {\n+          return;\n+        }\n+        const {displayName, hocDisplayNames, key} = node;\n+        if (\n+          (displayName !== null && regExp.test(displayName)) ||\n+          (hocDisplayNames !== null &&\n+            hocDisplayNames.some(name => regExp.test(name))) ||\n+          (key !== null && regExp.test(String(key)))\n+        ) {\n+          matches.push({id, name: displayName});\n+        }\n+        node.children.forEach(walk);\n+      };\n+      walk(commitTree.rootID);\n+      return matches;\n+    },\n+    [rootID, selectedCommitIndex, didRecordCommits, profilerStore],\n+  );\n+\n+  // Keep the controlled input update synchronous (see setSearchText), but\n+  // derive matches from a *deferred* value so the tree walk runs at transition\n+  // priority and never blocks typing. Deriving via a memo also keeps results\n+  // scoped to the current commit for free (findMatches tracks selectedCommitIndex).\n+  const deferredSearchText = useDeferredValue(searchText);\n+  const searchResults = useMemo<Array<SearchResult>>(\n+    () => findMatches(deferredSearchText),\n+    [findMatches, deferredSearchText],\n+  );\n+\n+  const setSearchText = useCallback((text: string) => {\n+    // Synchronous so the input stays responsive; searchResults recomputes off\n+    // the deferred value at transition priority.\n+    setSearchTextState(text);\n+    setSearchIndex(text === '' ? -1 : 0);\n+  }, []);\n+\n+  const goToNextSearchResult = useCallback(() => {\n+    setSearchIndex(prevIndex => {\n+      const count = searchResults.length;\n+      if (count === 0) {\n+        return -1;\n+      }\n+      return prevIndex < 0 || prevIndex >= count ? 0 : (prevIndex + 1) % count;\n+    });\n+  }, [searchResults.length]);\n+\n+  const goToPreviousSearchResult = useCallback(() => {\n+    setSearchIndex(prevIndex => {\n+      const count = searchResults.length;\n+      if (count === 0) {\n+        return -1;\n+      }\n+      const current = prevIndex < 0 || prevIndex >= count ? count : prevIndex;\n+      return current <= 0 ? count - 1 : current - 1;\n+    });\n+  }, [searchResults.length]);\n+\n+  const goToSearchResult = useCallback(\n+    (index: number) => setSearchIndex(index),\n+    [],\n+  );\n+\n+  // Selection follows the current (results, index). Because results are\n+  // produced at transition priority, selection reacts to them here rather than\n+  // in the input handler; this also re-selects the match after switching\n+  // commits, and clears a stale selection when a query has no matches.\n+  useEffect(() => {\n+    if (searchResults.length === 0) {\n+      if (deferredSearchText !== '') {\n+        selectFiber(null, null);\n+      }\n+      return;\n+    }\n+    const index =\n+      searchIndex < 0 || searchIndex >= searchResults.length ? 0 : searchIndex;\n+    const match = searchResults[index];\n+    selectFiber(match.id, match.name);\n+  }, [searchResults, searchIndex, deferredSearchText, selectFiber]);",
+        "comment_created_at": "2026-07-29T17:30:04+00:00",
+        "comment_author": "Biki-das",
+        "comment_body": " Removed the effect and updated the selection during render using the same previous-value pattern already used for `prevProfilingData` in this file. This keeps the search results and selected item in sync within the same render, avoiding the brief post-paint frame where the selection could become stale. One thing to note is that renders can't dispatch to the Components tree, so keyboard search navigation no longer updates the selection there (mouse clicks still do). If that's important, I can add it back through a small dedicated sync path.\r\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2804909659",
+    "pr_number": 35776,
+    "pr_file": "packages/react-client/src/ReactFlightClient.js",
+    "created_at": "2026-02-13T15:57:21+00:00",
+    "commented_code": "}\n \n function parseModel<T>(response: Response, json: UninitializedModel): T {\n-  return JSON.parse(json, response._fromJSON);\n+  return response._walkJSON(JSON.parse(json), null, '');\n }\n \n-function createFromJSONCallback(response: Response) {\n-  // $FlowFixMe[missing-this-annot]\n-  return function (key: string, value: JSONValue) {\n-    if (key === __PROTO__) {\n-      return undefined;\n-    }\n+function createWalkParsedJSON(response: Response) {\n+  function walk(\n+    value: JSONValue,\n+    parentObject: Object | null,\n+    key: string,\n+  ): any {\n     if (typeof value === 'string') {\n-      // We can't use .bind here because we need the \"this\" value.\n-      return parseModelString(response, this, key, value);\n+      if (value[0] === '$') {",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2804909659",
+        "repo_full_name": "react/react",
+        "pr_number": 35776,
+        "pr_file": "packages/react-client/src/ReactFlightClient.js",
+        "discussion_id": "2804909659",
+        "commented_code": "@@ -5237,24 +5237,50 @@ export function processStringChunk(\n }\n \n function parseModel<T>(response: Response, json: UninitializedModel): T {\n-  return JSON.parse(json, response._fromJSON);\n+  return response._walkJSON(JSON.parse(json), null, '');\n }\n \n-function createFromJSONCallback(response: Response) {\n-  // $FlowFixMe[missing-this-annot]\n-  return function (key: string, value: JSONValue) {\n-    if (key === __PROTO__) {\n-      return undefined;\n-    }\n+function createWalkParsedJSON(response: Response) {\n+  function walk(\n+    value: JSONValue,\n+    parentObject: Object | null,\n+    key: string,\n+  ): any {\n     if (typeof value === 'string') {\n-      // We can't use .bind here because we need the \"this\" value.\n-      return parseModelString(response, this, key, value);\n+      if (value[0] === '$') {",
+        "comment_created_at": "2026-02-13T15:57:21+00:00",
+        "comment_author": "timneutkens",
+        "comment_body": "I don't think this check is an optimization tbh. it's checked in `parseModelString` and will just return the value there.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2806336283",
+        "repo_full_name": "react/react",
+        "pr_number": 35776,
+        "pr_file": "packages/react-client/src/ReactFlightClient.js",
+        "discussion_id": "2804909659",
+        "commented_code": "@@ -5237,24 +5237,50 @@ export function processStringChunk(\n }\n \n function parseModel<T>(response: Response, json: UninitializedModel): T {\n-  return JSON.parse(json, response._fromJSON);\n+  return response._walkJSON(JSON.parse(json), null, '');\n }\n \n-function createFromJSONCallback(response: Response) {\n-  // $FlowFixMe[missing-this-annot]\n-  return function (key: string, value: JSONValue) {\n-    if (key === __PROTO__) {\n-      return undefined;\n-    }\n+function createWalkParsedJSON(response: Response) {\n+  function walk(\n+    value: JSONValue,\n+    parentObject: Object | null,\n+    key: string,\n+  ): any {\n     if (typeof value === 'string') {\n-      // We can't use .bind here because we need the \"this\" value.\n-      return parseModelString(response, this, key, value);\n+      if (value[0] === '$') {",
+        "comment_created_at": "2026-02-13T22:20:56+00:00",
+        "comment_author": "unstubbable",
+        "comment_body": "The check is duplicated, but the point is avoiding the function call. `parseModelString` is a large function with many switch cases, so neither GCC nor V8 will inline it. Without the guard, every non-`$` string (class names, text content, attribute values, etc.) pays for argument setup, stack frame push/pop, the same `value[0] === '$'` check inside, and return. With the guard, those strings never enter the function. I haven't measured the impact though, so it would be good to verify with your benchmarks.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2466183082",
+    "pr_number": 34988,
+    "pr_file": "packages/react-client/src/ReactFlightClient.js",
+    "created_at": "2025-10-27T15:45:15+00:00",
+    "commented_code": "rejectListeners.splice(rejectionIdx, 1);\n               }\n             }\n+            // The status might have changed after fulfilling the reference.\n+            return wakeChunkIfInitialized(",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2466183082",
+        "repo_full_name": "react/react",
+        "pr_number": 34988,
+        "pr_file": "packages/react-client/src/ReactFlightClient.js",
+        "discussion_id": "2466183082",
+        "commented_code": "@@ -624,6 +624,12 @@ function wakeChunkIfInitialized<T>(\n                 rejectListeners.splice(rejectionIdx, 1);\n               }\n             }\n+            // The status might have changed after fulfilling the reference.\n+            return wakeChunkIfInitialized(",
+        "comment_created_at": "2025-10-27T15:45:15+00:00",
+        "comment_author": "sebmarkbage",
+        "comment_body": "We should try to avoid recursion when not necessary. For example, a pattern we typically use is check if something is resolved first and then initialize and then check if something is initialized instead of a single switch.\n\nIn this case, there can also be a lot of listeners when there's a lot of references to the same thing so in theory you can actually stack overflow because of this recursion.\n\nInstead, you should check if the status has changed to initialized or errored here and if so call `wakeChunk` or `rejectChunk` respectively.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2376111051",
+    "pr_number": 34524,
+    "pr_file": "packages/react-client/src/ReactFlightClient.js",
+    "created_at": "2025-09-24T15:04:02+00:00",
+    "commented_code": "chunk: SomeChunk<any>,\n ): void {\n   if (__DEV__ && enableAsyncDebugInfo) {\n-    // Push the currently resolving chunk's debug info representing the stream on the Promise\n-    // that was waiting on the stream.\n-    chunk._debugInfo.push({awaited: streamState._debugInfo});\n+    // Add the currently resolving chunk's debug info representing the stream\n+    // to the Promise that was waiting on the stream, or its underlying value.\n+    const debugInfoEntry: ReactAsyncInfo = {awaited: streamState._debugInfo};\n+\n+    const addDebugInfo = () => {",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2376111051",
+        "repo_full_name": "react/react",
+        "pr_number": 34524,
+        "pr_file": "packages/react-client/src/ReactFlightClient.js",
+        "discussion_id": "2376111051",
+        "commented_code": "@@ -2714,9 +2756,35 @@ function resolveChunkDebugInfo(\n   chunk: SomeChunk<any>,\n ): void {\n   if (__DEV__ && enableAsyncDebugInfo) {\n-    // Push the currently resolving chunk's debug info representing the stream on the Promise\n-    // that was waiting on the stream.\n-    chunk._debugInfo.push({awaited: streamState._debugInfo});\n+    // Add the currently resolving chunk's debug info representing the stream\n+    // to the Promise that was waiting on the stream, or its underlying value.\n+    const debugInfoEntry: ReactAsyncInfo = {awaited: streamState._debugInfo};\n+\n+    const addDebugInfo = () => {",
+        "comment_created_at": "2025-09-24T15:04:02+00:00",
+        "comment_author": "sebmarkbage",
+        "comment_body": "We shouldn't create the closure outside the condition. Maybe it's optimized but we should make sure.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2376466621",
+        "repo_full_name": "react/react",
+        "pr_number": 34524,
+        "pr_file": "packages/react-client/src/ReactFlightClient.js",
+        "discussion_id": "2376111051",
+        "commented_code": "@@ -2714,9 +2756,35 @@ function resolveChunkDebugInfo(\n   chunk: SomeChunk<any>,\n ): void {\n   if (__DEV__ && enableAsyncDebugInfo) {\n-    // Push the currently resolving chunk's debug info representing the stream on the Promise\n-    // that was waiting on the stream.\n-    chunk._debugInfo.push({awaited: streamState._debugInfo});\n+    // Add the currently resolving chunk's debug info representing the stream\n+    // to the Promise that was waiting on the stream, or its underlying value.\n+    const debugInfoEntry: ReactAsyncInfo = {awaited: streamState._debugInfo};\n+\n+    const addDebugInfo = () => {",
+        "comment_created_at": "2025-09-24T17:09:22+00:00",
+        "comment_author": "unstubbable",
+        "comment_body": "But it's used in both branches of the condition.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2376680227",
+        "repo_full_name": "react/react",
+        "pr_number": 34524,
+        "pr_file": "packages/react-client/src/ReactFlightClient.js",
+        "discussion_id": "2376111051",
+        "commented_code": "@@ -2714,9 +2756,35 @@ function resolveChunkDebugInfo(\n   chunk: SomeChunk<any>,\n ): void {\n   if (__DEV__ && enableAsyncDebugInfo) {\n-    // Push the currently resolving chunk's debug info representing the stream on the Promise\n-    // that was waiting on the stream.\n-    chunk._debugInfo.push({awaited: streamState._debugInfo});\n+    // Add the currently resolving chunk's debug info representing the stream\n+    // to the Promise that was waiting on the stream, or its underlying value.\n+    const debugInfoEntry: ReactAsyncInfo = {awaited: streamState._debugInfo};\n+\n+    const addDebugInfo = () => {",
+        "comment_created_at": "2025-09-24T18:17:16+00:00",
+        "comment_author": "sebmarkbage",
+        "comment_body": "In that case you should move it out to a reusable function in module scope and then call that from the closure. So that the closure only needs to be allocated in the delayed branch.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2376682928",
+        "repo_full_name": "react/react",
+        "pr_number": 34524,
+        "pr_file": "packages/react-client/src/ReactFlightClient.js",
+        "discussion_id": "2376111051",
+        "commented_code": "@@ -2714,9 +2756,35 @@ function resolveChunkDebugInfo(\n   chunk: SomeChunk<any>,\n ): void {\n   if (__DEV__ && enableAsyncDebugInfo) {\n-    // Push the currently resolving chunk's debug info representing the stream on the Promise\n-    // that was waiting on the stream.\n-    chunk._debugInfo.push({awaited: streamState._debugInfo});\n+    // Add the currently resolving chunk's debug info representing the stream\n+    // to the Promise that was waiting on the stream, or its underlying value.\n+    const debugInfoEntry: ReactAsyncInfo = {awaited: streamState._debugInfo};\n+\n+    const addDebugInfo = () => {",
+        "comment_created_at": "2025-09-24T18:18:45+00:00",
+        "comment_author": "sebmarkbage",
+        "comment_body": "E.g.\n\n```\nif (chunk.status === PENDING || chunk.status === BLOCKED) {\n  const boundAddDebugInfo = addDebugInfo.bind(null, chunk);\n  chunk.then(boundAddDebugInfo, boundAddDebugInfo);\n} else {\n   addDebugInfo(chunk);\n}\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2376683803",
+        "repo_full_name": "react/react",
+        "pr_number": 34524,
+        "pr_file": "packages/react-client/src/ReactFlightClient.js",
+        "discussion_id": "2376111051",
+        "commented_code": "@@ -2714,9 +2756,35 @@ function resolveChunkDebugInfo(\n   chunk: SomeChunk<any>,\n ): void {\n   if (__DEV__ && enableAsyncDebugInfo) {\n-    // Push the currently resolving chunk's debug info representing the stream on the Promise\n-    // that was waiting on the stream.\n-    chunk._debugInfo.push({awaited: streamState._debugInfo});\n+    // Add the currently resolving chunk's debug info representing the stream\n+    // to the Promise that was waiting on the stream, or its underlying value.\n+    const debugInfoEntry: ReactAsyncInfo = {awaited: streamState._debugInfo};\n+\n+    const addDebugInfo = () => {",
+        "comment_created_at": "2025-09-24T18:19:11+00:00",
+        "comment_author": "sebmarkbage",
+        "comment_body": "Then `addDebugInfo` can be hoisted out.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2434345550",
+    "pr_number": 34864,
+    "pr_file": "packages/react/src/jsx/ReactJSXElement.js",
+    "created_at": "2025-10-16T01:45:45+00:00",
+    "commented_code": "const trackActualOwner =\n       __DEV__ &&\n       ReactSharedInternals.recentlyCreatedOwnerStacks++ < ownerStackLimit;\n+    let debugStackDEV = false;\n+    if (__DEV__) {\n+      if (trackActualOwner) {\n+        if (supportsSettingStackTraceLimit) {\n+          try {\n+            const previousStackTraceLimit = Error.stackTraceLimit;\n+            Error.stackTraceLimit = ownerStackTraceLimit;\n+            debugStackDEV = Error('react-stack-top-frame');\n+            Error.stackTraceLimit = previousStackTraceLimit;\n+          } catch {}",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2434345550",
+        "repo_full_name": "react/react",
+        "pr_number": 34864,
+        "pr_file": "packages/react/src/jsx/ReactJSXElement.js",
+        "discussion_id": "2434345550",
+        "commented_code": "@@ -352,15 +377,31 @@ export function jsxProdSignatureRunningInDevWithDynamicChildren(\n     const trackActualOwner =\n       __DEV__ &&\n       ReactSharedInternals.recentlyCreatedOwnerStacks++ < ownerStackLimit;\n+    let debugStackDEV = false;\n+    if (__DEV__) {\n+      if (trackActualOwner) {\n+        if (supportsSettingStackTraceLimit) {\n+          try {\n+            const previousStackTraceLimit = Error.stackTraceLimit;\n+            Error.stackTraceLimit = ownerStackTraceLimit;\n+            debugStackDEV = Error('react-stack-top-frame');\n+            Error.stackTraceLimit = previousStackTraceLimit;\n+          } catch {}",
+        "comment_created_at": "2025-10-16T01:45:45+00:00",
+        "comment_author": "sebmarkbage",
+        "comment_body": "try/catch is notorious for deopting. It's better in modern browsers but can still trigger extra stuff on the stack and avoid inlining capabilities by making larger code.\n\nWe need to cut everything. We should just let it throw if this is not supported.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2434348056",
+    "pr_number": 34864,
+    "pr_file": "packages/react/src/jsx/ReactJSXElement.js",
+    "created_at": "2025-10-16T01:48:18+00:00",
+    "commented_code": "const trackActualOwner =\n       __DEV__ &&\n       ReactSharedInternals.recentlyCreatedOwnerStacks++ < ownerStackLimit;\n+    let debugStackDEV = false;\n+    if (__DEV__) {\n+      if (trackActualOwner) {\n+        if (supportsSettingStackTraceLimit) {",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2434348056",
+        "repo_full_name": "react/react",
+        "pr_number": 34864,
+        "pr_file": "packages/react/src/jsx/ReactJSXElement.js",
+        "discussion_id": "2434348056",
+        "commented_code": "@@ -352,15 +377,31 @@ export function jsxProdSignatureRunningInDevWithDynamicChildren(\n     const trackActualOwner =\n       __DEV__ &&\n       ReactSharedInternals.recentlyCreatedOwnerStacks++ < ownerStackLimit;\n+    let debugStackDEV = false;\n+    if (__DEV__) {\n+      if (trackActualOwner) {\n+        if (supportsSettingStackTraceLimit) {",
+        "comment_created_at": "2025-10-16T01:48:18+00:00",
+        "comment_author": "sebmarkbage",
+        "comment_body": "I'm concerned about this unnecessary condition adding to code size (in terms of memory / JIT optimization and not download size) and the extra lookup every call.\n\nWe should make two entire copies of the function and switch which function we use instead so that the function that we use doesn't have to make any additional checks at runtime.\n\nAlternatively we should just assume that you can set it and not support environments that don't play ball.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2349446585",
+    "pr_number": 34495,
+    "pr_file": "packages/react-devtools-shared/src/backend/fiber/renderer.js",
+    "created_at": "2025-09-15T15:54:04+00:00",
+    "commented_code": "// is no longer in the new set.\n     if (previousSuspendedBy !== null && parentSuspenseNode !== null) {\n       const nextSuspendedBy = instance.suspendedBy;\n+      // A boundary can await the same IO multiple times.\n+      // We still want to error if we're trying to remove IO that isn't present on\n+      // this boundary. We're tracking the IO we already removed so that we can error\n+      // every time a delete fails.\n+      const removedIOInfos = new Set<ReactIOInfo>();",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2349446585",
+        "repo_full_name": "react/react",
+        "pr_number": 34495,
+        "pr_file": "packages/react-devtools-shared/src/backend/fiber/renderer.js",
+        "discussion_id": "2349446585",
+        "commented_code": "@@ -2890,6 +2890,11 @@ export function attach(\n     // is no longer in the new set.\n     if (previousSuspendedBy !== null && parentSuspenseNode !== null) {\n       const nextSuspendedBy = instance.suspendedBy;\n+      // A boundary can await the same IO multiple times.\n+      // We still want to error if we're trying to remove IO that isn't present on\n+      // this boundary. We're tracking the IO we already removed so that we can error\n+      // every time a delete fails.\n+      const removedIOInfos = new Set<ReactIOInfo>();",
+        "comment_created_at": "2025-09-15T15:54:04+00:00",
+        "comment_author": "sebmarkbage",
+        "comment_body": "I don't think we want to allocate memory in this pass since it can happen at every level when there's no change.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2352839101",
+    "pr_number": 34495,
+    "pr_file": "packages/react-devtools-shared/src/backend/fiber/renderer.js",
+    "created_at": "2025-09-16T15:11:19+00:00",
+    "commented_code": "// Let's remove it from the parent SuspenseNode.\n           const ioInfo = asyncInfo.awaited;\n           const suspendedBySet = parentSuspenseNode.suspendedBy.get(ioInfo);\n+          // A boundary can await the same IO multiple times.\n+          // We still want to error if we're trying to remove IO that isn't present on\n+          // this boundary so we need to check if we've already removed it.\n+          // We're assuming previousSuspendedBy is a small array so this should be faster\n+          // than allocating and maintaining a Set.\n+          let alreadyRemovedIO = false;\n+          for (let j = 0; j < i; j++) {\n+            const removedIOInfo = previousSuspendedBy[j].awaited;\n+            if (removedIOInfo === ioInfo) {\n+              alreadyRemovedIO = true;\n+              break;\n+            }\n+          }\n           if (\n             suspendedBySet === undefined ||\n-            !suspendedBySet.delete(instance)\n+            (!alreadyRemovedIO && !suspendedBySet.delete(instance))",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2352839101",
+        "repo_full_name": "react/react",
+        "pr_number": 34495,
+        "pr_file": "packages/react-devtools-shared/src/backend/fiber/renderer.js",
+        "discussion_id": "2352839101",
+        "commented_code": "@@ -2902,9 +2902,22 @@ export function attach(\n           // Let's remove it from the parent SuspenseNode.\n           const ioInfo = asyncInfo.awaited;\n           const suspendedBySet = parentSuspenseNode.suspendedBy.get(ioInfo);\n+          // A boundary can await the same IO multiple times.\n+          // We still want to error if we're trying to remove IO that isn't present on\n+          // this boundary so we need to check if we've already removed it.\n+          // We're assuming previousSuspendedBy is a small array so this should be faster\n+          // than allocating and maintaining a Set.\n+          let alreadyRemovedIO = false;\n+          for (let j = 0; j < i; j++) {\n+            const removedIOInfo = previousSuspendedBy[j].awaited;\n+            if (removedIOInfo === ioInfo) {\n+              alreadyRemovedIO = true;\n+              break;\n+            }\n+          }\n           if (\n             suspendedBySet === undefined ||\n-            !suspendedBySet.delete(instance)\n+            (!alreadyRemovedIO && !suspendedBySet.delete(instance))",
+        "comment_created_at": "2025-09-16T15:11:19+00:00",
+        "comment_author": "sebmarkbage",
+        "comment_body": "Ideally we'd check if `!suspendedBySet.delete(instance)` first before doing the loop so that in the common case when we do succeed in deleting it, there's no reason to check.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

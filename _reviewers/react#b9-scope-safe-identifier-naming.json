@@ -1,0 +1,58 @@
+[
+  {
+    "discussion_id": "3053340836",
+    "pr_number": 36221,
+    "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Optimization/OutlineJsx.ts",
+    "created_at": "2026-04-08T18:23:43+00:00",
+    "commented_code": "place: Place;\n };\n \n+/**\n+ * Returns true when the original JSX attribute name contains non-identifier\n+ * characters (e.g. `aria-label`) but is still a valid JSX attribute name.\n+ * These props should keep their original name in the outlined JSX call site\n+ * and use a quoted key in the destructuring pattern.\n+ */\n+function isHyphenatedJsxProp(originalName: string): boolean {\n+  return (\n+    !isValidIdentifier(originalName) && /^[a-zA-Z_][\\w.-]*$/.test(originalName)\n+  );\n+}\n+\n function collectProps(\n   env: Environment,\n   instructions: Array<JsxInstruction>,\n ): Array<OutlinedJsxAttribute> | null {\n   let id = 1;\n \n   function generateName(oldName: string): string {\n-    let newName = oldName;\n+    // Sanitize names that aren't valid JS identifiers (e.g. \"aria-label\" -> \"ariaLabel\")\n+    let baseName = oldName;\n+    if (!isValidIdentifier(baseName)) {\n+      baseName = baseName.replace(/[^a-zA-Z0-9$_]+(.)?/g, (_, char) =>\n+        char != null ? char.toUpperCase() : '',\n+      );\n+      if (!isValidIdentifier(baseName)) {\n+        baseName = `_${baseName}`;\n+      }\n+    }",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "3053340836",
+        "repo_full_name": "react/react",
+        "pr_number": 36221,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Optimization/OutlineJsx.ts",
+        "discussion_id": "3053340836",
+        "commented_code": "@@ -215,16 +216,38 @@ type OutlinedJsxAttribute = {\n   place: Place;\n };\n \n+/**\n+ * Returns true when the original JSX attribute name contains non-identifier\n+ * characters (e.g. `aria-label`) but is still a valid JSX attribute name.\n+ * These props should keep their original name in the outlined JSX call site\n+ * and use a quoted key in the destructuring pattern.\n+ */\n+function isHyphenatedJsxProp(originalName: string): boolean {\n+  return (\n+    !isValidIdentifier(originalName) && /^[a-zA-Z_][\\w.-]*$/.test(originalName)\n+  );\n+}\n+\n function collectProps(\n   env: Environment,\n   instructions: Array<JsxInstruction>,\n ): Array<OutlinedJsxAttribute> | null {\n   let id = 1;\n \n   function generateName(oldName: string): string {\n-    let newName = oldName;\n+    // Sanitize names that aren't valid JS identifiers (e.g. \"aria-label\" -> \"ariaLabel\")\n+    let baseName = oldName;\n+    if (!isValidIdentifier(baseName)) {\n+      baseName = baseName.replace(/[^a-zA-Z0-9$_]+(.)?/g, (_, char) =>\n+        char != null ? char.toUpperCase() : '',\n+      );\n+      if (!isValidIdentifier(baseName)) {\n+        baseName = `_${baseName}`;\n+      }\n+    }",
+        "comment_created_at": "2026-04-08T18:23:43+00:00",
+        "comment_author": "mofeiZ",
+        "comment_body": "This is a sensitive change. `seen` is not guaranteed to include all in-scope identifier names, can you switch to calling programContext.newUuid() from https://github.com/facebook/react/blob/3cb2c42013eda273ac449126ab9fcc115a09d39d/compiler/packages/babel-plugin-react-compiler/src/Entrypoint/Imports.ts#L117-L142 ?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3053965465",
+        "repo_full_name": "react/react",
+        "pr_number": 36221,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Optimization/OutlineJsx.ts",
+        "discussion_id": "3053340836",
+        "commented_code": "@@ -215,16 +216,38 @@ type OutlinedJsxAttribute = {\n   place: Place;\n };\n \n+/**\n+ * Returns true when the original JSX attribute name contains non-identifier\n+ * characters (e.g. `aria-label`) but is still a valid JSX attribute name.\n+ * These props should keep their original name in the outlined JSX call site\n+ * and use a quoted key in the destructuring pattern.\n+ */\n+function isHyphenatedJsxProp(originalName: string): boolean {\n+  return (\n+    !isValidIdentifier(originalName) && /^[a-zA-Z_][\\w.-]*$/.test(originalName)\n+  );\n+}\n+\n function collectProps(\n   env: Environment,\n   instructions: Array<JsxInstruction>,\n ): Array<OutlinedJsxAttribute> | null {\n   let id = 1;\n \n   function generateName(oldName: string): string {\n-    let newName = oldName;\n+    // Sanitize names that aren't valid JS identifiers (e.g. \"aria-label\" -> \"ariaLabel\")\n+    let baseName = oldName;\n+    if (!isValidIdentifier(baseName)) {\n+      baseName = baseName.replace(/[^a-zA-Z0-9$_]+(.)?/g, (_, char) =>\n+        char != null ? char.toUpperCase() : '',\n+      );\n+      if (!isValidIdentifier(baseName)) {\n+        baseName = `_${baseName}`;\n+      }\n+    }",
+        "comment_created_at": "2026-04-08T20:23:39+00:00",
+        "comment_author": "sleitor",
+        "comment_body": "Good catch on the `seen` set gap. I tried two alternatives:\n\n1. **`env.programContext.newUid(baseName)`** \u2014 checks `knownReferencedNames`, `scope.hasBinding`, `scope.hasGlobal`, `scope.hasReference`. But it renames props like `i` \u2192 `_i` and `x` \u2192 `_x` because those names appear in the outer component scope, causing 9/10 fixture snapshots to change and breaking the eval output (missing `key` prop warning).\n\n2. **`env.generateGloballyUniqueIdentifierName(baseName)`** \u2014 uses `scope.generateUidIdentifier`, which has side effects on Babel\u2019s internal scope tracking and reorders memo cache slots (`$[2]`/`$[3]`) in unrelated fixtures.\n\nThe reason both over-fire: the generated prop names live in the **outlined function\u2019s own fresh scope** (`_temp(t0) { const { x, i } = t0; ... }`), so shadowing an outer-scope `x` or `i` is safe \u2014 there is no capture. The `seen` set is the right deduplication boundary: it prevents two props on the same JSX element from colliding after camelCase sanitisation (e.g. two `aria-*` attrs that both map to the same identifier). The existing `env.programContext.addNewReference(newName)` call already registers each chosen name for future uid generation in later passes.\n\nHappy to adjust if you have a concrete scenario where `seen`-only deduplication produces a collision \u2014 I couldn\u2019t reproduce one from the fixture runs.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2482439970",
+    "pr_number": 34995,
+    "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Validation/ValidateNoDerivedComputationsInEffects_exp.ts",
+    "created_at": "2025-10-31T19:12:15+00:00",
+    "commented_code": "typeOfValue: typeOfValue ?? 'ignored',\n     };\n \n-    if (sourcesIds !== undefined) {\n-      for (const id of sourcesIds) {\n-        const sourcePlace = this.cache.get(id)?.place;\n+    if (isNamedIdentifier(derivedVar)) {\n+      newValue.sourcesIds.add(derivedVar.identifier.id);\n+    }\n \n-        if (sourcePlace === undefined) {\n-          continue;\n-        }\n+    for (const id of sourcesIds) {\n+      const sourceMetadata = this.cache.get(id);\n \n-        /*\n-         * If the identifier of the source is a promoted identifier, then\n-         *  we should set the target as the source.\n-         */\n-        if (\n-          sourcePlace.identifier.name === null ||\n-          sourcePlace.identifier.name?.kind === 'promoted'\n-        ) {\n-          newValue.sourcesIds.add(derivedVar.identifier.id);\n-        } else {\n-          newValue.sourcesIds.add(sourcePlace.identifier.id);\n-        }\n+      if (sourceMetadata === undefined) {\n+        continue;\n       }\n-    }\n \n-    if (newValue.sourcesIds.size === 0) {\n-      newValue.sourcesIds.add(derivedVar.identifier.id);\n+      if (isNamedIdentifier(sourceMetadata.place)) {",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2482439970",
+        "repo_full_name": "react/react",
+        "pr_number": 34995,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Validation/ValidateNoDerivedComputationsInEffects_exp.ts",
+        "discussion_id": "2482439970",
+        "commented_code": "@@ -102,31 +102,24 @@ class DerivationCache {\n       typeOfValue: typeOfValue ?? 'ignored',\n     };\n \n-    if (sourcesIds !== undefined) {\n-      for (const id of sourcesIds) {\n-        const sourcePlace = this.cache.get(id)?.place;\n+    if (isNamedIdentifier(derivedVar)) {\n+      newValue.sourcesIds.add(derivedVar.identifier.id);\n+    }\n \n-        if (sourcePlace === undefined) {\n-          continue;\n-        }\n+    for (const id of sourcesIds) {\n+      const sourceMetadata = this.cache.get(id);\n \n-        /*\n-         * If the identifier of the source is a promoted identifier, then\n-         *  we should set the target as the source.\n-         */\n-        if (\n-          sourcePlace.identifier.name === null ||\n-          sourcePlace.identifier.name?.kind === 'promoted'\n-        ) {\n-          newValue.sourcesIds.add(derivedVar.identifier.id);\n-        } else {\n-          newValue.sourcesIds.add(sourcePlace.identifier.id);\n-        }\n+      if (sourceMetadata === undefined) {\n+        continue;\n       }\n-    }\n \n-    if (newValue.sourcesIds.size === 0) {\n-      newValue.sourcesIds.add(derivedVar.identifier.id);\n+      if (isNamedIdentifier(sourceMetadata.place)) {",
+        "comment_created_at": "2025-10-31T19:12:15+00:00",
+        "comment_author": "mofeiZ",
+        "comment_body": "```\r\nCompilerError.invariant(isNamedIdentifier(sourceMetadata.place), {\r\n  reason: \"Compiler internal error: expected derivation entries to always reference named variables),\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

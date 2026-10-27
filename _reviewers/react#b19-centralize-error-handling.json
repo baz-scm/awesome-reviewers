@@ -1,0 +1,92 @@
+[
+  {
+    "discussion_id": "2231850322",
+    "pr_number": 34000,
+    "pr_file": "compiler/packages/babel-plugin-react-compiler/src/HIR/ObjectShape.ts",
+    "created_at": "2025-07-25T19:19:36+00:00",
+    "commented_code": "['*', {kind: 'Object', shapeId: BuiltInRefValueId}],\n ]);\n \n+addObject(BUILTIN_SHAPES, ReanimatedSharedValueId, []);",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2231850322",
+        "repo_full_name": "react/react",
+        "pr_number": 34000,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/HIR/ObjectShape.ts",
+        "discussion_id": "2231850322",
+        "commented_code": "@@ -1211,6 +1211,8 @@ addObject(BUILTIN_SHAPES, BuiltInRefValueId, [\n   ['*', {kind: 'Object', shapeId: BuiltInRefValueId}],\n ]);\n \n+addObject(BUILTIN_SHAPES, ReanimatedSharedValueId, []);",
+        "comment_created_at": "2025-07-25T19:19:36+00:00",
+        "comment_author": "josephsavona",
+        "comment_body": "Without this i got errors trying to resolve properties, because we have a shape id defined for reanimated but no shape definition. I'm not sure how we didn't run into that error before but it seems like it easily could have occurred.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2231851036",
+        "repo_full_name": "react/react",
+        "pr_number": 34000,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/HIR/ObjectShape.ts",
+        "discussion_id": "2231850322",
+        "commented_code": "@@ -1211,6 +1211,8 @@ addObject(BUILTIN_SHAPES, BuiltInRefValueId, [\n   ['*', {kind: 'Object', shapeId: BuiltInRefValueId}],\n ]);\n \n+addObject(BUILTIN_SHAPES, ReanimatedSharedValueId, []);",
+        "comment_created_at": "2025-07-25T19:20:04+00:00",
+        "comment_author": "josephsavona",
+        "comment_body": "Note that the error was an invariant which i don't think we report in eslint, so the compiler may have just been silently failing for folks using reanimated",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2446311283",
+    "pr_number": 34580,
+    "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Validation/ValidateNoDerivedComputationsInEffects_exp.ts",
+    "created_at": "2025-10-20T22:58:25+00:00",
+    "commented_code": "+/**\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+import {CompilerDiagnostic, CompilerError, Effect} from '..';\n+import {ErrorCategory} from '../CompilerError';\n+import {\n+  BlockId,\n+  FunctionExpression,\n+  HIRFunction,\n+  IdentifierId,\n+  isSetStateType,\n+  isUseEffectHookType,\n+  Place,\n+  CallExpression,\n+  Instruction,\n+  isUseStateType,\n+  BasicBlock,\n+  isUseRefType,\n+  GeneratedSource,\n+  SourceLocation,\n+} from '../HIR';\n+import {eachInstructionLValue, eachInstructionOperand} from '../HIR/visitors';\n+import {isMutable} from '../ReactiveScopes/InferReactiveScopeVariables';\n+import {assertExhaustive} from '../Utils/utils';\n+\n+type TypeOfValue = 'ignored' | 'fromProps' | 'fromState' | 'fromPropsAndState';\n+\n+type DerivationMetadata = {\n+  typeOfValue: TypeOfValue;\n+  place: Place;\n+  sourcesIds: Set<IdentifierId>;\n+};\n+\n+type ValidationContext = {\n+  readonly functions: Map<IdentifierId, FunctionExpression>;\n+  readonly errors: CompilerError;\n+  readonly derivationCache: DerivationCache;\n+  readonly effects: Set<HIRFunction>;\n+  readonly setStateCache: Map<string | undefined | null, Array<Place>>;\n+  readonly effectSetStateCache: Map<string | undefined | null, Array<Place>>;\n+};\n+\n+class DerivationCache {\n+  hasChanges: boolean = false;\n+  cache: Map<IdentifierId, DerivationMetadata> = new Map();\n+\n+  snapshot(): boolean {\n+    const hasChanges = this.hasChanges;\n+    this.hasChanges = false;\n+    return hasChanges;\n+  }\n+\n+  addDerivationEntry(\n+    derivedVar: Place,\n+    sourcesIds: Set<IdentifierId>,\n+    typeOfValue: TypeOfValue,\n+  ): void {\n+    let newValue: DerivationMetadata = {\n+      place: derivedVar,\n+      sourcesIds: new Set(),\n+      typeOfValue: typeOfValue ?? 'ignored',\n+    };\n+\n+    if (sourcesIds !== undefined) {\n+      for (const id of sourcesIds) {\n+        const sourcePlace = this.cache.get(id)?.place;\n+\n+        if (sourcePlace === undefined) {\n+          continue;\n+        }\n+\n+        /*\n+         * If the identifier of the source is a promoted identifier, then\n+         *  we should set the target as the source.\n+         */\n+        if (\n+          sourcePlace.identifier.name === null ||\n+          sourcePlace.identifier.name?.kind === 'promoted'\n+        ) {\n+          newValue.sourcesIds.add(derivedVar.identifier.id);\n+        } else {\n+          newValue.sourcesIds.add(sourcePlace.identifier.id);\n+        }\n+      }\n+    }\n+\n+    if (newValue.sourcesIds.size === 0) {\n+      newValue.sourcesIds.add(derivedVar.identifier.id);\n+    }\n+\n+    const existingValue = this.cache.get(derivedVar.identifier.id);\n+    if (\n+      existingValue === undefined ||\n+      !this.isDerivationEqual(existingValue, newValue)\n+    ) {\n+      this.cache.set(derivedVar.identifier.id, newValue);\n+      this.hasChanges = true;\n+    }\n+  }\n+\n+  private isDerivationEqual(\n+    a: DerivationMetadata,\n+    b: DerivationMetadata,\n+  ): boolean {\n+    if (a.typeOfValue !== b.typeOfValue) {\n+      return false;\n+    }\n+    if (a.sourcesIds.size !== b.sourcesIds.size) {\n+      return false;\n+    }\n+    for (const id of a.sourcesIds) {\n+      if (!b.sourcesIds.has(id)) {\n+        return false;\n+      }\n+    }\n+    return true;\n+  }\n+}\n+\n+/**\n+ * Validates that useEffect is not used for derived computations which could/should\n+ * be performed in render.\n+ *\n+ * See https://react.dev/learn/you-might-not-need-an-effect#updating-state-based-on-props-or-state\n+ *\n+ * Example:\n+ *\n+ * ```\n+ * // \ud83d\udd34 Avoid: redundant state and unnecessary Effect\n+ * const [fullName, setFullName] = useState('');\n+ * useEffect(() => {\n+ *   setFullName(firstName + ' ' + lastName);\n+ * }, [firstName, lastName]);\n+ * ```\n+ *\n+ * Instead use:\n+ *\n+ * ```\n+ * // \u2705 Good: calculated during rendering\n+ * const fullName = firstName + ' ' + lastName;\n+ * ```\n+ */\n+export function validateNoDerivedComputationsInEffects_exp(\n+  fn: HIRFunction,\n+): void {\n+  const functions: Map<IdentifierId, FunctionExpression> = new Map();\n+  const derivationCache = new DerivationCache();\n+  const errors = new CompilerError();\n+  const effects: Set<HIRFunction> = new Set();\n+\n+  const setStateCache: Map<string | undefined | null, Array<Place>> = new Map();\n+  const effectSetStateCache: Map<\n+    string | undefined | null,\n+    Array<Place>\n+  > = new Map();\n+\n+  const context: ValidationContext = {\n+    functions,\n+    errors,\n+    derivationCache,\n+    effects,\n+    setStateCache,\n+    effectSetStateCache,\n+  };\n+\n+  if (fn.fnType === 'Hook') {\n+    for (const param of fn.params) {\n+      if (param.kind === 'Identifier') {\n+        context.derivationCache.cache.set(param.identifier.id, {\n+          place: param,\n+          sourcesIds: new Set([param.identifier.id]),\n+          typeOfValue: 'fromProps',\n+        });\n+        context.derivationCache.hasChanges = true;\n+      }\n+    }\n+  } else if (fn.fnType === 'Component') {\n+    const props = fn.params[0];\n+    if (props != null && props.kind === 'Identifier') {\n+      context.derivationCache.cache.set(props.identifier.id, {\n+        place: props,\n+        sourcesIds: new Set([props.identifier.id]),\n+        typeOfValue: 'fromProps',\n+      });\n+      context.derivationCache.hasChanges = true;\n+    }\n+  }\n+\n+  let isFirstPass = true;\n+  do {\n+    for (const block of fn.body.blocks.values()) {\n+      recordPhiDerivations(block, context);\n+      for (const instr of block.instructions) {\n+        recordInstructionDerivations(instr, context, isFirstPass);\n+      }\n+    }\n+\n+    isFirstPass = false;\n+  } while (context.derivationCache.snapshot());\n+\n+  for (const effect of effects) {\n+    validateEffect(effect, context);\n+  }\n+\n+  if (errors.hasAnyErrors()) {\n+    throw errors;",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2446311283",
+        "repo_full_name": "react/react",
+        "pr_number": 34580,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Validation/ValidateNoDerivedComputationsInEffects_exp.ts",
+        "discussion_id": "2446311283",
+        "commented_code": "@@ -0,0 +1,504 @@\n+/**\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+import {CompilerDiagnostic, CompilerError, Effect} from '..';\n+import {ErrorCategory} from '../CompilerError';\n+import {\n+  BlockId,\n+  FunctionExpression,\n+  HIRFunction,\n+  IdentifierId,\n+  isSetStateType,\n+  isUseEffectHookType,\n+  Place,\n+  CallExpression,\n+  Instruction,\n+  isUseStateType,\n+  BasicBlock,\n+  isUseRefType,\n+  GeneratedSource,\n+  SourceLocation,\n+} from '../HIR';\n+import {eachInstructionLValue, eachInstructionOperand} from '../HIR/visitors';\n+import {isMutable} from '../ReactiveScopes/InferReactiveScopeVariables';\n+import {assertExhaustive} from '../Utils/utils';\n+\n+type TypeOfValue = 'ignored' | 'fromProps' | 'fromState' | 'fromPropsAndState';\n+\n+type DerivationMetadata = {\n+  typeOfValue: TypeOfValue;\n+  place: Place;\n+  sourcesIds: Set<IdentifierId>;\n+};\n+\n+type ValidationContext = {\n+  readonly functions: Map<IdentifierId, FunctionExpression>;\n+  readonly errors: CompilerError;\n+  readonly derivationCache: DerivationCache;\n+  readonly effects: Set<HIRFunction>;\n+  readonly setStateCache: Map<string | undefined | null, Array<Place>>;\n+  readonly effectSetStateCache: Map<string | undefined | null, Array<Place>>;\n+};\n+\n+class DerivationCache {\n+  hasChanges: boolean = false;\n+  cache: Map<IdentifierId, DerivationMetadata> = new Map();\n+\n+  snapshot(): boolean {\n+    const hasChanges = this.hasChanges;\n+    this.hasChanges = false;\n+    return hasChanges;\n+  }\n+\n+  addDerivationEntry(\n+    derivedVar: Place,\n+    sourcesIds: Set<IdentifierId>,\n+    typeOfValue: TypeOfValue,\n+  ): void {\n+    let newValue: DerivationMetadata = {\n+      place: derivedVar,\n+      sourcesIds: new Set(),\n+      typeOfValue: typeOfValue ?? 'ignored',\n+    };\n+\n+    if (sourcesIds !== undefined) {\n+      for (const id of sourcesIds) {\n+        const sourcePlace = this.cache.get(id)?.place;\n+\n+        if (sourcePlace === undefined) {\n+          continue;\n+        }\n+\n+        /*\n+         * If the identifier of the source is a promoted identifier, then\n+         *  we should set the target as the source.\n+         */\n+        if (\n+          sourcePlace.identifier.name === null ||\n+          sourcePlace.identifier.name?.kind === 'promoted'\n+        ) {\n+          newValue.sourcesIds.add(derivedVar.identifier.id);\n+        } else {\n+          newValue.sourcesIds.add(sourcePlace.identifier.id);\n+        }\n+      }\n+    }\n+\n+    if (newValue.sourcesIds.size === 0) {\n+      newValue.sourcesIds.add(derivedVar.identifier.id);\n+    }\n+\n+    const existingValue = this.cache.get(derivedVar.identifier.id);\n+    if (\n+      existingValue === undefined ||\n+      !this.isDerivationEqual(existingValue, newValue)\n+    ) {\n+      this.cache.set(derivedVar.identifier.id, newValue);\n+      this.hasChanges = true;\n+    }\n+  }\n+\n+  private isDerivationEqual(\n+    a: DerivationMetadata,\n+    b: DerivationMetadata,\n+  ): boolean {\n+    if (a.typeOfValue !== b.typeOfValue) {\n+      return false;\n+    }\n+    if (a.sourcesIds.size !== b.sourcesIds.size) {\n+      return false;\n+    }\n+    for (const id of a.sourcesIds) {\n+      if (!b.sourcesIds.has(id)) {\n+        return false;\n+      }\n+    }\n+    return true;\n+  }\n+}\n+\n+/**\n+ * Validates that useEffect is not used for derived computations which could/should\n+ * be performed in render.\n+ *\n+ * See https://react.dev/learn/you-might-not-need-an-effect#updating-state-based-on-props-or-state\n+ *\n+ * Example:\n+ *\n+ * ```\n+ * // \ud83d\udd34 Avoid: redundant state and unnecessary Effect\n+ * const [fullName, setFullName] = useState('');\n+ * useEffect(() => {\n+ *   setFullName(firstName + ' ' + lastName);\n+ * }, [firstName, lastName]);\n+ * ```\n+ *\n+ * Instead use:\n+ *\n+ * ```\n+ * // \u2705 Good: calculated during rendering\n+ * const fullName = firstName + ' ' + lastName;\n+ * ```\n+ */\n+export function validateNoDerivedComputationsInEffects_exp(\n+  fn: HIRFunction,\n+): void {\n+  const functions: Map<IdentifierId, FunctionExpression> = new Map();\n+  const derivationCache = new DerivationCache();\n+  const errors = new CompilerError();\n+  const effects: Set<HIRFunction> = new Set();\n+\n+  const setStateCache: Map<string | undefined | null, Array<Place>> = new Map();\n+  const effectSetStateCache: Map<\n+    string | undefined | null,\n+    Array<Place>\n+  > = new Map();\n+\n+  const context: ValidationContext = {\n+    functions,\n+    errors,\n+    derivationCache,\n+    effects,\n+    setStateCache,\n+    effectSetStateCache,\n+  };\n+\n+  if (fn.fnType === 'Hook') {\n+    for (const param of fn.params) {\n+      if (param.kind === 'Identifier') {\n+        context.derivationCache.cache.set(param.identifier.id, {\n+          place: param,\n+          sourcesIds: new Set([param.identifier.id]),\n+          typeOfValue: 'fromProps',\n+        });\n+        context.derivationCache.hasChanges = true;\n+      }\n+    }\n+  } else if (fn.fnType === 'Component') {\n+    const props = fn.params[0];\n+    if (props != null && props.kind === 'Identifier') {\n+      context.derivationCache.cache.set(props.identifier.id, {\n+        place: props,\n+        sourcesIds: new Set([props.identifier.id]),\n+        typeOfValue: 'fromProps',\n+      });\n+      context.derivationCache.hasChanges = true;\n+    }\n+  }\n+\n+  let isFirstPass = true;\n+  do {\n+    for (const block of fn.body.blocks.values()) {\n+      recordPhiDerivations(block, context);\n+      for (const instr of block.instructions) {\n+        recordInstructionDerivations(instr, context, isFirstPass);\n+      }\n+    }\n+\n+    isFirstPass = false;\n+  } while (context.derivationCache.snapshot());\n+\n+  for (const effect of effects) {\n+    validateEffect(effect, context);\n+  }\n+\n+  if (errors.hasAnyErrors()) {\n+    throw errors;",
+        "comment_created_at": "2025-10-20T22:58:25+00:00",
+        "comment_author": "mofeiZ",
+        "comment_body": "In a follow-up / when we decide to land this, let's also return and handle (log or throw) inside of the `run` function (in `Pipeline`) instead of throwing here",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2334441474",
+    "pr_number": 34424,
+    "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Inference/InferMutationAliasingEffects.ts",
+    "created_at": "2025-09-09T18:32:58+00:00",
+    "commented_code": "case 'Alias':\n     case 'Capture': {\n       CompilerError.invariant(\n-        effect.kind === 'Capture' || initialized.has(effect.into.identifier.id),\n+        effect.kind === 'Capture' ||\n+          effect.kind === 'MaybeAlias' ||\n+          initialized.has(effect.into.identifier.id),\n         {\n           reason: `Expected destination value to already be initialized within this instruction for Alias effect`,",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2334441474",
+        "repo_full_name": "react/react",
+        "pr_number": 34424,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Inference/InferMutationAliasingEffects.ts",
+        "discussion_id": "2334441474",
+        "commented_code": "@@ -748,7 +748,9 @@ function applyEffect(\n     case 'Alias':\n     case 'Capture': {\n       CompilerError.invariant(\n-        effect.kind === 'Capture' || initialized.has(effect.into.identifier.id),\n+        effect.kind === 'Capture' ||\n+          effect.kind === 'MaybeAlias' ||\n+          initialized.has(effect.into.identifier.id),\n         {\n           reason: `Expected destination value to already be initialized within this instruction for Alias effect`,",
+        "comment_created_at": "2025-09-09T18:32:58+00:00",
+        "comment_author": "poteto",
+        "comment_body": "minor nit, should we update the reason or move into description?\n```suggestion\n          reason: `Expected destination value to already be initialized within this instruction for ${effect.kind} effect`,\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2334541216",
+        "repo_full_name": "react/react",
+        "pr_number": 34424,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Inference/InferMutationAliasingEffects.ts",
+        "discussion_id": "2334441474",
+        "commented_code": "@@ -748,7 +748,9 @@ function applyEffect(\n     case 'Alias':\n     case 'Capture': {\n       CompilerError.invariant(\n-        effect.kind === 'Capture' || initialized.has(effect.into.identifier.id),\n+        effect.kind === 'Capture' ||\n+          effect.kind === 'MaybeAlias' ||\n+          initialized.has(effect.into.identifier.id),\n         {\n           reason: `Expected destination value to already be initialized within this instruction for Alias effect`,",
+        "comment_created_at": "2025-09-09T19:16:19+00:00",
+        "comment_author": "josephsavona",
+        "comment_body": "Yeah fair. I\u2019m less worried about aggregating invariants since they shouldn\u2019t happen but for consistency, yes!",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

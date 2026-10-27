@@ -1,0 +1,70 @@
+[
+  {
+    "discussion_id": "4244809120",
+    "pr_number": 36921,
+    "pr_file": "compiler/crates/react_compiler_diagnostics/src/lib.rs",
+    "created_at": "2026-10-12T05:02:42+00:00",
+    "commented_code": "/// Source location (matches Babel's SourceLocation format)\n /// This is the HIR source location, separate from AST's BaseNode location.\n /// GeneratedSource is represented as None.\n+/// Node offsets remain separate from position indices and are not part of the\n+/// serialized Babel location.\n #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]\n pub struct SourceLocation {\n     pub start: Position,\n     pub end: Position,\n+    /// Original AST node `start`, independent of `start.index`.\n+    #[serde(skip)]\n+    pub start_offset: Option<u32>,",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "4244809120",
+        "repo_full_name": "react/react",
+        "pr_number": 36921,
+        "pr_file": "compiler/crates/react_compiler_diagnostics/src/lib.rs",
+        "discussion_id": "4244809120",
+        "commented_code": "@@ -96,10 +96,18 @@ pub struct CompilerSuggestion {\n /// Source location (matches Babel's SourceLocation format)\n /// This is the HIR source location, separate from AST's BaseNode location.\n /// GeneratedSource is represented as None.\n+/// Node offsets remain separate from position indices and are not part of the\n+/// serialized Babel location.\n #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]\n pub struct SourceLocation {\n     pub start: Position,\n     pub end: Position,\n+    /// Original AST node `start`, independent of `start.index`.\n+    #[serde(skip)]\n+    pub start_offset: Option<u32>,",
+        "comment_created_at": "2026-10-12T05:02:42+00:00",
+        "comment_author": "poteto",
+        "comment_body": "On x86_64, `SourceLocation` grows from 32 to 48 B and `Place` from 40 to 56 B, which matches your numbers. `InstructionValue` also grows from 200 to 264 B and `Instruction` from 304 to 400 B. With release builds, napi `compile` over 1,816 fixtures is 2.1% slower at the median. That's 7 alternating runs per side on one core, and head was slower in 48 of 49 pairs. Profiling puts the cost in lowering (+5%) and `EnterSSA` (+8.5%), not JSON parsing. Two `u32` fields with a sentinel for \"absent\" would make this struct 40 B. If you'd rather keep the current shape, could the description include these numbers?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4250336067",
+        "repo_full_name": "react/react",
+        "pr_number": 36921,
+        "pr_file": "compiler/crates/react_compiler_diagnostics/src/lib.rs",
+        "discussion_id": "4244809120",
+        "commented_code": "@@ -96,10 +96,18 @@ pub struct CompilerSuggestion {\n /// Source location (matches Babel's SourceLocation format)\n /// This is the HIR source location, separate from AST's BaseNode location.\n /// GeneratedSource is represented as None.\n+/// Node offsets remain separate from position indices and are not part of the\n+/// serialized Babel location.\n #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]\n pub struct SourceLocation {\n     pub start: Position,\n     pub end: Position,\n+    /// Original AST node `start`, independent of `start.index`.\n+    #[serde(skip)]\n+    pub start_offset: Option<u32>,",
+        "comment_created_at": "2026-10-12T16:40:58+00:00",
+        "comment_author": "magic-akari",
+        "comment_body": "Agreed, this adds a measurable cost. Your x86_64 measurements show +2.1% median NAPI compile time, with lowering +5% and EnterSSA +8.5%. I'm accepting that tradeoff for the straightforward implementation in this PR.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3924434877",
+    "pr_number": 37487,
+    "pr_file": "compiler/crates/react_compiler_inference/src/infer_mutation_aliasing_effects.rs",
+    "created_at": "2026-09-03T12:19:54+00:00",
+    "commented_code": "return Err(diag);\n             }\n \n-            // Queue successors\n+            // Queue successors. TS passes the same state object to every\n+            // successor; Rust has to hand each one its own copy, but the last\n+            // successor can take ownership instead of cloning. Straight-line\n+            // blocks have a single successor, so they clone not at all.\n             let successors = terminal_successors(&func.body.blocks[&block_id].terminal);\n-            for next_block_id in successors {\n+            let last = successors.len();\n+            let mut state = Some(state);\n+            for (i, next_block_id) in successors.into_iter().enumerate() {\n+                let outgoing = if i + 1 == last {\n+                    state\n+                        .take()\n+                        .expect(\"state is taken only on the last successor\")\n+                } else {\n+                    state\n+                        .as_ref()\n+                        .expect(\"state is live until the last successor\")\n+                        .clone()\n+                };",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "3924434877",
+        "repo_full_name": "react/react",
+        "pr_number": 37487,
+        "pr_file": "compiler/crates/react_compiler_inference/src/infer_mutation_aliasing_effects.rs",
+        "discussion_id": "3924434877",
+        "commented_code": "@@ -220,14 +220,29 @@ pub fn infer_mutation_aliasing_effects(\n                 return Err(diag);\n             }\n \n-            // Queue successors\n+            // Queue successors. TS passes the same state object to every\n+            // successor; Rust has to hand each one its own copy, but the last\n+            // successor can take ownership instead of cloning. Straight-line\n+            // blocks have a single successor, so they clone not at all.\n             let successors = terminal_successors(&func.body.blocks[&block_id].terminal);\n-            for next_block_id in successors {\n+            let last = successors.len();\n+            let mut state = Some(state);\n+            for (i, next_block_id) in successors.into_iter().enumerate() {\n+                let outgoing = if i + 1 == last {\n+                    state\n+                        .take()\n+                        .expect(\"state is taken only on the last successor\")\n+                } else {\n+                    state\n+                        .as_ref()\n+                        .expect(\"state is live until the last successor\")\n+                        .clone()\n+                };",
+        "comment_created_at": "2026-09-03T12:19:54+00:00",
+        "comment_author": "javache",
+        "comment_body": "Could std::iter::repeat_n simplify this? It clones the value exactly n - 1 times and moves the original for the remaining item, preserving the optimization without the Option and expect branches.\n```suggestion\n            let outgoing_states = std::iter::repeat_n(state, successors.len());\n            for (next_block_id, outgoing) in\n                  successors.into_iter().zip(outgoing_states)\n              {\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3962962206",
+        "repo_full_name": "react/react",
+        "pr_number": 37487,
+        "pr_file": "compiler/crates/react_compiler_inference/src/infer_mutation_aliasing_effects.rs",
+        "discussion_id": "3924434877",
+        "commented_code": "@@ -220,14 +220,29 @@ pub fn infer_mutation_aliasing_effects(\n                 return Err(diag);\n             }\n \n-            // Queue successors\n+            // Queue successors. TS passes the same state object to every\n+            // successor; Rust has to hand each one its own copy, but the last\n+            // successor can take ownership instead of cloning. Straight-line\n+            // blocks have a single successor, so they clone not at all.\n             let successors = terminal_successors(&func.body.blocks[&block_id].terminal);\n-            for next_block_id in successors {\n+            let last = successors.len();\n+            let mut state = Some(state);\n+            for (i, next_block_id) in successors.into_iter().enumerate() {\n+                let outgoing = if i + 1 == last {\n+                    state\n+                        .take()\n+                        .expect(\"state is taken only on the last successor\")\n+                } else {\n+                    state\n+                        .as_ref()\n+                        .expect(\"state is live until the last successor\")\n+                        .clone()\n+                };",
+        "comment_created_at": "2026-09-08T22:49:32+00:00",
+        "comment_author": "andrewimm",
+        "comment_body": "Wow, that's exactly the functionality I need. Elegant.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

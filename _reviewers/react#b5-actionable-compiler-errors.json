@@ -1,0 +1,114 @@
+[
+  {
+    "discussion_id": "2231850322",
+    "pr_number": 34000,
+    "pr_file": "compiler/packages/babel-plugin-react-compiler/src/HIR/ObjectShape.ts",
+    "created_at": "2025-07-25T19:19:36+00:00",
+    "commented_code": "['*', {kind: 'Object', shapeId: BuiltInRefValueId}],\n ]);\n \n+addObject(BUILTIN_SHAPES, ReanimatedSharedValueId, []);",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2231850322",
+        "repo_full_name": "react/react",
+        "pr_number": 34000,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/HIR/ObjectShape.ts",
+        "discussion_id": "2231850322",
+        "commented_code": "@@ -1211,6 +1211,8 @@ addObject(BUILTIN_SHAPES, BuiltInRefValueId, [\n   ['*', {kind: 'Object', shapeId: BuiltInRefValueId}],\n ]);\n \n+addObject(BUILTIN_SHAPES, ReanimatedSharedValueId, []);",
+        "comment_created_at": "2025-07-25T19:19:36+00:00",
+        "comment_author": "josephsavona",
+        "comment_body": "Without this i got errors trying to resolve properties, because we have a shape id defined for reanimated but no shape definition. I'm not sure how we didn't run into that error before but it seems like it easily could have occurred.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2231851036",
+        "repo_full_name": "react/react",
+        "pr_number": 34000,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/HIR/ObjectShape.ts",
+        "discussion_id": "2231850322",
+        "commented_code": "@@ -1211,6 +1211,8 @@ addObject(BUILTIN_SHAPES, BuiltInRefValueId, [\n   ['*', {kind: 'Object', shapeId: BuiltInRefValueId}],\n ]);\n \n+addObject(BUILTIN_SHAPES, ReanimatedSharedValueId, []);",
+        "comment_created_at": "2025-07-25T19:20:04+00:00",
+        "comment_author": "josephsavona",
+        "comment_body": "Note that the error was an invariant which i don't think we report in eslint, so the compiler may have just been silently failing for folks using reanimated",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2593314876",
+    "pr_number": 35285,
+    "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Validation/ValidateExhaustiveDependencies.ts",
+    "created_at": "2025-12-05T16:46:23+00:00",
+    "commented_code": "context: boolean;\n       loc: SourceLocation;\n     }\n-  | {kind: 'Function'; dependencies: Set<Temporary>};\n+  | {kind: 'Aggregate'; dependencies: Set<InferredDependency>};",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2593314876",
+        "repo_full_name": "react/react",
+        "pr_number": 35285,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Validation/ValidateExhaustiveDependencies.ts",
+        "discussion_id": "2593314876",
+        "commented_code": "@@ -773,7 +893,7 @@ type Temporary =\n       context: boolean;\n       loc: SourceLocation;\n     }\n-  | {kind: 'Function'; dependencies: Set<Temporary>};\n+  | {kind: 'Aggregate'; dependencies: Set<InferredDependency>};",
+        "comment_created_at": "2025-12-05T16:46:23+00:00",
+        "comment_author": "josephsavona",
+        "comment_body": "we could add a `loc: SourceLocation` to aggregates, which would let us remember the location of the manual deps array, and use it later to construct an automated fix (`suggestion`) value",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2350252384",
+    "pr_number": 34394,
+    "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Validation/ValidateExhaustiveDependencies.ts",
+    "created_at": "2025-09-15T22:27:56+00:00",
+    "commented_code": "+/**\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+import prettyFormat from 'pretty-format';\n+import {CompilerDiagnostic, CompilerError, SourceLocation} from '..';\n+import {ErrorCategory} from '../CompilerError';\n+import {\n+  areEqualPaths,\n+  BlockId,\n+  DependencyPath,\n+  FinishMemoize,\n+  HIRFunction,\n+  Identifier,\n+  IdentifierId,\n+  InstructionKind,\n+  isSubPath,\n+  LoadGlobal,\n+  ManualMemoDependency,\n+  Place,\n+  StartMemoize,\n+} from '../HIR';\n+import {\n+  eachInstructionLValue,\n+  eachInstructionValueLValue,\n+  eachInstructionValueOperand,\n+  eachTerminalOperand,\n+} from '../HIR/visitors';\n+import {Result} from '../Utils/Result';\n+import {retainWhere} from '../Utils/utils';\n+\n+const DEBUG = false;\n+\n+/**\n+ * Validates that existing manual memoization had exhaustive dependencies.\n+ * Memoization with missing or extra reactive dependencies is invalid React\n+ * and compilation can change behavior, causing a value to be computed more\n+ * or less times.\n+ *\n+ * TODOs:\n+ * - Better handling of cases where we infer multiple dependencies related to a single\n+ *   variable. Eg if the user has dep `x` and we inferred `x.y, x.z`, the user's dep\n+ *   is sufficient.\n+ * - Handle cases where the user deps were not simple identifiers + property chains.\n+ *   We try to detect this in ValidateUseMemo but we miss some cases. The problem\n+ *   is that invalid forms can be value blocks or function calls that don't get\n+ *   removed by DCE, leaving a structure like:\n+ *\n+ * StartMemoize\n+ * t0 = <value to memoize>\n+ * ...non-DCE'd code for manual deps...\n+ * FinishMemoize decl=t0\n+ *\n+ * When we go to compute the dependencies, we then think that the user's manual dep\n+ * logic is part of what the memo computation logic.\n+ */\n+export function validateExhaustiveDependencies(\n+  fn: HIRFunction,\n+): Result<void, CompilerError> {\n+  const reactive = collectReactiveIdentifiersHIR(fn);\n+\n+  const temporaries: Map<IdentifierId, Temporary> = new Map();\n+  for (const param of fn.params) {\n+    const place = param.kind === 'Identifier' ? param : param.place;\n+    temporaries.set(place.identifier.id, {\n+      kind: 'Local',\n+      identifier: place.identifier,\n+      path: [],\n+      context: false,\n+      loc: place.loc,\n+    });\n+  }\n+  const error = new CompilerError();\n+  let startMemo: StartMemoize | null = null;\n+\n+  function onStartMemoize(\n+    value: StartMemoize,\n+    dependencies: Set<InferredDependency>,\n+    locals: Set<IdentifierId>,\n+  ): void {\n+    CompilerError.simpleInvariant(startMemo == null, {\n+      reason: 'Unexpected nested memo calls',\n+      loc: value.loc,\n+    });\n+    startMemo = value;\n+    dependencies.clear();",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2350252384",
+        "repo_full_name": "react/react",
+        "pr_number": 34394,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Validation/ValidateExhaustiveDependencies.ts",
+        "discussion_id": "2350252384",
+        "commented_code": "@@ -0,0 +1,749 @@\n+/**\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+import prettyFormat from 'pretty-format';\n+import {CompilerDiagnostic, CompilerError, SourceLocation} from '..';\n+import {ErrorCategory} from '../CompilerError';\n+import {\n+  areEqualPaths,\n+  BlockId,\n+  DependencyPath,\n+  FinishMemoize,\n+  HIRFunction,\n+  Identifier,\n+  IdentifierId,\n+  InstructionKind,\n+  isSubPath,\n+  LoadGlobal,\n+  ManualMemoDependency,\n+  Place,\n+  StartMemoize,\n+} from '../HIR';\n+import {\n+  eachInstructionLValue,\n+  eachInstructionValueLValue,\n+  eachInstructionValueOperand,\n+  eachTerminalOperand,\n+} from '../HIR/visitors';\n+import {Result} from '../Utils/Result';\n+import {retainWhere} from '../Utils/utils';\n+\n+const DEBUG = false;\n+\n+/**\n+ * Validates that existing manual memoization had exhaustive dependencies.\n+ * Memoization with missing or extra reactive dependencies is invalid React\n+ * and compilation can change behavior, causing a value to be computed more\n+ * or less times.\n+ *\n+ * TODOs:\n+ * - Better handling of cases where we infer multiple dependencies related to a single\n+ *   variable. Eg if the user has dep `x` and we inferred `x.y, x.z`, the user's dep\n+ *   is sufficient.\n+ * - Handle cases where the user deps were not simple identifiers + property chains.\n+ *   We try to detect this in ValidateUseMemo but we miss some cases. The problem\n+ *   is that invalid forms can be value blocks or function calls that don't get\n+ *   removed by DCE, leaving a structure like:\n+ *\n+ * StartMemoize\n+ * t0 = <value to memoize>\n+ * ...non-DCE'd code for manual deps...\n+ * FinishMemoize decl=t0\n+ *\n+ * When we go to compute the dependencies, we then think that the user's manual dep\n+ * logic is part of what the memo computation logic.\n+ */\n+export function validateExhaustiveDependencies(\n+  fn: HIRFunction,\n+): Result<void, CompilerError> {\n+  const reactive = collectReactiveIdentifiersHIR(fn);\n+\n+  const temporaries: Map<IdentifierId, Temporary> = new Map();\n+  for (const param of fn.params) {\n+    const place = param.kind === 'Identifier' ? param : param.place;\n+    temporaries.set(place.identifier.id, {\n+      kind: 'Local',\n+      identifier: place.identifier,\n+      path: [],\n+      context: false,\n+      loc: place.loc,\n+    });\n+  }\n+  const error = new CompilerError();\n+  let startMemo: StartMemoize | null = null;\n+\n+  function onStartMemoize(\n+    value: StartMemoize,\n+    dependencies: Set<InferredDependency>,\n+    locals: Set<IdentifierId>,\n+  ): void {\n+    CompilerError.simpleInvariant(startMemo == null, {\n+      reason: 'Unexpected nested memo calls',\n+      loc: value.loc,\n+    });\n+    startMemo = value;\n+    dependencies.clear();",
+        "comment_created_at": "2025-09-15T22:27:56+00:00",
+        "comment_author": "mofeiZ",
+        "comment_body": "super nit: should this be an assertion instead since `onFinishMemoize` already clears dependencies and locals?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "2350309805",
+        "repo_full_name": "react/react",
+        "pr_number": 34394,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Validation/ValidateExhaustiveDependencies.ts",
+        "discussion_id": "2350252384",
+        "commented_code": "@@ -0,0 +1,749 @@\n+/**\n+ * Copyright (c) Meta Platforms, Inc. and affiliates.\n+ *\n+ * This source code is licensed under the MIT license found in the\n+ * LICENSE file in the root directory of this source tree.\n+ */\n+\n+import prettyFormat from 'pretty-format';\n+import {CompilerDiagnostic, CompilerError, SourceLocation} from '..';\n+import {ErrorCategory} from '../CompilerError';\n+import {\n+  areEqualPaths,\n+  BlockId,\n+  DependencyPath,\n+  FinishMemoize,\n+  HIRFunction,\n+  Identifier,\n+  IdentifierId,\n+  InstructionKind,\n+  isSubPath,\n+  LoadGlobal,\n+  ManualMemoDependency,\n+  Place,\n+  StartMemoize,\n+} from '../HIR';\n+import {\n+  eachInstructionLValue,\n+  eachInstructionValueLValue,\n+  eachInstructionValueOperand,\n+  eachTerminalOperand,\n+} from '../HIR/visitors';\n+import {Result} from '../Utils/Result';\n+import {retainWhere} from '../Utils/utils';\n+\n+const DEBUG = false;\n+\n+/**\n+ * Validates that existing manual memoization had exhaustive dependencies.\n+ * Memoization with missing or extra reactive dependencies is invalid React\n+ * and compilation can change behavior, causing a value to be computed more\n+ * or less times.\n+ *\n+ * TODOs:\n+ * - Better handling of cases where we infer multiple dependencies related to a single\n+ *   variable. Eg if the user has dep `x` and we inferred `x.y, x.z`, the user's dep\n+ *   is sufficient.\n+ * - Handle cases where the user deps were not simple identifiers + property chains.\n+ *   We try to detect this in ValidateUseMemo but we miss some cases. The problem\n+ *   is that invalid forms can be value blocks or function calls that don't get\n+ *   removed by DCE, leaving a structure like:\n+ *\n+ * StartMemoize\n+ * t0 = <value to memoize>\n+ * ...non-DCE'd code for manual deps...\n+ * FinishMemoize decl=t0\n+ *\n+ * When we go to compute the dependencies, we then think that the user's manual dep\n+ * logic is part of what the memo computation logic.\n+ */\n+export function validateExhaustiveDependencies(\n+  fn: HIRFunction,\n+): Result<void, CompilerError> {\n+  const reactive = collectReactiveIdentifiersHIR(fn);\n+\n+  const temporaries: Map<IdentifierId, Temporary> = new Map();\n+  for (const param of fn.params) {\n+    const place = param.kind === 'Identifier' ? param : param.place;\n+    temporaries.set(place.identifier.id, {\n+      kind: 'Local',\n+      identifier: place.identifier,\n+      path: [],\n+      context: false,\n+      loc: place.loc,\n+    });\n+  }\n+  const error = new CompilerError();\n+  let startMemo: StartMemoize | null = null;\n+\n+  function onStartMemoize(\n+    value: StartMemoize,\n+    dependencies: Set<InferredDependency>,\n+    locals: Set<IdentifierId>,\n+  ): void {\n+    CompilerError.simpleInvariant(startMemo == null, {\n+      reason: 'Unexpected nested memo calls',\n+      loc: value.loc,\n+    });\n+    startMemo = value;\n+    dependencies.clear();",
+        "comment_created_at": "2025-09-15T23:19:45+00:00",
+        "comment_author": "josephsavona",
+        "comment_body": "No, deps are always aggregated and have to be cleared before entering a scope. We don't technically need to clear them when exiting a scope in onFinishMemoize but it doesn't hurt either.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2482459638",
+    "pr_number": 34995,
+    "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Validation/ValidateNoDerivedComputationsInEffects_exp.ts",
+    "created_at": "2025-10-31T19:22:03+00:00",
+    "commented_code": "typeOfValue: typeOfValue ?? 'ignored',\n     };\n \n-    if (sourcesIds !== undefined) {\n-      for (const id of sourcesIds) {\n-        const sourcePlace = this.cache.get(id)?.place;\n+    if (isNamedIdentifier(derivedVar)) {\n+      newValue.sourcesIds.add(derivedVar.identifier.id);\n+    }\n \n-        if (sourcePlace === undefined) {\n-          continue;\n-        }\n+    for (const id of sourcesIds) {\n+      const sourceMetadata = this.cache.get(id);\n \n-        /*\n-         * If the identifier of the source is a promoted identifier, then\n-         *  we should set the target as the source.\n-         */\n-        if (\n-          sourcePlace.identifier.name === null ||\n-          sourcePlace.identifier.name?.kind === 'promoted'\n-        ) {\n-          newValue.sourcesIds.add(derivedVar.identifier.id);\n-        } else {\n-          newValue.sourcesIds.add(sourcePlace.identifier.id);\n-        }\n+      if (sourceMetadata === undefined) {",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "2482459638",
+        "repo_full_name": "react/react",
+        "pr_number": 34995,
+        "pr_file": "compiler/packages/babel-plugin-react-compiler/src/Validation/ValidateNoDerivedComputationsInEffects_exp.ts",
+        "discussion_id": "2482459638",
+        "commented_code": "@@ -102,31 +102,24 @@ class DerivationCache {\n       typeOfValue: typeOfValue ?? 'ignored',\n     };\n \n-    if (sourcesIds !== undefined) {\n-      for (const id of sourcesIds) {\n-        const sourcePlace = this.cache.get(id)?.place;\n+    if (isNamedIdentifier(derivedVar)) {\n+      newValue.sourcesIds.add(derivedVar.identifier.id);\n+    }\n \n-        if (sourcePlace === undefined) {\n-          continue;\n-        }\n+    for (const id of sourcesIds) {\n+      const sourceMetadata = this.cache.get(id);\n \n-        /*\n-         * If the identifier of the source is a promoted identifier, then\n-         *  we should set the target as the source.\n-         */\n-        if (\n-          sourcePlace.identifier.name === null ||\n-          sourcePlace.identifier.name?.kind === 'promoted'\n-        ) {\n-          newValue.sourcesIds.add(derivedVar.identifier.id);\n-        } else {\n-          newValue.sourcesIds.add(sourcePlace.identifier.id);\n-        }\n+      if (sourceMetadata === undefined) {",
+        "comment_created_at": "2025-10-31T19:22:03+00:00",
+        "comment_author": "mofeiZ",
+        "comment_body": "We checked if all calls to `addDerivationEntry` only add known-sourceIds, so this should be safe to remove (or assert with `CompilerError.invariant`)",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

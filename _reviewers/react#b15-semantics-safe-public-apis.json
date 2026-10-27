@@ -1,0 +1,70 @@
+[
+  {
+    "discussion_id": "4340059144",
+    "pr_number": 37895,
+    "pr_file": "compiler/crates/react_compiler_hir/src/globals.rs",
+    "created_at": "2026-10-21T17:46:35+00:00",
+    "commented_code": "intersection_observer_ctor,\n     );\n \n+    let resize_observer_ctor = add_function(\n+        shapes,\n+        Vec::new(),\n+        FunctionSignatureBuilder {\n+            // The callback is retained for later delivery, not invoked by construction.\n+            positional_params: vec![Effect::Freeze, Effect::Read],",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "4340059144",
+        "repo_full_name": "react/react",
+        "pr_number": 37895,
+        "pr_file": "compiler/crates/react_compiler_hir/src/globals.rs",
+        "discussion_id": "4340059144",
+        "commented_code": "@@ -2348,6 +2348,41 @@ fn build_typed_globals(\n         intersection_observer_ctor,\n     );\n \n+    let resize_observer_ctor = add_function(\n+        shapes,\n+        Vec::new(),\n+        FunctionSignatureBuilder {\n+            // The callback is retained for later delivery, not invoked by construction.\n+            positional_params: vec![Effect::Freeze, Effect::Read],",
+        "comment_created_at": "2026-10-21T17:46:35+00:00",
+        "comment_author": "javache",
+        "comment_body": "What's the 2nd param for? ResizeObserver only has a single constructor param.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4349664315",
+        "repo_full_name": "react/react",
+        "pr_number": 37895,
+        "pr_file": "compiler/crates/react_compiler_hir/src/globals.rs",
+        "discussion_id": "4340059144",
+        "commented_code": "@@ -2348,6 +2348,41 @@ fn build_typed_globals(\n         intersection_observer_ctor,\n     );\n \n+    let resize_observer_ctor = add_function(\n+        shapes,\n+        Vec::new(),\n+        FunctionSignatureBuilder {\n+            // The callback is retained for later delivery, not invoked by construction.\n+            positional_params: vec![Effect::Freeze, Effect::Read],",
+        "comment_created_at": "2026-10-22T14:35:25+00:00",
+        "comment_author": "zhoubiao188",
+        "comment_body": "You're right \u2014 good catch. `ResizeObserver` only takes the callback; the `{box}` options belong to `observe(target, options)`. I had copied the shape from `IntersectionObserver`, where the options really are a second constructor argument.\n\nDropped the second positional param in both the TS and Rust globals, so `ResizeObserver` and `MutationObserver` are now both modeled with a single `Freeze`d callback.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3390816548",
+    "pr_number": 36731,
+    "pr_file": "compiler/crates/react_compiler_diagnostics/src/js_string.rs",
+    "created_at": "2026-06-10T19:00:27+00:00",
+    "commented_code": "+//! A JavaScript string value. JS strings are sequences of UTF-16 code units\n+//! with no validity requirement, so a value can contain unpaired surrogate\n+//! halves that Rust's `String` cannot represent. `JsString` keeps the common\n+//! valid case as UTF-8 and falls back to code units only when the value is\n+//! ill-formed, so the compiler computes on true program values instead of\n+//! replacement characters or escape hatches.\n+//!\n+//! Wire format: the babel bridge transports lone surrogates as\n+//! `__SURROGATE_XXXX__` markers (see `sanitizeJsonSurrogates` in bridge.ts),\n+//! because serde_json can neither parse nor emit a lone `\\uXXXX` escape.\n+//! Serde for `JsString` decodes and re-emits that marker form, which keeps the\n+//! JS side of the bridge unchanged.\n+\n+use std::fmt;\n+\n+use serde::Deserialize;\n+use serde::Serialize;\n+\n+#[derive(Debug, Clone, PartialEq, Eq, Hash)]",
+    "repo_full_name": "react/react",
+    "discussion_comments": [
+      {
+        "comment_id": "3390816548",
+        "repo_full_name": "react/react",
+        "pr_number": 36731,
+        "pr_file": "compiler/crates/react_compiler_diagnostics/src/js_string.rs",
+        "discussion_id": "3390816548",
+        "commented_code": "@@ -0,0 +1,289 @@\n+//! A JavaScript string value. JS strings are sequences of UTF-16 code units\n+//! with no validity requirement, so a value can contain unpaired surrogate\n+//! halves that Rust's `String` cannot represent. `JsString` keeps the common\n+//! valid case as UTF-8 and falls back to code units only when the value is\n+//! ill-formed, so the compiler computes on true program values instead of\n+//! replacement characters or escape hatches.\n+//!\n+//! Wire format: the babel bridge transports lone surrogates as\n+//! `__SURROGATE_XXXX__` markers (see `sanitizeJsonSurrogates` in bridge.ts),\n+//! because serde_json can neither parse nor emit a lone `\\uXXXX` escape.\n+//! Serde for `JsString` decodes and re-emits that marker form, which keeps the\n+//! JS side of the bridge unchanged.\n+\n+use std::fmt;\n+\n+use serde::Deserialize;\n+use serde::Serialize;\n+\n+#[derive(Debug, Clone, PartialEq, Eq, Hash)]",
+        "comment_created_at": "2026-06-10T19:00:27+00:00",
+        "comment_author": "mofeiZ",
+        "comment_body": "Gotcha, deriving Hash / PartialEq / Eq are safe because we always construct JsString from marked strings or by calling `from_code_units`.\n\nIt feels a bit dangerous keeping this as a pub enum since there's nothing stopping a caller from manually creating `JsStrings` without enforcing the unpaired surrogate <--> wtf16 invariant. What do you think about exposing string refs? something like\n```\npub struct JsString(Repr);\n\nenum Repr {\n    Utf8(String),\n    Wtf16(Vec<u16>),\n}\n\npub enum JsStringRef<'a> {\n    Utf8(&'a str),\n    Wtf16(&'a [u16]),\n}\n\nimpl JsString {\n    pub fn from_code_units(u: &[u16]) -> Self { /* canonicalizes */ }\n    pub fn view(&self) -> JsStringRef<'_> { /* &self.0 \u2192 borrowed view */ }\n    // ...\n}\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3393044874",
+        "repo_full_name": "react/react",
+        "pr_number": 36731,
+        "pr_file": "compiler/crates/react_compiler_diagnostics/src/js_string.rs",
+        "discussion_id": "3390816548",
+        "commented_code": "@@ -0,0 +1,289 @@\n+//! A JavaScript string value. JS strings are sequences of UTF-16 code units\n+//! with no validity requirement, so a value can contain unpaired surrogate\n+//! halves that Rust's `String` cannot represent. `JsString` keeps the common\n+//! valid case as UTF-8 and falls back to code units only when the value is\n+//! ill-formed, so the compiler computes on true program values instead of\n+//! replacement characters or escape hatches.\n+//!\n+//! Wire format: the babel bridge transports lone surrogates as\n+//! `__SURROGATE_XXXX__` markers (see `sanitizeJsonSurrogates` in bridge.ts),\n+//! because serde_json can neither parse nor emit a lone `\\uXXXX` escape.\n+//! Serde for `JsString` decodes and re-emits that marker form, which keeps the\n+//! JS side of the bridge unchanged.\n+\n+use std::fmt;\n+\n+use serde::Deserialize;\n+use serde::Serialize;\n+\n+#[derive(Debug, Clone, PartialEq, Eq, Hash)]",
+        "comment_created_at": "2026-06-11T03:20:32+00:00",
+        "comment_author": "poteto",
+        "comment_body": "good idea, incorporated!",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

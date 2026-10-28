@@ -1,0 +1,136 @@
+[
+  {
+    "discussion_id": "4364421853",
+    "pr_number": 15095,
+    "pr_file": "apps/examples/desktop-app/webview/hooks/composer-suggestions/use-verbs.ts",
+    "created_at": "2026-10-26T16:53:09+00:00",
+    "commented_code": "+\"use client\";\n+\n+import {\n+\ttype ComposerSuggestionItem,\n+\ttype PluginUiInput,\n+\tSUGGESTION_SEND_VERDICT_MS,\n+\ttype SuggestionRef,\n+\ttype SuggestionsLocal,\n+} from \"@cline/shared/browser\";\n+import {\n+\ttype Dispatch,\n+\ttype RefObject,\n+\ttype SetStateAction,\n+\tuseCallback,\n+\tuseRef,\n+} from \"react\";\n+import { type SendSnapshot, snapshotAtSend } from \"./sent-prompt\";\n+import { delay, msSinceExposed } from \"./timing\";\n+import type {\n+\tComposerSuggestionsOptions,\n+\tLastSkip,\n+\tReadyView,\n+\tSuggestionComposer,\n+\tSuggestionsDispatch,\n+\tSuggestionsInvoke,\n+} from \"./types\";\n+\n+export function useSuggestionVerbs({\n+\tinvoke,\n+\tboundRef,\n+\tlocalRef,\n+\tlatest,\n+\tdispatch,\n+\tlastSkip,\n+\tsetLastSkip,\n+\tsetSendingItemId,\n+\tsendSnapshotRef,\n+}: {\n+\tinvoke: SuggestionsInvoke;\n+\tboundRef: RefObject<string>;\n+\tlocalRef: RefObject<SuggestionsLocal>;\n+\tlatest: RefObject<ComposerSuggestionsOptions>;\n+\tdispatch: SuggestionsDispatch;\n+\tlastSkip: LastSkip | undefined;\n+\tsetLastSkip: Dispatch<SetStateAction<LastSkip | undefined>>;\n+\tsetSendingItemId: Dispatch<SetStateAction<string | undefined>>;\n+\tsendSnapshotRef: RefObject<SendSnapshot>;\n+}) {\n+\t/** A one-key Send is waiting for its verdict; another press then sends nothing. */\n+\tconst sendInFlightRef = useRef(false);\n+\n+\tconst signalInert = useCallback(\n+\t\t(reason: \"not_exposed\" | \"unsendable\" | \"stale\") => {\n+\t\t\tconst revision = localRef.current.envelope?.state?.revision;\n+\t\t\tvoid invoke(\n+\t\t\t\t{\n+\t\t\t\t\tverb: \"signal\",\n+\t\t\t\t\tname: \"key_inert\",\n+\t\t\t\t\treason,\n+\t\t\t\t\t...(revision ? { revision } : {}),\n+\t\t\t\t},\n+\t\t\t\t{ applyReply: false },\n+\t\t\t);\n+\t\t},\n+\t\t[invoke, localRef],\n+\t);\n+\n+\tconst use = useCallback(\n+\t\t(\n+\t\t\titem: ComposerSuggestionItem,\n+\t\t\tinput: PluginUiInput,\n+\t\t\tcomposer: SuggestionComposer,\n+\t\t) => {\n+\t\t\tconst current = localRef.current;\n+\t\t\tconst revision = current.envelope?.state?.revision;\n+\t\t\tif (!revision) return;\n+\t\t\tcomposer.setDraft(item.prompt);\n+\t\t\tcomposer.focus();\n+\t\t\tdispatch({ type: \"used\", itemId: item.id });\n+\t\t\tconst boundSessionId = boundRef.current;\n+\t\t\tvoid invoke({\n+\t\t\t\tverb: \"use\",\n+\t\t\t\trevision,\n+\t\t\t\titemId: item.id,\n+\t\t\t\tinput,\n+\t\t\t\t...msSinceExposed(current),\n+\t\t\t}).then((result) => {\n+\t\t\t\tif (result?.outcome !== \"refused\") return;\n+\t\t\t\tif (boundRef.current !== boundSessionId) return;\n+\t\t\t\tconst used = localRef.current.used;\n+\t\t\t\tif (used?.itemId === item.id && used.revision === revision) {\n+\t\t\t\t\tdispatch({ type: \"draft_cleared\" });\n+\t\t\t\t}\n+\t\t\t\tif (composer.draft() === item.prompt) composer.setDraft(\"\");\n+\t\t\t});\n+\t\t},\n+\t\t[boundRef, dispatch, invoke, localRef],\n+\t);\n+\n+\tconst send = useCallback(\n+\t\tasync (view: ReadyView, input: PluginUiInput) => {\n+\t\t\tif (sendInFlightRef.current) return;\n+\t\t\tconst item = view.highlighted;\n+\t\t\tif (!view.canSend) {\n+\t\t\t\tsignalInert(item.sendable ? \"not_exposed\" : \"unsendable\");\n+\t\t\t\treturn;\n+\t\t\t}\n+\t\t\tconst current = localRef.current;\n+\t\t\tconst revision = current.envelope?.state?.revision;\n+\t\t\tconst boundSessionId = boundRef.current;\n+\t\t\tif (!revision || !boundSessionId) return;\n+\t\t\tconst ref: SuggestionRef = {\n+\t\t\t\titemId: item.id,\n+\t\t\t\trevision,\n+\t\t\t\tprompt: item.prompt,\n+\t\t\t\tlabel: item.label,\n+\t\t\t\ttone: item.tone,\n+\t\t\t};\n+\t\t\tsendInFlightRef.current = true;\n+\t\t\tsetSendingItemId(item.id);\n+\t\t\ttry {\n+\t\t\t\tconst verdict = await Promise.race([\n+\t\t\t\t\tinvoke({\n+\t\t\t\t\t\tverb: \"send\",\n+\t\t\t\t\t\trevision,\n+\t\t\t\t\t\titemId: item.id,\n+\t\t\t\t\t\tinput,\n+\t\t\t\t\t\t...msSinceExposed(current),\n+\t\t\t\t\t}),\n+\t\t\t\t\tdelay(SUGGESTION_SEND_VERDICT_MS),\n+\t\t\t\t]);\n+\t\t\t\tif (verdict?.outcome === \"refused\") return;\n+\t\t\t\tif (boundRef.current !== boundSessionId) return;\n+\t\t\t\tsendSnapshotRef.current = snapshotAtSend(latest.current);\n+\t\t\t\tlatest.current.onSend(ref.prompt);",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4380037261",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15095,
+        "pr_file": "apps/examples/desktop-app/webview/hooks/composer-suggestions/use-verbs.ts",
+        "discussion_id": "4364421853",
+        "commented_code": "@@ -0,0 +1,302 @@\n+\"use client\";\n+\n+import {\n+\ttype ComposerSuggestionItem,\n+\ttype PluginUiInput,\n+\tSUGGESTION_SEND_VERDICT_MS,\n+\ttype SuggestionRef,\n+\ttype SuggestionsLocal,\n+} from \"@cline/shared/browser\";\n+import {\n+\ttype Dispatch,\n+\ttype RefObject,\n+\ttype SetStateAction,\n+\tuseCallback,\n+\tuseRef,\n+} from \"react\";\n+import { type SendSnapshot, snapshotAtSend } from \"./sent-prompt\";\n+import { delay, msSinceExposed } from \"./timing\";\n+import type {\n+\tComposerSuggestionsOptions,\n+\tLastSkip,\n+\tReadyView,\n+\tSuggestionComposer,\n+\tSuggestionsDispatch,\n+\tSuggestionsInvoke,\n+} from \"./types\";\n+\n+export function useSuggestionVerbs({\n+\tinvoke,\n+\tboundRef,\n+\tlocalRef,\n+\tlatest,\n+\tdispatch,\n+\tlastSkip,\n+\tsetLastSkip,\n+\tsetSendingItemId,\n+\tsendSnapshotRef,\n+}: {\n+\tinvoke: SuggestionsInvoke;\n+\tboundRef: RefObject<string>;\n+\tlocalRef: RefObject<SuggestionsLocal>;\n+\tlatest: RefObject<ComposerSuggestionsOptions>;\n+\tdispatch: SuggestionsDispatch;\n+\tlastSkip: LastSkip | undefined;\n+\tsetLastSkip: Dispatch<SetStateAction<LastSkip | undefined>>;\n+\tsetSendingItemId: Dispatch<SetStateAction<string | undefined>>;\n+\tsendSnapshotRef: RefObject<SendSnapshot>;\n+}) {\n+\t/** A one-key Send is waiting for its verdict; another press then sends nothing. */\n+\tconst sendInFlightRef = useRef(false);\n+\n+\tconst signalInert = useCallback(\n+\t\t(reason: \"not_exposed\" | \"unsendable\" | \"stale\") => {\n+\t\t\tconst revision = localRef.current.envelope?.state?.revision;\n+\t\t\tvoid invoke(\n+\t\t\t\t{\n+\t\t\t\t\tverb: \"signal\",\n+\t\t\t\t\tname: \"key_inert\",\n+\t\t\t\t\treason,\n+\t\t\t\t\t...(revision ? { revision } : {}),\n+\t\t\t\t},\n+\t\t\t\t{ applyReply: false },\n+\t\t\t);\n+\t\t},\n+\t\t[invoke, localRef],\n+\t);\n+\n+\tconst use = useCallback(\n+\t\t(\n+\t\t\titem: ComposerSuggestionItem,\n+\t\t\tinput: PluginUiInput,\n+\t\t\tcomposer: SuggestionComposer,\n+\t\t) => {\n+\t\t\tconst current = localRef.current;\n+\t\t\tconst revision = current.envelope?.state?.revision;\n+\t\t\tif (!revision) return;\n+\t\t\tcomposer.setDraft(item.prompt);\n+\t\t\tcomposer.focus();\n+\t\t\tdispatch({ type: \"used\", itemId: item.id });\n+\t\t\tconst boundSessionId = boundRef.current;\n+\t\t\tvoid invoke({\n+\t\t\t\tverb: \"use\",\n+\t\t\t\trevision,\n+\t\t\t\titemId: item.id,\n+\t\t\t\tinput,\n+\t\t\t\t...msSinceExposed(current),\n+\t\t\t}).then((result) => {\n+\t\t\t\tif (result?.outcome !== \"refused\") return;\n+\t\t\t\tif (boundRef.current !== boundSessionId) return;\n+\t\t\t\tconst used = localRef.current.used;\n+\t\t\t\tif (used?.itemId === item.id && used.revision === revision) {\n+\t\t\t\t\tdispatch({ type: \"draft_cleared\" });\n+\t\t\t\t}\n+\t\t\t\tif (composer.draft() === item.prompt) composer.setDraft(\"\");\n+\t\t\t});\n+\t\t},\n+\t\t[boundRef, dispatch, invoke, localRef],\n+\t);\n+\n+\tconst send = useCallback(\n+\t\tasync (view: ReadyView, input: PluginUiInput) => {\n+\t\t\tif (sendInFlightRef.current) return;\n+\t\t\tconst item = view.highlighted;\n+\t\t\tif (!view.canSend) {\n+\t\t\t\tsignalInert(item.sendable ? \"not_exposed\" : \"unsendable\");\n+\t\t\t\treturn;\n+\t\t\t}\n+\t\t\tconst current = localRef.current;\n+\t\t\tconst revision = current.envelope?.state?.revision;\n+\t\t\tconst boundSessionId = boundRef.current;\n+\t\t\tif (!revision || !boundSessionId) return;\n+\t\t\tconst ref: SuggestionRef = {\n+\t\t\t\titemId: item.id,\n+\t\t\t\trevision,\n+\t\t\t\tprompt: item.prompt,\n+\t\t\t\tlabel: item.label,\n+\t\t\t\ttone: item.tone,\n+\t\t\t};\n+\t\t\tsendInFlightRef.current = true;\n+\t\t\tsetSendingItemId(item.id);\n+\t\t\ttry {\n+\t\t\t\tconst verdict = await Promise.race([\n+\t\t\t\t\tinvoke({\n+\t\t\t\t\t\tverb: \"send\",\n+\t\t\t\t\t\trevision,\n+\t\t\t\t\t\titemId: item.id,\n+\t\t\t\t\t\tinput,\n+\t\t\t\t\t\t...msSinceExposed(current),\n+\t\t\t\t\t}),\n+\t\t\t\t\tdelay(SUGGESTION_SEND_VERDICT_MS),\n+\t\t\t\t]);\n+\t\t\t\tif (verdict?.outcome === \"refused\") return;\n+\t\t\t\tif (boundRef.current !== boundSessionId) return;\n+\t\t\t\tsendSnapshotRef.current = snapshotAtSend(latest.current);\n+\t\t\t\tlatest.current.onSend(ref.prompt);",
+        "comment_created_at": "2026-10-26T16:53:09+00:00",
+        "comment_author": "harrisonofcline",
+        "comment_body": "Fixed in 178682bae4. A one-key Send captures the files attached at the press. Once the verdict arrives, it sends only those that are still attached, through a new `takeFiles(wanted)` on the pending-attachments hook. Files added during the wait stay on the composer with the draft being typed, and a file removed during the wait doesn't go out.\n\nCovered by \"leaves a file added during a one-key Send's wait on the composer when its verdict lands / when its verdict wait runs out\" and \"leaves out a file removed from the composer while a one-key Send waited for its verdict\" in `use-verbs.test.tsx`, plus `use-pending-attachments.test.tsx` (now in `test:sidecar`).\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4366219786",
+    "pr_number": 15322,
+    "pr_file": "apps/examples/desktop-app/webview/lib/session-changes.ts",
+    "created_at": "2026-10-24T06:14:24+00:00",
+    "commented_code": "+import { useEffect, useRef, useState } from \"react\";\n+import { desktopClient } from \"./desktop-client\";\n+\n+/** One file from the sidecar's `get_session_changes`. */\n+export type SessionChangeFile = {\n+\t/** Repository-root-relative, forward slashes. */\n+\tpath: string;\n+\tstatus: \"A\" | \"M\" | \"D\";\n+\t/** Null for binary files. */\n+\tadditions: number | null;\n+\tdeletions: number | null;\n+\toldOid?: string;\n+\tnewOid?: string;\n+};\n+\n+export type SessionChangeSet = {\n+\tfiles: SessionChangeFile[];\n+\tomitted: number;\n+};\n+\n+export type SessionChanges = {\n+\troot?: string;\n+\tsession?: SessionChangeSet;\n+\t/** The latest turn, identified by its run count. */\n+\tlastTurn?: SessionChangeSet & { runCount: number };\n+\t/** Set when the workspace has no git checkpoints to compare. */\n+\tunavailableReason?: string;\n+};\n+\n+export type SessionChangeContents = {\n+\toldText?: string;\n+\tnewText: string;\n+\tbinary: boolean;\n+\ttruncated: boolean;\n+};\n+\n+export type ChangesScope = \"last-turn\" | \"session\";\n+\n+export function sumChanges(files: readonly SessionChangeFile[]): {\n+\tadditions: number;\n+\tdeletions: number;\n+} {\n+\treturn files.reduce(\n+\t\t(totals, file) => ({\n+\t\t\tadditions: totals.additions + (file.additions ?? 0),\n+\t\t\tdeletions: totals.deletions + (file.deletions ?? 0),\n+\t\t}),\n+\t\t{ additions: 0, deletions: 0 },\n+\t);\n+}\n+\n+const REFRESH_DEBOUNCE_MS = 400;\n+\n+/**\n+ * Last-turn and whole-session changes for a local session, refetched whenever\n+ * `refreshKey` changes (tool edits and turn boundaries). Errors, such as an\n+ * untrusted connection, read as unavailable so hosts fall back to the\n+ * tool-event reconstruction. `current` is false until the fetch for the\n+ * latest `refreshKey` lands, so hosts can hold back views that must not show\n+ * the previous turn's changes.\n+ */\n+export function useSessionChanges({\n+\tenabled,\n+\tenvironmentId,\n+\tsessionId,\n+\tcwd,\n+\trefreshKey,\n+}: {\n+\tenabled: boolean;\n+\tenvironmentId: string;\n+\tsessionId: string | null;\n+\tcwd: string;\n+\trefreshKey: string;\n+}): { changes: SessionChanges | null; current: boolean } {\n+\tconst [result, setResult] = useState<{\n+\t\tkey: string;\n+\t\tchanges: SessionChanges;\n+\t} | null>(null);\n+\tconst requestRef = useRef(0);\n+\n+\t// A different session never shows the previous one's changes.\n+\tuseEffect(() => {\n+\t\tvoid sessionId;\n+\t\tvoid cwd;\n+\t\tsetResult(null);\n+\t}, [sessionId, cwd]);\n+\n+\tuseEffect(() => {\n+\t\tif (!enabled || !sessionId || !cwd) return;\n+\t\tconst request = ++requestRef.current;\n+\t\tconst timer = window.setTimeout(() => {\n+\t\t\tdesktopClient\n+\t\t\t\t.invoke<SessionChanges>(\"get_session_changes\", {\n+\t\t\t\t\tenvironmentId,\n+\t\t\t\t\tsessionId,\n+\t\t\t\t\tcwd,\n+\t\t\t\t})\n+\t\t\t\t.catch((error: unknown) => ({\n+\t\t\t\t\tunavailableReason:\n+\t\t\t\t\t\terror instanceof Error ? error.message : String(error),\n+\t\t\t\t}))\n+\t\t\t\t.then((next) => {\n+\t\t\t\t\tif (request === requestRef.current) {\n+\t\t\t\t\t\tsetResult({ key: refreshKey, changes: next });\n+\t\t\t\t\t}\n+\t\t\t\t});\n+\t\t}, REFRESH_DEBOUNCE_MS);\n+\t\treturn () => window.clearTimeout(timer);\n+\t}, [enabled, environmentId, sessionId, cwd, refreshKey]);\n+\n+\treturn {\n+\t\tchanges: result?.changes ?? null,\n+\t\tcurrent: result?.key === refreshKey,",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4366221938",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15322,
+        "pr_file": "apps/examples/desktop-app/webview/lib/session-changes.ts",
+        "discussion_id": "4366219786",
+        "commented_code": "@@ -0,0 +1,115 @@\n+import { useEffect, useRef, useState } from \"react\";\n+import { desktopClient } from \"./desktop-client\";\n+\n+/** One file from the sidecar's `get_session_changes`. */\n+export type SessionChangeFile = {\n+\t/** Repository-root-relative, forward slashes. */\n+\tpath: string;\n+\tstatus: \"A\" | \"M\" | \"D\";\n+\t/** Null for binary files. */\n+\tadditions: number | null;\n+\tdeletions: number | null;\n+\toldOid?: string;\n+\tnewOid?: string;\n+};\n+\n+export type SessionChangeSet = {\n+\tfiles: SessionChangeFile[];\n+\tomitted: number;\n+};\n+\n+export type SessionChanges = {\n+\troot?: string;\n+\tsession?: SessionChangeSet;\n+\t/** The latest turn, identified by its run count. */\n+\tlastTurn?: SessionChangeSet & { runCount: number };\n+\t/** Set when the workspace has no git checkpoints to compare. */\n+\tunavailableReason?: string;\n+};\n+\n+export type SessionChangeContents = {\n+\toldText?: string;\n+\tnewText: string;\n+\tbinary: boolean;\n+\ttruncated: boolean;\n+};\n+\n+export type ChangesScope = \"last-turn\" | \"session\";\n+\n+export function sumChanges(files: readonly SessionChangeFile[]): {\n+\tadditions: number;\n+\tdeletions: number;\n+} {\n+\treturn files.reduce(\n+\t\t(totals, file) => ({\n+\t\t\tadditions: totals.additions + (file.additions ?? 0),\n+\t\t\tdeletions: totals.deletions + (file.deletions ?? 0),\n+\t\t}),\n+\t\t{ additions: 0, deletions: 0 },\n+\t);\n+}\n+\n+const REFRESH_DEBOUNCE_MS = 400;\n+\n+/**\n+ * Last-turn and whole-session changes for a local session, refetched whenever\n+ * `refreshKey` changes (tool edits and turn boundaries). Errors, such as an\n+ * untrusted connection, read as unavailable so hosts fall back to the\n+ * tool-event reconstruction. `current` is false until the fetch for the\n+ * latest `refreshKey` lands, so hosts can hold back views that must not show\n+ * the previous turn's changes.\n+ */\n+export function useSessionChanges({\n+\tenabled,\n+\tenvironmentId,\n+\tsessionId,\n+\tcwd,\n+\trefreshKey,\n+}: {\n+\tenabled: boolean;\n+\tenvironmentId: string;\n+\tsessionId: string | null;\n+\tcwd: string;\n+\trefreshKey: string;\n+}): { changes: SessionChanges | null; current: boolean } {\n+\tconst [result, setResult] = useState<{\n+\t\tkey: string;\n+\t\tchanges: SessionChanges;\n+\t} | null>(null);\n+\tconst requestRef = useRef(0);\n+\n+\t// A different session never shows the previous one's changes.\n+\tuseEffect(() => {\n+\t\tvoid sessionId;\n+\t\tvoid cwd;\n+\t\tsetResult(null);\n+\t}, [sessionId, cwd]);\n+\n+\tuseEffect(() => {\n+\t\tif (!enabled || !sessionId || !cwd) return;\n+\t\tconst request = ++requestRef.current;\n+\t\tconst timer = window.setTimeout(() => {\n+\t\t\tdesktopClient\n+\t\t\t\t.invoke<SessionChanges>(\"get_session_changes\", {\n+\t\t\t\t\tenvironmentId,\n+\t\t\t\t\tsessionId,\n+\t\t\t\t\tcwd,\n+\t\t\t\t})\n+\t\t\t\t.catch((error: unknown) => ({\n+\t\t\t\t\tunavailableReason:\n+\t\t\t\t\t\terror instanceof Error ? error.message : String(error),\n+\t\t\t\t}))\n+\t\t\t\t.then((next) => {\n+\t\t\t\t\tif (request === requestRef.current) {\n+\t\t\t\t\t\tsetResult({ key: refreshKey, changes: next });\n+\t\t\t\t\t}\n+\t\t\t\t});\n+\t\t}, REFRESH_DEBOUNCE_MS);\n+\t\treturn () => window.clearTimeout(timer);\n+\t}, [enabled, environmentId, sessionId, cwd, refreshKey]);\n+\n+\treturn {\n+\t\tchanges: result?.changes ?? null,\n+\t\tcurrent: result?.key === refreshKey,",
+        "comment_created_at": "2026-10-24T06:14:24+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Valid, fixed in 9623170f7. The refresh key now includes the user message count (`${status}:${users}:${tools}`), so a new turn always changes the key even without tool calls, and the previous turn's fetched changes can no longer count as current.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4332237059",
+    "pr_number": 15237,
+    "pr_file": "apps/vscode/webview-ui/src/components/chat/chat-view/hooks/useThinkingLoaderRow.ts",
+    "created_at": "2026-10-21T01:54:08+00:00",
+    "commented_code": "}: ThinkingLoaderInputs): boolean {\n \tconst lastMsg = modifiedMessages[modifiedMessages.length - 1]\n \n+\t// A provisioning cloud sandbox shows its own progress card.\n+\tif (lastRawMessage?.type === \"say\" && lastRawMessage.say === \"cloud_provisioning\") {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4332237059",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15237,
+        "pr_file": "apps/vscode/webview-ui/src/components/chat/chat-view/hooks/useThinkingLoaderRow.ts",
+        "discussion_id": "4332237059",
+        "commented_code": "@@ -52,6 +52,11 @@ export function computeIsWaitingForResponse({\n }: ThinkingLoaderInputs): boolean {\n \tconst lastMsg = modifiedMessages[modifiedMessages.length - 1]\n \n+\t// A provisioning cloud sandbox shows its own progress card.\n+\tif (lastRawMessage?.type === \"say\" && lastRawMessage.say === \"cloud_provisioning\") {",
+        "comment_created_at": "2026-10-21T01:54:08+00:00",
+        "comment_author": "dominiccooney",
+        "comment_body": "**[P2] Apply provisioning suppression to the combined loader condition.** On a new cloud send, `beginPendingResponse` sets the optimistic marker. The coordinator emits `cloud_provisioning` through the partial-message stream before the full-state acknowledgement arrives; partial messages leave `turnState` unchanged, and that acknowledgement goes through the 50 ms state-post debounce. During this handoff, `forceShow` is still true and the provisioning message has `partial: false`, so `optimisticShow` below overrides this `false` and renders \u201cThinking\u2026\u201d alongside the progress card. This contradicts the intended suppression and adds an avoidable loader insertion/removal at startup.\n\nGate the combined condition passed to `useDebouncedLoaderVisibility` on the provisioning tail, keeping the hook call unconditional. The added helper-only test misses this: rendering the full hook with a provisioning tail, stale idle `turnState`, and `forceShow: true` currently returns visible. Cover that combination, then verify an `api_req_started` successor can show the loader again.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4332853558",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15237,
+        "pr_file": "apps/vscode/webview-ui/src/components/chat/chat-view/hooks/useThinkingLoaderRow.ts",
+        "discussion_id": "4332237059",
+        "commented_code": "@@ -52,6 +52,11 @@ export function computeIsWaitingForResponse({\n }: ThinkingLoaderInputs): boolean {\n \tconst lastMsg = modifiedMessages[modifiedMessages.length - 1]\n \n+\t// A provisioning cloud sandbox shows its own progress card.\n+\tif (lastRawMessage?.type === \"say\" && lastRawMessage.say === \"cloud_provisioning\") {",
+        "comment_created_at": "2026-10-21T03:50:47+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Good catch, thanks. Fixed in f8d9ca206: the provisioning check now gates the combined condition passed to `useDebouncedLoaderVisibility` (`!cloudProvisioning && (optimisticShow || isWaitingForResponse || handoffToReasoningPending)`), and the hook call stays unconditional. I moved the check out of `computeIsWaitingForResponse` instead of duplicating it, so that helper matches main again.\r\n\r\nI replaced the helper-only test with a full-hook test: a provisioning tail, a stale idle `turnState`, and `forceShow: true` keep the loader hidden, then an `api_req_started` successor shows it again. The test fails on the previous code (`expected true to be false`) and passes with the fix.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4233048173",
+    "pr_number": 14957,
+    "pr_file": "apps/examples/desktop-app/webview/hooks/use-chat-session.ts",
+    "created_at": "2026-10-09T17:57:14+00:00",
+    "commented_code": "}\n \t\t\tsetSessionId(id);\n \t\t\tsetIsCloudSessionExpired(false);\n+\t\t\tfor (const warning of payload.pluginWarnings ?? []) {\n+\t\t\t\taddMessage(makePluginIssueMessage(id, warning));\n+\t\t\t}",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4233062271",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14957,
+        "pr_file": "apps/examples/desktop-app/webview/hooks/use-chat-session.ts",
+        "discussion_id": "4233048173",
+        "commented_code": "@@ -2641,6 +2679,9 @@ export function useChatSession(environmentId: string) {\n \t\t\t}\n \t\t\tsetSessionId(id);\n \t\t\tsetIsCloudSessionExpired(false);\n+\t\t\tfor (const warning of payload.pluginWarnings ?? []) {\n+\t\t\t\taddMessage(makePluginIssueMessage(id, warning));\n+\t\t\t}",
+        "comment_created_at": "2026-10-09T17:57:14+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "Valid, fixed in 90df99574b. `applyCanonicalHistory` now returns `withLivePluginIssues(sessionMessages, historyMessages)`, which carries the session's live plugin-warning lines (`meta.messageKind: \"plugin_issue\"`) into the saved history, each inserted at its original position by `createdAt`. It also skips any line whose id is already in history. Tests: the hook test now finishes a queued turn so the reconcile path replaces the transcript with saved history that has no warnings. It asserts the saved answer is applied and both the start warning and the streamed notice are still there, and it fails without the change. Unit tests in history-reconciliation.test.ts cover ordering and the no-warnings case (history is returned unchanged). Residual: the warnings aren't persisted, so reopening the session later from history (a fresh hydrate) won't show them. The start-of-session information is gone at that point, and a new session reports any plugin that still fails.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4243774553",
+    "pr_number": 14957,
+    "pr_file": "apps/examples/desktop-app/webview/hooks/use-chat-session.ts",
+    "created_at": "2026-10-12T20:55:27+00:00",
+    "commented_code": "}\n \t\t\tsetSessionId(id);\n \t\t\tsetIsCloudSessionExpired(false);\n+\t\t\tfor (const warning of payload.pluginWarnings ?? []) {\n+\t\t\t\taddMessage(makePluginIssueMessage(id, warning));\n+\t\t\t}",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4252244052",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14957,
+        "pr_file": "apps/examples/desktop-app/webview/hooks/use-chat-session.ts",
+        "discussion_id": "4243774553",
+        "commented_code": "@@ -2641,6 +2679,9 @@ export function useChatSession(environmentId: string) {\n \t\t\t}\n \t\t\tsetSessionId(id);\n \t\t\tsetIsCloudSessionExpired(false);\n+\t\t\tfor (const warning of payload.pluginWarnings ?? []) {\n+\t\t\t\taddMessage(makePluginIssueMessage(id, warning));\n+\t\t\t}",
+        "comment_created_at": "2026-10-12T20:55:27+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Valid. `sendPrompt` adds the optimistic user bubble before `startSession`, and `startSession` appends the plugin warning after it, so the backward search in the `chat_queued_prompt_start` handler stops at the warning and appends the prompt again. It's cosmetic and lasts until saved history replaces the live transcript. Fix: skip rows with `meta.messageKind === \"plugin_issue\"` in that loop. Will take it with the P1 fix.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4252522879",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14957,
+        "pr_file": "apps/examples/desktop-app/webview/hooks/use-chat-session.ts",
+        "discussion_id": "4243774553",
+        "commented_code": "@@ -2641,6 +2679,9 @@ export function useChatSession(environmentId: string) {\n \t\t\t}\n \t\t\tsetSessionId(id);\n \t\t\tsetIsCloudSessionExpired(false);\n+\t\t\tfor (const warning of payload.pluginWarnings ?? []) {\n+\t\t\t\taddMessage(makePluginIssueMessage(id, warning));\n+\t\t\t}",
+        "comment_created_at": "2026-10-12T21:33:27+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Fixed in 1e18aadc1.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

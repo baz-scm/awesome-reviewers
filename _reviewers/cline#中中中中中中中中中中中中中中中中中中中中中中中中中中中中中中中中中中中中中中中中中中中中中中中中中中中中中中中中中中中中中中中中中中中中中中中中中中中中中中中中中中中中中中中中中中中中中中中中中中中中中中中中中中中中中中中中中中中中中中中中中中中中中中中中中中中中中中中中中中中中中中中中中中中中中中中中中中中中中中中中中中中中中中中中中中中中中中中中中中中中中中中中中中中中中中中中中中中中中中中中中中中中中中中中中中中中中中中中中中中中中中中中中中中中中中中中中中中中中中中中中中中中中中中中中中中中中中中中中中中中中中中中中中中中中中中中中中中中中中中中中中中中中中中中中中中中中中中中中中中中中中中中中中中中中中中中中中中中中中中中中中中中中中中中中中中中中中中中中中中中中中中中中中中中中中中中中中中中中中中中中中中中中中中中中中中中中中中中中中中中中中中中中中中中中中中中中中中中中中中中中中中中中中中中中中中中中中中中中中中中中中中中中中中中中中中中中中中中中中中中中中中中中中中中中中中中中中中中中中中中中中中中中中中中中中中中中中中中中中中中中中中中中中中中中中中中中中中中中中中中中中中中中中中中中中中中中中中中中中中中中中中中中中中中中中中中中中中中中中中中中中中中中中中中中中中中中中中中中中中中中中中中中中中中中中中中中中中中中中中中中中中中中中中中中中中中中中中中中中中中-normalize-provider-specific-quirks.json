@@ -1,0 +1,272 @@
+[
+  {
+    "discussion_id": "4302140263",
+    "pr_number": 15095,
+    "pr_file": "sdk/examples/plugins/next-turn/src/planner/model/model.ts",
+    "created_at": "2026-10-18T02:42:03+00:00",
+    "commented_code": "+import type {\n+\tApiHandler,\n+\tApiStreamChunk,\n+\tProviderConfig,\n+\tResolveProviderRequestHeadersInput,\n+} from \"@cline/llms\";\n+import {\n+\tPLANNER_MAX_OUTPUT_TOKENS,\n+\tPLANNER_RETRY_MAX_OUTPUT_TOKENS,\n+\tPLANNER_RETRY_REASONING_EFFORT,\n+\tPLANNER_TEMPERATURE,\n+\tPLANNER_TIMEOUT_MS,\n+\tPOOL_CACHE_LIMIT,\n+} from \"../../config\";\n+import { TIMED_OUT, withDeadline } from \"../../deadline\";\n+import type { Settings } from \"../../settings/settings\";\n+import { errorMessage } from \"../../values\";\n+import type { Suggestion } from \"../candidates\";\n+import type { SuggestionKind } from \"../kinds\";\n+import type { PlannerInput } from \"./input\";\n+import { parsePlannerOutput } from \"./output\";\n+\n+/**\n+ * Where the planner meets a model. One tool-less, bounded call per turn\n+ * position writes a pool; Skip walks the pool, and only a used-up pool calls\n+ * the model again. Anything that goes wrong answers with the rules instead.\n+ *\n+ * The provider is the person's own: by default the\n+ * chat's provider and model, so nothing new leaves the machine; or the one the\n+ * settings name. A provider that signs in with OAuth is refreshed the way a\n+ * chat refreshes it. The key never leaves this module.\n+ */\n+\n+/** Token counts the provider reported for one call, summed over its usage chunks. */\n+export type CallUsage = {\n+\tinputTokens: number;\n+\toutputTokens: number;\n+\tcacheReadTokens: number;\n+\tcacheWriteTokens: number;\n+};\n+\n+type Completion = {\n+\ttext: string;\n+\tcostUsd?: number;\n+\tproviderId?: string;\n+\tmodelId?: string;\n+\tusage?: CallUsage;\n+\t/** From sending the request to its first text or reasoning chunk. */\n+\tfirstTokenMs?: number;\n+};\n+\n+/**\n+ * One tool-less call; null when no provider can be resolved. `settings` are\n+ * the ones the input's sources were allowed under, so the call goes where they\n+ * allowed it to.\n+ */\n+export type Complete = (\n+\tinput: PlannerInput,\n+\tsignal: AbortSignal,\n+\tsettings: Settings,\n+) => Promise<Completion | null>;\n+\n+/** Pools by turn position, oldest dropped first: a pool is only worth the turn it was written for. */\n+export class PoolCache {\n+\tprivate readonly pools = new Map<string, readonly Suggestion[]>();\n+\n+\tget(key: string): readonly Suggestion[] | undefined {\n+\t\treturn this.pools.get(key);\n+\t}\n+\n+\tset(key: string, pool: readonly Suggestion[]): void {\n+\t\tthis.pools.delete(key);\n+\t\tthis.pools.set(key, pool);\n+\t\tfor (const oldest of this.pools.keys()) {\n+\t\t\tif (this.pools.size <= POOL_CACHE_LIMIT) break;\n+\t\t\tthis.pools.delete(oldest);\n+\t\t}\n+\t}\n+}\n+\n+export type PoolFailure =\n+\t| \"no_provider\"\n+\t| \"timeout\"\n+\t| \"aborted\"\n+\t| \"unparseable\"\n+\t| \"error\";\n+\n+type PoolAttempt = Omit<Completion, \"text\"> &\n+\t({ pool: Suggestion[] } | { reason: PoolFailure; error?: string });\n+\n+/**\n+ * Races the call against the deadline; a call that loses is aborted and its\n+ * late failure ignored. `stale` aborts it too, once nobody will see its answer.\n+ */\n+export async function generatePool(\n+\tcomplete: Complete,\n+\tinput: PlannerInput,\n+\tkinds: readonly SuggestionKind[],\n+\tsettings: Settings,\n+\ttimeoutMs: number = PLANNER_TIMEOUT_MS,\n+\tstale?: AbortSignal,\n+): Promise<PoolAttempt> {\n+\ttry {\n+\t\tconst answer = await withDeadline(\n+\t\t\t(deadline) =>\n+\t\t\t\tcomplete(\n+\t\t\t\t\tinput,\n+\t\t\t\t\tstale ? AbortSignal.any([deadline, stale]) : deadline,\n+\t\t\t\t\tsettings,\n+\t\t\t\t),\n+\t\t\ttimeoutMs,\n+\t\t);\n+\t\tif (stale?.aborted) return { reason: \"aborted\" };\n+\t\tif (answer === TIMED_OUT) return { reason: \"timeout\" };\n+\t\tif (answer === null) return { reason: \"no_provider\" };\n+\t\tconst { text, ...meta } = answer;\n+\t\tconst pool = parsePlannerOutput(text, kinds);\n+\t\treturn pool ? { pool, ...meta } : { reason: \"unparseable\", ...meta };\n+\t} catch (error) {\n+\t\tif (stale?.aborted) return { reason: \"aborted\" };\n+\t\treturn { reason: \"error\", error: errorMessage(error) };\n+\t}\n+}\n+\n+/** Which provider and model the planner asks; an absent `providerId` means no provider is known for this chat yet. */\n+type ProviderChoice = { providerId?: string; modelId?: string };\n+\n+type PlannerRequestContext = Pick<\n+\tResolveProviderRequestHeadersInput,\n+\t\"sessionId\" | \"client\"\n+>;\n+\n+/** The settings' choice, else the chat's own provider and model. */\n+export function plannerProvider(\n+\tsettings: Settings,\n+\tchat?: { providerId: string; modelId: string },\n+): ProviderChoice {\n+\tconst model = settings.planner.model;\n+\tif (model.kind === \"model\")\n+\t\treturn { providerId: model.providerId, modelId: model.modelId };\n+\treturn chat ? { providerId: chat.providerId, modelId: chat.modelId } : {};\n+}\n+\n+type CoreModule = typeof import(\"@cline/core\");\n+type LlmsModule = typeof import(\"@cline/llms\");\n+\n+/**\n+ * Resolves the provider config the planner calls with, its key and request\n+ * headers resolved the way `local-runtime-bootstrap.ts` resolves a chat's;\n+ * undefined when the provider is not usable. Under `kind: \"chat\"` the planner\n+ * never borrows another provider from `getLastUsedProviderConfig`. One\n+ * resolver serves every call, so concurrent calls share an OAuth refresh; the\n+ * settings file is still read on each call.\n+ */\n+export function providerResolver(\n+\tcore: CoreModule,\n+\tllms: Pick<LlmsModule, \"resolveProviderRequestHeaders\">,\n+): (\n+\tchoice: ProviderChoice & { providerId: string },\n+\trequestContext?: PlannerRequestContext,\n+) => Promise<ProviderConfig | undefined> {\n+\tconst manager = new core.ProviderSettingsManager();\n+\tconst oauth = new core.RuntimeOAuthTokenManager({\n+\t\tproviderSettingsManager: manager,\n+\t});\n+\treturn async (choice, requestContext) => {\n+\t\tconst stored = manager.getProviderSettings(choice.providerId);\n+\t\tif (!stored) return undefined;\n+\t\tconst config = core.toProviderConfig(stored, { includeKnownModels: false });\n+\t\tconst providerId = config.providerId;\n+\t\tconst resolved = await oauth.resolveProviderApiKey({ providerId });\n+\t\tconst apiKey = (\n+\t\t\tresolved?.apiKey ||\n+\t\t\tcore.resolveProviderApiKeyFromSettings(manager, providerId) ||\n+\t\t\tconfig.apiKey ||\n+\t\t\t\"\"\n+\t\t).trim();\n+\t\tif (!apiKey && !config.baseUrl) return undefined;\n+\t\tconst headers = llms.resolveProviderRequestHeaders({\n+\t\t\tproviderId,\n+\t\t\tsessionId: requestContext?.sessionId,\n+\t\t\tdefaultSource: \"cli\",\n+\t\t\tclient: {\n+\t\t\t\t...requestContext?.client,\n+\t\t\t\tversionHeaderFallback: config.headers?.[\"X-CLIENT-VERSION\"],\n+\t\t\t},\n+\t\t\tcoreVersion: core.CORE_BUILD_VERSION || \"unknown\",\n+\t\t\topenAiCodex: {\n+\t\t\t\taccountId: config.accountId ?? stored.auth?.accountId,\n+\t\t\t\taccessToken: apiKey || stored.auth?.accessToken || stored.apiKey,\n+\t\t\t},\n+\t\t\theaders: { stored: stored.headers, config: config.headers },\n+\t\t});\n+\t\treturn {\n+\t\t\t...config,\n+\t\t\t...(choice.modelId ? { modelId: choice.modelId } : {}),\n+\t\t\t...(apiKey ? { apiKey, accessToken: apiKey } : {}),\n+\t\t\t...(headers ? { headers } : {}),\n+\t\t};\n+\t};\n+}\n+\n+function addUsage(\n+\ttotal: CallUsage | undefined,\n+\tchunk: Extract<ApiStreamChunk, { type: \"usage\" }>,\n+): CallUsage {\n+\treturn {\n+\t\tinputTokens: (total?.inputTokens ?? 0) + chunk.inputTokens,\n+\t\toutputTokens: (total?.outputTokens ?? 0) + chunk.outputTokens,\n+\t\tcacheReadTokens:\n+\t\t\t(total?.cacheReadTokens ?? 0) + (chunk.cacheReadTokens ?? 0),\n+\t\tcacheWriteTokens:\n+\t\t\t(total?.cacheWriteTokens ?? 0) + (chunk.cacheWriteTokens ?? 0),",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4305454495",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15095,
+        "pr_file": "sdk/examples/plugins/next-turn/src/planner/model/model.ts",
+        "discussion_id": "4302140263",
+        "commented_code": "@@ -0,0 +1,342 @@\n+import type {\n+\tApiHandler,\n+\tApiStreamChunk,\n+\tProviderConfig,\n+\tResolveProviderRequestHeadersInput,\n+} from \"@cline/llms\";\n+import {\n+\tPLANNER_MAX_OUTPUT_TOKENS,\n+\tPLANNER_RETRY_MAX_OUTPUT_TOKENS,\n+\tPLANNER_RETRY_REASONING_EFFORT,\n+\tPLANNER_TEMPERATURE,\n+\tPLANNER_TIMEOUT_MS,\n+\tPOOL_CACHE_LIMIT,\n+} from \"../../config\";\n+import { TIMED_OUT, withDeadline } from \"../../deadline\";\n+import type { Settings } from \"../../settings/settings\";\n+import { errorMessage } from \"../../values\";\n+import type { Suggestion } from \"../candidates\";\n+import type { SuggestionKind } from \"../kinds\";\n+import type { PlannerInput } from \"./input\";\n+import { parsePlannerOutput } from \"./output\";\n+\n+/**\n+ * Where the planner meets a model. One tool-less, bounded call per turn\n+ * position writes a pool; Skip walks the pool, and only a used-up pool calls\n+ * the model again. Anything that goes wrong answers with the rules instead.\n+ *\n+ * The provider is the person's own: by default the\n+ * chat's provider and model, so nothing new leaves the machine; or the one the\n+ * settings name. A provider that signs in with OAuth is refreshed the way a\n+ * chat refreshes it. The key never leaves this module.\n+ */\n+\n+/** Token counts the provider reported for one call, summed over its usage chunks. */\n+export type CallUsage = {\n+\tinputTokens: number;\n+\toutputTokens: number;\n+\tcacheReadTokens: number;\n+\tcacheWriteTokens: number;\n+};\n+\n+type Completion = {\n+\ttext: string;\n+\tcostUsd?: number;\n+\tproviderId?: string;\n+\tmodelId?: string;\n+\tusage?: CallUsage;\n+\t/** From sending the request to its first text or reasoning chunk. */\n+\tfirstTokenMs?: number;\n+};\n+\n+/**\n+ * One tool-less call; null when no provider can be resolved. `settings` are\n+ * the ones the input's sources were allowed under, so the call goes where they\n+ * allowed it to.\n+ */\n+export type Complete = (\n+\tinput: PlannerInput,\n+\tsignal: AbortSignal,\n+\tsettings: Settings,\n+) => Promise<Completion | null>;\n+\n+/** Pools by turn position, oldest dropped first: a pool is only worth the turn it was written for. */\n+export class PoolCache {\n+\tprivate readonly pools = new Map<string, readonly Suggestion[]>();\n+\n+\tget(key: string): readonly Suggestion[] | undefined {\n+\t\treturn this.pools.get(key);\n+\t}\n+\n+\tset(key: string, pool: readonly Suggestion[]): void {\n+\t\tthis.pools.delete(key);\n+\t\tthis.pools.set(key, pool);\n+\t\tfor (const oldest of this.pools.keys()) {\n+\t\t\tif (this.pools.size <= POOL_CACHE_LIMIT) break;\n+\t\t\tthis.pools.delete(oldest);\n+\t\t}\n+\t}\n+}\n+\n+export type PoolFailure =\n+\t| \"no_provider\"\n+\t| \"timeout\"\n+\t| \"aborted\"\n+\t| \"unparseable\"\n+\t| \"error\";\n+\n+type PoolAttempt = Omit<Completion, \"text\"> &\n+\t({ pool: Suggestion[] } | { reason: PoolFailure; error?: string });\n+\n+/**\n+ * Races the call against the deadline; a call that loses is aborted and its\n+ * late failure ignored. `stale` aborts it too, once nobody will see its answer.\n+ */\n+export async function generatePool(\n+\tcomplete: Complete,\n+\tinput: PlannerInput,\n+\tkinds: readonly SuggestionKind[],\n+\tsettings: Settings,\n+\ttimeoutMs: number = PLANNER_TIMEOUT_MS,\n+\tstale?: AbortSignal,\n+): Promise<PoolAttempt> {\n+\ttry {\n+\t\tconst answer = await withDeadline(\n+\t\t\t(deadline) =>\n+\t\t\t\tcomplete(\n+\t\t\t\t\tinput,\n+\t\t\t\t\tstale ? AbortSignal.any([deadline, stale]) : deadline,\n+\t\t\t\t\tsettings,\n+\t\t\t\t),\n+\t\t\ttimeoutMs,\n+\t\t);\n+\t\tif (stale?.aborted) return { reason: \"aborted\" };\n+\t\tif (answer === TIMED_OUT) return { reason: \"timeout\" };\n+\t\tif (answer === null) return { reason: \"no_provider\" };\n+\t\tconst { text, ...meta } = answer;\n+\t\tconst pool = parsePlannerOutput(text, kinds);\n+\t\treturn pool ? { pool, ...meta } : { reason: \"unparseable\", ...meta };\n+\t} catch (error) {\n+\t\tif (stale?.aborted) return { reason: \"aborted\" };\n+\t\treturn { reason: \"error\", error: errorMessage(error) };\n+\t}\n+}\n+\n+/** Which provider and model the planner asks; an absent `providerId` means no provider is known for this chat yet. */\n+type ProviderChoice = { providerId?: string; modelId?: string };\n+\n+type PlannerRequestContext = Pick<\n+\tResolveProviderRequestHeadersInput,\n+\t\"sessionId\" | \"client\"\n+>;\n+\n+/** The settings' choice, else the chat's own provider and model. */\n+export function plannerProvider(\n+\tsettings: Settings,\n+\tchat?: { providerId: string; modelId: string },\n+): ProviderChoice {\n+\tconst model = settings.planner.model;\n+\tif (model.kind === \"model\")\n+\t\treturn { providerId: model.providerId, modelId: model.modelId };\n+\treturn chat ? { providerId: chat.providerId, modelId: chat.modelId } : {};\n+}\n+\n+type CoreModule = typeof import(\"@cline/core\");\n+type LlmsModule = typeof import(\"@cline/llms\");\n+\n+/**\n+ * Resolves the provider config the planner calls with, its key and request\n+ * headers resolved the way `local-runtime-bootstrap.ts` resolves a chat's;\n+ * undefined when the provider is not usable. Under `kind: \"chat\"` the planner\n+ * never borrows another provider from `getLastUsedProviderConfig`. One\n+ * resolver serves every call, so concurrent calls share an OAuth refresh; the\n+ * settings file is still read on each call.\n+ */\n+export function providerResolver(\n+\tcore: CoreModule,\n+\tllms: Pick<LlmsModule, \"resolveProviderRequestHeaders\">,\n+): (\n+\tchoice: ProviderChoice & { providerId: string },\n+\trequestContext?: PlannerRequestContext,\n+) => Promise<ProviderConfig | undefined> {\n+\tconst manager = new core.ProviderSettingsManager();\n+\tconst oauth = new core.RuntimeOAuthTokenManager({\n+\t\tproviderSettingsManager: manager,\n+\t});\n+\treturn async (choice, requestContext) => {\n+\t\tconst stored = manager.getProviderSettings(choice.providerId);\n+\t\tif (!stored) return undefined;\n+\t\tconst config = core.toProviderConfig(stored, { includeKnownModels: false });\n+\t\tconst providerId = config.providerId;\n+\t\tconst resolved = await oauth.resolveProviderApiKey({ providerId });\n+\t\tconst apiKey = (\n+\t\t\tresolved?.apiKey ||\n+\t\t\tcore.resolveProviderApiKeyFromSettings(manager, providerId) ||\n+\t\t\tconfig.apiKey ||\n+\t\t\t\"\"\n+\t\t).trim();\n+\t\tif (!apiKey && !config.baseUrl) return undefined;\n+\t\tconst headers = llms.resolveProviderRequestHeaders({\n+\t\t\tproviderId,\n+\t\t\tsessionId: requestContext?.sessionId,\n+\t\t\tdefaultSource: \"cli\",\n+\t\t\tclient: {\n+\t\t\t\t...requestContext?.client,\n+\t\t\t\tversionHeaderFallback: config.headers?.[\"X-CLIENT-VERSION\"],\n+\t\t\t},\n+\t\t\tcoreVersion: core.CORE_BUILD_VERSION || \"unknown\",\n+\t\t\topenAiCodex: {\n+\t\t\t\taccountId: config.accountId ?? stored.auth?.accountId,\n+\t\t\t\taccessToken: apiKey || stored.auth?.accessToken || stored.apiKey,\n+\t\t\t},\n+\t\t\theaders: { stored: stored.headers, config: config.headers },\n+\t\t});\n+\t\treturn {\n+\t\t\t...config,\n+\t\t\t...(choice.modelId ? { modelId: choice.modelId } : {}),\n+\t\t\t...(apiKey ? { apiKey, accessToken: apiKey } : {}),\n+\t\t\t...(headers ? { headers } : {}),\n+\t\t};\n+\t};\n+}\n+\n+function addUsage(\n+\ttotal: CallUsage | undefined,\n+\tchunk: Extract<ApiStreamChunk, { type: \"usage\" }>,\n+): CallUsage {\n+\treturn {\n+\t\tinputTokens: (total?.inputTokens ?? 0) + chunk.inputTokens,\n+\t\toutputTokens: (total?.outputTokens ?? 0) + chunk.outputTokens,\n+\t\tcacheReadTokens:\n+\t\t\t(total?.cacheReadTokens ?? 0) + (chunk.cacheReadTokens ?? 0),\n+\t\tcacheWriteTokens:\n+\t\t\t(total?.cacheWriteTokens ?? 0) + (chunk.cacheWriteTokens ?? 0),",
+        "comment_created_at": "2026-10-18T02:42:03+00:00",
+        "comment_author": "harrisonofcline",
+        "comment_body": "Fixed in 5af3770c6f. `addUsage` sums `thoughtsTokenCount` into a separate optional `reasoningTokens`, which reaches planner.jsonl only when the provider reported one. Correction to the premise: the SDK leaves reasoning out of `outputTokens` only when the provider counts it apart (`normalizeUsage` in ai-sdk.ts); a provider that doesn't keeps it in `outputTokens`. The field's doc says so.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1957418765",
+    "pr_number": 1808,
+    "pr_file": "src/api/providers/openai.ts",
+    "created_at": "2025-02-16T21:29:50+00:00",
+    "commented_code": "constructor(options: ApiHandlerOptions) {\n \t\tthis.options = options\n \t\t// Azure API shape slightly differs from the core API shape: https://github.com/openai/openai-node?tab=readme-ov-file#microsoft-azure-openai\n-\t\tif (this.options.openAiBaseUrl?.toLowerCase().includes(\"azure.com\")) {\n+\t\tif (this.options.openAiBaseUrl?.toLowerCase().includes(\"deepseek\")) {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "1957418765",
+        "repo_full_name": "cline/cline",
+        "pr_number": 1808,
+        "pr_file": "src/api/providers/openai.ts",
+        "discussion_id": "1957418765",
+        "commented_code": "@@ -14,7 +14,12 @@ export class OpenAiHandler implements ApiHandler {\n \tconstructor(options: ApiHandlerOptions) {\n \t\tthis.options = options\n \t\t// Azure API shape slightly differs from the core API shape: https://github.com/openai/openai-node?tab=readme-ov-file#microsoft-azure-openai\n-\t\tif (this.options.openAiBaseUrl?.toLowerCase().includes(\"azure.com\")) {\n+\t\tif (this.options.openAiBaseUrl?.toLowerCase().includes(\"deepseek\")) {",
+        "comment_created_at": "2025-02-16T21:29:50+00:00",
+        "comment_author": "dcbartlett",
+        "comment_body": "Let's use this instead.\r\n\r\n```suggestion\r\n\t\tif (this.options.openAiBaseUrl?.toLowerCase().includes(\"azure.com\") && !this.options.openAiModelId?.toLowerCase().includes(\"deepseek\")) {\r\n```\r\n\r\nWe shouldn't need to duplicate the logic with this change.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1958270960",
+        "repo_full_name": "cline/cline",
+        "pr_number": 1808,
+        "pr_file": "src/api/providers/openai.ts",
+        "discussion_id": "1957418765",
+        "commented_code": "@@ -14,7 +14,12 @@ export class OpenAiHandler implements ApiHandler {\n \tconstructor(options: ApiHandlerOptions) {\n \t\tthis.options = options\n \t\t// Azure API shape slightly differs from the core API shape: https://github.com/openai/openai-node?tab=readme-ov-file#microsoft-azure-openai\n-\t\tif (this.options.openAiBaseUrl?.toLowerCase().includes(\"azure.com\")) {\n+\t\tif (this.options.openAiBaseUrl?.toLowerCase().includes(\"deepseek\")) {",
+        "comment_created_at": "2025-02-17T13:47:31+00:00",
+        "comment_author": "yt3trees",
+        "comment_body": "@dcbartlett \r\nThank you for pointing that out. Fixed.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4225962664",
+    "pr_number": 14959,
+    "pr_file": "apps/cli/src/connectors/session-runtime.ts",
+    "created_at": "2026-10-09T20:09:20+00:00",
+    "commented_code": "input.options.model?.trim() ||\n \t\t\tselectedProviderSettings?.model ||\n \t\t\tinput.defaultModel ||\n-\t\t\t\"anthropic/claude-sonnet-4.6\",\n+\t\t\t(provider === \"cline\" || provider === \"cline-pass\"\n+\t\t\t\t? (await Llms.getProviderCollection(provider))?.provider?.defaultModelId\n+\t\t\t\t: undefined) ||",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4234137820",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14959,
+        "pr_file": "apps/cli/src/connectors/session-runtime.ts",
+        "discussion_id": "4225962664",
+        "commented_code": "@@ -110,7 +111,10 @@ export async function buildConnectorStartRequest(input: {\n \t\t\tinput.options.model?.trim() ||\n \t\t\tselectedProviderSettings?.model ||\n \t\t\tinput.defaultModel ||\n-\t\t\t\"anthropic/claude-sonnet-4.6\",\n+\t\t\t(provider === \"cline\" || provider === \"cline-pass\"\n+\t\t\t\t? (await Llms.getProviderCollection(provider))?.provider?.defaultModelId\n+\t\t\t\t: undefined) ||",
+        "comment_created_at": "2026-10-09T20:09:20+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "This is unchanged from `main`, which hardcodes `\"anthropic/claude-sonnet-4.6\"` as the connector's last-resort model for every provider; this PR only swaps that literal for `CLINE_DEFAULT_MODEL_ID`. Picking per-provider defaults in the connector is a reasonable follow-up, but it is out of scope for a default-model bump, and the intermediate attempt here was reverted to keep the change minimal.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4234186506",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14959,
+        "pr_file": "apps/cli/src/connectors/session-runtime.ts",
+        "discussion_id": "4225962664",
+        "commented_code": "@@ -110,7 +111,10 @@ export async function buildConnectorStartRequest(input: {\n \t\t\tinput.options.model?.trim() ||\n \t\t\tselectedProviderSettings?.model ||\n \t\t\tinput.defaultModel ||\n-\t\t\t\"anthropic/claude-sonnet-4.6\",\n+\t\t\t(provider === \"cline\" || provider === \"cline-pass\"\n+\t\t\t\t? (await Llms.getProviderCollection(provider))?.provider?.defaultModelId\n+\t\t\t\t: undefined) ||",
+        "comment_created_at": "2026-10-09T20:15:33+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Fair enough that `main`'s literal was already wrong for non-Cline providers; fixed properly in eb825d785. The connector now uses the provider manifest's `defaultModelId` when it is a real model (DeepSeek gets `deepseek-v4-flash`), skips the `\"default\"` placeholder exposed by catalog-less local providers, and only then falls back to `CLINE_DEFAULT_MODEL_ID`. Covered by a new case in `session-runtime.test.ts` for both the real-default and placeholder paths.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4092269857",
+    "pr_number": 14476,
+    "pr_file": "sdk/packages/llms/src/providers/routing/portable-reasoning.ts",
+    "created_at": "2026-09-24T10:05:02+00:00",
+    "commented_code": "\"sapaicore\",\n ]);\n \n-/** Resolve reasoning intent owned by the AI SDK's portable top-level option. */\n+/**\n+ * Resolve reasoning intent owned by the AI SDK's portable top-level option.\n+ *\n+ * `context` gates provider/model combinations whose adapter cannot translate\n+ * the portable option safely (see `bedrock-reasoning.ts`). It is required so\n+ * that a caller cannot silently opt out of that gate.\n+ */\n export function resolvePortableReasoning(\n \trequest: GatewayStreamRequest,\n+\tcontext: GatewayProviderContext,\n ): AiSdkReasoning | undefined {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4092338627",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/portable-reasoning.ts",
+        "discussion_id": "4092269857",
+        "commented_code": "@@ -26,14 +30,24 @@ const NON_PORTABLE_REASONING_PROVIDERS = new Set([\n \t\"sapaicore\",\n ]);\n \n-/** Resolve reasoning intent owned by the AI SDK's portable top-level option. */\n+/**\n+ * Resolve reasoning intent owned by the AI SDK's portable top-level option.\n+ *\n+ * `context` gates provider/model combinations whose adapter cannot translate\n+ * the portable option safely (see `bedrock-reasoning.ts`). It is required so\n+ * that a caller cannot silently opt out of that gate.\n+ */\n export function resolvePortableReasoning(\n \trequest: GatewayStreamRequest,\n+\tcontext: GatewayProviderContext,\n ): AiSdkReasoning | undefined {",
+        "comment_created_at": "2026-09-24T10:05:02+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Real, thanks. Both call sites already built a context for the adjacent `composeAiSdkProviderOptions` call, so it is now hoisted into a variable and passed to `resolvePortableReasoning` as well. Worth noting they would have thrown rather than mis-typed if a bedrock request ever reached them; they only passed because the short-circuit on providerId ran first.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4096513267",
+    "pr_number": 14476,
+    "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+    "created_at": "2026-09-24T17:28:39+00:00",
+    "commented_code": "+import type {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4096513267",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+        "discussion_id": "4096513267",
+        "commented_code": "@@ -0,0 +1,55 @@\n+import type {",
+        "comment_created_at": "2026-09-24T17:28:39+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "is this pattern present elsewhere in the codebase? seems like special handling for bedrock which I'd like to avoid if possible",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4096559232",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+        "discussion_id": "4096513267",
+        "commented_code": "@@ -0,0 +1,55 @@\n+import type {",
+        "comment_created_at": "2026-09-24T17:33:55+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "what do you think about making a pr upstream to the ai-sdk itself to fix the bedrock adapter so that it doesn't accidentally send reasoning. seems like the better place for the fix to live",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4096570713",
+    "pr_number": 14476,
+    "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+    "created_at": "2026-09-24T17:35:16+00:00",
+    "commented_code": "+import type {\n+\tGatewayProviderContext,\n+\tGatewayStreamRequest,\n+} from \"@cline/shared\";\n+import { getModelReasoningControls } from \"../model-facts\";\n+\n+/**\n+ * Bedrock reasoning routing.\n+ *\n+ * `@ai-sdk/amazon-bedrock` translates the AI SDK's portable top-level\n+ * `reasoning` option into the wire shape each Bedrock model family accepts\n+ * (Anthropic `output_config.effort` / thinking, OpenAI `reasoning.effort`,\n+ * gpt-oss `reasoning_effort`) and falls back to\n+ * `additionalModelRequestFields.reasoningConfig` for everything else. The\n+ * Converse API rejects that fallback field for models without reasoning\n+ * support (\"reasoningConfig: Extra inputs are not permitted\"), so the effort\n+ * must only be forwarded when the catalog advertises reasoning controls for\n+ * the model. Provisioned/application inference-profile ARNs and other\n+ * unlisted ids advertise nothing and get no reasoning fields at all.\n+ *\n+ * OpenAI models routed through inference profiles (`us.openai.gpt-\u2026`,\n+ * `global.openai.gpt-\u2026`) used to hit the same fallback because the adapter\n+ * only recognised bare `openai.` ids; adapter 5.0.65+ recognises the prefixed\n+ * form, so they stay on the portable path here.\n+ *\n+ * Tracked in cline/cline#14095 and cline/cline#14451.\n+ */\n+\n+/** True when the catalog advertises at least one user-facing reasoning control. */\n+function bedrockModelAdvertisesReasoning(",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4096570713",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+        "discussion_id": "4096570713",
+        "commented_code": "@@ -0,0 +1,55 @@\n+import type {\n+\tGatewayProviderContext,\n+\tGatewayStreamRequest,\n+} from \"@cline/shared\";\n+import { getModelReasoningControls } from \"../model-facts\";\n+\n+/**\n+ * Bedrock reasoning routing.\n+ *\n+ * `@ai-sdk/amazon-bedrock` translates the AI SDK's portable top-level\n+ * `reasoning` option into the wire shape each Bedrock model family accepts\n+ * (Anthropic `output_config.effort` / thinking, OpenAI `reasoning.effort`,\n+ * gpt-oss `reasoning_effort`) and falls back to\n+ * `additionalModelRequestFields.reasoningConfig` for everything else. The\n+ * Converse API rejects that fallback field for models without reasoning\n+ * support (\"reasoningConfig: Extra inputs are not permitted\"), so the effort\n+ * must only be forwarded when the catalog advertises reasoning controls for\n+ * the model. Provisioned/application inference-profile ARNs and other\n+ * unlisted ids advertise nothing and get no reasoning fields at all.\n+ *\n+ * OpenAI models routed through inference profiles (`us.openai.gpt-\u2026`,\n+ * `global.openai.gpt-\u2026`) used to hit the same fallback because the adapter\n+ * only recognised bare `openai.` ids; adapter 5.0.65+ recognises the prefixed\n+ * form, so they stay on the portable path here.\n+ *\n+ * Tracked in cline/cline#14095 and cline/cline#14451.\n+ */\n+\n+/** True when the catalog advertises at least one user-facing reasoning control. */\n+function bedrockModelAdvertisesReasoning(",
+        "comment_created_at": "2026-09-24T17:35:16+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "I don't think we will need one for bedrock specifically. It uses the same reasoning config for anthropic for anthropic models and same for openai, so we just need to check if it's an anthropic model or not",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4096582844",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+        "discussion_id": "4096570713",
+        "commented_code": "@@ -0,0 +1,55 @@\n+import type {\n+\tGatewayProviderContext,\n+\tGatewayStreamRequest,\n+} from \"@cline/shared\";\n+import { getModelReasoningControls } from \"../model-facts\";\n+\n+/**\n+ * Bedrock reasoning routing.\n+ *\n+ * `@ai-sdk/amazon-bedrock` translates the AI SDK's portable top-level\n+ * `reasoning` option into the wire shape each Bedrock model family accepts\n+ * (Anthropic `output_config.effort` / thinking, OpenAI `reasoning.effort`,\n+ * gpt-oss `reasoning_effort`) and falls back to\n+ * `additionalModelRequestFields.reasoningConfig` for everything else. The\n+ * Converse API rejects that fallback field for models without reasoning\n+ * support (\"reasoningConfig: Extra inputs are not permitted\"), so the effort\n+ * must only be forwarded when the catalog advertises reasoning controls for\n+ * the model. Provisioned/application inference-profile ARNs and other\n+ * unlisted ids advertise nothing and get no reasoning fields at all.\n+ *\n+ * OpenAI models routed through inference profiles (`us.openai.gpt-\u2026`,\n+ * `global.openai.gpt-\u2026`) used to hit the same fallback because the adapter\n+ * only recognised bare `openai.` ids; adapter 5.0.65+ recognises the prefixed\n+ * form, so they stay on the portable path here.\n+ *\n+ * Tracked in cline/cline#14095 and cline/cline#14451.\n+ */\n+\n+/** True when the catalog advertises at least one user-facing reasoning control. */\n+function bedrockModelAdvertisesReasoning(",
+        "comment_created_at": "2026-09-24T17:36:43+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "See example on https://ai-sdk.dev/providers/ai-sdk-providers/amazon-bedrock#reasoning-1\n\n```ts\nconst { text, reasoningText, reasoning } = await generateText({\n  model: bedrockAnthropic('us.anthropic.claude-sonnet-4-5-20250929-v1:0'),\n  prompt: 'How many people will live in the world in 2040?',\n  providerOptions: {\n    anthropic: {\n      thinking: { type: 'enabled', budgetTokens: 12000 },\n    },\n  },\n});\n```\n\nSo we just need to add openai to providerOptions?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4077616651",
+    "pr_number": 14426,
+    "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+    "created_at": "2026-09-22T23:52:04+00:00",
+    "commented_code": "return {\n \t\t...normalizedUsage,\n+\t\t// Providers report reasoning tokens as a subset of outputTokens (e.g.\n+\t\t// OpenAI's completion_tokens_details.reasoning_tokens), not additional\n+\t\t// to it. Strip them back out here so outputTokens reflects the actual\n+\t\t// non-reasoning output, with reasoningTokenCount tracked separately \u2014\n+\t\t// otherwise every downstream consumer (session totals, telemetry,\n+\t\t// Harbor's n_output_tokens) double-books reasoning as both its own\n+\t\t// count and part of \"output\". Cost above is computed from the\n+\t\t// pre-subtraction outputTokens, since reasoning tokens are still\n+\t\t// billed at the output rate.\n+\t\toutputTokens: Math.max(0, normalizedUsage.outputTokens - reasoningTokenCount),",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4077718466",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14426,
+        "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+        "discussion_id": "4077616651",
+        "commented_code": "@@ -1335,6 +1335,16 @@ export function normalizeUsage(\n \n \treturn {\n \t\t...normalizedUsage,\n+\t\t// Providers report reasoning tokens as a subset of outputTokens (e.g.\n+\t\t// OpenAI's completion_tokens_details.reasoning_tokens), not additional\n+\t\t// to it. Strip them back out here so outputTokens reflects the actual\n+\t\t// non-reasoning output, with reasoningTokenCount tracked separately \u2014\n+\t\t// otherwise every downstream consumer (session totals, telemetry,\n+\t\t// Harbor's n_output_tokens) double-books reasoning as both its own\n+\t\t// count and part of \"output\". Cost above is computed from the\n+\t\t// pre-subtraction outputTokens, since reasoning tokens are still\n+\t\t// billed at the output rate.\n+\t\toutputTokens: Math.max(0, normalizedUsage.outputTokens - reasoningTokenCount),",
+        "comment_created_at": "2026-09-22T23:52:04+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "Good catch. This is about the shape of the usage object, not the installed AI SDK version: if a finish part still reaches normalizeUsage with reasoning under outputTokens.reasoning and no raw provider metadata, our current path misses it and leaves those tokens in outputTokens. I\u2019ll add support for that nested field and a positive-reasoning regression test.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4077754407",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14426,
+        "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+        "discussion_id": "4077616651",
+        "commented_code": "@@ -1335,6 +1335,16 @@ export function normalizeUsage(\n \n \treturn {\n \t\t...normalizedUsage,\n+\t\t// Providers report reasoning tokens as a subset of outputTokens (e.g.\n+\t\t// OpenAI's completion_tokens_details.reasoning_tokens), not additional\n+\t\t// to it. Strip them back out here so outputTokens reflects the actual\n+\t\t// non-reasoning output, with reasoningTokenCount tracked separately \u2014\n+\t\t// otherwise every downstream consumer (session totals, telemetry,\n+\t\t// Harbor's n_output_tokens) double-books reasoning as both its own\n+\t\t// count and part of \"output\". Cost above is computed from the\n+\t\t// pre-subtraction outputTokens, since reasoning tokens are still\n+\t\t// billed at the output rate.\n+\t\toutputTokens: Math.max(0, normalizedUsage.outputTokens - reasoningTokenCount),",
+        "comment_created_at": "2026-09-22T23:59:05+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "Pushed in 4a4844d6e8 \u2014 added `[\"outputTokens\", \"reasoning\"]` to `REASONING_TOKEN_PATHS` and a regression test (`subtracts AI SDK v4's nested outputTokens.reasoning from outputTokens`) covering this exact shape. Full `llms` suite still green (886 passed).",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4104104322",
+    "pr_number": 14515,
+    "pr_file": "sdk/packages/llms/src/providers/vendors/bedrock.wire.test.ts",
+    "created_at": "2026-09-25T11:36:10+00:00",
+    "commented_code": "+// Wire-contract tests for Bedrock reasoning, exercised through the *real*\n+// `@ai-sdk/amazon-bedrock` adapter (bedrock.test.ts mocks the constructor).\n+// Each case streams one turn through the gateway with a stubbed fetch and\n+// asserts on the `additionalModelRequestFields` the adapter put on the\n+// Converse request. They pin the reason for the adapter floor of 5.0.65:\n+// OpenAI models reached through inference profiles (`us.openai.*`,\n+// `global.openai.*`) must get `reasoning.effort`, the field Bedrock accepts,\n+// not the generic `reasoningConfig` that older adapters emitted for any id\n+// they did not recognise (cline/cline#14451, vercel/ai#19403).\n+import type { GatewayStreamRequest, ModelReasoningOption } from \"@cline/shared\";\n+import { describe, expect, it } from \"vitest\";\n+import { createGateway } from \"../gateway\";\n+\n+const EFFORT_OPTIONS: readonly ModelReasoningOption[] = [\n+\t{ type: \"effort\", values: [\"low\", \"medium\", \"high\", \"xhigh\", \"max\"] },\n+];\n+\n+/**\n+ * Stream one turn for `modelId` and return the `additionalModelRequestFields`\n+ * of the Converse request the adapter built (`null` when it carried none).\n+ * The model is registered on the provider config, so no assertion depends on",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4104104322",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14515,
+        "pr_file": "sdk/packages/llms/src/providers/vendors/bedrock.wire.test.ts",
+        "discussion_id": "4104104322",
+        "commented_code": "@@ -0,0 +1,98 @@\n+// Wire-contract tests for Bedrock reasoning, exercised through the *real*\n+// `@ai-sdk/amazon-bedrock` adapter (bedrock.test.ts mocks the constructor).\n+// Each case streams one turn through the gateway with a stubbed fetch and\n+// asserts on the `additionalModelRequestFields` the adapter put on the\n+// Converse request. They pin the reason for the adapter floor of 5.0.65:\n+// OpenAI models reached through inference profiles (`us.openai.*`,\n+// `global.openai.*`) must get `reasoning.effort`, the field Bedrock accepts,\n+// not the generic `reasoningConfig` that older adapters emitted for any id\n+// they did not recognise (cline/cline#14451, vercel/ai#19403).\n+import type { GatewayStreamRequest, ModelReasoningOption } from \"@cline/shared\";\n+import { describe, expect, it } from \"vitest\";\n+import { createGateway } from \"../gateway\";\n+\n+const EFFORT_OPTIONS: readonly ModelReasoningOption[] = [\n+\t{ type: \"effort\", values: [\"low\", \"medium\", \"high\", \"xhigh\", \"max\"] },\n+];\n+\n+/**\n+ * Stream one turn for `modelId` and return the `additionalModelRequestFields`\n+ * of the Converse request the adapter built (`null` when it carried none).\n+ * The model is registered on the provider config, so no assertion depends on",
+        "comment_created_at": "2026-09-25T11:36:10+00:00",
+        "comment_author": "dominiccooney",
+        "comment_body": "This is not quite true for the bare `openai.gpt-6-astra` case. Registering the model here avoids catalog-dependent model selection, but `createBedrockProviderModule` still calls `resolveBedrockModelId`, which consults the generated Bedrock catalog and rewrites this ID to `us.openai.gpt-6-astra` in `us-east-1`. The explicit `us.*` and `global.*` cases already cover the regression, so this does not block the fix, but please narrow this comment (and the matching PR claim) rather than saying no assertion depends on the catalog.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4104137695",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14515,
+        "pr_file": "sdk/packages/llms/src/providers/vendors/bedrock.wire.test.ts",
+        "discussion_id": "4104104322",
+        "commented_code": "@@ -0,0 +1,98 @@\n+// Wire-contract tests for Bedrock reasoning, exercised through the *real*\n+// `@ai-sdk/amazon-bedrock` adapter (bedrock.test.ts mocks the constructor).\n+// Each case streams one turn through the gateway with a stubbed fetch and\n+// asserts on the `additionalModelRequestFields` the adapter put on the\n+// Converse request. They pin the reason for the adapter floor of 5.0.65:\n+// OpenAI models reached through inference profiles (`us.openai.*`,\n+// `global.openai.*`) must get `reasoning.effort`, the field Bedrock accepts,\n+// not the generic `reasoningConfig` that older adapters emitted for any id\n+// they did not recognise (cline/cline#14451, vercel/ai#19403).\n+import type { GatewayStreamRequest, ModelReasoningOption } from \"@cline/shared\";\n+import { describe, expect, it } from \"vitest\";\n+import { createGateway } from \"../gateway\";\n+\n+const EFFORT_OPTIONS: readonly ModelReasoningOption[] = [\n+\t{ type: \"effort\", values: [\"low\", \"medium\", \"high\", \"xhigh\", \"max\"] },\n+];\n+\n+/**\n+ * Stream one turn for `modelId` and return the `additionalModelRequestFields`\n+ * of the Converse request the adapter built (`null` when it carried none).\n+ * The model is registered on the provider config, so no assertion depends on",
+        "comment_created_at": "2026-09-25T11:41:08+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Correct, and thanks for the precision. Registering the model only takes model *selection* off the catalog; `resolveBedrockModelId` still consults it, and with #14480 on main the bare `openai.gpt-6-astra` case goes out as `us.openai.gpt-6-astra` in us-east-1. The test now captures the request path: the `us.*` and `global.*` cases assert they pass through unchanged (no catalog involved), and the bare case is named for what it checks, that the OpenAI shape comes out whichever profile the resolver picks. Comment and PR description narrowed accordingly.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4091558177",
+    "pr_number": 14480,
+    "pr_file": "sdk/packages/llms/src/providers/vendors/bedrock.ts",
+    "created_at": "2026-09-24T08:47:09+00:00",
+    "commented_code": "// Claude 3.7 predates tier-first naming but launched profile-only.\n \t/^anthropic\\.claude-3-7-/,\n \t/^amazon\\.nova-(?:2|micro|lite|pro|premier)/,\n+\t// OpenAI GPT-5.x / GPT-6 (Sol, Luna, Astra, Terra) launched profile-only;\n+\t// gpt-oss has on-demand throughput and keeps its bare id\n+\t// (cline/cline#14468).\n+\t/^openai\\.gpt-(?!oss-)/,",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4091643196",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14480,
+        "pr_file": "sdk/packages/llms/src/providers/vendors/bedrock.ts",
+        "discussion_id": "4091558177",
+        "commented_code": "@@ -62,6 +62,10 @@ const BEDROCK_INFERENCE_PROFILE_REQUIRED_PATTERNS: readonly RegExp[] = [\n \t// Claude 3.7 predates tier-first naming but launched profile-only.\n \t/^anthropic\\.claude-3-7-/,\n \t/^amazon\\.nova-(?:2|micro|lite|pro|premier)/,\n+\t// OpenAI GPT-5.x / GPT-6 (Sol, Luna, Astra, Terra) launched profile-only;\n+\t// gpt-oss has on-demand throughput and keeps its bare id\n+\t// (cline/cline#14468).\n+\t/^openai\\.gpt-(?!oss-)/,",
+        "comment_created_at": "2026-09-24T08:47:09+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Real, thanks. ap-south-1/2 only tried `apac.` and the catalog carries `in.` variants for GPT-5.6 Luna/Terra. Added `in` to the recognised geo prefixes and made those regions try `in.` first with `apac.` as the fallback, the same shape as the `jp.`/`au.` entries, with tests for bare ids in ap-south-1/2 and for an already-prefixed `in.` id.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

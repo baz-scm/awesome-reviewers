@@ -1,0 +1,17 @@
+---
+title: Single-source config resolution
+description: 'Environment-dependent configuration (base URLs, environment name, feature/provider
+  settings, directory overrides) must be resolved once, from one authoritative source,
+  and that resolved value reused everywhere it''s needed — never re-derived independently
+  at each call site. Independent re-resolution is a recurring source of bugs: one
+  code path read a...'
+repository: cline/cline#中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中
+label: Configurations
+language: TypeScript
+comments_count: 7
+repository_stars: 70986
+---
+
+Environment-dependent configuration (base URLs, environment name, feature/provider settings, directory overrides) must be resolved once, from one authoritative source, and that resolved value reused everywhere it's needed — never re-derived independently at each call site. Independent re-resolution is a recurring source of bugs: one code path read a provider `baseUrl` override while another read `getClineEnvironmentConfig().appBaseUrl`, so a staging override silently opened production; a sidecar command re-read provider settings on every call instead of using the value resolved once at startup; a host name lookup hit the host bridge on every state build instead of reading it from a value filled once at startup. Fix this class of bug by resolving the value a single time (typically at process/session startup or in one shared helper), storing or passing that exact value, and having every consumer derive from it (e.g. `resolveClineAppBaseUrl(apiBaseUrl)` instead of reading environment config directly; copying `resolveClineDir()` into a sandboxed subprocess's env instead of letting it read a different value).
+
+This also applies to precedence between explicit overrides and computed defaults/env fallbacks: an explicitly supplied option must always win over a derived default, and that default should only apply via `??`/undefined-check, e.g. `allowBindFallback: explicit ?? !hasExplicitEndpoint`. When detecting whether a flag was explicitly set, don't trust a library's auto-populated default value (e.g. Commander's negatable `--no-mouse` defaulting to `true`) — use the framework's "was this set by the user" API (`getOptionValueSource(...) === "cli"`) so an unset CLI flag still falls through to the env-var fallback instead of being clobbered by a false default. Likewise, when multiple code paths need to treat the same environment variables specially (e.g. excluding non-key Bedrock env vars from "is a key configured" checks), keep that logic in one shared, exported helper rather than duplicating lists across the runtime and other consumers.

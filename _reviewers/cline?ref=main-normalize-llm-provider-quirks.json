@@ -1,0 +1,226 @@
+[
+  {
+    "discussion_id": "4366169644",
+    "pr_number": 15321,
+    "pr_file": "apps/examples/desktop-app/sidecar/local-runtimes/lmstudio.ts",
+    "created_at": "2026-10-24T06:30:58+00:00",
+    "commented_code": "+import { execFile } from \"node:child_process\";\n+import { readFile, rm } from \"node:fs/promises\";\n+import os from \"node:os\";\n+import path from \"node:path\";\n+import { promisify } from \"node:util\";\n+import {\n+\tLOCAL_RUNTIMES,\n+\ttype LocalModelDetails,\n+} from \"../../webview/lib/local-models\";\n+import {\n+\tfirstExecutable,\n+\tisLocalUrl,\n+\ttype LocalRuntimeBackend,\n+\treadProviderSettings,\n+\trespondsOk,\n+\tspawnDetached,\n+\ttoServerUrl,\n+\twaitUntilReachable,\n+} from \"./shared\";\n+\n+const execFileAsync = promisify(execFile);\n+\n+/** A model from LM Studio's `GET /api/v1/models`. */\n+interface LmStudioModel {\n+\ttype: string;\n+\tkey: string;\n+\tdisplay_name?: string;\n+\tarchitecture?: string;\n+\tquantization?: { name?: string } | null;\n+\tsize_bytes: number;\n+\tparams_string?: string | null;\n+\tmax_context_length?: number;\n+\tformat?: string;\n+\tcapabilities?: {\n+\t\tvision?: boolean;\n+\t\ttrained_for_tool_use?: boolean;\n+\t\treasoning?: unknown;\n+\t};\n+\tloaded_instances?: { id: string; config?: Record<string, unknown> }[];\n+}\n+\n+/** A job from `POST /api/v1/models/download` and its status endpoint. */\n+interface LmStudioDownloadJob {\n+\tjob_id?: string;\n+\tstatus: string;\n+\tdownloaded_bytes?: number;\n+\ttotal_size_bytes?: number;\n+}\n+\n+const readServerUrl = () =>\n+\ttoServerUrl(\n+\t\treadProviderSettings(\"lmstudio\").baseUrl,\n+\t\tLOCAL_RUNTIMES.lmstudio.defaultBaseUrl,\n+\t);\n+\n+/** LM Studio's server can require an API token for every endpoint. */\n+function authHeaders(): Record<string, string> {\n+\tconst { apiKey } = readProviderSettings(\"lmstudio\");\n+\treturn apiKey ? { authorization: `Bearer ${apiKey}` } : {};\n+}\n+\n+async function request<T>(pathname: string, body?: unknown): Promise<T> {\n+\tconst response = await fetch(`${readServerUrl()}${pathname}`, {\n+\t\tmethod: body === undefined ? \"GET\" : \"POST\",\n+\t\theaders: { \"content-type\": \"application/json\", ...authHeaders() },\n+\t\tbody: body === undefined ? undefined : JSON.stringify(body),\n+\t});\n+\tconst payload = (await response.json().catch(() => ({}))) as {\n+\t\terror?: string | { message?: string };\n+\t};\n+\tif (!response.ok) {\n+\t\tconst error = payload.error;\n+\t\tthrow new Error(\n+\t\t\t(typeof error === \"string\" ? error : error?.message) ??\n+\t\t\t\t`LM Studio responded with ${response.status}`,\n+\t\t);\n+\t}\n+\treturn payload as T;\n+}\n+\n+async function listModels(): Promise<LmStudioModel[]> {\n+\tconst { models } = await request<{ models: LmStudioModel[] }>(\n+\t\t\"/api/v1/models\",\n+\t);\n+\treturn models.filter((model) => model.type === \"llm\");\n+}\n+\n+async function findModel(key: string): Promise<LmStudioModel> {\n+\tconst model = (await listModels()).find((entry) => entry.key === key);\n+\tif (!model) {\n+\t\tthrow new Error(`LM Studio doesn't have ${key}.`);\n+\t}\n+\treturn model;\n+}\n+\n+const readCapabilities = (model: LmStudioModel) =>\n+\t[\n+\t\tmodel.capabilities?.trained_for_tool_use ? \"tools\" : \"\",\n+\t\tmodel.capabilities?.reasoning ? \"thinking\" : \"\",\n+\t\tmodel.capabilities?.vision ? \"vision\" : \"\",\n+\t].filter(Boolean);\n+\n+/** LM Studio keeps its data in ~/.lmstudio unless moved, in which case a pointer file says where. */\n+async function readHome(): Promise<string> {\n+\ttry {\n+\t\tconst pointer = await readFile(\n+\t\t\tpath.join(os.homedir(), \".lmstudio-home-pointer\"),\n+\t\t\t\"utf8\",\n+\t\t);\n+\t\tif (pointer.trim()) {\n+\t\t\treturn pointer.trim();\n+\t\t}\n+\t} catch {}\n+\treturn path.join(os.homedir(), \".lmstudio\");\n+}\n+\n+async function readModelsDir(home: string): Promise<string> {\n+\ttry {\n+\t\tconst settings = JSON.parse(\n+\t\t\tawait readFile(path.join(home, \"settings.json\"), \"utf8\"),\n+\t\t) as { downloadsFolder?: unknown };\n+\t\tif (\n+\t\t\ttypeof settings.downloadsFolder === \"string\" &&\n+\t\t\tsettings.downloadsFolder\n+\t\t) {\n+\t\t\treturn settings.downloadsFolder;\n+\t\t}\n+\t} catch {}\n+\treturn path.join(home, \"models\");\n+}\n+\n+/** Whether `dir` is exactly `depth` folders inside `parent`, e.g. `<models>/<publisher>/<repo>`. */\n+export function isNestedDir(parent: string, dir: string, depth: number) {\n+\tconst relative = path.relative(parent, dir);\n+\tconst parts = relative.split(path.sep);\n+\treturn (\n+\t\t!path.isAbsolute(relative) &&\n+\t\tparts.length === depth &&\n+\t\tparts.every((part) => part !== \"\" && part !== \".\" && part !== \"..\")\n+\t);\n+}\n+\n+const hubModelsDir = (home: string) => path.join(home, \"hub\", \"models\");\n+\n+/**\n+ * Models downloaded from LM Studio Hub come with a manifest naming the\n+ * Hugging Face repos their files were downloaded from. LM Studio has no API\n+ * for deleting models, so this is how Cline finds the files to remove.\n+ */\n+async function readHubSources(\n+\thome: string,\n+\tkey: string,\n+): Promise<{ user: string; repo: string }[] | undefined> {\n+\ttry {\n+\t\tconst manifest = JSON.parse(\n+\t\t\tawait readFile(\n+\t\t\t\tpath.join(hubModelsDir(home), key, \"manifest.json\"),\n+\t\t\t\t\"utf8\",\n+\t\t\t),\n+\t\t) as {\n+\t\t\tdependencies?: {\n+\t\t\t\tsources?: { type?: string; user?: string; repo?: string }[];\n+\t\t\t}[];\n+\t\t};\n+\t\treturn (manifest.dependencies ?? [])\n+\t\t\t.flatMap((dependency) => dependency.sources ?? [])\n+\t\t\t.filter(\n+\t\t\t\t(source): source is { user: string; repo: string } =>\n+\t\t\t\t\tsource.type === \"huggingface\" && !!source.user && !!source.repo,\n+\t\t\t);\n+\t} catch {\n+\t\treturn undefined;\n+\t}\n+}\n+\n+/** The `lms` CLI, which both the LM Studio app and the headless llmster install into the LM Studio home. */\n+async function findLms(home: string): Promise<string | undefined> {\n+\tconst binary = process.platform === \"win32\" ? \"lms.exe\" : \"lms\";\n+\treturn await firstExecutable(\n+\t\t[path.join(home, \"bin\"), ...(process.env.PATH ?? \"\").split(path.delimiter)]\n+\t\t\t.filter(Boolean)\n+\t\t\t.map((dir) => path.join(dir, binary)),\n+\t);\n+}\n+\n+async function findApp(): Promise<string | undefined> {\n+\tconst home = os.homedir();\n+\tif (process.platform === \"darwin\") {\n+\t\treturn await firstExecutable([\n+\t\t\t\"/Applications/LM Studio.app\",\n+\t\t\tpath.join(home, \"Applications\", \"LM Studio.app\"),\n+\t\t]);\n+\t}\n+\tif (process.platform === \"win32\") {\n+\t\treturn await firstExecutable([\n+\t\t\tpath.join(\n+\t\t\t\tprocess.env.LOCALAPPDATA ?? path.join(home, \"AppData\", \"Local\"),\n+\t\t\t\t\"Programs\",\n+\t\t\t\t\"LM Studio\",\n+\t\t\t\t\"LM Studio.exe\",\n+\t\t\t),\n+\t\t]);\n+\t}\n+\treturn undefined;\n+}\n+\n+export const lmstudioBackend: LocalRuntimeBackend = {\n+\treadSettings: () => readProviderSettings(\"lmstudio\"),\n+\n+\tisLocal: () => isLocalUrl(readServerUrl()),\n+\n+\tisReachable: () =>\n+\t\trespondsOk(`${readServerUrl()}/api/v1/models`, authHeaders()),\n+\n+\tasync isInstalled() {\n+\t\treturn !!((await findLms(await readHome())) ?? (await findApp()));\n+\t},\n+\n+\tasync start() {\n+\t\tconst lms = await findLms(await readHome());\n+\t\tif (lms) {\n+\t\t\tconst { port } = new URL(readServerUrl());\n+\t\t\t// Wakes the LM Studio service if it isn't running, then starts its server.\n+\t\t\tawait execFileAsync(\n+\t\t\t\tlms,\n+\t\t\t\t[\"server\", \"start\", ...(port ? [\"--port\", port] : [])],\n+\t\t\t\t{ timeout: 60_000, windowsHide: true },\n+\t\t\t);\n+\t\t\treturn await waitUntilReachable(lmstudioBackend, 10_000);\n+\t\t}\n+\t\tconst app = await findApp();\n+\t\tif (!app) {\n+\t\t\tthrow new Error(\"LM Studio isn't installed.\");\n+\t\t}\n+\t\tconst spawnError =\n+\t\t\tprocess.platform === \"darwin\"\n+\t\t\t\t? spawnDetached(\"open\", [\"-a\", app])\n+\t\t\t\t: spawnDetached(app, []);\n+\t\treturn await waitUntilReachable(lmstudioBackend, 30_000, spawnError);\n+\t},\n+\n+\tasync readModels() {\n+\t\tconst [models, home] = await Promise.all([listModels(), readHome()]);\n+\t\treturn {\n+\t\t\tinstalled: await Promise.all(\n+\t\t\t\tmodels.map(async (model) => ({\n+\t\t\t\t\tname: model.key,\n+\t\t\t\t\tdisplayName: model.display_name,\n+\t\t\t\t\tsizeBytes: model.size_bytes,\n+\t\t\t\t\tparameterSize: model.params_string ?? \"\",\n+\t\t\t\t\tquantization: model.quantization?.name ?? \"\",\n+\t\t\t\t\tcapabilities: readCapabilities(model),\n+\t\t\t\t\tcontextLength: model.max_context_length ?? 0,\n+\t\t\t\t\tdeletable: !!(await readHubSources(home, model.key)),\n+\t\t\t\t})),\n+\t\t\t),\n+\t\t\trunning: models\n+\t\t\t\t.filter((model) => model.loaded_instances?.length)\n+\t\t\t\t.map((model) => ({\n+\t\t\t\t\tname: model.key,\n+\t\t\t\t\tsizeBytes: model.size_bytes,\n+\t\t\t\t\tcontextLength:\n+\t\t\t\t\t\tNumber(model.loaded_instances?.[0]?.config?.context_length) || 0,\n+\t\t\t\t})),\n+\t\t};\n+\t},\n+\n+\tasync modelDirs() {\n+\t\treturn [await readModelsDir(await readHome())];\n+\t},\n+\n+\tasync pull(model, onProgress) {\n+\t\tlet job = await request<LmStudioDownloadJob>(\"/api/v1/models/download\", {\n+\t\t\tmodel,\n+\t\t});\n+\t\twhile (job.status !== \"completed\" && job.status !== \"already_downloaded\") {\n+\t\t\tif (job.status === \"failed\" || !job.job_id) {\n+\t\t\t\tthrow new Error(`LM Studio couldn't download ${model}.`);\n+\t\t\t}\n+\t\t\tif (job.status === \"paused\") {\n+\t\t\t\tthrow new Error(\n+\t\t\t\t\t`The download of ${model} was paused. Resume it in LM Studio.`,\n+\t\t\t\t);\n+\t\t\t}\n+\t\t\tonProgress({\n+\t\t\t\tstatus: job.status,\n+\t\t\t\tcompleted: job.downloaded_bytes ?? 0,\n+\t\t\t\ttotal: job.total_size_bytes ?? 0,\n+\t\t\t});\n+\t\t\tawait new Promise((resolve) => setTimeout(resolve, 500));\n+\t\t\tjob = await request<LmStudioDownloadJob>(\n+\t\t\t\t`/api/v1/models/download/status/${job.job_id}`,\n+\t\t\t);\n+\t\t}\n+\t},\n+\n+\tasync load(model, contextWindow) {\n+\t\tconst info = await findModel(model);\n+\t\tconst contextLength = info.max_context_length\n+\t\t\t? Math.min(contextWindow, info.max_context_length)\n+\t\t\t: contextWindow;\n+\t\tconst instances = info.loaded_instances ?? [];\n+\t\tif (\n+\t\t\tinstances.some(\n+\t\t\t\t(instance) => Number(instance.config?.context_length) === contextLength,\n+\t\t\t)\n+\t\t) {\n+\t\t\treturn;\n+\t\t}\n+\t\t// Loading again would add a second copy rather than resize the first.\n+\t\tfor (const instance of instances) {\n+\t\t\tawait request(\"/api/v1/models/unload\", { instance_id: instance.id });\n+\t\t}\n+\t\tawait request(\"/api/v1/models/load\", {\n+\t\t\tmodel,\n+\t\t\t...(contextLength > 0 ? { context_length: contextLength } : {}),\n+\t\t});\n+\t},\n+\n+\tasync unload(model) {\n+\t\tfor (const instance of (await findModel(model)).loaded_instances ?? []) {\n+\t\t\tawait request(\"/api/v1/models/unload\", { instance_id: instance.id });\n+\t\t}\n+\t},\n+\n+\tasync delete(model) {\n+\t\tconst home = await readHome();\n+\t\tconst sources = await readHubSources(home, model);\n+\t\tif (!sources) {\n+\t\t\tthrow new Error(\n+\t\t\t\t\"Cline can only delete models downloaded from LM Studio Hub. Remove this one from LM Studio.\",\n+\t\t\t);\n+\t\t}\n+\t\tconst modelsDir = await readModelsDir(home);\n+\t\tconst hubDir = path.join(hubModelsDir(home), model);\n+\t\tconst sourceDirs = sources.map((source) =>\n+\t\t\tpath.join(modelsDir, source.user, source.repo),\n+\t\t);\n+\t\tif (\n+\t\t\t!isNestedDir(hubModelsDir(home), hubDir, 2) ||\n+\t\t\t!sourceDirs.every((dir) => isNestedDir(modelsDir, dir, 2))\n+\t\t) {\n+\t\t\tthrow new Error(`Refusing to delete files outside ${modelsDir}.`);\n+\t\t}\n+\t\tawait lmstudioBackend.unload(model);\n+\t\tfor (const dir of [...sourceDirs, hubDir]) {\n+\t\t\tawait rm(dir, { recursive: true, force: true });",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4366258482",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15321,
+        "pr_file": "apps/examples/desktop-app/sidecar/local-runtimes/lmstudio.ts",
+        "discussion_id": "4366169644",
+        "commented_code": "@@ -0,0 +1,379 @@\n+import { execFile } from \"node:child_process\";\n+import { readFile, rm } from \"node:fs/promises\";\n+import os from \"node:os\";\n+import path from \"node:path\";\n+import { promisify } from \"node:util\";\n+import {\n+\tLOCAL_RUNTIMES,\n+\ttype LocalModelDetails,\n+} from \"../../webview/lib/local-models\";\n+import {\n+\tfirstExecutable,\n+\tisLocalUrl,\n+\ttype LocalRuntimeBackend,\n+\treadProviderSettings,\n+\trespondsOk,\n+\tspawnDetached,\n+\ttoServerUrl,\n+\twaitUntilReachable,\n+} from \"./shared\";\n+\n+const execFileAsync = promisify(execFile);\n+\n+/** A model from LM Studio's `GET /api/v1/models`. */\n+interface LmStudioModel {\n+\ttype: string;\n+\tkey: string;\n+\tdisplay_name?: string;\n+\tarchitecture?: string;\n+\tquantization?: { name?: string } | null;\n+\tsize_bytes: number;\n+\tparams_string?: string | null;\n+\tmax_context_length?: number;\n+\tformat?: string;\n+\tcapabilities?: {\n+\t\tvision?: boolean;\n+\t\ttrained_for_tool_use?: boolean;\n+\t\treasoning?: unknown;\n+\t};\n+\tloaded_instances?: { id: string; config?: Record<string, unknown> }[];\n+}\n+\n+/** A job from `POST /api/v1/models/download` and its status endpoint. */\n+interface LmStudioDownloadJob {\n+\tjob_id?: string;\n+\tstatus: string;\n+\tdownloaded_bytes?: number;\n+\ttotal_size_bytes?: number;\n+}\n+\n+const readServerUrl = () =>\n+\ttoServerUrl(\n+\t\treadProviderSettings(\"lmstudio\").baseUrl,\n+\t\tLOCAL_RUNTIMES.lmstudio.defaultBaseUrl,\n+\t);\n+\n+/** LM Studio's server can require an API token for every endpoint. */\n+function authHeaders(): Record<string, string> {\n+\tconst { apiKey } = readProviderSettings(\"lmstudio\");\n+\treturn apiKey ? { authorization: `Bearer ${apiKey}` } : {};\n+}\n+\n+async function request<T>(pathname: string, body?: unknown): Promise<T> {\n+\tconst response = await fetch(`${readServerUrl()}${pathname}`, {\n+\t\tmethod: body === undefined ? \"GET\" : \"POST\",\n+\t\theaders: { \"content-type\": \"application/json\", ...authHeaders() },\n+\t\tbody: body === undefined ? undefined : JSON.stringify(body),\n+\t});\n+\tconst payload = (await response.json().catch(() => ({}))) as {\n+\t\terror?: string | { message?: string };\n+\t};\n+\tif (!response.ok) {\n+\t\tconst error = payload.error;\n+\t\tthrow new Error(\n+\t\t\t(typeof error === \"string\" ? error : error?.message) ??\n+\t\t\t\t`LM Studio responded with ${response.status}`,\n+\t\t);\n+\t}\n+\treturn payload as T;\n+}\n+\n+async function listModels(): Promise<LmStudioModel[]> {\n+\tconst { models } = await request<{ models: LmStudioModel[] }>(\n+\t\t\"/api/v1/models\",\n+\t);\n+\treturn models.filter((model) => model.type === \"llm\");\n+}\n+\n+async function findModel(key: string): Promise<LmStudioModel> {\n+\tconst model = (await listModels()).find((entry) => entry.key === key);\n+\tif (!model) {\n+\t\tthrow new Error(`LM Studio doesn't have ${key}.`);\n+\t}\n+\treturn model;\n+}\n+\n+const readCapabilities = (model: LmStudioModel) =>\n+\t[\n+\t\tmodel.capabilities?.trained_for_tool_use ? \"tools\" : \"\",\n+\t\tmodel.capabilities?.reasoning ? \"thinking\" : \"\",\n+\t\tmodel.capabilities?.vision ? \"vision\" : \"\",\n+\t].filter(Boolean);\n+\n+/** LM Studio keeps its data in ~/.lmstudio unless moved, in which case a pointer file says where. */\n+async function readHome(): Promise<string> {\n+\ttry {\n+\t\tconst pointer = await readFile(\n+\t\t\tpath.join(os.homedir(), \".lmstudio-home-pointer\"),\n+\t\t\t\"utf8\",\n+\t\t);\n+\t\tif (pointer.trim()) {\n+\t\t\treturn pointer.trim();\n+\t\t}\n+\t} catch {}\n+\treturn path.join(os.homedir(), \".lmstudio\");\n+}\n+\n+async function readModelsDir(home: string): Promise<string> {\n+\ttry {\n+\t\tconst settings = JSON.parse(\n+\t\t\tawait readFile(path.join(home, \"settings.json\"), \"utf8\"),\n+\t\t) as { downloadsFolder?: unknown };\n+\t\tif (\n+\t\t\ttypeof settings.downloadsFolder === \"string\" &&\n+\t\t\tsettings.downloadsFolder\n+\t\t) {\n+\t\t\treturn settings.downloadsFolder;\n+\t\t}\n+\t} catch {}\n+\treturn path.join(home, \"models\");\n+}\n+\n+/** Whether `dir` is exactly `depth` folders inside `parent`, e.g. `<models>/<publisher>/<repo>`. */\n+export function isNestedDir(parent: string, dir: string, depth: number) {\n+\tconst relative = path.relative(parent, dir);\n+\tconst parts = relative.split(path.sep);\n+\treturn (\n+\t\t!path.isAbsolute(relative) &&\n+\t\tparts.length === depth &&\n+\t\tparts.every((part) => part !== \"\" && part !== \".\" && part !== \"..\")\n+\t);\n+}\n+\n+const hubModelsDir = (home: string) => path.join(home, \"hub\", \"models\");\n+\n+/**\n+ * Models downloaded from LM Studio Hub come with a manifest naming the\n+ * Hugging Face repos their files were downloaded from. LM Studio has no API\n+ * for deleting models, so this is how Cline finds the files to remove.\n+ */\n+async function readHubSources(\n+\thome: string,\n+\tkey: string,\n+): Promise<{ user: string; repo: string }[] | undefined> {\n+\ttry {\n+\t\tconst manifest = JSON.parse(\n+\t\t\tawait readFile(\n+\t\t\t\tpath.join(hubModelsDir(home), key, \"manifest.json\"),\n+\t\t\t\t\"utf8\",\n+\t\t\t),\n+\t\t) as {\n+\t\t\tdependencies?: {\n+\t\t\t\tsources?: { type?: string; user?: string; repo?: string }[];\n+\t\t\t}[];\n+\t\t};\n+\t\treturn (manifest.dependencies ?? [])\n+\t\t\t.flatMap((dependency) => dependency.sources ?? [])\n+\t\t\t.filter(\n+\t\t\t\t(source): source is { user: string; repo: string } =>\n+\t\t\t\t\tsource.type === \"huggingface\" && !!source.user && !!source.repo,\n+\t\t\t);\n+\t} catch {\n+\t\treturn undefined;\n+\t}\n+}\n+\n+/** The `lms` CLI, which both the LM Studio app and the headless llmster install into the LM Studio home. */\n+async function findLms(home: string): Promise<string | undefined> {\n+\tconst binary = process.platform === \"win32\" ? \"lms.exe\" : \"lms\";\n+\treturn await firstExecutable(\n+\t\t[path.join(home, \"bin\"), ...(process.env.PATH ?? \"\").split(path.delimiter)]\n+\t\t\t.filter(Boolean)\n+\t\t\t.map((dir) => path.join(dir, binary)),\n+\t);\n+}\n+\n+async function findApp(): Promise<string | undefined> {\n+\tconst home = os.homedir();\n+\tif (process.platform === \"darwin\") {\n+\t\treturn await firstExecutable([\n+\t\t\t\"/Applications/LM Studio.app\",\n+\t\t\tpath.join(home, \"Applications\", \"LM Studio.app\"),\n+\t\t]);\n+\t}\n+\tif (process.platform === \"win32\") {\n+\t\treturn await firstExecutable([\n+\t\t\tpath.join(\n+\t\t\t\tprocess.env.LOCALAPPDATA ?? path.join(home, \"AppData\", \"Local\"),\n+\t\t\t\t\"Programs\",\n+\t\t\t\t\"LM Studio\",\n+\t\t\t\t\"LM Studio.exe\",\n+\t\t\t),\n+\t\t]);\n+\t}\n+\treturn undefined;\n+}\n+\n+export const lmstudioBackend: LocalRuntimeBackend = {\n+\treadSettings: () => readProviderSettings(\"lmstudio\"),\n+\n+\tisLocal: () => isLocalUrl(readServerUrl()),\n+\n+\tisReachable: () =>\n+\t\trespondsOk(`${readServerUrl()}/api/v1/models`, authHeaders()),\n+\n+\tasync isInstalled() {\n+\t\treturn !!((await findLms(await readHome())) ?? (await findApp()));\n+\t},\n+\n+\tasync start() {\n+\t\tconst lms = await findLms(await readHome());\n+\t\tif (lms) {\n+\t\t\tconst { port } = new URL(readServerUrl());\n+\t\t\t// Wakes the LM Studio service if it isn't running, then starts its server.\n+\t\t\tawait execFileAsync(\n+\t\t\t\tlms,\n+\t\t\t\t[\"server\", \"start\", ...(port ? [\"--port\", port] : [])],\n+\t\t\t\t{ timeout: 60_000, windowsHide: true },\n+\t\t\t);\n+\t\t\treturn await waitUntilReachable(lmstudioBackend, 10_000);\n+\t\t}\n+\t\tconst app = await findApp();\n+\t\tif (!app) {\n+\t\t\tthrow new Error(\"LM Studio isn't installed.\");\n+\t\t}\n+\t\tconst spawnError =\n+\t\t\tprocess.platform === \"darwin\"\n+\t\t\t\t? spawnDetached(\"open\", [\"-a\", app])\n+\t\t\t\t: spawnDetached(app, []);\n+\t\treturn await waitUntilReachable(lmstudioBackend, 30_000, spawnError);\n+\t},\n+\n+\tasync readModels() {\n+\t\tconst [models, home] = await Promise.all([listModels(), readHome()]);\n+\t\treturn {\n+\t\t\tinstalled: await Promise.all(\n+\t\t\t\tmodels.map(async (model) => ({\n+\t\t\t\t\tname: model.key,\n+\t\t\t\t\tdisplayName: model.display_name,\n+\t\t\t\t\tsizeBytes: model.size_bytes,\n+\t\t\t\t\tparameterSize: model.params_string ?? \"\",\n+\t\t\t\t\tquantization: model.quantization?.name ?? \"\",\n+\t\t\t\t\tcapabilities: readCapabilities(model),\n+\t\t\t\t\tcontextLength: model.max_context_length ?? 0,\n+\t\t\t\t\tdeletable: !!(await readHubSources(home, model.key)),\n+\t\t\t\t})),\n+\t\t\t),\n+\t\t\trunning: models\n+\t\t\t\t.filter((model) => model.loaded_instances?.length)\n+\t\t\t\t.map((model) => ({\n+\t\t\t\t\tname: model.key,\n+\t\t\t\t\tsizeBytes: model.size_bytes,\n+\t\t\t\t\tcontextLength:\n+\t\t\t\t\t\tNumber(model.loaded_instances?.[0]?.config?.context_length) || 0,\n+\t\t\t\t})),\n+\t\t};\n+\t},\n+\n+\tasync modelDirs() {\n+\t\treturn [await readModelsDir(await readHome())];\n+\t},\n+\n+\tasync pull(model, onProgress) {\n+\t\tlet job = await request<LmStudioDownloadJob>(\"/api/v1/models/download\", {\n+\t\t\tmodel,\n+\t\t});\n+\t\twhile (job.status !== \"completed\" && job.status !== \"already_downloaded\") {\n+\t\t\tif (job.status === \"failed\" || !job.job_id) {\n+\t\t\t\tthrow new Error(`LM Studio couldn't download ${model}.`);\n+\t\t\t}\n+\t\t\tif (job.status === \"paused\") {\n+\t\t\t\tthrow new Error(\n+\t\t\t\t\t`The download of ${model} was paused. Resume it in LM Studio.`,\n+\t\t\t\t);\n+\t\t\t}\n+\t\t\tonProgress({\n+\t\t\t\tstatus: job.status,\n+\t\t\t\tcompleted: job.downloaded_bytes ?? 0,\n+\t\t\t\ttotal: job.total_size_bytes ?? 0,\n+\t\t\t});\n+\t\t\tawait new Promise((resolve) => setTimeout(resolve, 500));\n+\t\t\tjob = await request<LmStudioDownloadJob>(\n+\t\t\t\t`/api/v1/models/download/status/${job.job_id}`,\n+\t\t\t);\n+\t\t}\n+\t},\n+\n+\tasync load(model, contextWindow) {\n+\t\tconst info = await findModel(model);\n+\t\tconst contextLength = info.max_context_length\n+\t\t\t? Math.min(contextWindow, info.max_context_length)\n+\t\t\t: contextWindow;\n+\t\tconst instances = info.loaded_instances ?? [];\n+\t\tif (\n+\t\t\tinstances.some(\n+\t\t\t\t(instance) => Number(instance.config?.context_length) === contextLength,\n+\t\t\t)\n+\t\t) {\n+\t\t\treturn;\n+\t\t}\n+\t\t// Loading again would add a second copy rather than resize the first.\n+\t\tfor (const instance of instances) {\n+\t\t\tawait request(\"/api/v1/models/unload\", { instance_id: instance.id });\n+\t\t}\n+\t\tawait request(\"/api/v1/models/load\", {\n+\t\t\tmodel,\n+\t\t\t...(contextLength > 0 ? { context_length: contextLength } : {}),\n+\t\t});\n+\t},\n+\n+\tasync unload(model) {\n+\t\tfor (const instance of (await findModel(model)).loaded_instances ?? []) {\n+\t\t\tawait request(\"/api/v1/models/unload\", { instance_id: instance.id });\n+\t\t}\n+\t},\n+\n+\tasync delete(model) {\n+\t\tconst home = await readHome();\n+\t\tconst sources = await readHubSources(home, model);\n+\t\tif (!sources) {\n+\t\t\tthrow new Error(\n+\t\t\t\t\"Cline can only delete models downloaded from LM Studio Hub. Remove this one from LM Studio.\",\n+\t\t\t);\n+\t\t}\n+\t\tconst modelsDir = await readModelsDir(home);\n+\t\tconst hubDir = path.join(hubModelsDir(home), model);\n+\t\tconst sourceDirs = sources.map((source) =>\n+\t\t\tpath.join(modelsDir, source.user, source.repo),\n+\t\t);\n+\t\tif (\n+\t\t\t!isNestedDir(hubModelsDir(home), hubDir, 2) ||\n+\t\t\t!sourceDirs.every((dir) => isNestedDir(modelsDir, dir, 2))\n+\t\t) {\n+\t\t\tthrow new Error(`Refusing to delete files outside ${modelsDir}.`);\n+\t\t}\n+\t\tawait lmstudioBackend.unload(model);\n+\t\tfor (const dir of [...sourceDirs, hubDir]) {\n+\t\t\tawait rm(dir, { recursive: true, force: true });",
+        "comment_created_at": "2026-10-24T06:30:58+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Fixed in aa52079cc. LM Studio groups every downloaded quantization of a Hub model as a variant of one model key (`variants` in `/api/v1/models`). Delete is now only offered, and `delete()` refuses otherwise, when the model has a single variant, so it can't remove a quantization the user didn't pick.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4355891758",
+    "pr_number": 15277,
+    "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+    "created_at": "2026-10-23T03:48:14+00:00",
+    "commented_code": "...(provider.executesModelTools && activeModelTools.length\n \t\t\t\t\t\t\t\t? { stopWhen: stepCountIs(8) }\n \t\t\t\t\t\t\t\t: {}),\n+\t\t\t\t\t\t\ttimeout: { firstChunkMs: timeoutMs, chunkMs: timeoutMs },",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4355891758",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15277,
+        "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+        "discussion_id": "4355891758",
+        "commented_code": "@@ -2471,6 +2523,7 @@ function createAiSdkProvider(\n \t\t\t\t\t\t\t...(provider.executesModelTools && activeModelTools.length\n \t\t\t\t\t\t\t\t? { stopWhen: stepCountIs(8) }\n \t\t\t\t\t\t\t\t: {}),\n+\t\t\t\t\t\t\ttimeout: { firstChunkMs: timeoutMs, chunkMs: timeoutMs },",
+        "comment_created_at": "2026-10-23T03:48:14+00:00",
+        "comment_author": "notlakshitha",
+        "comment_body": "Is a 2 minute `firstChunkMs` safe for hosted reasoning models? From what I can see in `streamText` (ai 7.0.120), the first chunk and chunk timers only reset on non-empty `text-delta`, `reasoning-delta` or `tool-input-delta` parts (plus `file`/`tool-call`). So a model that thinks for a while without streaming any reasoning text gets aborted as `before_first_chunk` even though the request is fine, and high effort runs can easily sit there past 2 minutes. Maybe only apply `firstChunkMs` when `timeoutMs` is set explicitly, or give it a much longer default than the header timeout?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4363160627",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15277,
+        "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+        "discussion_id": "4355891758",
+        "commented_code": "@@ -2471,6 +2523,7 @@ function createAiSdkProvider(\n \t\t\t\t\t\t\t...(provider.executesModelTools && activeModelTools.length\n \t\t\t\t\t\t\t\t? { stopWhen: stepCountIs(8) }\n \t\t\t\t\t\t\t\t: {}),\n+\t\t\t\t\t\t\ttimeout: { firstChunkMs: timeoutMs, chunkMs: timeoutMs },",
+        "comment_created_at": "2026-10-23T18:52:18+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "i reverted back to the standard 5 minute timeout, this PR just improved error messaging and adds metrics now.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4307782368",
+    "pr_number": 15176,
+    "pr_file": "sdk/packages/core/src/services/providers/model-source.ts",
+    "created_at": "2026-10-18T16:27:28+00:00",
+    "commented_code": "-function parseModelIdList(input: unknown): string[] {\n+/**\n+ * A model advertised by a provider's model-list endpoint. Provider catalogs\n+ * commonly include limits next to the id (OpenAI `context_length`, vLLM,\n+ * LM Studio, etc.); keeping them avoids dropping back to a 128K default.\n+ */\n+export interface ModelSourceEntry {\n+\tid: string;\n+\tname?: string;\n+\tcontextWindow?: number;\n+\tmaxInputTokens?: number;\n+\tmaxTokens?: number;\n+}\n+\n+function asRecord(value: unknown): Record<string, unknown> | undefined {\n+\treturn value && typeof value === \"object\" && !Array.isArray(value)\n+\t\t? (value as Record<string, unknown>)\n+\t\t: undefined;\n+}\n+\n+function firstString(...values: unknown[]): string | undefined {\n+\tfor (const value of values) {\n+\t\tif (typeof value === \"string\" && value.trim()) {\n+\t\t\treturn value.trim();\n+\t\t}\n+\t}\n+\treturn undefined;\n+}\n+\n+function firstPositiveInteger(...values: unknown[]): number | undefined {\n+\tfor (const value of values) {\n+\t\tif (typeof value === \"number\" && Number.isFinite(value) && value > 0) {\n+\t\t\treturn Math.trunc(value);\n+\t\t}\n+\t}\n+\treturn undefined;\n+}\n+\n+function toModelSourceEntry(item: unknown): ModelSourceEntry | undefined {\n+\tif (typeof item === \"string\") {\n+\t\tconst id = item.trim();\n+\t\treturn id ? { id } : undefined;\n+\t}\n+\tconst entry = asRecord(item);\n+\tif (!entry) return undefined;\n+\tconst id = firstString(entry.id, entry.name, entry.model);\n+\tif (!id) return undefined;\n+\tconst contextWindow = firstPositiveInteger(\n+\t\tentry.context_length,\n+\t\tentry.context_window,\n+\t\tentry.max_context_length,",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4307782368",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15176,
+        "pr_file": "sdk/packages/core/src/services/providers/model-source.ts",
+        "discussion_id": "4307782368",
+        "commented_code": "@@ -1,26 +1,98 @@\n-function parseModelIdList(input: unknown): string[] {\n+/**\n+ * A model advertised by a provider's model-list endpoint. Provider catalogs\n+ * commonly include limits next to the id (OpenAI `context_length`, vLLM,\n+ * LM Studio, etc.); keeping them avoids dropping back to a 128K default.\n+ */\n+export interface ModelSourceEntry {\n+\tid: string;\n+\tname?: string;\n+\tcontextWindow?: number;\n+\tmaxInputTokens?: number;\n+\tmaxTokens?: number;\n+}\n+\n+function asRecord(value: unknown): Record<string, unknown> | undefined {\n+\treturn value && typeof value === \"object\" && !Array.isArray(value)\n+\t\t? (value as Record<string, unknown>)\n+\t\t: undefined;\n+}\n+\n+function firstString(...values: unknown[]): string | undefined {\n+\tfor (const value of values) {\n+\t\tif (typeof value === \"string\" && value.trim()) {\n+\t\t\treturn value.trim();\n+\t\t}\n+\t}\n+\treturn undefined;\n+}\n+\n+function firstPositiveInteger(...values: unknown[]): number | undefined {\n+\tfor (const value of values) {\n+\t\tif (typeof value === \"number\" && Number.isFinite(value) && value > 0) {\n+\t\t\treturn Math.trunc(value);\n+\t\t}\n+\t}\n+\treturn undefined;\n+}\n+\n+function toModelSourceEntry(item: unknown): ModelSourceEntry | undefined {\n+\tif (typeof item === \"string\") {\n+\t\tconst id = item.trim();\n+\t\treturn id ? { id } : undefined;\n+\t}\n+\tconst entry = asRecord(item);\n+\tif (!entry) return undefined;\n+\tconst id = firstString(entry.id, entry.name, entry.model);\n+\tif (!id) return undefined;\n+\tconst contextWindow = firstPositiveInteger(\n+\t\tentry.context_length,\n+\t\tentry.context_window,\n+\t\tentry.max_context_length,",
+        "comment_created_at": "2026-10-18T16:27:28+00:00",
+        "comment_author": "notlakshitha",
+        "comment_body": "On LM Studio's `/api/v0/models`, `max_context_length` is the model's ceiling, and a loaded model also reports `loaded_context_length`, which is what it actually serves (can be a lot smaller). Since maxInputTokens falls back to contextWindow and that's the compaction budget, compaction won't kick in before LM Studio starts rejecting. Prefer `loaded_context_length` when it's present?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3660053558",
+    "pr_number": 11165,
+    "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+    "created_at": "2026-08-16T02:31:52+00:00",
+    "commented_code": "function normalizeAiSdkToolInputSchema(\n \tinputSchema: Record<string, unknown>,\n ): Record<string, unknown> {\n-\tif (inputSchema.type === \"object\") {\n-\t\treturn inputSchema;\n+\tconst schema: Record<string, unknown> = { ...inputSchema };\n+\tif (typeof inputSchema.type === \"string\") {\n+\t\tschema.type = inputSchema.type.toLowerCase();\n+\t}\n+\n+\tconst isObjectLike =\n+\t\tschema.type === \"object\" ||\n+\t\t\"properties\" in schema ||\n+\t\t\"required\" in schema ||\n+\t\t\"additionalProperties\" in schema;\n+\n+\tif (!isObjectLike) {\n+\t\treturn schema;\n+\t}",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "3790765879",
+        "repo_full_name": "cline/cline",
+        "pr_number": 11165,
+        "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+        "discussion_id": "3660053558",
+        "commented_code": "@@ -452,13 +456,46 @@ export async function repairMalformedToolCall<T extends RepairableToolCall>({\n function normalizeAiSdkToolInputSchema(\n \tinputSchema: Record<string, unknown>,\n ): Record<string, unknown> {\n-\tif (inputSchema.type === \"object\") {\n-\t\treturn inputSchema;\n+\tconst schema: Record<string, unknown> = { ...inputSchema };\n+\tif (typeof inputSchema.type === \"string\") {\n+\t\tschema.type = inputSchema.type.toLowerCase();\n+\t}\n+\n+\tconst isObjectLike =\n+\t\tschema.type === \"object\" ||\n+\t\t\"properties\" in schema ||\n+\t\t\"required\" in schema ||\n+\t\t\"additionalProperties\" in schema;\n+\n+\tif (!isObjectLike) {\n+\t\treturn schema;\n+\t}",
+        "comment_created_at": "2026-08-16T02:31:52+00:00",
+        "comment_author": "he-yufeng",
+        "comment_body": "Fixed in 595b17fec: the object-likeness early return now applies only below the root. A bare or scalar-only root schema (empty MCP inputSchema included) still comes out as `{ type: \"object\" }`, matching what Gemini requires for tool parameters. Covered by the new root-default test.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4096513267",
+    "pr_number": 14476,
+    "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+    "created_at": "2026-09-24T17:28:39+00:00",
+    "commented_code": "+import type {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4096513267",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+        "discussion_id": "4096513267",
+        "commented_code": "@@ -0,0 +1,55 @@\n+import type {",
+        "comment_created_at": "2026-09-24T17:28:39+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "is this pattern present elsewhere in the codebase? seems like special handling for bedrock which I'd like to avoid if possible",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4096559232",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+        "discussion_id": "4096513267",
+        "commented_code": "@@ -0,0 +1,55 @@\n+import type {",
+        "comment_created_at": "2026-09-24T17:33:55+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "what do you think about making a pr upstream to the ai-sdk itself to fix the bedrock adapter so that it doesn't accidentally send reasoning. seems like the better place for the fix to live",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4077616651",
+    "pr_number": 14426,
+    "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+    "created_at": "2026-09-22T23:52:04+00:00",
+    "commented_code": "return {\n \t\t...normalizedUsage,\n+\t\t// Providers report reasoning tokens as a subset of outputTokens (e.g.\n+\t\t// OpenAI's completion_tokens_details.reasoning_tokens), not additional\n+\t\t// to it. Strip them back out here so outputTokens reflects the actual\n+\t\t// non-reasoning output, with reasoningTokenCount tracked separately \u2014\n+\t\t// otherwise every downstream consumer (session totals, telemetry,\n+\t\t// Harbor's n_output_tokens) double-books reasoning as both its own\n+\t\t// count and part of \"output\". Cost above is computed from the\n+\t\t// pre-subtraction outputTokens, since reasoning tokens are still\n+\t\t// billed at the output rate.\n+\t\toutputTokens: Math.max(0, normalizedUsage.outputTokens - reasoningTokenCount),",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4077718466",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14426,
+        "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+        "discussion_id": "4077616651",
+        "commented_code": "@@ -1335,6 +1335,16 @@ export function normalizeUsage(\n \n \treturn {\n \t\t...normalizedUsage,\n+\t\t// Providers report reasoning tokens as a subset of outputTokens (e.g.\n+\t\t// OpenAI's completion_tokens_details.reasoning_tokens), not additional\n+\t\t// to it. Strip them back out here so outputTokens reflects the actual\n+\t\t// non-reasoning output, with reasoningTokenCount tracked separately \u2014\n+\t\t// otherwise every downstream consumer (session totals, telemetry,\n+\t\t// Harbor's n_output_tokens) double-books reasoning as both its own\n+\t\t// count and part of \"output\". Cost above is computed from the\n+\t\t// pre-subtraction outputTokens, since reasoning tokens are still\n+\t\t// billed at the output rate.\n+\t\toutputTokens: Math.max(0, normalizedUsage.outputTokens - reasoningTokenCount),",
+        "comment_created_at": "2026-09-22T23:52:04+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "Good catch. This is about the shape of the usage object, not the installed AI SDK version: if a finish part still reaches normalizeUsage with reasoning under outputTokens.reasoning and no raw provider metadata, our current path misses it and leaves those tokens in outputTokens. I\u2019ll add support for that nested field and a positive-reasoning regression test.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4077754407",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14426,
+        "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+        "discussion_id": "4077616651",
+        "commented_code": "@@ -1335,6 +1335,16 @@ export function normalizeUsage(\n \n \treturn {\n \t\t...normalizedUsage,\n+\t\t// Providers report reasoning tokens as a subset of outputTokens (e.g.\n+\t\t// OpenAI's completion_tokens_details.reasoning_tokens), not additional\n+\t\t// to it. Strip them back out here so outputTokens reflects the actual\n+\t\t// non-reasoning output, with reasoningTokenCount tracked separately \u2014\n+\t\t// otherwise every downstream consumer (session totals, telemetry,\n+\t\t// Harbor's n_output_tokens) double-books reasoning as both its own\n+\t\t// count and part of \"output\". Cost above is computed from the\n+\t\t// pre-subtraction outputTokens, since reasoning tokens are still\n+\t\t// billed at the output rate.\n+\t\toutputTokens: Math.max(0, normalizedUsage.outputTokens - reasoningTokenCount),",
+        "comment_created_at": "2026-09-22T23:59:05+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "Pushed in 4a4844d6e8 \u2014 added `[\"outputTokens\", \"reasoning\"]` to `REASONING_TOKEN_PATHS` and a regression test (`subtracts AI SDK v4's nested outputTokens.reasoning from outputTokens`) covering this exact shape. Full `llms` suite still green (886 passed).",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4087329417",
+    "pr_number": 14461,
+    "pr_file": "sdk/packages/llms/src/providers/providers.generated.ts",
+    "created_at": "2026-09-23T21:08:22+00:00",
+    "commented_code": "family: \"vertex\",\n \t\tcapabilities: [\"tools\", \"reasoning\", \"prompt-cache\"],\n \t\tmodelsProviderId: \"vertex\",\n-\t\tdefaultModelId: \"gemini-3.8-flash\",\n+\t\tdefaultModelId: \"claude-opus-5-5@default\",",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4087329417",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14461,
+        "pr_file": "sdk/packages/llms/src/providers/providers.generated.ts",
+        "discussion_id": "4087329417",
+        "commented_code": "@@ -2643,7 +2643,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [\n \t\tfamily: \"vertex\",\n \t\tcapabilities: [\"tools\", \"reasoning\", \"prompt-cache\"],\n \t\tmodelsProviderId: \"vertex\",\n-\t\tdefaultModelId: \"gemini-3.8-flash\",\n+\t\tdefaultModelId: \"claude-opus-5-5@default\",",
+        "comment_created_at": "2026-09-23T21:08:22+00:00",
+        "comment_author": "johnwschoi",
+        "comment_body": "This default breaks API-key-only Vertex configurations because the Claude adapter ignores the configured API key.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4088327453",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14461,
+        "pr_file": "sdk/packages/llms/src/providers/providers.generated.ts",
+        "discussion_id": "4087329417",
+        "commented_code": "@@ -2643,7 +2643,7 @@ export const GENERATED_PROVIDER_SPECS: readonly BuiltinSpec[] = [\n \t\tfamily: \"vertex\",\n \t\tcapabilities: [\"tools\", \"reasoning\", \"prompt-cache\"],\n \t\tmodelsProviderId: \"vertex\",\n-\t\tdefaultModelId: \"gemini-3.8-flash\",\n+\t\tdefaultModelId: \"claude-opus-5-5@default\",",
+        "comment_created_at": "2026-09-23T23:33:16+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "This doesn't block users from switching model, and if we need to fix it we should fix the generation script wihch we could do in a follow up, wdyt?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4091558177",
+    "pr_number": 14480,
+    "pr_file": "sdk/packages/llms/src/providers/vendors/bedrock.ts",
+    "created_at": "2026-09-24T08:47:09+00:00",
+    "commented_code": "// Claude 3.7 predates tier-first naming but launched profile-only.\n \t/^anthropic\\.claude-3-7-/,\n \t/^amazon\\.nova-(?:2|micro|lite|pro|premier)/,\n+\t// OpenAI GPT-5.x / GPT-6 (Sol, Luna, Astra, Terra) launched profile-only;\n+\t// gpt-oss has on-demand throughput and keeps its bare id\n+\t// (cline/cline#14468).\n+\t/^openai\\.gpt-(?!oss-)/,",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4091643196",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14480,
+        "pr_file": "sdk/packages/llms/src/providers/vendors/bedrock.ts",
+        "discussion_id": "4091558177",
+        "commented_code": "@@ -62,6 +62,10 @@ const BEDROCK_INFERENCE_PROFILE_REQUIRED_PATTERNS: readonly RegExp[] = [\n \t// Claude 3.7 predates tier-first naming but launched profile-only.\n \t/^anthropic\\.claude-3-7-/,\n \t/^amazon\\.nova-(?:2|micro|lite|pro|premier)/,\n+\t// OpenAI GPT-5.x / GPT-6 (Sol, Luna, Astra, Terra) launched profile-only;\n+\t// gpt-oss has on-demand throughput and keeps its bare id\n+\t// (cline/cline#14468).\n+\t/^openai\\.gpt-(?!oss-)/,",
+        "comment_created_at": "2026-09-24T08:47:09+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Real, thanks. ap-south-1/2 only tried `apac.` and the catalog carries `in.` variants for GPT-5.6 Luna/Terra. Added `in` to the recognised geo prefixes and made those regions try `in.` first with `apac.` as the fallback, the same shape as the `jp.`/`au.` entries, with tests for bare ids in ap-south-1/2 and for an already-prefixed `in.` id.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,134 @@
+[
+  {
+    "discussion_id": "3998118919",
+    "pr_number": 4022,
+    "pr_file": "src/persist/snapshot.rs",
+    "created_at": "2026-09-13T00:32:47+00:00",
+    "commented_code": "})\n             .unwrap_or_default();\n         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());\n+        // A pane that has not run a foreground command since the server\n+        // started reports no activation, so it falls back to the one it was\n+        // restored into. Without that, saving a restored session at an idle\n+        // prompt would lose the environment on the next restore.\n+        //\n+        // That fallback is sticky: deactivating and then saving at an idle\n+        // prompt brings the environment back on the next restore. A shell\n+        // deactivates in its own process, and that is not observable from\n+        // outside it, so there is nothing here to notice the change.\n+        let virtual_env = tab\n+            .virtual_env_for_pane(*id, terminal_runtimes)\n+            .or_else(|| terminal.and_then(|terminal| terminal.virtual_env.clone()))",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3998133741",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 4022,
+        "pr_file": "src/persist/snapshot.rs",
+        "discussion_id": "3998118919",
+        "commented_code": "@@ -335,6 +369,20 @@ fn capture_tab(\n             })\n             .unwrap_or_default();\n         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());\n+        // A pane that has not run a foreground command since the server\n+        // started reports no activation, so it falls back to the one it was\n+        // restored into. Without that, saving a restored session at an idle\n+        // prompt would lose the environment on the next restore.\n+        //\n+        // That fallback is sticky: deactivating and then saving at an idle\n+        // prompt brings the environment back on the next restore. A shell\n+        // deactivates in its own process, and that is not observable from\n+        // outside it, so there is nothing here to notice the change.\n+        let virtual_env = tab\n+            .virtual_env_for_pane(*id, terminal_runtimes)\n+            .or_else(|| terminal.and_then(|terminal| terminal.virtual_env.clone()))",
+        "comment_created_at": "2026-09-13T00:32:47+00:00",
+        "comment_author": "JJLiebig",
+        "comment_body": "Fixed in cb91320. The read now returns a three-state observation (`Unknown` / `NoActivation` / `Activation`). A successful read with no activation drops the restored value instead of falling back to it, so a deactivated environment is no longer resurrected while an unactivated foreground command is running. `Unknown` (never observed) still falls back to the restored value, which is what keeps a fresh idle prompt from losing its environment.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3998118928",
+    "pr_number": 4022,
+    "pr_file": "src/pane.rs",
+    "created_at": "2026-09-13T00:32:48+00:00",
+    "commented_code": "None\n         }\n     }\n+\n+    /// Interpreter environment the pane is currently working in, if any.\n+    ///\n+    /// A shell mutates its own environment in place when it activates one, and\n+    /// that mutation is not visible from outside the process. What is visible\n+    /// is the environment a process was launched with, so this reads the\n+    /// foreground process group leader \u2014 the command the shell started, which\n+    /// carries any activation that was in effect when it began.\n+    ///\n+    /// An idle prompt leaves the shell itself in the foreground, where its\n+    /// activation cannot be read. The last activation observed on a foreground\n+    /// command is remembered for that case, so a save taken at the prompt keeps\n+    /// the environment instead of dropping it. A foreground command that runs\n+    /// without an activation clears the remembered one, which is how a\n+    /// deactivation is noticed while a command runs. An environment activated\n+    /// and left idle without running a command is still unobservable.\n+    ///\n+    /// Session saves call this for every pane, so it stays at one process\n+    /// lookup plus one environment read. In particular it does not ask the PTY\n+    /// actor for the foreground group: that is a round trip which blocks while\n+    /// the reader is paused for a handoff.\n+    pub fn foreground_virtual_env(&self) -> Option<crate::platform::VirtualEnvActivation> {\n+        let pid = self.child_pid.load(Ordering::Acquire);\n+        if pid == 0 {\n+            return None;\n+        }\n+        let foreground = crate::platform::foreground_process_group_id(pid);\n+        let remembered = self\n+            .remembered_virtual_env\n+            .lock()\n+            .unwrap_or_else(|poisoned| poisoned.into_inner())\n+            .clone();\n+        let (activation, remembered) = resolve_foreground_virtual_env(\n+            pid,\n+            foreground,\n+            remembered,\n+            crate::platform::process_virtual_env,\n+        );\n+        *self\n+            .remembered_virtual_env\n+            .lock()\n+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = remembered;\n+        activation\n+    }\n+}\n+\n+/// Pick the activation a pane reports and the value to remember for the next\n+/// save taken while the shell is idle.\n+///\n+/// The shell's own process environment is deliberately not read: it only shows\n+/// what the shell was launched with, not what it built by activating in place,\n+/// and reading it would add a process lookup to every idle pane. The remembered\n+/// value stands in for the shell.\n+fn resolve_foreground_virtual_env(\n+    child_pid: u32,\n+    foreground: Option<u32>,\n+    remembered: Option<crate::platform::VirtualEnvActivation>,\n+    observe: impl FnOnce(u32) -> Option<crate::platform::VirtualEnvActivation>,\n+) -> (\n+    Option<crate::platform::VirtualEnvActivation>,\n+    Option<crate::platform::VirtualEnvActivation>,\n+) {\n+    let Some(foreground) = foreground else {\n+        return (remembered.clone(), remembered);\n+    };\n+    if foreground == child_pid {\n+        return (remembered.clone(), remembered);\n+    }\n+    let observed = observe(foreground);\n+    (observed.clone(), observed)",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3998133772",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 4022,
+        "pr_file": "src/pane.rs",
+        "discussion_id": "3998118928",
+        "commented_code": "@@ -3348,6 +3377,76 @@ impl PaneRuntime {\n             None\n         }\n     }\n+\n+    /// Interpreter environment the pane is currently working in, if any.\n+    ///\n+    /// A shell mutates its own environment in place when it activates one, and\n+    /// that mutation is not visible from outside the process. What is visible\n+    /// is the environment a process was launched with, so this reads the\n+    /// foreground process group leader \u2014 the command the shell started, which\n+    /// carries any activation that was in effect when it began.\n+    ///\n+    /// An idle prompt leaves the shell itself in the foreground, where its\n+    /// activation cannot be read. The last activation observed on a foreground\n+    /// command is remembered for that case, so a save taken at the prompt keeps\n+    /// the environment instead of dropping it. A foreground command that runs\n+    /// without an activation clears the remembered one, which is how a\n+    /// deactivation is noticed while a command runs. An environment activated\n+    /// and left idle without running a command is still unobservable.\n+    ///\n+    /// Session saves call this for every pane, so it stays at one process\n+    /// lookup plus one environment read. In particular it does not ask the PTY\n+    /// actor for the foreground group: that is a round trip which blocks while\n+    /// the reader is paused for a handoff.\n+    pub fn foreground_virtual_env(&self) -> Option<crate::platform::VirtualEnvActivation> {\n+        let pid = self.child_pid.load(Ordering::Acquire);\n+        if pid == 0 {\n+            return None;\n+        }\n+        let foreground = crate::platform::foreground_process_group_id(pid);\n+        let remembered = self\n+            .remembered_virtual_env\n+            .lock()\n+            .unwrap_or_else(|poisoned| poisoned.into_inner())\n+            .clone();\n+        let (activation, remembered) = resolve_foreground_virtual_env(\n+            pid,\n+            foreground,\n+            remembered,\n+            crate::platform::process_virtual_env,\n+        );\n+        *self\n+            .remembered_virtual_env\n+            .lock()\n+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = remembered;\n+        activation\n+    }\n+}\n+\n+/// Pick the activation a pane reports and the value to remember for the next\n+/// save taken while the shell is idle.\n+///\n+/// The shell's own process environment is deliberately not read: it only shows\n+/// what the shell was launched with, not what it built by activating in place,\n+/// and reading it would add a process lookup to every idle pane. The remembered\n+/// value stands in for the shell.\n+fn resolve_foreground_virtual_env(\n+    child_pid: u32,\n+    foreground: Option<u32>,\n+    remembered: Option<crate::platform::VirtualEnvActivation>,\n+    observe: impl FnOnce(u32) -> Option<crate::platform::VirtualEnvActivation>,\n+) -> (\n+    Option<crate::platform::VirtualEnvActivation>,\n+    Option<crate::platform::VirtualEnvActivation>,\n+) {\n+    let Some(foreground) = foreground else {\n+        return (remembered.clone(), remembered);\n+    };\n+    if foreground == child_pid {\n+        return (remembered.clone(), remembered);\n+    }\n+    let observed = observe(foreground);\n+    (observed.clone(), observed)",
+        "comment_created_at": "2026-09-13T00:32:48+00:00",
+        "comment_author": "JJLiebig",
+        "comment_body": "Fixed in cb91320. `process_virtual_env` now distinguishes a successful read with no activation (`NoActivation`) from an unreadable process (`Unknown`). Only `NoActivation` clears `remembered_virtual_env`; `Unknown` keeps it, so a transient failure (process exit, unsafe Linux state, denied Windows read, withheld macOS environment) no longer forgets a valid activation. Covered by the updated `resolve_foreground_virtual_env` unit test.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3998139964",
+    "pr_number": 4022,
+    "pr_file": "src/persist/snapshot.rs",
+    "created_at": "2026-09-13T00:36:48+00:00",
+    "commented_code": "})\n             .unwrap_or_default();\n         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());\n+        // A pane that has not run a foreground command since the server\n+        // started reports no activation, so it falls back to the one it was\n+        // restored into. Without that, saving a restored session at an idle\n+        // prompt would lose the environment on the next restore.\n+        //\n+        // That fallback is sticky: deactivating and then saving at an idle\n+        // prompt brings the environment back on the next restore. A shell\n+        // deactivates in its own process, and that is not observable from\n+        // outside it, so there is nothing here to notice the change.\n+        let virtual_env = tab\n+            .virtual_env_for_pane(*id, terminal_runtimes)\n+            .or_else(|| terminal.and_then(|terminal| terminal.virtual_env.clone()))\n+            .as_ref()\n+            .map(PaneVirtualEnvSnapshot::from_activation);",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3998143219",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 4022,
+        "pr_file": "src/persist/snapshot.rs",
+        "discussion_id": "3998139964",
+        "commented_code": "@@ -335,6 +369,20 @@ fn capture_tab(\n             })\n             .unwrap_or_default();\n         let launch_argv = terminal.and_then(|terminal| terminal.launch_argv.clone());\n+        // A pane that has not run a foreground command since the server\n+        // started reports no activation, so it falls back to the one it was\n+        // restored into. Without that, saving a restored session at an idle\n+        // prompt would lose the environment on the next restore.\n+        //\n+        // That fallback is sticky: deactivating and then saving at an idle\n+        // prompt brings the environment back on the next restore. A shell\n+        // deactivates in its own process, and that is not observable from\n+        // outside it, so there is nothing here to notice the change.\n+        let virtual_env = tab\n+            .virtual_env_for_pane(*id, terminal_runtimes)\n+            .or_else(|| terminal.and_then(|terminal| terminal.virtual_env.clone()))\n+            .as_ref()\n+            .map(PaneVirtualEnvSnapshot::from_activation);",
+        "comment_created_at": "2026-09-13T00:36:48+00:00",
+        "comment_author": "JJLiebig",
+        "comment_body": "Addressed in cb91320f. `PaneRuntime::foreground_virtual_env` now returns a three-state `VirtualEnvObservation` (`Unknown` / `NoActivation` / `Activation`). `capture_tab` applies the `TerminalState::virtual_env` fallback only for `Unknown` (no observation yet), and drops the restored value on `NoActivation`. So a snapshot taken while an unactivated foreground command is running no longer saves the restored activation, and an unreadable process (`Unknown`) still keeps the restored value.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3721870018",
+    "pr_number": 2367,
+    "pr_file": "src/persist/restore.rs",
+    "created_at": "2026-08-05T16:52:10+00:00",
+    "commented_code": "let public_pane_id = old_pane_id\n             .and_then(|old_id| public_pane_ids_by_old_raw.get(&old_id))\n             .map(String::as_str);\n+        // The pane comes back from a shell that never activated anything, so\n+        // re-enter the interpreter environment it was working in before.\n+        let restored_virtual_env = saved_pane\n+            .and_then(|pane| pane.virtual_env.as_ref())\n+            .and_then(|snapshot| snapshot.to_activation());\n+        let extra_env = restored_virtual_env\n+            .as_ref()\n+            .map(|activation| activation.launch_env(std::env::var(\"PATH\").ok().as_deref()))\n+            .unwrap_or_default();\n         let launch_env = public_pane_id\n             .map(|pane_id| {\n-                PaneLaunchEnv::from_extra(Vec::new()).with_identity(\n+                PaneLaunchEnv::from_extra(extra_env.clone()).with_identity(\n                     workspace_id.to_string(),\n                     crate::workspace::public_tab_id_for_number(workspace_id, number),\n                     pane_id.to_string(),\n                 )\n             })\n-            .unwrap_or_default();\n+            .unwrap_or_else(|| PaneLaunchEnv::from_extra(extra_env));",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3722435611",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 2367,
+        "pr_file": "src/persist/restore.rs",
+        "discussion_id": "3721870018",
+        "commented_code": "@@ -517,15 +517,24 @@ fn restore_tab(\n         let public_pane_id = old_pane_id\n             .and_then(|old_id| public_pane_ids_by_old_raw.get(&old_id))\n             .map(String::as_str);\n+        // The pane comes back from a shell that never activated anything, so\n+        // re-enter the interpreter environment it was working in before.\n+        let restored_virtual_env = saved_pane\n+            .and_then(|pane| pane.virtual_env.as_ref())\n+            .and_then(|snapshot| snapshot.to_activation());\n+        let extra_env = restored_virtual_env\n+            .as_ref()\n+            .map(|activation| activation.launch_env(std::env::var(\"PATH\").ok().as_deref()))\n+            .unwrap_or_default();\n         let launch_env = public_pane_id\n             .map(|pane_id| {\n-                PaneLaunchEnv::from_extra(Vec::new()).with_identity(\n+                PaneLaunchEnv::from_extra(extra_env.clone()).with_identity(\n                     workspace_id.to_string(),\n                     crate::workspace::public_tab_id_for_number(workspace_id, number),\n                     pane_id.to_string(),\n                 )\n             })\n-            .unwrap_or_default();\n+            .unwrap_or_else(|| PaneLaunchEnv::from_extra(extra_env));",
+        "comment_created_at": "2026-08-05T16:52:10+00:00",
+        "comment_author": "happysnehal111-del",
+        "comment_body": "Good catch \u2014 fixed in e6308ed. A prefix that no longer resolves to a directory is dropped with a warning before it reaches `launch_env`, so the pane restores on the inherited environment instead of a broken one. Added `cold_restore_drops_a_virtual_env_that_no_longer_exists` to cover it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3978501957",
+    "pr_number": 3894,
+    "pr_file": "src/client/shell/input.rs",
+    "created_at": "2026-09-10T11:21:22+00:00",
+    "commented_code": "RawInputEvent::HostDefaultColor {\n                     kind: crate::terminal_theme::DefaultColorKind::Background,\n                     color,\n-                } if !self.host_appearance_explicit => {\n-                    let appearance = color.inferred_appearance();\n-                    self.host_appearance = Some(appearance);\n-                    if self.config.theme_runtime.auto_switch {\n-                        self.config.palette = crate::app::client_palette_for_appearance(\n-                            &self.config.theme_runtime,\n-                            appearance,\n-                        );\n+                } => {\n+                    if self.host_background != Some(color) {\n+                        self.host_background = Some(color);\n                         outcome.repaint = true;\n                     }",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3978514383",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 3894,
+        "pr_file": "src/client/shell/input.rs",
+        "discussion_id": "3978501957",
+        "commented_code": "@@ -267,16 +267,22 @@ impl ClientShellState {\n                 RawInputEvent::HostDefaultColor {\n                     kind: crate::terminal_theme::DefaultColorKind::Background,\n                     color,\n-                } if !self.host_appearance_explicit => {\n-                    let appearance = color.inferred_appearance();\n-                    self.host_appearance = Some(appearance);\n-                    if self.config.theme_runtime.auto_switch {\n-                        self.config.palette = crate::app::client_palette_for_appearance(\n-                            &self.config.theme_runtime,\n-                            appearance,\n-                        );\n+                } => {\n+                    if self.host_background != Some(color) {\n+                        self.host_background = Some(color);\n                         outcome.repaint = true;\n                     }",
+        "comment_created_at": "2026-09-10T11:21:22+00:00",
+        "comment_author": "ogulcancelik",
+        "comment_body": "i\u2019m keeping the last measured background until a new color reply replaces it. an appearance notification does not necessarily change the terminal background, and clearing it on every query would temporarily restore the symbolic fallback that caused this bug. this also preserves the previous host-theme behavior; terminals that never report a background still use the fallback.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3744980283",
+    "pr_number": 2586,
+    "pr_file": "src/platform/fallback.rs",
+    "created_at": "2026-08-09T20:03:31+00:00",
+    "commented_code": "false\n }\n \n+pub(crate) fn hostname() -> Option<String> {\n+    None\n+}\n+\n+pub(crate) fn local_datetime() -> Option<time::PrimitiveDateTime> {\n+    let now = time::OffsetDateTime::now_utc();\n+    Some(time::PrimitiveDateTime::new(now.date(), now.time()))\n+}",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3745066736",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 2586,
+        "pr_file": "src/platform/fallback.rs",
+        "discussion_id": "3744980283",
+        "commented_code": "@@ -89,6 +89,15 @@ pub(crate) fn should_draw_host_cursor_by_default() -> bool {\n     false\n }\n \n+pub(crate) fn hostname() -> Option<String> {\n+    None\n+}\n+\n+pub(crate) fn local_datetime() -> Option<time::PrimitiveDateTime> {\n+    let now = time::OffsetDateTime::now_utc();\n+    Some(time::PrimitiveDateTime::new(now.date(), now.time()))\n+}",
+        "comment_created_at": "2026-08-09T20:03:31+00:00",
+        "comment_author": "ogulcancelik",
+        "comment_body": "Fixed in 53abfc28. Unsupported fallback targets now return `None` rather than presenting UTC as local wall-clock time.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

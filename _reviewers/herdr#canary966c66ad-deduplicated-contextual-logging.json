@@ -1,0 +1,90 @@
+[
+  {
+    "discussion_id": "4186117175",
+    "pr_number": 4965,
+    "pr_file": "src/server/headless/lifecycle.rs",
+    "created_at": "2026-10-05T16:14:33+00:00",
+    "commented_code": "if self.shutting_down {\n             return;\n         }\n-        info!(\"server shutdown initiated\");\n+        let reason = if self.host_shutdown_requested.load(Ordering::Acquire) {\n+            ShutdownReason::HostShutdown\n+        } else {\n+            self.server_stop\n+                .take_reason()\n+                .unwrap_or(ShutdownReason::Unknown)\n+        };\n+        info!(%reason, \"server shutdown initiated\");",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "4186186527",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 4965,
+        "pr_file": "src/server/headless/lifecycle.rs",
+        "discussion_id": "4186117175",
+        "commented_code": "@@ -304,7 +304,14 @@ impl HeadlessServer {\n         if self.shutting_down {\n             return;\n         }\n-        info!(\"server shutdown initiated\");\n+        let reason = if self.host_shutdown_requested.load(Ordering::Acquire) {\n+            ShutdownReason::HostShutdown\n+        } else {\n+            self.server_stop\n+                .take_reason()\n+                .unwrap_or(ShutdownReason::Unknown)\n+        };\n+        info!(%reason, \"server shutdown initiated\");",
+        "comment_created_at": "2026-10-05T16:14:33+00:00",
+        "comment_author": "ogulcancelik",
+        "comment_body": "intentional: the handoff exit already logs its own reason line, `live handoff completed; old server exiting`, in finish_live_handoff_shutdown. routing it through initiate_shutdown would also send ServerShutdown to clients that were already handed off, so i kept one line per shutdown there.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4112150184",
+    "pr_number": 4659,
+    "pr_file": "src/api/server.rs",
+    "created_at": "2026-09-26T17:34:09+00:00",
+    "commented_code": "})\n }\n \n+fn run_accept_loop<S>(\n+    incoming: impl IntoIterator<Item = io::Result<S>>,\n+    running: &AtomicBool,\n+    error_backoff: Duration,\n+    mut handle: impl FnMut(S),\n+) {\n+    let mut consecutive_errors = 0_u64;\n+    for stream in incoming {\n+        match stream {\n+            Ok(stream) => {\n+                if consecutive_errors > 0 {\n+                    info!(consecutive_errors, \"api listener accept recovered\");\n+                    consecutive_errors = 0;\n+                }\n+                handle(stream);\n+            }\n+            Err(err) => {\n+                if !running.load(Ordering::Relaxed) {\n+                    break;\n+                }\n+                // Accept errors such as ECONNABORTED or EMFILE are transient;\n+                // exiting would leave the socket file with no listener.\n+                if consecutive_errors == 0 {\n+                    error!(err = %err, \"api listener accept failed; retrying\");\n+                } else {\n+                    debug!(err = %err, \"api listener accept failed again\");\n+                }\n+                consecutive_errors = consecutive_errors.saturating_add(1);\n+                std::thread::sleep(error_backoff);\n+                if !running.load(Ordering::Relaxed) {",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "4112167489",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 4659,
+        "pr_file": "src/api/server.rs",
+        "discussion_id": "4112150184",
+        "commented_code": "@@ -160,6 +158,86 @@ fn start_server_inner(\n     })\n }\n \n+fn run_accept_loop<S>(\n+    incoming: impl IntoIterator<Item = io::Result<S>>,\n+    running: &AtomicBool,\n+    error_backoff: Duration,\n+    mut handle: impl FnMut(S),\n+) {\n+    let mut consecutive_errors = 0_u64;\n+    for stream in incoming {\n+        match stream {\n+            Ok(stream) => {\n+                if consecutive_errors > 0 {\n+                    info!(consecutive_errors, \"api listener accept recovered\");\n+                    consecutive_errors = 0;\n+                }\n+                handle(stream);\n+            }\n+            Err(err) => {\n+                if !running.load(Ordering::Relaxed) {\n+                    break;\n+                }\n+                // Accept errors such as ECONNABORTED or EMFILE are transient;\n+                // exiting would leave the socket file with no listener.\n+                if consecutive_errors == 0 {\n+                    error!(err = %err, \"api listener accept failed; retrying\");\n+                } else {\n+                    debug!(err = %err, \"api listener accept failed again\");\n+                }\n+                consecutive_errors = consecutive_errors.saturating_add(1);\n+                std::thread::sleep(error_backoff);\n+                if !running.load(Ordering::Relaxed) {",
+        "comment_created_at": "2026-09-26T17:34:09+00:00",
+        "comment_author": "ogulcancelik",
+        "comment_body": "agreed, the per-retry debug line added nothing since the recovery log carries the count. dropped it, so a sustained failure now logs once on the first error and once on recovery.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4016539251",
+    "pr_number": 4192,
+    "pr_file": "src/logging.rs",
+    "created_at": "2026-09-15T14:12:38+00:00",
+    "commented_code": ");\n }\n \n-pub(crate) fn session_restored(workspaces: usize, outcome: &'static str) {\n+pub(crate) fn session_restored(path: &Path, workspaces: usize, outcome: &'static str) {\n     tracing::info!(\n         event = \"persist.restore\",\n         subsystem = \"persist\",\n         outcome,\n+        path = %path.display(),",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "4016552476",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 4192,
+        "pr_file": "src/logging.rs",
+        "discussion_id": "4016539251",
+        "commented_code": "@@ -331,16 +331,29 @@ pub(crate) fn session_clear_failed(path: &Path, err: &str) {\n     );\n }\n \n-pub(crate) fn session_restored(workspaces: usize, outcome: &'static str) {\n+pub(crate) fn session_restored(path: &Path, workspaces: usize, outcome: &'static str) {\n     tracing::info!(\n         event = \"persist.restore\",\n         subsystem = \"persist\",\n         outcome,\n+        path = %path.display(),",
+        "comment_created_at": "2026-09-15T14:12:38+00:00",
+        "comment_author": "akbash-bot",
+        "comment_body": "Keeping the full path intentionally: existing persist.save, persist.clear, and startup socket logs already record this session directory. The exact path lets us distinguish a missing file from loading a different config/session location, which is essential to this investigation. This change neither logs snapshot contents nor uploads logs; paths should be redacted before sharing publicly.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3645036497",
+    "pr_number": 1823,
+    "pr_file": "src/platform/windows.rs",
+    "created_at": "2026-07-24T12:17:55+00:00",
+    "commented_code": "String::from_utf16(&buffer).ok()\n }\n \n+// Prefix-mode ASCII input source support (see `switch_ascii_input_source_in_prefix`).\n+//\n+// Windows IMEs live in the terminal-emulator process, not in herdr. Empirically:\n+//   - `WM_IME_CONTROL` / `IMC_GETCONVERSIONMODE` reads the real conversion mode\n+//     reliably (this is what kren-select uses), so we detect state with it.\n+//   - `IMC_SETCONVERSIONMODE` changes the flag value but does NOT affect real\n+//     input in terminal/TSF hosts, so we cannot switch by writing the mode.\n+//   - `ImmGetContext` on the foreground window returns null across the process\n+//     boundary, so the ImmGetOpenStatus/ImmSetOpenStatus path is unavailable.\n+// Therefore we switch the way kren-select does: inject the IME toggle key with\n+// `SendInput`, which reaches the foreground input queue like a real keypress.\n+//\n+// The toggle key is language-specific, so we pick it from the foreground\n+// keyboard layout's language id. Only Korean is mapped today; other IMEs are\n+// detected and left untouched (a no-op) rather than toggled with the wrong key.\n+\n+/// `WM_IME_CONTROL` sub-command that reads the current IME conversion mode.\n+const IMC_GETCONVERSIONMODE: usize = 0x0005;\n+\n+/// Conversion-mode bit set while the IME composes native characters\n+/// (Hangul / kana / pinyin). Cleared means ASCII-capable direct input.\n+const IME_CMODE_NATIVE: isize = 0x0001;\n+\n+/// Virtual key that toggles Hangul/English on Korean IMEs.\n+const VK_HANGUL: u16 = 0x15;\n+\n+/// Primary language id (low 10 bits of a LANGID) for Korean.\n+const LANG_KOREAN: u32 = 0x12;\n+\n+/// Whether the IME is currently composing native (non-ASCII) characters.\n+///\n+/// Uses a bit test rather than an equality check because Japanese and Chinese\n+/// IMEs combine `IME_CMODE_NATIVE` with other bits (full-shape, katakana,\n+/// roman), so the native state is not a single fixed value.\n+fn native_mode_active(mode: isize) -> bool {\n+    mode & IME_CMODE_NATIVE != 0\n+}\n+\n+/// The IME toggle key for a keyboard layout language id, or `None` when the\n+/// language's toggle key is not known. `langid` is the full LANGID (LOWORD of\n+/// an `HKL`); the primary language is its low 10 bits.\n+///\n+/// Only Korean is mapped: `VK_HANGUL` is the Hangul/English toggle. Japanese\n+/// (half/full-width) and Chinese use different keys per IME, so they return\n+/// `None` and are left untouched instead of toggled incorrectly.\n+fn toggle_key_for_language(langid: u32) -> Option<u16> {\n+    match langid & 0x3FF {\n+        LANG_KOREAN => Some(VK_HANGUL),\n+        _ => None,\n+    }\n+}\n+\n+/// Builds the key-down then key-up `INPUT` pair for `vk`.\n+fn key_tap_inputs(vk: u16) -> [INPUT; 2] {\n+    let key_event = |flags| INPUT {\n+        r#type: INPUT_KEYBOARD,\n+        Anonymous: INPUT_0 {\n+            ki: KEYBDINPUT {\n+                wVk: vk,\n+                wScan: 0,\n+                dwFlags: flags,\n+                time: 0,\n+                dwExtraInfo: 0,\n+            },\n+        },\n+    };\n+    [key_event(0), key_event(KEYEVENTF_KEYUP)]\n+}\n+\n+/// Injects a key-down then key-up for `vk` via `SendInput`.\n+fn send_vk_tap(vk: u16) {\n+    let inputs = key_tap_inputs(vk);\n+    // SAFETY: `inputs` outlives the call; its `INPUT_KEYBOARD` entries have the\n+    // `ki` union variant fully initialized, which is the variant SendInput reads\n+    // for keyboard input. `size_of::<INPUT>()` is the required `cbSize`.\n+    unsafe {\n+        SendInput(\n+            inputs.len() as u32,\n+            inputs.as_ptr(),\n+            size_of::<INPUT>() as i32,\n+        );\n+    }\n+}",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3645251612",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 1823,
+        "pr_file": "src/platform/windows.rs",
+        "discussion_id": "3645036497",
+        "commented_code": "@@ -657,6 +669,166 @@ fn read_unicode_string(process: HANDLE, unicode: UNICODE_STRING) -> Option<Strin\n     String::from_utf16(&buffer).ok()\n }\n \n+// Prefix-mode ASCII input source support (see `switch_ascii_input_source_in_prefix`).\n+//\n+// Windows IMEs live in the terminal-emulator process, not in herdr. Empirically:\n+//   - `WM_IME_CONTROL` / `IMC_GETCONVERSIONMODE` reads the real conversion mode\n+//     reliably (this is what kren-select uses), so we detect state with it.\n+//   - `IMC_SETCONVERSIONMODE` changes the flag value but does NOT affect real\n+//     input in terminal/TSF hosts, so we cannot switch by writing the mode.\n+//   - `ImmGetContext` on the foreground window returns null across the process\n+//     boundary, so the ImmGetOpenStatus/ImmSetOpenStatus path is unavailable.\n+// Therefore we switch the way kren-select does: inject the IME toggle key with\n+// `SendInput`, which reaches the foreground input queue like a real keypress.\n+//\n+// The toggle key is language-specific, so we pick it from the foreground\n+// keyboard layout's language id. Only Korean is mapped today; other IMEs are\n+// detected and left untouched (a no-op) rather than toggled with the wrong key.\n+\n+/// `WM_IME_CONTROL` sub-command that reads the current IME conversion mode.\n+const IMC_GETCONVERSIONMODE: usize = 0x0005;\n+\n+/// Conversion-mode bit set while the IME composes native characters\n+/// (Hangul / kana / pinyin). Cleared means ASCII-capable direct input.\n+const IME_CMODE_NATIVE: isize = 0x0001;\n+\n+/// Virtual key that toggles Hangul/English on Korean IMEs.\n+const VK_HANGUL: u16 = 0x15;\n+\n+/// Primary language id (low 10 bits of a LANGID) for Korean.\n+const LANG_KOREAN: u32 = 0x12;\n+\n+/// Whether the IME is currently composing native (non-ASCII) characters.\n+///\n+/// Uses a bit test rather than an equality check because Japanese and Chinese\n+/// IMEs combine `IME_CMODE_NATIVE` with other bits (full-shape, katakana,\n+/// roman), so the native state is not a single fixed value.\n+fn native_mode_active(mode: isize) -> bool {\n+    mode & IME_CMODE_NATIVE != 0\n+}\n+\n+/// The IME toggle key for a keyboard layout language id, or `None` when the\n+/// language's toggle key is not known. `langid` is the full LANGID (LOWORD of\n+/// an `HKL`); the primary language is its low 10 bits.\n+///\n+/// Only Korean is mapped: `VK_HANGUL` is the Hangul/English toggle. Japanese\n+/// (half/full-width) and Chinese use different keys per IME, so they return\n+/// `None` and are left untouched instead of toggled incorrectly.\n+fn toggle_key_for_language(langid: u32) -> Option<u16> {\n+    match langid & 0x3FF {\n+        LANG_KOREAN => Some(VK_HANGUL),\n+        _ => None,\n+    }\n+}\n+\n+/// Builds the key-down then key-up `INPUT` pair for `vk`.\n+fn key_tap_inputs(vk: u16) -> [INPUT; 2] {\n+    let key_event = |flags| INPUT {\n+        r#type: INPUT_KEYBOARD,\n+        Anonymous: INPUT_0 {\n+            ki: KEYBDINPUT {\n+                wVk: vk,\n+                wScan: 0,\n+                dwFlags: flags,\n+                time: 0,\n+                dwExtraInfo: 0,\n+            },\n+        },\n+    };\n+    [key_event(0), key_event(KEYEVENTF_KEYUP)]\n+}\n+\n+/// Injects a key-down then key-up for `vk` via `SendInput`.\n+fn send_vk_tap(vk: u16) {\n+    let inputs = key_tap_inputs(vk);\n+    // SAFETY: `inputs` outlives the call; its `INPUT_KEYBOARD` entries have the\n+    // `ki` union variant fully initialized, which is the variant SendInput reads\n+    // for keyboard input. `size_of::<INPUT>()` is the required `cbSize`.\n+    unsafe {\n+        SendInput(\n+            inputs.len() as u32,\n+            inputs.as_ptr(),\n+            size_of::<INPUT>() as i32,\n+        );\n+    }\n+}",
+        "comment_created_at": "2026-07-24T12:17:55+00:00",
+        "comment_author": "joonhwan",
+        "comment_body": "Applied in c9b7876. `send_vk_tap` now captures `SendInput`'s return value and emits a `tracing::warn!` with the sent/expected counts and the virtual key when fewer events than requested are queued, so a blocked injection (e.g. UIPI) leaves a diagnostic trail instead of a silent success. Tap behavior is otherwise unchanged for both the switch and restore-on-drop paths.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

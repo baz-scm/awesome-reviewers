@@ -1,0 +1,170 @@
+[
+  {
+    "discussion_id": "4271897697",
+    "pr_number": 5275,
+    "pr_file": "src/remote/attach.rs",
+    "created_at": "2026-10-14T14:25:20+00:00",
+    "commented_code": "}\n \n fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<DetectedRemotePlatform> {\n+    // Interactive setup forwards SSH stderr to the terminal, so a Windows host\n+    // whose default shell is PowerShell would print a raw\n+    // `CommandNotFoundException` for the POSIX `/bin/sh` probe below. Probe for\n+    // Windows first there so such hosts never receive a `/bin/sh` command.\n+    // Background bridges capture stderr instead, so they keep the POSIX-first\n+    // probe to avoid an extra round trip on Unix hosts.\n+    if !ssh.noninteractive {\n+        if let Some(platform) = detect_windows_remote_platform(ssh)? {\n+            return Ok(platform);",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "4272061383",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 5275,
+        "pr_file": "src/remote/attach.rs",
+        "discussion_id": "4271897697",
+        "commented_code": "@@ -1694,6 +1694,18 @@ pub(super) fn discover_remote_api_metadata(\n }\n \n fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<DetectedRemotePlatform> {\n+    // Interactive setup forwards SSH stderr to the terminal, so a Windows host\n+    // whose default shell is PowerShell would print a raw\n+    // `CommandNotFoundException` for the POSIX `/bin/sh` probe below. Probe for\n+    // Windows first there so such hosts never receive a `/bin/sh` command.\n+    // Background bridges capture stderr instead, so they keep the POSIX-first\n+    // probe to avoid an extra round trip on Unix hosts.\n+    if !ssh.noninteractive {\n+        if let Some(platform) = detect_windows_remote_platform(ssh)? {\n+            return Ok(platform);",
+        "comment_created_at": "2026-10-14T14:25:20+00:00",
+        "comment_author": "JJLiebig",
+        "comment_body": "Fixed in 8fcdf49. The encoded PowerShell probe now exits non-zero when its working directory is a `\\\\wsl$` / `\\\\wsl.localhost` UNC path, so a WSL endpoint (where `powershell.exe` is reachable through interop) is rejected and falls through to the POSIX probe instead of being accepted as Windows.\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4273863864",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 5275,
+        "pr_file": "src/remote/attach.rs",
+        "discussion_id": "4271897697",
+        "commented_code": "@@ -1694,6 +1694,18 @@ pub(super) fn discover_remote_api_metadata(\n }\n \n fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<DetectedRemotePlatform> {\n+    // Interactive setup forwards SSH stderr to the terminal, so a Windows host\n+    // whose default shell is PowerShell would print a raw\n+    // `CommandNotFoundException` for the POSIX `/bin/sh` probe below. Probe for\n+    // Windows first there so such hosts never receive a `/bin/sh` command.\n+    // Background bridges capture stderr instead, so they keep the POSIX-first\n+    // probe to avoid an extra round trip on Unix hosts.\n+    if !ssh.noninteractive {\n+        if let Some(platform) = detect_windows_remote_platform(ssh)? {\n+            return Ok(platform);",
+        "comment_created_at": "2026-10-14T17:06:06+00:00",
+        "comment_author": "JJLiebig",
+        "comment_body": "Fixed in 807892c0. Your mounted-drive concern was valid: I reproduced the old probe reporting `herdr-windows:AMD64` from WSL `/mnt/c` while `uname` reported Linux.\n\nThe cwd heuristic is removed. The first probe now checks expansion in the SSH login shell before accepting Windows PowerShell's result. Ordinary fallback probes use the same guard; only an explicit MINGW/MSYS/Cygwin uname hint permits the direct Windows probe.\n\nLive sh/bash/zsh probes reject Windows from both `/home` and `/mnt/c`; native Windows PowerShell 5/7 and cmd probes succeed with empty stderr. The new native Windows regression test executes the same Windows PowerShell binary through native and POSIX login shells. Full Windows `just check` and 69 focused WSL checks passed.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4272518123",
+    "pr_number": 5280,
+    "pr_file": "src/server/client_transport.rs",
+    "created_at": "2026-10-14T15:24:51+00:00",
+    "commented_code": "fn observer_write_timeout_resets_when_sending_makes_progress() {\n         use std::io::Read as _;\n \n+        // A slow observer that keeps draining must not be disconnected, because every\n+        // partial write resets the writer's deadline. Keep the drain cadence far below\n+        // the write timeout so a loaded runner's scheduler jitter cannot manufacture a\n+        // stall, while the transfer still outlasts the timeout so the reset is required\n+        // (otherwise the writer could finish within one timeout window without resetting).\n+        const WRITE_TIMEOUT: Duration = Duration::from_secs(1);\n+        const DRAIN_INTERVAL: Duration = Duration::from_millis(25);\n+        const TOTAL_BYTES: usize = 1024 * 1024;",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "4272769534",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 5280,
+        "pr_file": "src/server/client_transport.rs",
+        "discussion_id": "4272518123",
+        "commented_code": "@@ -1706,24 +1706,31 @@ mod tests {\n     fn observer_write_timeout_resets_when_sending_makes_progress() {\n         use std::io::Read as _;\n \n+        // A slow observer that keeps draining must not be disconnected, because every\n+        // partial write resets the writer's deadline. Keep the drain cadence far below\n+        // the write timeout so a loaded runner's scheduler jitter cannot manufacture a\n+        // stall, while the transfer still outlasts the timeout so the reset is required\n+        // (otherwise the writer could finish within one timeout window without resetting).\n+        const WRITE_TIMEOUT: Duration = Duration::from_secs(1);\n+        const DRAIN_INTERVAL: Duration = Duration::from_millis(25);\n+        const TOTAL_BYTES: usize = 1024 * 1024;",
+        "comment_created_at": "2026-10-14T15:24:51+00:00",
+        "comment_author": "JJLiebig",
+        "comment_body": "Addressed in `1d06f67f`. The test now bounds both kernel socket buffers \u2014 `SO_SNDBUF` on the writer and `SO_RCVBUF` on the observer \u2014 to 64 KiB via `limit_local_stream_buffers`, which is far below the 1 MiB frame. The writer must therefore block for the observer and can only finish by resetting its deadline across many drains, independent of the platform default buffer sizes.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4272551505",
+    "pr_number": 5280,
+    "pr_file": "src/server/client_transport.rs",
+    "created_at": "2026-10-14T15:24:53+00:00",
+    "commented_code": "fn observer_write_timeout_resets_when_sending_makes_progress() {\n         use std::io::Read as _;\n \n+        // A slow observer that keeps draining must not be disconnected, because every\n+        // partial write resets the writer's deadline. Keep the drain cadence far below\n+        // the write timeout so a loaded runner's scheduler jitter cannot manufacture a\n+        // stall, while the transfer still outlasts the timeout so the reset is required\n+        // (otherwise the writer could finish within one timeout window without resetting).\n+        const WRITE_TIMEOUT: Duration = Duration::from_secs(1);\n+        const DRAIN_INTERVAL: Duration = Duration::from_millis(25);\n+        const TOTAL_BYTES: usize = 1024 * 1024;",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "4272769920",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 5280,
+        "pr_file": "src/server/client_transport.rs",
+        "discussion_id": "4272551505",
+        "commented_code": "@@ -1706,24 +1706,31 @@ mod tests {\n     fn observer_write_timeout_resets_when_sending_makes_progress() {\n         use std::io::Read as _;\n \n+        // A slow observer that keeps draining must not be disconnected, because every\n+        // partial write resets the writer's deadline. Keep the drain cadence far below\n+        // the write timeout so a loaded runner's scheduler jitter cannot manufacture a\n+        // stall, while the transfer still outlasts the timeout so the reset is required\n+        // (otherwise the writer could finish within one timeout window without resetting).\n+        const WRITE_TIMEOUT: Duration = Duration::from_secs(1);\n+        const DRAIN_INTERVAL: Duration = Duration::from_millis(25);\n+        const TOTAL_BYTES: usize = 1024 * 1024;",
+        "comment_created_at": "2026-10-14T15:24:53+00:00",
+        "comment_author": "JJLiebig",
+        "comment_body": "Addressed in `1d06f67f`. The test now bounds both kernel socket buffers \u2014 `SO_SNDBUF` on the writer and `SO_RCVBUF` on the observer \u2014 to 64 KiB via `limit_local_stream_buffers`, which is far below the 1 MiB frame. The writer must therefore block for the observer and can only finish by resetting its deadline across many drains, independent of the platform default buffer sizes.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4259316098",
+    "pr_number": 5232,
+    "pr_file": "src/client/shell/machine_diagnostics.rs",
+    "created_at": "2026-10-13T13:40:22+00:00",
+    "commented_code": "pub(super) fn clear_machine_diagnostic(&mut self, id: &ClientEndpointId) {\n         self.machine_diagnostics.errors.remove(id);\n+        self.machine_diagnostics.retry_reports.remove(id);\n+    }\n+\n+    /// Asks for an immediate connection attempt instead of waiting out the backoff.\n+    /// Returns false when the machine has no pending reconnect to bring forward.\n+    pub(super) fn retry_machine(&mut self, id: &ClientEndpointId) -> bool {\n+        let ClientEndpointId::Ssh(profile_id) = id else {\n+            return false;\n+        };\n+        if !self\n+            .endpoints\n+            .iter()\n+            .any(|endpoint| &endpoint.endpoint_id == id && machine_retryable(endpoint))\n+        {\n+            return false;\n+        }\n+        // A visible diagnostic describes the attempt this retry replaces.\n+        let code = machine_diagnostic_code(profile_id);\n+        if self\n+            .visible_endpoint_notice\n+            .as_ref()\n+            .is_some_and(|notice| notice.key.code == code)\n+        {\n+            self.visible_endpoint_notice = None;\n+        }\n+        if !self.machine_diagnostics.retry_requests.contains(id) {\n+            self.machine_diagnostics.retry_requests.push(id.clone());\n+        }\n+        self.machine_diagnostics.retry_reports.insert(id.clone());\n+        self.set_endpoint_status(id, ClientEndpointStatus::Connecting);\n+        true",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "4259361321",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 5232,
+        "pr_file": "src/client/shell/machine_diagnostics.rs",
+        "discussion_id": "4259316098",
+        "commented_code": "@@ -49,6 +66,48 @@ impl ClientShellState {\n \n     pub(super) fn clear_machine_diagnostic(&mut self, id: &ClientEndpointId) {\n         self.machine_diagnostics.errors.remove(id);\n+        self.machine_diagnostics.retry_reports.remove(id);\n+    }\n+\n+    /// Asks for an immediate connection attempt instead of waiting out the backoff.\n+    /// Returns false when the machine has no pending reconnect to bring forward.\n+    pub(super) fn retry_machine(&mut self, id: &ClientEndpointId) -> bool {\n+        let ClientEndpointId::Ssh(profile_id) = id else {\n+            return false;\n+        };\n+        if !self\n+            .endpoints\n+            .iter()\n+            .any(|endpoint| &endpoint.endpoint_id == id && machine_retryable(endpoint))\n+        {\n+            return false;\n+        }\n+        // A visible diagnostic describes the attempt this retry replaces.\n+        let code = machine_diagnostic_code(profile_id);\n+        if self\n+            .visible_endpoint_notice\n+            .as_ref()\n+            .is_some_and(|notice| notice.key.code == code)\n+        {\n+            self.visible_endpoint_notice = None;\n+        }\n+        if !self.machine_diagnostics.retry_requests.contains(id) {\n+            self.machine_diagnostics.retry_requests.push(id.clone());\n+        }\n+        self.machine_diagnostics.retry_reports.insert(id.clone());\n+        self.set_endpoint_status(id, ClientEndpointStatus::Connecting);\n+        true",
+        "comment_created_at": "2026-10-13T13:40:22+00:00",
+        "comment_author": "JJLiebig",
+        "comment_body": "The shell intentionally becomes Online after a fresh snapshot in `install_client_shell_snapshot` (`src/client/shell_runtime.rs`), or after the active presentation fence commits. A successful handshake alone does not make a coherent screen ready for pane input. That snapshot path calls `set_endpoint_status(Online)`, which clears the diagnostic and retry marker. Moving it into `Connected` would bypass the existing readiness boundary. I\u2019m keeping that boundary intact; an attempt waiting for its initial snapshot remains in progress under this PR\u2019s stated scope.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3941294169",
+    "pr_number": 3661,
+    "pr_file": "src/remote/attach.rs",
+    "created_at": "2026-09-05T16:48:58+00:00",
+    "commented_code": "}\n }\n \n+fn discard_windows_bridge_preamble(reader: &mut impl io::BufRead) -> io::Result<()> {\n+    let mut line = Vec::new();\n+    loop {\n+        line.clear();\n+        if reader.read_until(b'\n', &mut line)? == 0 {",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3941306747",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 3661,
+        "pr_file": "src/remote/attach.rs",
+        "discussion_id": "3941294169",
+        "commented_code": "@@ -2018,6 +2259,25 @@ fn bridge_connection(\n     }\n }\n \n+fn discard_windows_bridge_preamble(reader: &mut impl io::BufRead) -> io::Result<()> {\n+    let mut line = Vec::new();\n+    loop {\n+        line.clear();\n+        if reader.read_until(b'\\n', &mut line)? == 0 {",
+        "comment_created_at": "2026-09-05T16:48:58+00:00",
+        "comment_author": "JJLiebig",
+        "comment_body": "Thanks. This SSH host is already the trusted execution peer and can send an unbounded stream after the marker as well. A preamble cap would therefore not establish a resource boundary; it would only reject a new, unevidenced class of remote profiles. The parser keeps at most one discarded line, and the concrete profile-noise failure this framing fixes is covered by the live Windows SSH test. We are keeping the reader minimal under the repository rule against speculative limits.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3941510055",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 3661,
+        "pr_file": "src/remote/attach.rs",
+        "discussion_id": "3941294169",
+        "commented_code": "@@ -2018,6 +2259,25 @@ fn bridge_connection(\n     }\n }\n \n+fn discard_windows_bridge_preamble(reader: &mut impl io::BufRead) -> io::Result<()> {\n+    let mut line = Vec::new();\n+    loop {\n+        line.clear();\n+        if reader.read_until(b'\\n', &mut line)? == 0 {",
+        "comment_created_at": "2026-09-05T17:50:01+00:00",
+        "comment_author": "JJLiebig",
+        "comment_body": "You were right that the previous `read_until` implementation buffered an unbounded line before the marker; my earlier stream comparison missed that distinction. The updated head replaces it with one shared, constant-state `BufRead::fill_buf`/`consume` scanner for POSIX and Windows startup output. It accepts banners of arbitrary length, handles markers split across read buffers, and preserves all bytes after the marker without retaining the preamble. Captured setup output uses the same framing after the existing process capture.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3588532245",
+    "pr_number": 1453,
+    "pr_file": "src/cli.rs",
+    "created_at": "2026-07-15T20:58:59+00:00",
+    "commented_code": "}\n \n pub(super) fn send_request(request: &Request) -> std::io::Result<serde_json::Value> {\n+    let client = ApiClient::local();\n+    ensure_server_protocol_compatible(&client, &request.id)?;\n+    client\n+        .request_value(request)\n+        .map_err(api_client_error_to_io)\n+}\n+\n+pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde_json::Value> {\n     ApiClient::local()\n         .request_value(request)\n         .map_err(api_client_error_to_io)\n }\n \n+fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> std::io::Result<()> {\n+    let status = client.status().map_err(api_client_error_to_io)?;\n+    let server_protocol = status\n+        .protocol\n+        .ok_or_else(|| std::io::Error::other(\"server ping did not include a protocol version\"))?;\n+    let Some(response) = protocol_guard::mismatch_response(\n+        request_id,\n+        server_protocol,\n+        &crate::session::active_restart_after_update_guidance(),\n+    ) else {\n+        return Ok(());\n+    };",
+    "repo_full_name": "herdrdev/herdr",
+    "discussion_comments": [
+      {
+        "comment_id": "3590707244",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 1453,
+        "pr_file": "src/cli.rs",
+        "discussion_id": "3588532245",
+        "commented_code": "@@ -990,11 +993,43 @@ pub(super) fn send_ok_request(method: Method) -> std::io::Result<i32> {\n }\n \n pub(super) fn send_request(request: &Request) -> std::io::Result<serde_json::Value> {\n+    let client = ApiClient::local();\n+    ensure_server_protocol_compatible(&client, &request.id)?;\n+    client\n+        .request_value(request)\n+        .map_err(api_client_error_to_io)\n+}\n+\n+pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde_json::Value> {\n     ApiClient::local()\n         .request_value(request)\n         .map_err(api_client_error_to_io)\n }\n \n+fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> std::io::Result<()> {\n+    let status = client.status().map_err(api_client_error_to_io)?;\n+    let server_protocol = status\n+        .protocol\n+        .ok_or_else(|| std::io::Error::other(\"server ping did not include a protocol version\"))?;\n+    let Some(response) = protocol_guard::mismatch_response(\n+        request_id,\n+        server_protocol,\n+        &crate::session::active_restart_after_update_guidance(),\n+    ) else {\n+        return Ok(());\n+    };",
+        "comment_created_at": "2026-07-15T20:58:59+00:00",
+        "comment_author": "ogulcancelik",
+        "comment_body": "@akbash-bot wdyt?\n\nPlease inspect this review and reply in this thread.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3590714120",
+        "repo_full_name": "herdrdev/herdr",
+        "pr_number": 1453,
+        "pr_file": "src/cli.rs",
+        "discussion_id": "3588532245",
+        "commented_code": "@@ -990,11 +993,43 @@ pub(super) fn send_ok_request(method: Method) -> std::io::Result<i32> {\n }\n \n pub(super) fn send_request(request: &Request) -> std::io::Result<serde_json::Value> {\n+    let client = ApiClient::local();\n+    ensure_server_protocol_compatible(&client, &request.id)?;\n+    client\n+        .request_value(request)\n+        .map_err(api_client_error_to_io)\n+}\n+\n+pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde_json::Value> {\n     ApiClient::local()\n         .request_value(request)\n         .map_err(api_client_error_to_io)\n }\n \n+fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> std::io::Result<()> {\n+    let status = client.status().map_err(api_client_error_to_io)?;\n+    let server_protocol = status\n+        .protocol\n+        .ok_or_else(|| std::io::Error::other(\"server ping did not include a protocol version\"))?;\n+    let Some(response) = protocol_guard::mismatch_response(\n+        request_id,\n+        server_protocol,\n+        &crate::session::active_restart_after_update_guidance(),\n+    ) else {\n+        return Ok(());\n+    };",
+        "comment_created_at": "2026-07-15T21:00:20+00:00",
+        "comment_author": "akbash-bot",
+        "comment_body": "@ogulcancelik The extra round trip is real, but I think it is the right tradeoff here. The check must happen immediately before each API operation: caching once per CLI process would reopen the exact stale-server gap if an install/handoff replaces the server between `plugin.list` and `plugin.link`. A wait subscription is pinged once before it opens, not once per event, and these are bounded local socket/pipe round trips. I would not weaken or cache this without measured latency showing a problem. If it does become material, the clean optimization is same-connection protocol negotiation/dispatch, not skipping per-operation validation.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,170 @@
+[
+  {
+    "discussion_id": "4247960146",
+    "pr_number": 14520,
+    "pr_file": "sdk/packages/shared/src/llms/tokens.ts",
+    "created_at": "2026-10-12T13:04:58+00:00",
+    "commented_code": "return Math.max(1, Math.ceil(chars / CHARS_PER_TOKEN));\n }\n \n+/**\n+ * Flat per-image token cost used in place of the char-based estimate for an\n+ * image block's base64 payload. Real vision-model costs depend on pixel\n+ * dimensions, not encoded byte size, and top out around ~1.6k tokens even\n+ * for a large image; this sits comfortably above typical per-image cost\n+ * without scaling with the base64 string length.\n+ */\n+export const ESTIMATED_TOKENS_PER_IMAGE = 1_600;\n+\n export interface TokenEstimatedRequest {\n \tsystemPrompt?: string;\n \tmessages: readonly unknown[];\n \ttools?: readonly unknown[];\n }\n \n+/**\n+ * Build a JSON.stringify replacer that blanks an image node's base64\n+ * payload wherever it's nested in the serialized value, so it's never\n+ * billed at CHARS_PER_TOKEN. Two image shapes reach this replacer:\n+ * `ImageContent { type: \"image\", data: string }` (compaction's\n+ * `MessageWithMetadata`) and `AgentImagePart { type: \"image\", image:\n+ * string | Uint8Array | ArrayBuffer | URL }` (the gateway's\n+ * `AgentMessage`). Returns the replacer alongside an `imageCount`\n+ * accessor so the caller can add a flat per-image token cost back in\n+ * afterwards.\n+ */\n+export function createImageAwareReplacer(): {\n+\treplacer: (key: string, value: unknown) => unknown;\n+\timageCount: () => number;\n+} {\n+\tlet count = 0;\n+\tconst replacer = (_key: string, value: unknown): unknown => {\n+\t\tif (\n+\t\t\tvalue === null ||\n+\t\t\ttypeof value !== \"object\" ||\n+\t\t\t(value as { type?: unknown }).type !== \"image\"\n+\t\t) {\n+\t\t\treturn value;\n+\t\t}\n+\t\tconst record = value as Record<string, unknown>;\n+\t\tif (typeof record.data === \"string\") {\n+\t\t\tcount += 1;\n+\t\t\treturn { ...record, data: \"\" };\n+\t\t}\n+\t\tif (\"image\" in record) {\n+\t\t\tcount += 1;\n+\t\t\treturn { ...record, image: \"\" };",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4248329089",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14520,
+        "pr_file": "sdk/packages/shared/src/llms/tokens.ts",
+        "discussion_id": "4247960146",
+        "commented_code": "@@ -11,12 +11,59 @@ export function estimateTokens(chars: number): number {\n \treturn Math.max(1, Math.ceil(chars / CHARS_PER_TOKEN));\n }\n \n+/**\n+ * Flat per-image token cost used in place of the char-based estimate for an\n+ * image block's base64 payload. Real vision-model costs depend on pixel\n+ * dimensions, not encoded byte size, and top out around ~1.6k tokens even\n+ * for a large image; this sits comfortably above typical per-image cost\n+ * without scaling with the base64 string length.\n+ */\n+export const ESTIMATED_TOKENS_PER_IMAGE = 1_600;\n+\n export interface TokenEstimatedRequest {\n \tsystemPrompt?: string;\n \tmessages: readonly unknown[];\n \ttools?: readonly unknown[];\n }\n \n+/**\n+ * Build a JSON.stringify replacer that blanks an image node's base64\n+ * payload wherever it's nested in the serialized value, so it's never\n+ * billed at CHARS_PER_TOKEN. Two image shapes reach this replacer:\n+ * `ImageContent { type: \"image\", data: string }` (compaction's\n+ * `MessageWithMetadata`) and `AgentImagePart { type: \"image\", image:\n+ * string | Uint8Array | ArrayBuffer | URL }` (the gateway's\n+ * `AgentMessage`). Returns the replacer alongside an `imageCount`\n+ * accessor so the caller can add a flat per-image token cost back in\n+ * afterwards.\n+ */\n+export function createImageAwareReplacer(): {\n+\treplacer: (key: string, value: unknown) => unknown;\n+\timageCount: () => number;\n+} {\n+\tlet count = 0;\n+\tconst replacer = (_key: string, value: unknown): unknown => {\n+\t\tif (\n+\t\t\tvalue === null ||\n+\t\t\ttypeof value !== \"object\" ||\n+\t\t\t(value as { type?: unknown }).type !== \"image\"\n+\t\t) {\n+\t\t\treturn value;\n+\t\t}\n+\t\tconst record = value as Record<string, unknown>;\n+\t\tif (typeof record.data === \"string\") {\n+\t\t\tcount += 1;\n+\t\t\treturn { ...record, data: \"\" };\n+\t\t}\n+\t\tif (\"image\" in record) {\n+\t\t\tcount += 1;\n+\t\t\treturn { ...record, image: \"\" };",
+        "comment_created_at": "2026-10-12T13:04:58+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Declining this one. No code path produces an image-shaped object inside tool arguments or tool schemas, so this is a theoretical under-count. If it ever occurred, the budget scaling from the provider's actual input count (compaction.ts, `underestimateFactor`) and overflow recovery already bound the damage. Scoping the replacer per path isn't worth the complexity.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4307782368",
+    "pr_number": 15176,
+    "pr_file": "sdk/packages/core/src/services/providers/model-source.ts",
+    "created_at": "2026-10-18T16:27:28+00:00",
+    "commented_code": "-function parseModelIdList(input: unknown): string[] {\n+/**\n+ * A model advertised by a provider's model-list endpoint. Provider catalogs\n+ * commonly include limits next to the id (OpenAI `context_length`, vLLM,\n+ * LM Studio, etc.); keeping them avoids dropping back to a 128K default.\n+ */\n+export interface ModelSourceEntry {\n+\tid: string;\n+\tname?: string;\n+\tcontextWindow?: number;\n+\tmaxInputTokens?: number;\n+\tmaxTokens?: number;\n+}\n+\n+function asRecord(value: unknown): Record<string, unknown> | undefined {\n+\treturn value && typeof value === \"object\" && !Array.isArray(value)\n+\t\t? (value as Record<string, unknown>)\n+\t\t: undefined;\n+}\n+\n+function firstString(...values: unknown[]): string | undefined {\n+\tfor (const value of values) {\n+\t\tif (typeof value === \"string\" && value.trim()) {\n+\t\t\treturn value.trim();\n+\t\t}\n+\t}\n+\treturn undefined;\n+}\n+\n+function firstPositiveInteger(...values: unknown[]): number | undefined {\n+\tfor (const value of values) {\n+\t\tif (typeof value === \"number\" && Number.isFinite(value) && value > 0) {\n+\t\t\treturn Math.trunc(value);\n+\t\t}\n+\t}\n+\treturn undefined;\n+}\n+\n+function toModelSourceEntry(item: unknown): ModelSourceEntry | undefined {\n+\tif (typeof item === \"string\") {\n+\t\tconst id = item.trim();\n+\t\treturn id ? { id } : undefined;\n+\t}\n+\tconst entry = asRecord(item);\n+\tif (!entry) return undefined;\n+\tconst id = firstString(entry.id, entry.name, entry.model);\n+\tif (!id) return undefined;\n+\tconst contextWindow = firstPositiveInteger(\n+\t\tentry.context_length,\n+\t\tentry.context_window,\n+\t\tentry.max_context_length,",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4307782368",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15176,
+        "pr_file": "sdk/packages/core/src/services/providers/model-source.ts",
+        "discussion_id": "4307782368",
+        "commented_code": "@@ -1,26 +1,98 @@\n-function parseModelIdList(input: unknown): string[] {\n+/**\n+ * A model advertised by a provider's model-list endpoint. Provider catalogs\n+ * commonly include limits next to the id (OpenAI `context_length`, vLLM,\n+ * LM Studio, etc.); keeping them avoids dropping back to a 128K default.\n+ */\n+export interface ModelSourceEntry {\n+\tid: string;\n+\tname?: string;\n+\tcontextWindow?: number;\n+\tmaxInputTokens?: number;\n+\tmaxTokens?: number;\n+}\n+\n+function asRecord(value: unknown): Record<string, unknown> | undefined {\n+\treturn value && typeof value === \"object\" && !Array.isArray(value)\n+\t\t? (value as Record<string, unknown>)\n+\t\t: undefined;\n+}\n+\n+function firstString(...values: unknown[]): string | undefined {\n+\tfor (const value of values) {\n+\t\tif (typeof value === \"string\" && value.trim()) {\n+\t\t\treturn value.trim();\n+\t\t}\n+\t}\n+\treturn undefined;\n+}\n+\n+function firstPositiveInteger(...values: unknown[]): number | undefined {\n+\tfor (const value of values) {\n+\t\tif (typeof value === \"number\" && Number.isFinite(value) && value > 0) {\n+\t\t\treturn Math.trunc(value);\n+\t\t}\n+\t}\n+\treturn undefined;\n+}\n+\n+function toModelSourceEntry(item: unknown): ModelSourceEntry | undefined {\n+\tif (typeof item === \"string\") {\n+\t\tconst id = item.trim();\n+\t\treturn id ? { id } : undefined;\n+\t}\n+\tconst entry = asRecord(item);\n+\tif (!entry) return undefined;\n+\tconst id = firstString(entry.id, entry.name, entry.model);\n+\tif (!id) return undefined;\n+\tconst contextWindow = firstPositiveInteger(\n+\t\tentry.context_length,\n+\t\tentry.context_window,\n+\t\tentry.max_context_length,",
+        "comment_created_at": "2026-10-18T16:27:28+00:00",
+        "comment_author": "notlakshitha",
+        "comment_body": "On LM Studio's `/api/v0/models`, `max_context_length` is the model's ceiling, and a loaded model also reports `loaded_context_length`, which is what it actually serves (can be a lot smaller). Since maxInputTokens falls back to contextWindow and that's the compaction budget, compaction won't kick in before LM Studio starts rejecting. Prefer `loaded_context_length` when it's present?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3896164042",
+    "pr_number": 13602,
+    "pr_file": "sdk/packages/llms/src/providers/vendors/lmstudio.ts",
+    "created_at": "2026-08-31T16:01:49+00:00",
+    "commented_code": "+export interface LmStudioModel {\n+\tid: string;\n+\ttype?: string;\n+\tmaxContextWindow?: number;\n+\tloadedContextWindow?: number;\n+}\n+\n+interface LmStudioModelResponse {\n+\tkey?: string;\n+\ttype?: string;\n+\tmax_context_length?: number;\n+\tloaded_instances?: Array<{\n+\t\tid?: string;\n+\t\tconfig?: { context_length?: number };\n+\t}>;\n+}\n+\n+export type LmStudioModelsFetch = (url: string) => Promise<Response>;\n+\n+function readPositiveInteger(value: unknown): number | undefined {\n+\tif (typeof value === \"number\" && Number.isFinite(value) && value > 0) {\n+\t\treturn Math.floor(value);\n+\t}\n+\treturn undefined;\n+}\n+\n+export function toLmStudioRestModelsUrl(baseUrl: string): string | undefined {\n+\ttry {\n+\t\tconst url = new URL(baseUrl);\n+\t\tconst basePath = url.pathname\n+\t\t\t.replace(/\\/+$/, \"\")\n+\t\t\t.replace(/\\/models$/, \"\")\n+\t\t\t.replace(/\\/v1$/, \"\");\n+\t\turl.pathname = `${basePath}/api/v1/models`;\n+\t\turl.search = \"\";\n+\t\turl.hash = \"\";\n+\t\treturn url.toString();\n+\t} catch {\n+\t\treturn undefined;\n+\t}\n+}\n+\n+export async function fetchLmStudioModels(\n+\tbaseUrl: string,\n+\tfetchModels: LmStudioModelsFetch = (url) => fetch(url, { method: \"GET\" }),\n+): Promise<LmStudioModel[]> {\n+\tconst endpoint = toLmStudioRestModelsUrl(baseUrl);\n+\tif (!endpoint) {\n+\t\treturn [];\n+\t}\n+\tconst response = await fetchModels(endpoint);\n+\tif (!response.ok) {\n+\t\tthrow new Error(`LM Studio model refresh failed: HTTP ${response.status}`);\n+\t}\n+\tconst payload = (await response.json()) as {\n+\t\tmodels?: LmStudioModelResponse[];\n+\t};\n+\treturn (payload.models ?? []).flatMap((model) => {\n+\t\tconst id = model.key?.trim();\n+\t\tif (!id) {\n+\t\t\treturn [];\n+\t\t}\n+\t\tconst loadedInstance =\n+\t\t\tmodel.loaded_instances?.find((instance) => instance.id === id) ??\n+\t\t\tmodel.loaded_instances?.[0];",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "3896164042",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13602,
+        "pr_file": "sdk/packages/llms/src/providers/vendors/lmstudio.ts",
+        "discussion_id": "3896164042",
+        "commented_code": "@@ -0,0 +1,77 @@\n+export interface LmStudioModel {\n+\tid: string;\n+\ttype?: string;\n+\tmaxContextWindow?: number;\n+\tloadedContextWindow?: number;\n+}\n+\n+interface LmStudioModelResponse {\n+\tkey?: string;\n+\ttype?: string;\n+\tmax_context_length?: number;\n+\tloaded_instances?: Array<{\n+\t\tid?: string;\n+\t\tconfig?: { context_length?: number };\n+\t}>;\n+}\n+\n+export type LmStudioModelsFetch = (url: string) => Promise<Response>;\n+\n+function readPositiveInteger(value: unknown): number | undefined {\n+\tif (typeof value === \"number\" && Number.isFinite(value) && value > 0) {\n+\t\treturn Math.floor(value);\n+\t}\n+\treturn undefined;\n+}\n+\n+export function toLmStudioRestModelsUrl(baseUrl: string): string | undefined {\n+\ttry {\n+\t\tconst url = new URL(baseUrl);\n+\t\tconst basePath = url.pathname\n+\t\t\t.replace(/\\/+$/, \"\")\n+\t\t\t.replace(/\\/models$/, \"\")\n+\t\t\t.replace(/\\/v1$/, \"\");\n+\t\turl.pathname = `${basePath}/api/v1/models`;\n+\t\turl.search = \"\";\n+\t\turl.hash = \"\";\n+\t\treturn url.toString();\n+\t} catch {\n+\t\treturn undefined;\n+\t}\n+}\n+\n+export async function fetchLmStudioModels(\n+\tbaseUrl: string,\n+\tfetchModels: LmStudioModelsFetch = (url) => fetch(url, { method: \"GET\" }),\n+): Promise<LmStudioModel[]> {\n+\tconst endpoint = toLmStudioRestModelsUrl(baseUrl);\n+\tif (!endpoint) {\n+\t\treturn [];\n+\t}\n+\tconst response = await fetchModels(endpoint);\n+\tif (!response.ok) {\n+\t\tthrow new Error(`LM Studio model refresh failed: HTTP ${response.status}`);\n+\t}\n+\tconst payload = (await response.json()) as {\n+\t\tmodels?: LmStudioModelResponse[];\n+\t};\n+\treturn (payload.models ?? []).flatMap((model) => {\n+\t\tconst id = model.key?.trim();\n+\t\tif (!id) {\n+\t\t\treturn [];\n+\t\t}\n+\t\tconst loadedInstance =\n+\t\t\tmodel.loaded_instances?.find((instance) => instance.id === id) ??\n+\t\t\tmodel.loaded_instances?.[0];",
+        "comment_created_at": "2026-08-31T16:01:49+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "maybe `min()` by `context_length` for safety?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4077616651",
+    "pr_number": 14426,
+    "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+    "created_at": "2026-09-22T23:52:04+00:00",
+    "commented_code": "return {\n \t\t...normalizedUsage,\n+\t\t// Providers report reasoning tokens as a subset of outputTokens (e.g.\n+\t\t// OpenAI's completion_tokens_details.reasoning_tokens), not additional\n+\t\t// to it. Strip them back out here so outputTokens reflects the actual\n+\t\t// non-reasoning output, with reasoningTokenCount tracked separately \u2014\n+\t\t// otherwise every downstream consumer (session totals, telemetry,\n+\t\t// Harbor's n_output_tokens) double-books reasoning as both its own\n+\t\t// count and part of \"output\". Cost above is computed from the\n+\t\t// pre-subtraction outputTokens, since reasoning tokens are still\n+\t\t// billed at the output rate.\n+\t\toutputTokens: Math.max(0, normalizedUsage.outputTokens - reasoningTokenCount),",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4077718466",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14426,
+        "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+        "discussion_id": "4077616651",
+        "commented_code": "@@ -1335,6 +1335,16 @@ export function normalizeUsage(\n \n \treturn {\n \t\t...normalizedUsage,\n+\t\t// Providers report reasoning tokens as a subset of outputTokens (e.g.\n+\t\t// OpenAI's completion_tokens_details.reasoning_tokens), not additional\n+\t\t// to it. Strip them back out here so outputTokens reflects the actual\n+\t\t// non-reasoning output, with reasoningTokenCount tracked separately \u2014\n+\t\t// otherwise every downstream consumer (session totals, telemetry,\n+\t\t// Harbor's n_output_tokens) double-books reasoning as both its own\n+\t\t// count and part of \"output\". Cost above is computed from the\n+\t\t// pre-subtraction outputTokens, since reasoning tokens are still\n+\t\t// billed at the output rate.\n+\t\toutputTokens: Math.max(0, normalizedUsage.outputTokens - reasoningTokenCount),",
+        "comment_created_at": "2026-09-22T23:52:04+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "Good catch. This is about the shape of the usage object, not the installed AI SDK version: if a finish part still reaches normalizeUsage with reasoning under outputTokens.reasoning and no raw provider metadata, our current path misses it and leaves those tokens in outputTokens. I\u2019ll add support for that nested field and a positive-reasoning regression test.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4077754407",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14426,
+        "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+        "discussion_id": "4077616651",
+        "commented_code": "@@ -1335,6 +1335,16 @@ export function normalizeUsage(\n \n \treturn {\n \t\t...normalizedUsage,\n+\t\t// Providers report reasoning tokens as a subset of outputTokens (e.g.\n+\t\t// OpenAI's completion_tokens_details.reasoning_tokens), not additional\n+\t\t// to it. Strip them back out here so outputTokens reflects the actual\n+\t\t// non-reasoning output, with reasoningTokenCount tracked separately \u2014\n+\t\t// otherwise every downstream consumer (session totals, telemetry,\n+\t\t// Harbor's n_output_tokens) double-books reasoning as both its own\n+\t\t// count and part of \"output\". Cost above is computed from the\n+\t\t// pre-subtraction outputTokens, since reasoning tokens are still\n+\t\t// billed at the output rate.\n+\t\toutputTokens: Math.max(0, normalizedUsage.outputTokens - reasoningTokenCount),",
+        "comment_created_at": "2026-09-22T23:59:05+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "Pushed in 4a4844d6e8 \u2014 added `[\"outputTokens\", \"reasoning\"]` to `REASONING_TOKEN_PATHS` and a regression test (`subtracts AI SDK v4's nested outputTokens.reasoning from outputTokens`) covering this exact shape. Full `llms` suite still green (886 passed).",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4096513267",
+    "pr_number": 14476,
+    "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+    "created_at": "2026-09-24T17:28:39+00:00",
+    "commented_code": "+import type {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4096513267",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+        "discussion_id": "4096513267",
+        "commented_code": "@@ -0,0 +1,55 @@\n+import type {",
+        "comment_created_at": "2026-09-24T17:28:39+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "is this pattern present elsewhere in the codebase? seems like special handling for bedrock which I'd like to avoid if possible",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4096559232",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+        "discussion_id": "4096513267",
+        "commented_code": "@@ -0,0 +1,55 @@\n+import type {",
+        "comment_created_at": "2026-09-24T17:33:55+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "what do you think about making a pr upstream to the ai-sdk itself to fix the bedrock adapter so that it doesn't accidentally send reasoning. seems like the better place for the fix to live",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4096570713",
+    "pr_number": 14476,
+    "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+    "created_at": "2026-09-24T17:35:16+00:00",
+    "commented_code": "+import type {\n+\tGatewayProviderContext,\n+\tGatewayStreamRequest,\n+} from \"@cline/shared\";\n+import { getModelReasoningControls } from \"../model-facts\";\n+\n+/**\n+ * Bedrock reasoning routing.\n+ *\n+ * `@ai-sdk/amazon-bedrock` translates the AI SDK's portable top-level\n+ * `reasoning` option into the wire shape each Bedrock model family accepts\n+ * (Anthropic `output_config.effort` / thinking, OpenAI `reasoning.effort`,\n+ * gpt-oss `reasoning_effort`) and falls back to\n+ * `additionalModelRequestFields.reasoningConfig` for everything else. The\n+ * Converse API rejects that fallback field for models without reasoning\n+ * support (\"reasoningConfig: Extra inputs are not permitted\"), so the effort\n+ * must only be forwarded when the catalog advertises reasoning controls for\n+ * the model. Provisioned/application inference-profile ARNs and other\n+ * unlisted ids advertise nothing and get no reasoning fields at all.\n+ *\n+ * OpenAI models routed through inference profiles (`us.openai.gpt-\u2026`,\n+ * `global.openai.gpt-\u2026`) used to hit the same fallback because the adapter\n+ * only recognised bare `openai.` ids; adapter 5.0.65+ recognises the prefixed\n+ * form, so they stay on the portable path here.\n+ *\n+ * Tracked in cline/cline#14095 and cline/cline#14451.\n+ */\n+\n+/** True when the catalog advertises at least one user-facing reasoning control. */\n+function bedrockModelAdvertisesReasoning(",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4096570713",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+        "discussion_id": "4096570713",
+        "commented_code": "@@ -0,0 +1,55 @@\n+import type {\n+\tGatewayProviderContext,\n+\tGatewayStreamRequest,\n+} from \"@cline/shared\";\n+import { getModelReasoningControls } from \"../model-facts\";\n+\n+/**\n+ * Bedrock reasoning routing.\n+ *\n+ * `@ai-sdk/amazon-bedrock` translates the AI SDK's portable top-level\n+ * `reasoning` option into the wire shape each Bedrock model family accepts\n+ * (Anthropic `output_config.effort` / thinking, OpenAI `reasoning.effort`,\n+ * gpt-oss `reasoning_effort`) and falls back to\n+ * `additionalModelRequestFields.reasoningConfig` for everything else. The\n+ * Converse API rejects that fallback field for models without reasoning\n+ * support (\"reasoningConfig: Extra inputs are not permitted\"), so the effort\n+ * must only be forwarded when the catalog advertises reasoning controls for\n+ * the model. Provisioned/application inference-profile ARNs and other\n+ * unlisted ids advertise nothing and get no reasoning fields at all.\n+ *\n+ * OpenAI models routed through inference profiles (`us.openai.gpt-\u2026`,\n+ * `global.openai.gpt-\u2026`) used to hit the same fallback because the adapter\n+ * only recognised bare `openai.` ids; adapter 5.0.65+ recognises the prefixed\n+ * form, so they stay on the portable path here.\n+ *\n+ * Tracked in cline/cline#14095 and cline/cline#14451.\n+ */\n+\n+/** True when the catalog advertises at least one user-facing reasoning control. */\n+function bedrockModelAdvertisesReasoning(",
+        "comment_created_at": "2026-09-24T17:35:16+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "I don't think we will need one for bedrock specifically. It uses the same reasoning config for anthropic for anthropic models and same for openai, so we just need to check if it's an anthropic model or not",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4096582844",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14476,
+        "pr_file": "sdk/packages/llms/src/providers/routing/bedrock-reasoning.ts",
+        "discussion_id": "4096570713",
+        "commented_code": "@@ -0,0 +1,55 @@\n+import type {\n+\tGatewayProviderContext,\n+\tGatewayStreamRequest,\n+} from \"@cline/shared\";\n+import { getModelReasoningControls } from \"../model-facts\";\n+\n+/**\n+ * Bedrock reasoning routing.\n+ *\n+ * `@ai-sdk/amazon-bedrock` translates the AI SDK's portable top-level\n+ * `reasoning` option into the wire shape each Bedrock model family accepts\n+ * (Anthropic `output_config.effort` / thinking, OpenAI `reasoning.effort`,\n+ * gpt-oss `reasoning_effort`) and falls back to\n+ * `additionalModelRequestFields.reasoningConfig` for everything else. The\n+ * Converse API rejects that fallback field for models without reasoning\n+ * support (\"reasoningConfig: Extra inputs are not permitted\"), so the effort\n+ * must only be forwarded when the catalog advertises reasoning controls for\n+ * the model. Provisioned/application inference-profile ARNs and other\n+ * unlisted ids advertise nothing and get no reasoning fields at all.\n+ *\n+ * OpenAI models routed through inference profiles (`us.openai.gpt-\u2026`,\n+ * `global.openai.gpt-\u2026`) used to hit the same fallback because the adapter\n+ * only recognised bare `openai.` ids; adapter 5.0.65+ recognises the prefixed\n+ * form, so they stay on the portable path here.\n+ *\n+ * Tracked in cline/cline#14095 and cline/cline#14451.\n+ */\n+\n+/** True when the catalog advertises at least one user-facing reasoning control. */\n+function bedrockModelAdvertisesReasoning(",
+        "comment_created_at": "2026-09-24T17:36:43+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "See example on https://ai-sdk.dev/providers/ai-sdk-providers/amazon-bedrock#reasoning-1\n\n```ts\nconst { text, reasoningText, reasoning } = await generateText({\n  model: bedrockAnthropic('us.anthropic.claude-sonnet-4-5-20250929-v1:0'),\n  prompt: 'How many people will live in the world in 2040?',\n  providerOptions: {\n    anthropic: {\n      thinking: { type: 'enabled', budgetTokens: 12000 },\n    },\n  },\n});\n```\n\nSo we just need to add openai to providerOptions?",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

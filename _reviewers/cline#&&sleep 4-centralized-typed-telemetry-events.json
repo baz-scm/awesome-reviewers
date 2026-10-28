@@ -1,0 +1,168 @@
+[
+  {
+    "discussion_id": "4228580751",
+    "pr_number": 14609,
+    "pr_file": "sdk/packages/core/src/runtime/host/local-runtime-host.ts",
+    "created_at": "2026-10-09T09:56:31+00:00",
+    "commented_code": "}\n \t}\n \n+\t/**\n+\t * Teardown aborts any in-flight turn, and the abort settling resets\n+\t * `aborting` and schedules a queue drain while teardown is still awaiting\n+\t * I/O. Without this, a queued prompt would start a new run in a session\n+\t * that is being torn down and whose events nobody receives any more.\n+\t */\n+\tprivate beginTeardown(session: ActiveSession): void {\n+\t\tsession.shuttingDown = true;\n+\t\tthis.discardPendingPrompts(session, \"session_teardown\");\n+\t}\n+\n+\tprivate discardPendingPrompts(\n+\t\tsession: ActiveSession,\n+\t\treason: \"queue_abort\" | \"session_teardown\",\n+\t): void {\n+\t\tconst discarded = this.pendingPromptsController.discardQueue(session);\n+\t\tif (discarded.length === 0) return;\n+\t\tsession.config.telemetry?.capture({\n+\t\t\tevent: \"session.pending_prompts_discarded\",",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4228885051",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14609,
+        "pr_file": "sdk/packages/core/src/runtime/host/local-runtime-host.ts",
+        "discussion_id": "4228580751",
+        "commented_code": "@@ -2414,10 +2464,38 @@ export class LocalRuntimeHost implements RuntimeHost {\n \t\t}\n \t}\n \n+\t/**\n+\t * Teardown aborts any in-flight turn, and the abort settling resets\n+\t * `aborting` and schedules a queue drain while teardown is still awaiting\n+\t * I/O. Without this, a queued prompt would start a new run in a session\n+\t * that is being torn down and whose events nobody receives any more.\n+\t */\n+\tprivate beginTeardown(session: ActiveSession): void {\n+\t\tsession.shuttingDown = true;\n+\t\tthis.discardPendingPrompts(session, \"session_teardown\");\n+\t}\n+\n+\tprivate discardPendingPrompts(\n+\t\tsession: ActiveSession,\n+\t\treason: \"queue_abort\" | \"session_teardown\",\n+\t): void {\n+\t\tconst discarded = this.pendingPromptsController.discardQueue(session);\n+\t\tif (discarded.length === 0) return;\n+\t\tsession.config.telemetry?.capture({\n+\t\t\tevent: \"session.pending_prompts_discarded\",",
+        "comment_created_at": "2026-10-09T09:56:31+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Right, that broke the repo's telemetry rule. Folded into \"report discarded pending prompts\": the event is now `CORE_TELEMETRY_EVENTS.SESSION.PENDING_PROMPTS_DISCARDED` with a typed `capturePendingPromptsDiscarded` helper in `core-events.ts` (session id, count, reason; never the prompt text), and the host calls the helper. The test asserts the catalog constant. The three pre-existing literal captures in the same file (`session.input_sent`, `session.aborted`, `session.stopped`) predate this PR and are left alone here.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4380628500",
+    "pr_number": 15364,
+    "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+    "created_at": "2026-10-26T18:41:27+00:00",
+    "commented_code": "onLanguageModelCallStart: () => {\n \t\t\t\t\t\t\t\tcapturedError.current = undefined;\n \t\t\t\t\t\t\t},\n-\t\t\t\t\t\t\tonError: ({ error: streamError }) => {\n+\t\t\t\t\t\t\tonStepStart: () => {\n+\t\t\t\t\t\t\t\tstreamRetryBackoff?.startStep();\n+\t\t\t\t\t\t\t},\n+\t\t\t\t\t\t\tonError: async ({ error: streamError }) => {\n \t\t\t\t\t\t\t\tconst captured = captureStreamError(streamError);\n \t\t\t\t\t\t\t\tcapturedError.current = captured;\n \t\t\t\t\t\t\t\tstreamTelemetry.captureError(streamError);\n+\t\t\t\t\t\t\t\tconst wait = streamRetryBackoff?.onError(streamError);\n+\t\t\t\t\t\t\t\tif (!wait) return;\n+\t\t\t\t\t\t\t\trequest.emitStatusNotice?.(\n+\t\t\t\t\t\t\t\t\t`provider error \u2014 retrying in ${Math.round(wait.delayMs / 1000)}s (attempt ${wait.attempt}/${MODEL_STREAM_MAX_RETRIES})`,\n+\t\t\t\t\t\t\t\t\t{\n+\t\t\t\t\t\t\t\t\t\tkind: \"stream_retry\",\n+\t\t\t\t\t\t\t\t\t\tattempt: wait.attempt,\n+\t\t\t\t\t\t\t\t\t\tmaxAttempts: MODEL_STREAM_MAX_RETRIES,\n+\t\t\t\t\t\t\t\t\t\tdelayMs: wait.delayMs,\n+\t\t\t\t\t\t\t\t\t\tproviderId: request.providerId,\n+\t\t\t\t\t\t\t\t\t\tmodelId: request.modelId,\n+\t\t\t\t\t\t\t\t\t},\n+\t\t\t\t\t\t\t\t);\n+\t\t\t\t\t\t\t\tcontext.telemetry?.capture({\n+\t\t\t\t\t\t\t\t\tevent: \"sdk.stream_retry\",",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4381105948",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15364,
+        "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+        "discussion_id": "4380628500",
+        "commented_code": "@@ -2477,10 +2495,39 @@ function createAiSdkProvider(\n \t\t\t\t\t\t\tonLanguageModelCallStart: () => {\n \t\t\t\t\t\t\t\tcapturedError.current = undefined;\n \t\t\t\t\t\t\t},\n-\t\t\t\t\t\t\tonError: ({ error: streamError }) => {\n+\t\t\t\t\t\t\tonStepStart: () => {\n+\t\t\t\t\t\t\t\tstreamRetryBackoff?.startStep();\n+\t\t\t\t\t\t\t},\n+\t\t\t\t\t\t\tonError: async ({ error: streamError }) => {\n \t\t\t\t\t\t\t\tconst captured = captureStreamError(streamError);\n \t\t\t\t\t\t\t\tcapturedError.current = captured;\n \t\t\t\t\t\t\t\tstreamTelemetry.captureError(streamError);\n+\t\t\t\t\t\t\t\tconst wait = streamRetryBackoff?.onError(streamError);\n+\t\t\t\t\t\t\t\tif (!wait) return;\n+\t\t\t\t\t\t\t\trequest.emitStatusNotice?.(\n+\t\t\t\t\t\t\t\t\t`provider error \u2014 retrying in ${Math.round(wait.delayMs / 1000)}s (attempt ${wait.attempt}/${MODEL_STREAM_MAX_RETRIES})`,\n+\t\t\t\t\t\t\t\t\t{\n+\t\t\t\t\t\t\t\t\t\tkind: \"stream_retry\",\n+\t\t\t\t\t\t\t\t\t\tattempt: wait.attempt,\n+\t\t\t\t\t\t\t\t\t\tmaxAttempts: MODEL_STREAM_MAX_RETRIES,\n+\t\t\t\t\t\t\t\t\t\tdelayMs: wait.delayMs,\n+\t\t\t\t\t\t\t\t\t\tproviderId: request.providerId,\n+\t\t\t\t\t\t\t\t\t\tmodelId: request.modelId,\n+\t\t\t\t\t\t\t\t\t},\n+\t\t\t\t\t\t\t\t);\n+\t\t\t\t\t\t\t\tcontext.telemetry?.capture({\n+\t\t\t\t\t\t\t\t\tevent: \"sdk.stream_retry\",",
+        "comment_created_at": "2026-10-26T18:41:27+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Done. `sdk.stream_retry` now comes from `SDK_STREAM_RETRY_TELEMETRY_EVENT` in `@cline/shared` with a typed `captureSdkStreamRetry` helper (same shape as `captureSdkError`, tested in `shared`), and it is listed under `CORE_TELEMETRY_EVENTS.SDK.STREAM_RETRY` with the helper re-exported from `core-events.ts`. `@cline/llms` keeps importing from `shared` only.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4294190595",
+    "pr_number": 14610,
+    "pr_file": "apps/examples/desktop-app/sidecar/marketplace-telemetry.ts",
+    "created_at": "2026-10-16T11:38:00+00:00",
+    "commented_code": "+import type { ITelemetryService, TelemetryProperties } from \"@cline/shared\";\n+import type { JsonRecord } from \"./types\";\n+\n+export type MarketplaceInstallOutcome =\n+\t| \"installed\"\n+\t| \"already_installed\"\n+\t| \"failed\";\n+\n+export interface MarketplaceInstallEvent {\n+\ttype: string;\n+\toutcome: MarketplaceInstallOutcome;\n+\t/** Which path produced the outcome: skills-cli, github-download, already-installed. */\n+\tmethod?: string;\n+\t/** Coarse class of the skills CLI failure, when one happened. */\n+\tcli_failure?: string;\n+\tfallback_failed?: boolean;\n+}\n+\n+/** The marketplace entry type a desktop install request asked for. */\n+export function requestedMarketplaceType(\n+\targs: Record<string, unknown> | undefined,\n+): string {\n+\tconst entry =\n+\t\targs?.entry && typeof args.entry === \"object\"\n+\t\t\t? (args.entry as Record<string, unknown>)\n+\t\t\t: args;\n+\treturn typeof entry?.type === \"string\" ? entry.type : \"unknown\";\n+}\n+\n+export function marketplaceInstallEventFromResult(result: {\n+\ttype: string;\n+\tdetails?: JsonRecord;\n+}): MarketplaceInstallEvent {\n+\tconst details = result.details ?? {};\n+\tconst method =\n+\t\ttypeof details.method === \"string\" ? details.method : undefined;\n+\treturn {\n+\t\ttype: result.type,\n+\t\toutcome: method === \"already-installed\" ? \"already_installed\" : \"installed\",\n+\t\tmethod,\n+\t\tcli_failure:\n+\t\t\ttypeof details.cli_failure === \"string\" ? details.cli_failure : undefined,\n+\t};\n+}\n+\n+export function marketplaceInstallEventFromFailure(\n+\ttype: string,\n+\ttelemetry: JsonRecord | undefined,\n+): MarketplaceInstallEvent {\n+\treturn {\n+\t\ttype,\n+\t\toutcome: \"failed\",\n+\t\tmethod:\n+\t\t\ttypeof telemetry?.method === \"string\" ? telemetry.method : undefined,\n+\t\tcli_failure:\n+\t\t\ttypeof telemetry?.cli_failure === \"string\"\n+\t\t\t\t? telemetry.cli_failure\n+\t\t\t\t: undefined,\n+\t\tfallback_failed: telemetry?.fallback_failed === true ? true : undefined,\n+\t};\n+}\n+\n+export function captureMarketplaceInstallEvent(\n+\ttelemetry: ITelemetryService | undefined,\n+\tevent: MarketplaceInstallEvent,\n+): void {\n+\ttry {\n+\t\tif (!telemetry?.isEnabled()) return;\n+\t\tconst properties: TelemetryProperties = {};\n+\t\tfor (const [key, value] of Object.entries(event)) {\n+\t\t\tif (value !== undefined) properties[key] = value;\n+\t\t}\n+\t\ttelemetry.capture({ event: \"desktop.marketplace.install\", properties });",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4294240762",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14610,
+        "pr_file": "apps/examples/desktop-app/sidecar/marketplace-telemetry.ts",
+        "discussion_id": "4294190595",
+        "commented_code": "@@ -0,0 +1,77 @@\n+import type { ITelemetryService, TelemetryProperties } from \"@cline/shared\";\n+import type { JsonRecord } from \"./types\";\n+\n+export type MarketplaceInstallOutcome =\n+\t| \"installed\"\n+\t| \"already_installed\"\n+\t| \"failed\";\n+\n+export interface MarketplaceInstallEvent {\n+\ttype: string;\n+\toutcome: MarketplaceInstallOutcome;\n+\t/** Which path produced the outcome: skills-cli, github-download, already-installed. */\n+\tmethod?: string;\n+\t/** Coarse class of the skills CLI failure, when one happened. */\n+\tcli_failure?: string;\n+\tfallback_failed?: boolean;\n+}\n+\n+/** The marketplace entry type a desktop install request asked for. */\n+export function requestedMarketplaceType(\n+\targs: Record<string, unknown> | undefined,\n+): string {\n+\tconst entry =\n+\t\targs?.entry && typeof args.entry === \"object\"\n+\t\t\t? (args.entry as Record<string, unknown>)\n+\t\t\t: args;\n+\treturn typeof entry?.type === \"string\" ? entry.type : \"unknown\";\n+}\n+\n+export function marketplaceInstallEventFromResult(result: {\n+\ttype: string;\n+\tdetails?: JsonRecord;\n+}): MarketplaceInstallEvent {\n+\tconst details = result.details ?? {};\n+\tconst method =\n+\t\ttypeof details.method === \"string\" ? details.method : undefined;\n+\treturn {\n+\t\ttype: result.type,\n+\t\toutcome: method === \"already-installed\" ? \"already_installed\" : \"installed\",\n+\t\tmethod,\n+\t\tcli_failure:\n+\t\t\ttypeof details.cli_failure === \"string\" ? details.cli_failure : undefined,\n+\t};\n+}\n+\n+export function marketplaceInstallEventFromFailure(\n+\ttype: string,\n+\ttelemetry: JsonRecord | undefined,\n+): MarketplaceInstallEvent {\n+\treturn {\n+\t\ttype,\n+\t\toutcome: \"failed\",\n+\t\tmethod:\n+\t\t\ttypeof telemetry?.method === \"string\" ? telemetry.method : undefined,\n+\t\tcli_failure:\n+\t\t\ttypeof telemetry?.cli_failure === \"string\"\n+\t\t\t\t? telemetry.cli_failure\n+\t\t\t\t: undefined,\n+\t\tfallback_failed: telemetry?.fallback_failed === true ? true : undefined,\n+\t};\n+}\n+\n+export function captureMarketplaceInstallEvent(\n+\ttelemetry: ITelemetryService | undefined,\n+\tevent: MarketplaceInstallEvent,\n+): void {\n+\ttry {\n+\t\tif (!telemetry?.isEnabled()) return;\n+\t\tconst properties: TelemetryProperties = {};\n+\t\tfor (const [key, value] of Object.entries(event)) {\n+\t\t\tif (value !== undefined) properties[key] = value;\n+\t\t}\n+\t\ttelemetry.capture({ event: \"desktop.marketplace.install\", properties });",
+        "comment_created_at": "2026-10-16T11:38:00+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Done: `CORE_TELEMETRY_EVENTS.DESKTOP.MARKETPLACE_INSTALL` plus a typed `captureMarketplaceInstall` helper in `core-events.ts` (with a test), and the sidecar now calls that helper. For the record, the rule's scope doesn't list the desktop sidecar, and its existing `desktop.pull_request.*` event is a raw string too; I left that one alone here since it's unrelated to this PR.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4279377939",
+    "pr_number": 5955,
+    "pr_file": "src/integrations/terminal/TerminalProcess.ts",
+    "created_at": "2026-10-15T05:27:43+00:00",
+    "commented_code": "// the command process is finished, let's check the output to see if we need to use the terminal capture fallback\n \t\t\tif (!this.fullOutput.trim()) {\n+\t\t\t\t// No output captured via shell integration, trying fallback",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4279377939",
+        "repo_full_name": "cline/cline",
+        "pr_number": 5955,
+        "pr_file": "src/integrations/terminal/TerminalProcess.ts",
+        "discussion_id": "4279377939",
+        "commented_code": "@@ -189,7 +191,19 @@ export class TerminalProcess extends EventEmitter<TerminalProcessEvents> {\n \n \t\t\t// the command process is finished, let's check the output to see if we need to use the terminal capture fallback\n \t\t\tif (!this.fullOutput.trim()) {\n+\t\t\t\t// No output captured via shell integration, trying fallback",
+        "comment_created_at": "2026-10-15T05:27:43+00:00",
+        "comment_author": "BranchSun",
+        "comment_body": "\ud83d\udfe2 **maintainability** (low)\n\nThis event fires when shell integration returned no output (`!this.fullOutput.trim()`), i.e. an \"empty output\" condition, but it is reported with the reason `TIMEOUT`. Real timeouts and empty-output failures therefore cannot be distinguished in the `TERMINAL_OUTPUT_FAILURE` metric, which undermines the purpose of adding specific failure reasons.\n\n**\u5efa\u8bae**: Report a reason that matches the condition, e.g. add a `NO_OUTPUT` (or `EMPTY_OUTPUT`) value to `TerminalOutputFailureReason` and use it here.\n\n**\u8bc1\u636e**: `telemetryService.captureTerminalOutputFailure(TerminalOutputFailureReason.TIMEOUT)`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4279377943",
+    "pr_number": 5955,
+    "pr_file": "src/core/task/index.ts",
+    "created_at": "2026-10-15T05:27:43+00:00",
+    "commented_code": "process.continue()\n \t\t\t} catch {\n \t\t\t\tLogger.error(\"Error while asking for command output\")\n+\t\t\t\ttelemetryService.captureTerminalHang(TerminalHangStage.STREAM_TIMEOUT)",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4279377943",
+        "repo_full_name": "cline/cline",
+        "pr_number": 5955,
+        "pr_file": "src/core/task/index.ts",
+        "discussion_id": "4279377943",
+        "commented_code": "@@ -1517,7 +1530,13 @@ export class Task {\n \t\t\t\tprocess.continue()\n \t\t\t} catch {\n \t\t\t\tLogger.error(\"Error while asking for command output\")\n+\t\t\t\ttelemetryService.captureTerminalHang(TerminalHangStage.STREAM_TIMEOUT)",
+        "comment_created_at": "2026-10-15T05:27:43+00:00",
+        "comment_author": "BranchSun",
+        "comment_body": "\ud83d\udfe2 **maintainability** (low)\n\nThe surrounding `catch` wraps `await this.ask(\"command_output\", chunk)` and logs \"Error while asking for command output\", so it triggers for any rejection/abort of that ask call, not specifically a stream timeout. Classifying all of these as a `TERMINAL_HANG` with stage `STREAM_TIMEOUT` will inflate the hang metric with events that are not hangs.\n\n**\u5efa\u8bae**: Emit this with a dedicated reason that reflects an ask failure (e.g. add an `ASK_FAILED`/`ASK_ERROR` stage), or only emit a hang event when the failure is actually a timeout.\n\n**\u8bc1\u636e**: `telemetryService.captureTerminalHang(TerminalHangStage.STREAM_TIMEOUT)`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3804853918",
+    "pr_number": 13340,
+    "pr_file": "sdk/packages/shared/src/services/telemetry.ts",
+    "created_at": "2026-08-18T14:24:54+00:00",
+    "commented_code": "export const TASK_FIRST_CHUNK_RECEIVED_EVENT = \"task.first_chunk_received\";\n export const TASK_PROVIDER_STREAM_FAILED_EVENT = \"task.provider_stream_failed\";\n export const TASK_CANCELLED_EVENT = \"task.cancelled\";\n+export const TASK_MAX_TOKENS_RECOVERY_EVENT = \"task.max_tokens_recovery\";",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "3804964820",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13340,
+        "pr_file": "sdk/packages/shared/src/services/telemetry.ts",
+        "discussion_id": "3804853918",
+        "commented_code": "@@ -67,6 +67,7 @@ export const TASK_PROVIDER_STREAM_STARTED_EVENT =\n export const TASK_FIRST_CHUNK_RECEIVED_EVENT = \"task.first_chunk_received\";\n export const TASK_PROVIDER_STREAM_FAILED_EVENT = \"task.provider_stream_failed\";\n export const TASK_CANCELLED_EVENT = \"task.cancelled\";\n+export const TASK_MAX_TOKENS_RECOVERY_EVENT = \"task.max_tokens_recovery\";",
+        "comment_created_at": "2026-08-18T14:24:54+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Fixed \u2014 `task.max_tokens_recovery` is now registered in `CORE_TELEMETRY_EVENTS.TASK` (as `MAX_TOKENS_RECOVERY`, sourced from the shared constant like its sibling lifecycle events), and the catalog-consistency test in `core-events.test.ts` covers it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3882554922",
+    "pr_number": 13340,
+    "pr_file": "sdk/packages/core/src/services/telemetry/core-events.ts",
+    "created_at": "2026-08-28T17:14:25+00:00",
+    "commented_code": "SDK_ERROR_TELEMETRY_EVENT,\n \tTASK_CANCELLED_EVENT,\n \tTASK_FIRST_CHUNK_RECEIVED_EVENT,\n+\tTASK_MAX_TOKENS_RECOVERY_EVENT,",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "3882554922",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13340,
+        "pr_file": "sdk/packages/core/src/services/telemetry/core-events.ts",
+        "discussion_id": "3882554922",
+        "commented_code": "@@ -8,6 +8,7 @@ import {\n \tSDK_ERROR_TELEMETRY_EVENT,\n \tTASK_CANCELLED_EVENT,\n \tTASK_FIRST_CHUNK_RECEIVED_EVENT,\n+\tTASK_MAX_TOKENS_RECOVERY_EVENT,",
+        "comment_created_at": "2026-08-28T17:14:25+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "what's the plan for how we are going to make use of this telemetry event? will it appear on a dashboard? the telemetry is most useful if it helps us to take actions in the future",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4044638121",
+        "repo_full_name": "cline/cline",
+        "pr_number": 13340,
+        "pr_file": "sdk/packages/core/src/services/telemetry/core-events.ts",
+        "discussion_id": "3882554922",
+        "commented_code": "@@ -8,6 +8,7 @@ import {\n \tSDK_ERROR_TELEMETRY_EVENT,\n \tTASK_CANCELLED_EVENT,\n \tTASK_FIRST_CHUNK_RECEIVED_EVENT,\n+\tTASK_MAX_TOKENS_RECOVERY_EVENT,",
+        "comment_created_at": "2026-09-18T07:19:01+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "faiir question \u2014 this one was built from a specific question rather than for a dashboard; sorry I missed it in the pr desc; added. \r\n\r\n1. Primary use is to answer the question: \"how often does compaction not fix the truncation\" \u2014 a decision gate. [ENG-2458](https://linear.app/cline-bot/issue/ENG-2458/next-continue-a-max-tokens-truncated-turn-from-the-truncation-point). The answers gives us the priority. Nothing else can answer it: a rescued turn leaves no trace otherwise, and the day we want to decide we'd have to ship the event and wait weeks.\r\n2. Then \u2014 investigation. ~11k distinct users/week hit this truncation (~2.2k/day, stable this week). When someone reports \"Cline died at the token limit\", one query says whether recovery ran and, if not, why: `nothing_to_compact`, or `recovery_threw` with `error_type` separating a user abort from a real failure. Today we would need to request user's logs to ivestigate that..\r\n3. Finally \u2014 it can work as a tripwire. if `started` drops to zero while max-tokens errors stay flat that means the recovery path silently broke.\r\n\r\nCost: plain unsampled capture, fires only on an actual truncation (bounded by that error's ~35k/week), two events per recovery, closed set of values. I would say it's deliberately narrow, the opposite of the events we've had to reverse-engineer. After we decide on  ENG-2458, and if nothing else reads it we can delete it. \r\n",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

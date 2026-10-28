@@ -1,0 +1,19 @@
+---
+title: Verify tests catch regressions
+description: 'A test is only valuable if it actually fails when the behavior it protects
+  is broken. Two patterns repeatedly produced weak tests that would pass regardless
+  of the real implementation:'
+repository: cline/cline#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+label: Testing
+language: TypeScript
+comments_count: 12
+repository_stars: 70965
+---
+
+A test is only valuable if it actually fails when the behavior it protects is broken. Two patterns repeatedly produced weak tests that would pass regardless of the real implementation:
+
+1. **Loose or directional assertions.** Checking `toBeLessThan(naiveEstimate / 10)` or `toHaveBeenCalledTimes(2)` alone lets a wrong-but-plausible implementation slip through. Prefer exact contracts: assert the flat per-unit cost directly (e.g. `estimate("A".repeat(500_000))` must equal `estimate("A")`, and the per-item delta must equal the documented constant), assert the exact set of fields reported in an error message, or assert a catalog id is verifiably absent (`expect(gateway.listModels(...)).not.toContain(id)`) rather than merely not asserting its presence.
+
+2. **Over-mocked paths that bypass the real integration.** Stubbing out the adapter, SDK, or git/filesystem layer can hide bugs that only appear in the real wire format, the real type system, or real OS behavior (symlinks, binary detection, submodule blobs). Prefer driving the real adapter/SDK/git binary with a minimal stub only at the network or filesystem boundary (e.g. a stubbed `fetch`, a real SSH shell script against a temp directory with real symlinks, a real submodule-to-file replacement, the real YAML parser as an oracle for thousands of generated inputs).
+
+When adding a regression test, explicitly confirm it fails against the old (buggy) code before merging — revert the fix locally or hardcode the old value and watch the test fail. This proves the test is pinning the actual invariant (e.g. "every failure record is kept forever," "the rejected-fields message lists exactly three names," "the SDK-pinned version matches package.json") rather than trivially passing. Favor exact equality and real dependencies over approximate bounds and deep mocking whenever the cost of exercising the real path is reasonable.

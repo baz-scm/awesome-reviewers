@@ -1,0 +1,158 @@
+[
+  {
+    "discussion_id": "4393346890",
+    "pr_number": 15387,
+    "pr_file": "sdk/examples/plugins/next-turn/src/planner/repo.ts",
+    "created_at": "2026-10-27T19:56:35+00:00",
+    "commented_code": "+import {\n+\texistsSync,\n+\treaddirSync,\n+\treadFileSync,\n+\ttype Stats,\n+\tstatSync,\n+} from \"node:fs\";\n+import { join } from \"node:path\";\n+import type { Facts } from \"../types\";\n+import { redactSecrets } from \"./redact\";\n+\n+/**\n+ * Repository conventions, ported from #15095's `context/sources/repo.ts`: the\n+ * commands this repository says to run, so a Verify or Commit suggestion\n+ * names the real one (\"Run `bun run check`\") instead of \"run the tests\".\n+ * Workspace files only, read synchronously and cached by modification time:\n+ *\n+ * - `package.json` scripts named like test, check, lint, typecheck, build;\n+ * - the \"Before you push\" and \"Commands\" sections of `AGENTS.md`,\n+ *   `CLAUDE.md` and `.clinerules` (a file or a folder of them);\n+ * - `Makefile` targets of the same names.\n+ */\n+\n+const REPO_COMMANDS_MAX = 8;\n+const REPO_FILE_MAX_BYTES = 262_144;\n+const PACKAGE_FILE = \"package.json\";\n+const MAKEFILE = \"Makefile\";\n+const INSTRUCTION_FILES = [\"AGENTS.md\", \"CLAUDE.md\", \".clinerules\"] as const;\n+/** The runner `package.json` scripts go through, by the first lockfile found beside it. */\n+const LOCKFILE_RUNNERS = [\n+\t[\"bun.lock\", \"bun\"],\n+\t[\"bun.lockb\", \"bun\"],\n+\t[\"pnpm-lock.yaml\", \"pnpm\"],\n+\t[\"yarn.lock\", \"yarn\"],\n+] as const;\n+\n+const VERIFY_NAME = /^(?:test|check|lint|typecheck|build)(?:[:_-][\\w:-]+)?$/;\n+const SECTION_HEADING = /^(#{1,6})\\s+(.*)$/;\n+const COMMAND_SECTIONS = /^(?:before you push|commands)\\b/i;\n+const FENCE = /^\\s*(```|~~~)/;\n+const MAKE_TARGET = /^([A-Za-z][\\w-]*)\\s*:(?!=)/;\n+\n+type RepoConventions = {\n+\trunner: string;\n+\tscripts: string[];\n+\tdocumented: string[];\n+\tmakeTargets: string[];\n+};\n+\n+function isRecord(value: unknown): value is Record<string, unknown> {\n+\treturn typeof value === \"object\" && value !== null && !Array.isArray(value);\n+}\n+\n+export function verifyScripts(packageJson: string): string[] {\n+\ttry {\n+\t\tconst parsed: unknown = JSON.parse(packageJson);\n+\t\tif (!isRecord(parsed) || !isRecord(parsed.scripts)) return [];\n+\t\treturn Object.keys(parsed.scripts)\n+\t\t\t.filter((name) => VERIFY_NAME.test(name))\n+\t\t\t.sort()\n+\t\t\t.slice(0, REPO_COMMANDS_MAX);\n+\t} catch {\n+\t\treturn [];\n+\t}\n+}\n+\n+/** Shell lines from fenced blocks under a \"Before you push\" or \"Commands\" heading; trailing `#` comments are dropped. */\n+export function documentedCommands(markdown: string): string[] {\n+\tconst commands: string[] = [];\n+\tlet inSection = false;\n+\tlet sectionLevel = 0;\n+\tlet inFence = false;\n+\tfor (const raw of markdown.split(/\\r?\n/)) {\n+\t\tif (FENCE.test(raw)) {\n+\t\t\tinFence = !inFence;\n+\t\t\tcontinue;\n+\t\t}\n+\t\tconst heading = inFence ? null : SECTION_HEADING.exec(raw);\n+\t\tif (heading) {\n+\t\t\tconst level = heading[1].length;\n+\t\t\tif (COMMAND_SECTIONS.test(heading[2])) {\n+\t\t\t\tinSection = true;\n+\t\t\t\tsectionLevel = level;\n+\t\t\t} else if (level <= sectionLevel) inSection = false;\n+\t\t\tcontinue;\n+\t\t}\n+\t\tif (!inSection || !inFence) continue;\n+\t\tconst command = raw.replace(/\\s+#\\s.*$/, \"\").trim();\n+\t\tif (command && !command.startsWith(\"#\") && !commands.includes(command))\n+\t\t\tcommands.push(command);\n+\t}\n+\treturn commands.slice(0, REPO_COMMANDS_MAX);\n+}\n+\n+export function makeTargets(makefile: string): string[] {\n+\tconst targets = new Set<string>();\n+\tfor (const line of makefile.split(/\\r?\n/)) {\n+\t\tconst match = MAKE_TARGET.exec(line);\n+\t\tif (match?.[1] && VERIFY_NAME.test(match[1])) targets.add(match[1]);\n+\t}\n+\treturn [...targets].sort().slice(0, REPO_COMMANDS_MAX);\n+}\n+\n+function repoFacts(conventions: RepoConventions): Facts {\n+\tconst lines: string[] = [];\n+\tfor (const script of conventions.scripts)\n+\t\tlines.push(`Script: \\`${conventions.runner} run ${script}\\``);\n+\tfor (const target of conventions.makeTargets)\n+\t\tlines.push(`Make target: \\`make ${target}\\``);\n+\tfor (const command of conventions.documented)\n+\t\tlines.push(`Documented: \\`${command}\\``);\n+\treturn { heading: \"This repository's commands\", lines };\n+}\n+\n+function isMissing(error: unknown): boolean {\n+\treturn (\n+\t\ttypeof error === \"object\" &&\n+\t\terror !== null &&\n+\t\t\"code\" in error &&\n+\t\terror.code === \"ENOENT\"\n+\t);\n+}\n+\n+/** Reads each file once per modification; files over the size cap are skipped. A read that fails for any other reason is `\"unknown\"`. */\n+export class RepoReader {\n+\tprivate readonly cache = new Map<\n+\t\tstring,\n+\t\t{ mtimeMs: number; value: string }\n+\t>();\n+\n+\tread(path: string): string | undefined | \"unknown\" {\n+\t\ttry {\n+\t\t\treturn this.readStat(path, statSync(path));\n+\t\t} catch (error) {\n+\t\t\treturn isMissing(error) ? undefined : \"unknown\";\n+\t\t}\n+\t}\n+\n+\t/** A file, or each Markdown file in a folder of that name (`.clinerules/`). */\n+\treadAll(path: string): string[] | \"unknown\" {\n+\t\ttry {\n+\t\t\tconst stat = statSync(path);\n+\t\t\tif (!stat.isDirectory()) {\n+\t\t\t\tconst text = this.readStat(path, stat);\n+\t\t\t\tif (text === \"unknown\") return \"unknown\";\n+\t\t\t\treturn text === undefined ? [] : [text];\n+\t\t\t}\n+\t\t\tconst texts: string[] = [];\n+\t\t\tfor (const name of readdirSync(path)\n+\t\t\t\t.filter((entry) => entry.endsWith(\".md\"))\n+\t\t\t\t.sort()) {\n+\t\t\t\tconst text = this.read(join(path, name));\n+\t\t\t\tif (text === \"unknown\") return \"unknown\";\n+\t\t\t\tif (text !== undefined) texts.push(text);",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4393458246",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15387,
+        "pr_file": "sdk/examples/plugins/next-turn/src/planner/repo.ts",
+        "discussion_id": "4393346890",
+        "commented_code": "@@ -0,0 +1,209 @@\n+import {\n+\texistsSync,\n+\treaddirSync,\n+\treadFileSync,\n+\ttype Stats,\n+\tstatSync,\n+} from \"node:fs\";\n+import { join } from \"node:path\";\n+import type { Facts } from \"../types\";\n+import { redactSecrets } from \"./redact\";\n+\n+/**\n+ * Repository conventions, ported from #15095's `context/sources/repo.ts`: the\n+ * commands this repository says to run, so a Verify or Commit suggestion\n+ * names the real one (\"Run `bun run check`\") instead of \"run the tests\".\n+ * Workspace files only, read synchronously and cached by modification time:\n+ *\n+ * - `package.json` scripts named like test, check, lint, typecheck, build;\n+ * - the \"Before you push\" and \"Commands\" sections of `AGENTS.md`,\n+ *   `CLAUDE.md` and `.clinerules` (a file or a folder of them);\n+ * - `Makefile` targets of the same names.\n+ */\n+\n+const REPO_COMMANDS_MAX = 8;\n+const REPO_FILE_MAX_BYTES = 262_144;\n+const PACKAGE_FILE = \"package.json\";\n+const MAKEFILE = \"Makefile\";\n+const INSTRUCTION_FILES = [\"AGENTS.md\", \"CLAUDE.md\", \".clinerules\"] as const;\n+/** The runner `package.json` scripts go through, by the first lockfile found beside it. */\n+const LOCKFILE_RUNNERS = [\n+\t[\"bun.lock\", \"bun\"],\n+\t[\"bun.lockb\", \"bun\"],\n+\t[\"pnpm-lock.yaml\", \"pnpm\"],\n+\t[\"yarn.lock\", \"yarn\"],\n+] as const;\n+\n+const VERIFY_NAME = /^(?:test|check|lint|typecheck|build)(?:[:_-][\\w:-]+)?$/;\n+const SECTION_HEADING = /^(#{1,6})\\s+(.*)$/;\n+const COMMAND_SECTIONS = /^(?:before you push|commands)\\b/i;\n+const FENCE = /^\\s*(```|~~~)/;\n+const MAKE_TARGET = /^([A-Za-z][\\w-]*)\\s*:(?!=)/;\n+\n+type RepoConventions = {\n+\trunner: string;\n+\tscripts: string[];\n+\tdocumented: string[];\n+\tmakeTargets: string[];\n+};\n+\n+function isRecord(value: unknown): value is Record<string, unknown> {\n+\treturn typeof value === \"object\" && value !== null && !Array.isArray(value);\n+}\n+\n+export function verifyScripts(packageJson: string): string[] {\n+\ttry {\n+\t\tconst parsed: unknown = JSON.parse(packageJson);\n+\t\tif (!isRecord(parsed) || !isRecord(parsed.scripts)) return [];\n+\t\treturn Object.keys(parsed.scripts)\n+\t\t\t.filter((name) => VERIFY_NAME.test(name))\n+\t\t\t.sort()\n+\t\t\t.slice(0, REPO_COMMANDS_MAX);\n+\t} catch {\n+\t\treturn [];\n+\t}\n+}\n+\n+/** Shell lines from fenced blocks under a \"Before you push\" or \"Commands\" heading; trailing `#` comments are dropped. */\n+export function documentedCommands(markdown: string): string[] {\n+\tconst commands: string[] = [];\n+\tlet inSection = false;\n+\tlet sectionLevel = 0;\n+\tlet inFence = false;\n+\tfor (const raw of markdown.split(/\\r?\\n/)) {\n+\t\tif (FENCE.test(raw)) {\n+\t\t\tinFence = !inFence;\n+\t\t\tcontinue;\n+\t\t}\n+\t\tconst heading = inFence ? null : SECTION_HEADING.exec(raw);\n+\t\tif (heading) {\n+\t\t\tconst level = heading[1].length;\n+\t\t\tif (COMMAND_SECTIONS.test(heading[2])) {\n+\t\t\t\tinSection = true;\n+\t\t\t\tsectionLevel = level;\n+\t\t\t} else if (level <= sectionLevel) inSection = false;\n+\t\t\tcontinue;\n+\t\t}\n+\t\tif (!inSection || !inFence) continue;\n+\t\tconst command = raw.replace(/\\s+#\\s.*$/, \"\").trim();\n+\t\tif (command && !command.startsWith(\"#\") && !commands.includes(command))\n+\t\t\tcommands.push(command);\n+\t}\n+\treturn commands.slice(0, REPO_COMMANDS_MAX);\n+}\n+\n+export function makeTargets(makefile: string): string[] {\n+\tconst targets = new Set<string>();\n+\tfor (const line of makefile.split(/\\r?\\n/)) {\n+\t\tconst match = MAKE_TARGET.exec(line);\n+\t\tif (match?.[1] && VERIFY_NAME.test(match[1])) targets.add(match[1]);\n+\t}\n+\treturn [...targets].sort().slice(0, REPO_COMMANDS_MAX);\n+}\n+\n+function repoFacts(conventions: RepoConventions): Facts {\n+\tconst lines: string[] = [];\n+\tfor (const script of conventions.scripts)\n+\t\tlines.push(`Script: \\`${conventions.runner} run ${script}\\``);\n+\tfor (const target of conventions.makeTargets)\n+\t\tlines.push(`Make target: \\`make ${target}\\``);\n+\tfor (const command of conventions.documented)\n+\t\tlines.push(`Documented: \\`${command}\\``);\n+\treturn { heading: \"This repository's commands\", lines };\n+}\n+\n+function isMissing(error: unknown): boolean {\n+\treturn (\n+\t\ttypeof error === \"object\" &&\n+\t\terror !== null &&\n+\t\t\"code\" in error &&\n+\t\terror.code === \"ENOENT\"\n+\t);\n+}\n+\n+/** Reads each file once per modification; files over the size cap are skipped. A read that fails for any other reason is `\"unknown\"`. */\n+export class RepoReader {\n+\tprivate readonly cache = new Map<\n+\t\tstring,\n+\t\t{ mtimeMs: number; value: string }\n+\t>();\n+\n+\tread(path: string): string | undefined | \"unknown\" {\n+\t\ttry {\n+\t\t\treturn this.readStat(path, statSync(path));\n+\t\t} catch (error) {\n+\t\t\treturn isMissing(error) ? undefined : \"unknown\";\n+\t\t}\n+\t}\n+\n+\t/** A file, or each Markdown file in a folder of that name (`.clinerules/`). */\n+\treadAll(path: string): string[] | \"unknown\" {\n+\t\ttry {\n+\t\t\tconst stat = statSync(path);\n+\t\t\tif (!stat.isDirectory()) {\n+\t\t\t\tconst text = this.readStat(path, stat);\n+\t\t\t\tif (text === \"unknown\") return \"unknown\";\n+\t\t\t\treturn text === undefined ? [] : [text];\n+\t\t\t}\n+\t\t\tconst texts: string[] = [];\n+\t\t\tfor (const name of readdirSync(path)\n+\t\t\t\t.filter((entry) => entry.endsWith(\".md\"))\n+\t\t\t\t.sort()) {\n+\t\t\t\tconst text = this.read(join(path, name));\n+\t\t\t\tif (text === \"unknown\") return \"unknown\";\n+\t\t\t\tif (text !== undefined) texts.push(text);",
+        "comment_created_at": "2026-10-27T19:56:35+00:00",
+        "comment_author": "harrisonofcline",
+        "comment_body": "Partly taken in e012d55950. The `.clinerules` folder read is now capped at 16 files, and each file was already capped at 256 KB, so the synchronous block is bounded. I kept the reads synchronous: the bound is small and the mtime cache makes repeat turns cheap.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4393680108",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15387,
+        "pr_file": "sdk/examples/plugins/next-turn/src/planner/repo.ts",
+        "discussion_id": "4393346890",
+        "commented_code": "@@ -0,0 +1,209 @@\n+import {\n+\texistsSync,\n+\treaddirSync,\n+\treadFileSync,\n+\ttype Stats,\n+\tstatSync,\n+} from \"node:fs\";\n+import { join } from \"node:path\";\n+import type { Facts } from \"../types\";\n+import { redactSecrets } from \"./redact\";\n+\n+/**\n+ * Repository conventions, ported from #15095's `context/sources/repo.ts`: the\n+ * commands this repository says to run, so a Verify or Commit suggestion\n+ * names the real one (\"Run `bun run check`\") instead of \"run the tests\".\n+ * Workspace files only, read synchronously and cached by modification time:\n+ *\n+ * - `package.json` scripts named like test, check, lint, typecheck, build;\n+ * - the \"Before you push\" and \"Commands\" sections of `AGENTS.md`,\n+ *   `CLAUDE.md` and `.clinerules` (a file or a folder of them);\n+ * - `Makefile` targets of the same names.\n+ */\n+\n+const REPO_COMMANDS_MAX = 8;\n+const REPO_FILE_MAX_BYTES = 262_144;\n+const PACKAGE_FILE = \"package.json\";\n+const MAKEFILE = \"Makefile\";\n+const INSTRUCTION_FILES = [\"AGENTS.md\", \"CLAUDE.md\", \".clinerules\"] as const;\n+/** The runner `package.json` scripts go through, by the first lockfile found beside it. */\n+const LOCKFILE_RUNNERS = [\n+\t[\"bun.lock\", \"bun\"],\n+\t[\"bun.lockb\", \"bun\"],\n+\t[\"pnpm-lock.yaml\", \"pnpm\"],\n+\t[\"yarn.lock\", \"yarn\"],\n+] as const;\n+\n+const VERIFY_NAME = /^(?:test|check|lint|typecheck|build)(?:[:_-][\\w:-]+)?$/;\n+const SECTION_HEADING = /^(#{1,6})\\s+(.*)$/;\n+const COMMAND_SECTIONS = /^(?:before you push|commands)\\b/i;\n+const FENCE = /^\\s*(```|~~~)/;\n+const MAKE_TARGET = /^([A-Za-z][\\w-]*)\\s*:(?!=)/;\n+\n+type RepoConventions = {\n+\trunner: string;\n+\tscripts: string[];\n+\tdocumented: string[];\n+\tmakeTargets: string[];\n+};\n+\n+function isRecord(value: unknown): value is Record<string, unknown> {\n+\treturn typeof value === \"object\" && value !== null && !Array.isArray(value);\n+}\n+\n+export function verifyScripts(packageJson: string): string[] {\n+\ttry {\n+\t\tconst parsed: unknown = JSON.parse(packageJson);\n+\t\tif (!isRecord(parsed) || !isRecord(parsed.scripts)) return [];\n+\t\treturn Object.keys(parsed.scripts)\n+\t\t\t.filter((name) => VERIFY_NAME.test(name))\n+\t\t\t.sort()\n+\t\t\t.slice(0, REPO_COMMANDS_MAX);\n+\t} catch {\n+\t\treturn [];\n+\t}\n+}\n+\n+/** Shell lines from fenced blocks under a \"Before you push\" or \"Commands\" heading; trailing `#` comments are dropped. */\n+export function documentedCommands(markdown: string): string[] {\n+\tconst commands: string[] = [];\n+\tlet inSection = false;\n+\tlet sectionLevel = 0;\n+\tlet inFence = false;\n+\tfor (const raw of markdown.split(/\\r?\\n/)) {\n+\t\tif (FENCE.test(raw)) {\n+\t\t\tinFence = !inFence;\n+\t\t\tcontinue;\n+\t\t}\n+\t\tconst heading = inFence ? null : SECTION_HEADING.exec(raw);\n+\t\tif (heading) {\n+\t\t\tconst level = heading[1].length;\n+\t\t\tif (COMMAND_SECTIONS.test(heading[2])) {\n+\t\t\t\tinSection = true;\n+\t\t\t\tsectionLevel = level;\n+\t\t\t} else if (level <= sectionLevel) inSection = false;\n+\t\t\tcontinue;\n+\t\t}\n+\t\tif (!inSection || !inFence) continue;\n+\t\tconst command = raw.replace(/\\s+#\\s.*$/, \"\").trim();\n+\t\tif (command && !command.startsWith(\"#\") && !commands.includes(command))\n+\t\t\tcommands.push(command);\n+\t}\n+\treturn commands.slice(0, REPO_COMMANDS_MAX);\n+}\n+\n+export function makeTargets(makefile: string): string[] {\n+\tconst targets = new Set<string>();\n+\tfor (const line of makefile.split(/\\r?\\n/)) {\n+\t\tconst match = MAKE_TARGET.exec(line);\n+\t\tif (match?.[1] && VERIFY_NAME.test(match[1])) targets.add(match[1]);\n+\t}\n+\treturn [...targets].sort().slice(0, REPO_COMMANDS_MAX);\n+}\n+\n+function repoFacts(conventions: RepoConventions): Facts {\n+\tconst lines: string[] = [];\n+\tfor (const script of conventions.scripts)\n+\t\tlines.push(`Script: \\`${conventions.runner} run ${script}\\``);\n+\tfor (const target of conventions.makeTargets)\n+\t\tlines.push(`Make target: \\`make ${target}\\``);\n+\tfor (const command of conventions.documented)\n+\t\tlines.push(`Documented: \\`${command}\\``);\n+\treturn { heading: \"This repository's commands\", lines };\n+}\n+\n+function isMissing(error: unknown): boolean {\n+\treturn (\n+\t\ttypeof error === \"object\" &&\n+\t\terror !== null &&\n+\t\t\"code\" in error &&\n+\t\terror.code === \"ENOENT\"\n+\t);\n+}\n+\n+/** Reads each file once per modification; files over the size cap are skipped. A read that fails for any other reason is `\"unknown\"`. */\n+export class RepoReader {\n+\tprivate readonly cache = new Map<\n+\t\tstring,\n+\t\t{ mtimeMs: number; value: string }\n+\t>();\n+\n+\tread(path: string): string | undefined | \"unknown\" {\n+\t\ttry {\n+\t\t\treturn this.readStat(path, statSync(path));\n+\t\t} catch (error) {\n+\t\t\treturn isMissing(error) ? undefined : \"unknown\";\n+\t\t}\n+\t}\n+\n+\t/** A file, or each Markdown file in a folder of that name (`.clinerules/`). */\n+\treadAll(path: string): string[] | \"unknown\" {\n+\t\ttry {\n+\t\t\tconst stat = statSync(path);\n+\t\t\tif (!stat.isDirectory()) {\n+\t\t\t\tconst text = this.readStat(path, stat);\n+\t\t\t\tif (text === \"unknown\") return \"unknown\";\n+\t\t\t\treturn text === undefined ? [] : [text];\n+\t\t\t}\n+\t\t\tconst texts: string[] = [];\n+\t\t\tfor (const name of readdirSync(path)\n+\t\t\t\t.filter((entry) => entry.endsWith(\".md\"))\n+\t\t\t\t.sort()) {\n+\t\t\t\tconst text = this.read(join(path, name));\n+\t\t\t\tif (text === \"unknown\") return \"unknown\";\n+\t\t\t\tif (text !== undefined) texts.push(text);",
+        "comment_created_at": "2026-10-27T20:19:34+00:00",
+        "comment_author": "harrisonofcline",
+        "comment_body": "Agreed that it is bounded, not interruptible. The worst case is now 16 rules files plus three top-level files, each under 256 KB, read once per modification. That cost seems acceptable for the MVP, so I am keeping the synchronous reads. If it shows up in practice, the next step is async reads under the workspace budget.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4364797676",
+    "pr_number": 15301,
+    "pr_file": "sdk/packages/core/src/session/checkpoint-diff.ts",
+    "created_at": "2026-10-24T00:11:56+00:00",
+    "commented_code": "return absolutePath;\n }\n \n-async function readCheckpointFile(\n+interface TreeBlob {\n+\toid: string;\n+\tsize: number;\n+}\n+\n+async function listTreeBlobs(\n \tcwd: string,\n-\tref: string,\n-\trelativePath: string,\n-): Promise<string> {\n-\ttry {\n-\t\treturn await runGit(cwd, [\"show\", `${ref}:${relativePath}`]);\n-\t} catch {\n-\t\t// Stash-shaped checkpoints keep files that were untracked at snapshot\n-\t\t// time in a third-parent commit (see createWorktreeStashCommit), not in\n-\t\t// the stash commit's own tree. Fall back to it so pre-existing\n-\t\t// untracked files don't falsely appear as newly added.\n-\t\ttry {\n-\t\t\treturn await runGit(cwd, [\"show\", `${ref}^3:${relativePath}`]);\n-\t\t} catch {\n-\t\t\treturn \"\";\n+\ttreeish: string,\n+): Promise<Map<string, TreeBlob>> {\n+\tconst blobs = new Map<string, TreeBlob>();\n+\tconst output = await runGit(cwd, [\"ls-tree\", \"-r\", \"-l\", \"-z\", treeish]);",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4365242744",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15301,
+        "pr_file": "sdk/packages/core/src/session/checkpoint-diff.ts",
+        "discussion_id": "4364797676",
+        "commented_code": "@@ -50,24 +50,61 @@ function resolveGitPath(cwd: string, relativePath: string): string {\n \treturn absolutePath;\n }\n \n-async function readCheckpointFile(\n+interface TreeBlob {\n+\toid: string;\n+\tsize: number;\n+}\n+\n+async function listTreeBlobs(\n \tcwd: string,\n-\tref: string,\n-\trelativePath: string,\n-): Promise<string> {\n-\ttry {\n-\t\treturn await runGit(cwd, [\"show\", `${ref}:${relativePath}`]);\n-\t} catch {\n-\t\t// Stash-shaped checkpoints keep files that were untracked at snapshot\n-\t\t// time in a third-parent commit (see createWorktreeStashCommit), not in\n-\t\t// the stash commit's own tree. Fall back to it so pre-existing\n-\t\t// untracked files don't falsely appear as newly added.\n-\t\ttry {\n-\t\t\treturn await runGit(cwd, [\"show\", `${ref}^3:${relativePath}`]);\n-\t\t} catch {\n-\t\t\treturn \"\";\n+\ttreeish: string,\n+): Promise<Map<string, TreeBlob>> {\n+\tconst blobs = new Map<string, TreeBlob>();\n+\tconst output = await runGit(cwd, [\"ls-tree\", \"-r\", \"-l\", \"-z\", treeish]);",
+        "comment_created_at": "2026-10-24T00:11:56+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Fixed in 2eb31b4. The full-tree `ls-tree` is gone: `git diff --raw --no-abbrev --no-renames <ref>` already reports the checkpoint blob for every changed tracked path, so tracked lookups now scale with the number of changes instead of the repo size. Sizes for the 50 MB skip come from one `cat-file --batch-check` call. The only tree listing left is `ls-tree` of the untracked third parent, which already existed on main and is bounded by the untracked set the checkpoint hook snapshots. A comparison is still a constant 6 git processes.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4364797692",
+    "pr_number": 15301,
+    "pr_file": "sdk/packages/core/src/session/checkpoint-diff.test.ts",
+    "created_at": "2026-10-24T00:12:00+00:00",
+    "commented_code": "});\n \t});\n \n+\tit(\"reads checkpoint content for nested paths containing spaces\", async () => {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4365242952",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15301,
+        "pr_file": "sdk/packages/core/src/session/checkpoint-diff.test.ts",
+        "discussion_id": "4364797692",
+        "commented_code": "@@ -165,6 +165,29 @@ describe(\"checkpoint workspace comparison\", () => {\n \t\t});\n \t});\n \n+\tit(\"reads checkpoint content for nested paths containing spaces\", async () => {",
+        "comment_created_at": "2026-10-24T00:12:00+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Leaving this out on purpose. Counting spawns in a unit test would mean mocking `node:child_process`, which breaks the promisified `execFile` (`.child` / `{ stdout }`), or putting a shell-script `git` wrapper on PATH, which won't work on Windows. We try not to add test-only plumbing like that. The process counts were checked against real checkpoints instead: CLI and VS Code sessions on a repo with 3,000 untracked files. main peaked at 3,051 concurrent git processes and 3,046 zombies for one comparison; this branch uses 6 git processes in total per comparison. The existing tests still cover correctness for both the tracked and the third-parent lookups.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4355897238",
+    "pr_number": 15254,
+    "pr_file": "sdk/packages/core/src/session/services/message-builder.ts",
+    "created_at": "2026-10-23T03:49:28+00:00",
+    "commented_code": "options.minOutdatedRewriteBytes,\n \t\t\tDEFAULT_MIN_OUTDATED_REWRITE_BYTES,\n \t\t);\n+\t\t// Read tools bound their own output (line and character caps plus a\n+\t\t// paging footer), so by default their results get the file-content cap\n+\t\t// rather than the tool-result cap. A tool-result cap that was set\n+\t\t// explicitly keeps its documented meaning (every tool result) and so\n+\t\t// bounds reads too.\n+\t\tthis.maxReadResultChars =",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4355897238",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15254,
+        "pr_file": "sdk/packages/core/src/session/services/message-builder.ts",
+        "discussion_id": "4355897238",
+        "commented_code": "@@ -165,6 +170,15 @@ export class MessageBuilder {\n \t\t\toptions.minOutdatedRewriteBytes,\n \t\t\tDEFAULT_MIN_OUTDATED_REWRITE_BYTES,\n \t\t);\n+\t\t// Read tools bound their own output (line and character caps plus a\n+\t\t// paging footer), so by default their results get the file-content cap\n+\t\t// rather than the tool-result cap. A tool-result cap that was set\n+\t\t// explicitly keeps its documented meaning (every tool result) and so\n+\t\t// bounds reads too.\n+\t\tthis.maxReadResultChars =",
+        "comment_created_at": "2026-10-23T03:49:28+00:00",
+        "comment_author": "notlakshitha",
+        "comment_body": "This cap is per file entry, and `read_files` takes any number of files, so one batched call can now send N x ~48k chars in a single tool result where it used to be N x 8k (20 files is close to 1M chars). Is the plan to rely on the 6MB total budget and overflow compaction for that, or would a cap on the whole read result make sense too?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4279377929",
+    "pr_number": 5955,
+    "pr_file": "src/integrations/terminal/TerminalProcess.ts",
+    "created_at": "2026-10-15T05:27:43+00:00",
+    "commented_code": "// the command process is finished, let's check the output to see if we need to use the terminal capture fallback\n \t\t\tif (!this.fullOutput.trim()) {\n+\t\t\t\t// No output captured via shell integration, trying fallback\n+\t\t\t\ttelemetryService.captureTerminalOutputFailure(TerminalOutputFailureReason.TIMEOUT)\n \t\t\t\tawait returnCurrentTerminalContents()\n+\t\t\t\t// Check if fallback worked",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4279377929",
+        "repo_full_name": "cline/cline",
+        "pr_number": 5955,
+        "pr_file": "src/integrations/terminal/TerminalProcess.ts",
+        "discussion_id": "4279377929",
+        "commented_code": "@@ -189,7 +191,19 @@ export class TerminalProcess extends EventEmitter<TerminalProcessEvents> {\n \n \t\t\t// the command process is finished, let's check the output to see if we need to use the terminal capture fallback\n \t\t\tif (!this.fullOutput.trim()) {\n+\t\t\t\t// No output captured via shell integration, trying fallback\n+\t\t\t\ttelemetryService.captureTerminalOutputFailure(TerminalOutputFailureReason.TIMEOUT)\n \t\t\t\tawait returnCurrentTerminalContents()\n+\t\t\t\t// Check if fallback worked",
+        "comment_created_at": "2026-10-15T05:27:43+00:00",
+        "comment_author": "BranchSun",
+        "comment_body": "\ud83d\udfe1 **performance** (medium)\n\nIn the shell-integration fallback path, `returnCurrentTerminalContents()` already calls `getLatestTerminalOutput()` internally (which awaits it and emits the fallback message). The new telemetry code immediately calls `getLatestTerminalOutput()` a second time, so the entire clipboard capture round-trip (`workbench.action.terminal.selectAll` + `copySelection` + `clearSelection` plus two clipboard read/write operations) runs twice. The same duplication was added in the no-shell-integration branch (line 229). Besides doubling the latency/side effects of every fallback, the message that is emitted to the model and the snapshot used for the success telemetry can diverge because they come from two independent captures.\n\n**\u5efa\u8bae**: Make `returnCurrentTerminalContents` return the snapshot it already fetched (`const terminalSnapshot = await getLatestTerminalOutput()` inside it) and reuse that value for the telemetry call, or fetch the snapshot once at the call site and derive both the emitted fallback message and the success flag from that single value.\n\n**\u8bc1\u636e**: `const terminalSnapshot = await getLatestTerminalOutput()`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4108896341",
+    "pr_number": 14511,
+    "pr_file": "sdk/packages/core/src/session/services/tool-result-store.ts",
+    "created_at": "2026-09-25T21:45:00+00:00",
+    "commented_code": "+import { randomUUID } from \"node:crypto\";\n+import { mkdir, mkdtemp, rename, rm, writeFile } from \"node:fs/promises\";\n+import { tmpdir } from \"node:os\";\n+import { join } from \"node:path\";\n+import type { ToolResultContent } from \"@cline/shared\";\n+import { serializeToolResultContent } from \"./tool-result-recovery\";\n+\n+/** Disposable recovery files, isolated per runtime rather than session history. */\n+export class ToolResultStore {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4108896341",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14511,
+        "pr_file": "sdk/packages/core/src/session/services/tool-result-store.ts",
+        "discussion_id": "4108896341",
+        "commented_code": "@@ -0,0 +1,43 @@\n+import { randomUUID } from \"node:crypto\";\n+import { mkdir, mkdtemp, rename, rm, writeFile } from \"node:fs/promises\";\n+import { tmpdir } from \"node:os\";\n+import { join } from \"node:path\";\n+import type { ToolResultContent } from \"@cline/shared\";\n+import { serializeToolResultContent } from \"./tool-result-recovery\";\n+\n+/** Disposable recovery files, isolated per runtime rather than session history. */\n+export class ToolResultStore {",
+        "comment_created_at": "2026-09-25T21:45:00+00:00",
+        "comment_author": "johnwschoi",
+        "comment_body": "This directory is never deleted. No dispose path, one per runtime including subagents, plaintext MCP output, rewritten on every request via `message-builder.ts:253`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4109112553",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14511,
+        "pr_file": "sdk/packages/core/src/session/services/tool-result-store.ts",
+        "discussion_id": "4108896341",
+        "commented_code": "@@ -0,0 +1,43 @@\n+import { randomUUID } from \"node:crypto\";\n+import { mkdir, mkdtemp, rename, rm, writeFile } from \"node:fs/promises\";\n+import { tmpdir } from \"node:os\";\n+import { join } from \"node:path\";\n+import type { ToolResultContent } from \"@cline/shared\";\n+import { serializeToolResultContent } from \"./tool-result-recovery\";\n+\n+/** Disposable recovery files, isolated per runtime rather than session history. */\n+export class ToolResultStore {",
+        "comment_created_at": "2026-09-25T22:24:29+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "yea the rewritten on request was bad, thank for catching that. Updated it to:\r\n\r\n- Large external results are saved and shortened once, at tool completion.\r\n- Session history retains the preview and file path.\r\n- Later requests and resumes don\u2019t rewrite or re-truncate them.\r\n- Files live alongside session history and survive shutdown.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,92 @@
+[
+  {
+    "discussion_id": "4364421853",
+    "pr_number": 15095,
+    "pr_file": "apps/examples/desktop-app/webview/hooks/composer-suggestions/use-verbs.ts",
+    "created_at": "2026-10-26T16:53:09+00:00",
+    "commented_code": "+\"use client\";\n+\n+import {\n+\ttype ComposerSuggestionItem,\n+\ttype PluginUiInput,\n+\tSUGGESTION_SEND_VERDICT_MS,\n+\ttype SuggestionRef,\n+\ttype SuggestionsLocal,\n+} from \"@cline/shared/browser\";\n+import {\n+\ttype Dispatch,\n+\ttype RefObject,\n+\ttype SetStateAction,\n+\tuseCallback,\n+\tuseRef,\n+} from \"react\";\n+import { type SendSnapshot, snapshotAtSend } from \"./sent-prompt\";\n+import { delay, msSinceExposed } from \"./timing\";\n+import type {\n+\tComposerSuggestionsOptions,\n+\tLastSkip,\n+\tReadyView,\n+\tSuggestionComposer,\n+\tSuggestionsDispatch,\n+\tSuggestionsInvoke,\n+} from \"./types\";\n+\n+export function useSuggestionVerbs({\n+\tinvoke,\n+\tboundRef,\n+\tlocalRef,\n+\tlatest,\n+\tdispatch,\n+\tlastSkip,\n+\tsetLastSkip,\n+\tsetSendingItemId,\n+\tsendSnapshotRef,\n+}: {\n+\tinvoke: SuggestionsInvoke;\n+\tboundRef: RefObject<string>;\n+\tlocalRef: RefObject<SuggestionsLocal>;\n+\tlatest: RefObject<ComposerSuggestionsOptions>;\n+\tdispatch: SuggestionsDispatch;\n+\tlastSkip: LastSkip | undefined;\n+\tsetLastSkip: Dispatch<SetStateAction<LastSkip | undefined>>;\n+\tsetSendingItemId: Dispatch<SetStateAction<string | undefined>>;\n+\tsendSnapshotRef: RefObject<SendSnapshot>;\n+}) {\n+\t/** A one-key Send is waiting for its verdict; another press then sends nothing. */\n+\tconst sendInFlightRef = useRef(false);\n+\n+\tconst signalInert = useCallback(\n+\t\t(reason: \"not_exposed\" | \"unsendable\" | \"stale\") => {\n+\t\t\tconst revision = localRef.current.envelope?.state?.revision;\n+\t\t\tvoid invoke(\n+\t\t\t\t{\n+\t\t\t\t\tverb: \"signal\",\n+\t\t\t\t\tname: \"key_inert\",\n+\t\t\t\t\treason,\n+\t\t\t\t\t...(revision ? { revision } : {}),\n+\t\t\t\t},\n+\t\t\t\t{ applyReply: false },\n+\t\t\t);\n+\t\t},\n+\t\t[invoke, localRef],\n+\t);\n+\n+\tconst use = useCallback(\n+\t\t(\n+\t\t\titem: ComposerSuggestionItem,\n+\t\t\tinput: PluginUiInput,\n+\t\t\tcomposer: SuggestionComposer,\n+\t\t) => {\n+\t\t\tconst current = localRef.current;\n+\t\t\tconst revision = current.envelope?.state?.revision;\n+\t\t\tif (!revision) return;\n+\t\t\tcomposer.setDraft(item.prompt);\n+\t\t\tcomposer.focus();\n+\t\t\tdispatch({ type: \"used\", itemId: item.id });\n+\t\t\tconst boundSessionId = boundRef.current;\n+\t\t\tvoid invoke({\n+\t\t\t\tverb: \"use\",\n+\t\t\t\trevision,\n+\t\t\t\titemId: item.id,\n+\t\t\t\tinput,\n+\t\t\t\t...msSinceExposed(current),\n+\t\t\t}).then((result) => {\n+\t\t\t\tif (result?.outcome !== \"refused\") return;\n+\t\t\t\tif (boundRef.current !== boundSessionId) return;\n+\t\t\t\tconst used = localRef.current.used;\n+\t\t\t\tif (used?.itemId === item.id && used.revision === revision) {\n+\t\t\t\t\tdispatch({ type: \"draft_cleared\" });\n+\t\t\t\t}\n+\t\t\t\tif (composer.draft() === item.prompt) composer.setDraft(\"\");\n+\t\t\t});\n+\t\t},\n+\t\t[boundRef, dispatch, invoke, localRef],\n+\t);\n+\n+\tconst send = useCallback(\n+\t\tasync (view: ReadyView, input: PluginUiInput) => {\n+\t\t\tif (sendInFlightRef.current) return;\n+\t\t\tconst item = view.highlighted;\n+\t\t\tif (!view.canSend) {\n+\t\t\t\tsignalInert(item.sendable ? \"not_exposed\" : \"unsendable\");\n+\t\t\t\treturn;\n+\t\t\t}\n+\t\t\tconst current = localRef.current;\n+\t\t\tconst revision = current.envelope?.state?.revision;\n+\t\t\tconst boundSessionId = boundRef.current;\n+\t\t\tif (!revision || !boundSessionId) return;\n+\t\t\tconst ref: SuggestionRef = {\n+\t\t\t\titemId: item.id,\n+\t\t\t\trevision,\n+\t\t\t\tprompt: item.prompt,\n+\t\t\t\tlabel: item.label,\n+\t\t\t\ttone: item.tone,\n+\t\t\t};\n+\t\t\tsendInFlightRef.current = true;\n+\t\t\tsetSendingItemId(item.id);\n+\t\t\ttry {\n+\t\t\t\tconst verdict = await Promise.race([\n+\t\t\t\t\tinvoke({\n+\t\t\t\t\t\tverb: \"send\",\n+\t\t\t\t\t\trevision,\n+\t\t\t\t\t\titemId: item.id,\n+\t\t\t\t\t\tinput,\n+\t\t\t\t\t\t...msSinceExposed(current),\n+\t\t\t\t\t}),\n+\t\t\t\t\tdelay(SUGGESTION_SEND_VERDICT_MS),\n+\t\t\t\t]);\n+\t\t\t\tif (verdict?.outcome === \"refused\") return;\n+\t\t\t\tif (boundRef.current !== boundSessionId) return;\n+\t\t\t\tsendSnapshotRef.current = snapshotAtSend(latest.current);\n+\t\t\t\tlatest.current.onSend(ref.prompt);",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4380037261",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15095,
+        "pr_file": "apps/examples/desktop-app/webview/hooks/composer-suggestions/use-verbs.ts",
+        "discussion_id": "4364421853",
+        "commented_code": "@@ -0,0 +1,302 @@\n+\"use client\";\n+\n+import {\n+\ttype ComposerSuggestionItem,\n+\ttype PluginUiInput,\n+\tSUGGESTION_SEND_VERDICT_MS,\n+\ttype SuggestionRef,\n+\ttype SuggestionsLocal,\n+} from \"@cline/shared/browser\";\n+import {\n+\ttype Dispatch,\n+\ttype RefObject,\n+\ttype SetStateAction,\n+\tuseCallback,\n+\tuseRef,\n+} from \"react\";\n+import { type SendSnapshot, snapshotAtSend } from \"./sent-prompt\";\n+import { delay, msSinceExposed } from \"./timing\";\n+import type {\n+\tComposerSuggestionsOptions,\n+\tLastSkip,\n+\tReadyView,\n+\tSuggestionComposer,\n+\tSuggestionsDispatch,\n+\tSuggestionsInvoke,\n+} from \"./types\";\n+\n+export function useSuggestionVerbs({\n+\tinvoke,\n+\tboundRef,\n+\tlocalRef,\n+\tlatest,\n+\tdispatch,\n+\tlastSkip,\n+\tsetLastSkip,\n+\tsetSendingItemId,\n+\tsendSnapshotRef,\n+}: {\n+\tinvoke: SuggestionsInvoke;\n+\tboundRef: RefObject<string>;\n+\tlocalRef: RefObject<SuggestionsLocal>;\n+\tlatest: RefObject<ComposerSuggestionsOptions>;\n+\tdispatch: SuggestionsDispatch;\n+\tlastSkip: LastSkip | undefined;\n+\tsetLastSkip: Dispatch<SetStateAction<LastSkip | undefined>>;\n+\tsetSendingItemId: Dispatch<SetStateAction<string | undefined>>;\n+\tsendSnapshotRef: RefObject<SendSnapshot>;\n+}) {\n+\t/** A one-key Send is waiting for its verdict; another press then sends nothing. */\n+\tconst sendInFlightRef = useRef(false);\n+\n+\tconst signalInert = useCallback(\n+\t\t(reason: \"not_exposed\" | \"unsendable\" | \"stale\") => {\n+\t\t\tconst revision = localRef.current.envelope?.state?.revision;\n+\t\t\tvoid invoke(\n+\t\t\t\t{\n+\t\t\t\t\tverb: \"signal\",\n+\t\t\t\t\tname: \"key_inert\",\n+\t\t\t\t\treason,\n+\t\t\t\t\t...(revision ? { revision } : {}),\n+\t\t\t\t},\n+\t\t\t\t{ applyReply: false },\n+\t\t\t);\n+\t\t},\n+\t\t[invoke, localRef],\n+\t);\n+\n+\tconst use = useCallback(\n+\t\t(\n+\t\t\titem: ComposerSuggestionItem,\n+\t\t\tinput: PluginUiInput,\n+\t\t\tcomposer: SuggestionComposer,\n+\t\t) => {\n+\t\t\tconst current = localRef.current;\n+\t\t\tconst revision = current.envelope?.state?.revision;\n+\t\t\tif (!revision) return;\n+\t\t\tcomposer.setDraft(item.prompt);\n+\t\t\tcomposer.focus();\n+\t\t\tdispatch({ type: \"used\", itemId: item.id });\n+\t\t\tconst boundSessionId = boundRef.current;\n+\t\t\tvoid invoke({\n+\t\t\t\tverb: \"use\",\n+\t\t\t\trevision,\n+\t\t\t\titemId: item.id,\n+\t\t\t\tinput,\n+\t\t\t\t...msSinceExposed(current),\n+\t\t\t}).then((result) => {\n+\t\t\t\tif (result?.outcome !== \"refused\") return;\n+\t\t\t\tif (boundRef.current !== boundSessionId) return;\n+\t\t\t\tconst used = localRef.current.used;\n+\t\t\t\tif (used?.itemId === item.id && used.revision === revision) {\n+\t\t\t\t\tdispatch({ type: \"draft_cleared\" });\n+\t\t\t\t}\n+\t\t\t\tif (composer.draft() === item.prompt) composer.setDraft(\"\");\n+\t\t\t});\n+\t\t},\n+\t\t[boundRef, dispatch, invoke, localRef],\n+\t);\n+\n+\tconst send = useCallback(\n+\t\tasync (view: ReadyView, input: PluginUiInput) => {\n+\t\t\tif (sendInFlightRef.current) return;\n+\t\t\tconst item = view.highlighted;\n+\t\t\tif (!view.canSend) {\n+\t\t\t\tsignalInert(item.sendable ? \"not_exposed\" : \"unsendable\");\n+\t\t\t\treturn;\n+\t\t\t}\n+\t\t\tconst current = localRef.current;\n+\t\t\tconst revision = current.envelope?.state?.revision;\n+\t\t\tconst boundSessionId = boundRef.current;\n+\t\t\tif (!revision || !boundSessionId) return;\n+\t\t\tconst ref: SuggestionRef = {\n+\t\t\t\titemId: item.id,\n+\t\t\t\trevision,\n+\t\t\t\tprompt: item.prompt,\n+\t\t\t\tlabel: item.label,\n+\t\t\t\ttone: item.tone,\n+\t\t\t};\n+\t\t\tsendInFlightRef.current = true;\n+\t\t\tsetSendingItemId(item.id);\n+\t\t\ttry {\n+\t\t\t\tconst verdict = await Promise.race([\n+\t\t\t\t\tinvoke({\n+\t\t\t\t\t\tverb: \"send\",\n+\t\t\t\t\t\trevision,\n+\t\t\t\t\t\titemId: item.id,\n+\t\t\t\t\t\tinput,\n+\t\t\t\t\t\t...msSinceExposed(current),\n+\t\t\t\t\t}),\n+\t\t\t\t\tdelay(SUGGESTION_SEND_VERDICT_MS),\n+\t\t\t\t]);\n+\t\t\t\tif (verdict?.outcome === \"refused\") return;\n+\t\t\t\tif (boundRef.current !== boundSessionId) return;\n+\t\t\t\tsendSnapshotRef.current = snapshotAtSend(latest.current);\n+\t\t\t\tlatest.current.onSend(ref.prompt);",
+        "comment_created_at": "2026-10-26T16:53:09+00:00",
+        "comment_author": "harrisonofcline",
+        "comment_body": "Fixed in 178682bae4. A one-key Send captures the files attached at the press. Once the verdict arrives, it sends only those that are still attached, through a new `takeFiles(wanted)` on the pending-attachments hook. Files added during the wait stay on the composer with the draft being typed, and a file removed during the wait doesn't go out.\n\nCovered by \"leaves a file added during a one-key Send's wait on the composer when its verdict lands / when its verdict wait runs out\" and \"leaves out a file removed from the composer while a one-key Send waited for its verdict\" in `use-verbs.test.tsx`, plus `use-pending-attachments.test.tsx` (now in `test:sidecar`).\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4332237059",
+    "pr_number": 15237,
+    "pr_file": "apps/vscode/webview-ui/src/components/chat/chat-view/hooks/useThinkingLoaderRow.ts",
+    "created_at": "2026-10-21T01:54:08+00:00",
+    "commented_code": "}: ThinkingLoaderInputs): boolean {\n \tconst lastMsg = modifiedMessages[modifiedMessages.length - 1]\n \n+\t// A provisioning cloud sandbox shows its own progress card.\n+\tif (lastRawMessage?.type === \"say\" && lastRawMessage.say === \"cloud_provisioning\") {",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4332237059",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15237,
+        "pr_file": "apps/vscode/webview-ui/src/components/chat/chat-view/hooks/useThinkingLoaderRow.ts",
+        "discussion_id": "4332237059",
+        "commented_code": "@@ -52,6 +52,11 @@ export function computeIsWaitingForResponse({\n }: ThinkingLoaderInputs): boolean {\n \tconst lastMsg = modifiedMessages[modifiedMessages.length - 1]\n \n+\t// A provisioning cloud sandbox shows its own progress card.\n+\tif (lastRawMessage?.type === \"say\" && lastRawMessage.say === \"cloud_provisioning\") {",
+        "comment_created_at": "2026-10-21T01:54:08+00:00",
+        "comment_author": "dominiccooney",
+        "comment_body": "**[P2] Apply provisioning suppression to the combined loader condition.** On a new cloud send, `beginPendingResponse` sets the optimistic marker. The coordinator emits `cloud_provisioning` through the partial-message stream before the full-state acknowledgement arrives; partial messages leave `turnState` unchanged, and that acknowledgement goes through the 50 ms state-post debounce. During this handoff, `forceShow` is still true and the provisioning message has `partial: false`, so `optimisticShow` below overrides this `false` and renders \u201cThinking\u2026\u201d alongside the progress card. This contradicts the intended suppression and adds an avoidable loader insertion/removal at startup.\n\nGate the combined condition passed to `useDebouncedLoaderVisibility` on the provisioning tail, keeping the hook call unconditional. The added helper-only test misses this: rendering the full hook with a provisioning tail, stale idle `turnState`, and `forceShow: true` currently returns visible. Cover that combination, then verify an `api_req_started` successor can show the loader again.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4332853558",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15237,
+        "pr_file": "apps/vscode/webview-ui/src/components/chat/chat-view/hooks/useThinkingLoaderRow.ts",
+        "discussion_id": "4332237059",
+        "commented_code": "@@ -52,6 +52,11 @@ export function computeIsWaitingForResponse({\n }: ThinkingLoaderInputs): boolean {\n \tconst lastMsg = modifiedMessages[modifiedMessages.length - 1]\n \n+\t// A provisioning cloud sandbox shows its own progress card.\n+\tif (lastRawMessage?.type === \"say\" && lastRawMessage.say === \"cloud_provisioning\") {",
+        "comment_created_at": "2026-10-21T03:50:47+00:00",
+        "comment_author": "saoudrizwan",
+        "comment_body": "Good catch, thanks. Fixed in f8d9ca206: the provisioning check now gates the combined condition passed to `useDebouncedLoaderVisibility` (`!cloudProvisioning && (optimisticShow || isWaitingForResponse || handoffToReasoningPending)`), and the hook call stays unconditional. I moved the check out of `computeIsWaitingForResponse` instead of duplicating it, so that helper matches main again.\r\n\r\nI replaced the helper-only test with a full-hook test: a provisioning tail, a stale idle `turnState`, and `forceShow: true` keep the loader hidden, then an `api_req_started` successor shows it again. The test fails on the previous code (`expected true to be false`) and passes with the fix.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4152907129",
+    "pr_number": 14645,
+    "pr_file": "apps/examples/desktop-app/webview/hooks/use-prompt-draft.ts",
+    "created_at": "2026-10-01T07:32:32+00:00",
+    "commented_code": "+import { useCallback, useRef, useState } from \"react\";\n+\n+/**\n+ * Keeps drafts outside the keyed chat pane so navigation can safely unmount it.\n+ * Keystrokes only update the ref/cache; external edits also update the composer.\n+ * The caller remounts this hook when the thread changes.\n+ */\n+export function usePromptDraft(drafts: Map<string, string>, threadId: string) {\n+\tconst promptInputRef = useRef(drafts.get(threadId) ?? \"\");",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4152907129",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14645,
+        "pr_file": "apps/examples/desktop-app/webview/hooks/use-prompt-draft.ts",
+        "discussion_id": "4152907129",
+        "commented_code": "@@ -0,0 +1,39 @@\n+import { useCallback, useRef, useState } from \"react\";\n+\n+/**\n+ * Keeps drafts outside the keyed chat pane so navigation can safely unmount it.\n+ * Keystrokes only update the ref/cache; external edits also update the composer.\n+ * The caller remounts this hook when the thread changes.\n+ */\n+export function usePromptDraft(drafts: Map<string, string>, threadId: string) {\n+\tconst promptInputRef = useRef(drafts.get(threadId) ?? \"\");",
+        "comment_created_at": "2026-10-01T07:32:32+00:00",
+        "comment_author": "dominiccooney",
+        "comment_body": "[P2] Preserve the draft when a newly started session is reopened from history\n\nThis cache uses the UI thread ID, but one runtime session can have two UI thread IDs. A new conversation starts as `thread_*` (page.tsx:204\u2013206); `thread-started` records its runtime `sessionId` without changing that ID (desktop-app-state.ts:319\u2013333). Opening its sidebar/history row dispatches `open-session`, which only looks for `session_${sessionKey(...)}` and creates another thread (desktop-app-state.ts:175\u2013207).\n\nStart a session in this window, type an unsent follow-up, switch to another session, then reopen the original sidebar row: the new pane reads a different Map key and opens empty. The draft remains stranded under the original thread ID. Clicking the current session's own sidebar row can do the same. The real reducer/hook probe reproduces the two IDs and empty composer. This is a missing path in the draft-preservation fix, not a claim that persistence worked on main.\n\nReuse the already-bound thread for the same session/environment, or give aliases one draft identity and migrate the draft when binding. Add a start \u2192 bind session ID \u2192 type follow-up \u2192 reopen through history regression, retaining isolation for identical session IDs in different environments.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4156273822",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14645,
+        "pr_file": "apps/examples/desktop-app/webview/hooks/use-prompt-draft.ts",
+        "discussion_id": "4152907129",
+        "commented_code": "@@ -0,0 +1,39 @@\n+import { useCallback, useRef, useState } from \"react\";\n+\n+/**\n+ * Keeps drafts outside the keyed chat pane so navigation can safely unmount it.\n+ * Keystrokes only update the ref/cache; external edits also update the composer.\n+ * The caller remounts this hook when the thread changes.\n+ */\n+export function usePromptDraft(drafts: Map<string, string>, threadId: string) {\n+\tconst promptInputRef = useRef(drafts.get(threadId) ?? \"\");",
+        "comment_created_at": "2026-10-01T14:03:28+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "fixed",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

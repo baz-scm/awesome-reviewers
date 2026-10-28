@@ -1,0 +1,25 @@
+---
+title: Distinguish null, undefined, empty
+description: Several bugs came from treating "absent", "explicitly null", and "present
+  but empty/falsy" as interchangeable when they actually carry different meanings
+  in the protocol or API contract. Before writing a fallback or guard, decide exactly
+  which states are possible and what each one means, then write the check to match
+  that semantics instead of reaching for...
+repository: cline/cline#wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww
+label: Null Handling
+language: TypeScript
+comments_count: 6
+repository_stars: 70984
+---
+
+Several bugs came from treating "absent", "explicitly null", and "present but empty/falsy" as interchangeable when they actually carry different meanings in the protocol or API contract. Before writing a fallback or guard, decide exactly which states are possible and what each one means, then write the check to match that semantics instead of reaching for `??`, truthy checks, or a loose cast.
+
+Concrete failure patterns seen:
+- Using `??` to pick a fallback when the "real" value can be an empty-but-present value: `images ?? retry.images` kept an empty `[]` from protobuf instead of falling back, because `??` only triggers on `null`/`undefined`. Prefer an explicit check such as `images?.length ? images : retry.images` when empty must be treated differently from absent.
+- Trusting an external payload's type without narrowing: casting `tools/list` results to `{ nextCursor?: string }` let a server-sent `null` survive the `!== undefined` loop guard and cause an infinite/incorrect pagination loop. Narrow explicitly: `cursor = typeof result.nextCursor === "string" ? result.nextCursor : undefined;`
+- Collapsing a three-state field (unset / explicit null-to-clear / explicit value) into two states during serialization. Sending `metadata: null` to mean "clear" got silently turned into "omitted" by a decoder that treats `null` as absent, turning a clear into a no-op. If `null` is a meaningful "clear" signal, encode and test it explicitly (e.g. send `{}` rather than `null` if that's what the decoder expects as "clear").
+- Signature/body mismatch on nullable params: a function body normalized `null` but its type signature only declared `| undefined`, and `undefined` is swallowed by a parameter default — making it impossible to pass the "no match" signal through. Keep the type signature and the runtime handling of `null` vs `undefined` in sync.
+- Normalizing externally-supplied `null` into a real default only where that's actually safe (e.g., model-sent `null` for optional fields), and documenting why, rather than silently accepting `null` everywhere it could hide a real bug.
+
+When adding or reviewing code that passes optional/nullable values across a boundary (API payload, protobuf, persistence layer, callback params), explicitly enumerate the possible states (`undefined`, `null`, empty value, real value) and write both the guard and a regression test that proves each state is handled as intended.</description>
+</invoke>

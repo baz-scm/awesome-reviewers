@@ -1,0 +1,80 @@
+[
+  {
+    "discussion_id": "4333171900",
+    "pr_number": 15244,
+    "pr_file": "sdk/packages/core/src/runtime/host/local-runtime-host.ts",
+    "created_at": "2026-10-21T15:34:56+00:00",
+    "commented_code": "async startSession(input: StartSessionInput): Promise<StartSessionResult> {\n \t\tconst requestedSessionId = input.config.sessionId?.trim() ?? \"\";\n \t\tconst sessionId = requestedSessionId || createSessionId();\n+\t\t// Starting a session that is mid-run must not replace it: the replaced\n+\t\t// run keeps going unreachable (no abort, no queue) and its transcript\n+\t\t// writes resolve to the replacement's stale snapshot. Reattach instead.\n+\t\tconst live = this.sessions.get(sessionId);\n+\t\tif (live && !live.agent.canStartRun()) {\n+\t\t\tif (input.prompt?.trim()) {\n+\t\t\t\tthrow new Error(\n+\t\t\t\t\t`Session ${sessionId} already has a run in progress; queue the prompt instead.`,\n+\t\t\t\t);\n+\t\t\t}\n+\t\t\treturn await this.liveSessionStartResult(live);",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4338738175",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15244,
+        "pr_file": "sdk/packages/core/src/runtime/host/local-runtime-host.ts",
+        "discussion_id": "4333171900",
+        "commented_code": "@@ -491,6 +491,18 @@ export class LocalRuntimeHost implements RuntimeHost {\n \tasync startSession(input: StartSessionInput): Promise<StartSessionResult> {\n \t\tconst requestedSessionId = input.config.sessionId?.trim() ?? \"\";\n \t\tconst sessionId = requestedSessionId || createSessionId();\n+\t\t// Starting a session that is mid-run must not replace it: the replaced\n+\t\t// run keeps going unreachable (no abort, no queue) and its transcript\n+\t\t// writes resolve to the replacement's stale snapshot. Reattach instead.\n+\t\tconst live = this.sessions.get(sessionId);\n+\t\tif (live && !live.agent.canStartRun()) {\n+\t\t\tif (input.prompt?.trim()) {\n+\t\t\t\tthrow new Error(\n+\t\t\t\t\t`Session ${sessionId} already has a run in progress; queue the prompt instead.`,\n+\t\t\t\t);\n+\t\t\t}\n+\t\t\treturn await this.liveSessionStartResult(live);",
+        "comment_created_at": "2026-10-21T15:34:56+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "fixed in e68bb30086.\r\n\r\nThe hub now remembers every app that registered each callback for a task, including an app that joins a task while it's running. Each callback request goes to the original app while it's connected. If that app is gone, the request goes to the next connected app that registered the same callback. So when the original app closes, the app that joined takes over the callbacks, and sending another message works.\r\n\r\nTests:\r\n- New hub test: once the owner unregisters, the request goes to the joined client.\r\n- End-to-end run: after the original app left, the task kept running for 5 more steps with the joined app answering.\r\n\r\nWhat's left: if no connected app registered that callback (for example, the joining app never registers it), the request still fails right away with the \"disconnected\u2026 send a message to continue\" message. Desktop re-creates the task on its next send once the run has ended, which builds fresh callbacks, so that message is accurate there.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4341207680",
+    "pr_number": 15244,
+    "pr_file": "sdk/packages/core/src/hub/server/handlers/capability-handlers.ts",
+    "created_at": "2026-10-21T19:44:49+00:00",
+    "commented_code": "import { logHubMessage } from \"../hub-server-logging\";\n import { errorReply, type HubTransportContext, okReply } from \"./context\";\n \n+/**\n+ * Shown to the user when a run fails because the client that owned one of its\n+ * capabilities (hooks, client tools) went away mid-request. Client ids stay in\n+ * the hub log (targetClientId), not in this text.\n+ */\n+export const CAPABILITY_OWNER_GONE_MESSAGE =\n+\t\"The app running this task disconnected before it could respond. Send a message to continue.\";\n+\n+export function recordCapabilityClients(\n+\tctx: HubTransportContext,\n+\tsessionId: string,\n+\tclientId: string,\n+\tcontributions: readonly { capabilityName: string }[],\n+): void {\n+\tif (!ctx.capabilityClientsBySession || contributions.length === 0) return;\n+\t// ponytail: entries live as long as the hub process; prune on session delete if it grows.\n+\tlet byCapability = ctx.capabilityClientsBySession.get(sessionId);\n+\tif (!byCapability) {\n+\t\tbyCapability = new Map();\n+\t\tctx.capabilityClientsBySession.set(sessionId, byCapability);\n+\t}\n+\tfor (const { capabilityName } of contributions) {\n+\t\tconst clients = byCapability.get(capabilityName) ?? [];\n+\t\tif (!clients.includes(clientId)) clients.push(clientId);\n+\t\tbyCapability.set(capabilityName, clients);\n+\t}\n+}\n+\n+/**\n+ * The requested owner if connected, else another client that registered the\n+ * capability and is still connected and attached to the session (a client\n+ * that detached no longer receives the session's requests).\n+ */\n+function resolveCapabilityOwner(\n+\tctx: HubTransportContext,\n+\tsessionId: string,\n+\tcapabilityName: string,\n+\ttargetClientId: string,\n+): string | undefined {\n+\tif (ctx.clients.has(targetClientId)) return targetClientId;",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4341207680",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15244,
+        "pr_file": "sdk/packages/core/src/hub/server/handlers/capability-handlers.ts",
+        "discussion_id": "4341207680",
+        "commented_code": "@@ -3,14 +3,66 @@ import { createSessionId } from \"@cline/shared\";\n import { logHubMessage } from \"../hub-server-logging\";\n import { errorReply, type HubTransportContext, okReply } from \"./context\";\n \n+/**\n+ * Shown to the user when a run fails because the client that owned one of its\n+ * capabilities (hooks, client tools) went away mid-request. Client ids stay in\n+ * the hub log (targetClientId), not in this text.\n+ */\n+export const CAPABILITY_OWNER_GONE_MESSAGE =\n+\t\"The app running this task disconnected before it could respond. Send a message to continue.\";\n+\n+export function recordCapabilityClients(\n+\tctx: HubTransportContext,\n+\tsessionId: string,\n+\tclientId: string,\n+\tcontributions: readonly { capabilityName: string }[],\n+): void {\n+\tif (!ctx.capabilityClientsBySession || contributions.length === 0) return;\n+\t// ponytail: entries live as long as the hub process; prune on session delete if it grows.\n+\tlet byCapability = ctx.capabilityClientsBySession.get(sessionId);\n+\tif (!byCapability) {\n+\t\tbyCapability = new Map();\n+\t\tctx.capabilityClientsBySession.set(sessionId, byCapability);\n+\t}\n+\tfor (const { capabilityName } of contributions) {\n+\t\tconst clients = byCapability.get(capabilityName) ?? [];\n+\t\tif (!clients.includes(clientId)) clients.push(clientId);\n+\t\tbyCapability.set(capabilityName, clients);\n+\t}\n+}\n+\n+/**\n+ * The requested owner if connected, else another client that registered the\n+ * capability and is still connected and attached to the session (a client\n+ * that detached no longer receives the session's requests).\n+ */\n+function resolveCapabilityOwner(\n+\tctx: HubTransportContext,\n+\tsessionId: string,\n+\tcapabilityName: string,\n+\ttargetClientId: string,\n+): string | undefined {\n+\tif (ctx.clients.has(targetClientId)) return targetClientId;",
+        "comment_created_at": "2026-10-21T19:44:49+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "[P2] Honor explicit session detachment for the original owner too. This shortcut still selects a connected owner after it detaches, even with an attached replacement available; reproduced against this resolver. Please track/validate owner eligibility for both paths, including the requestedClientId fallback below, while preserving bootstrap callbacks issued before initial attachment. Add coverage where the original owner detaches but stays connected.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4341721115",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15244,
+        "pr_file": "sdk/packages/core/src/hub/server/handlers/capability-handlers.ts",
+        "discussion_id": "4341207680",
+        "commented_code": "@@ -3,14 +3,66 @@ import { createSessionId } from \"@cline/shared\";\n import { logHubMessage } from \"../hub-server-logging\";\n import { errorReply, type HubTransportContext, okReply } from \"./context\";\n \n+/**\n+ * Shown to the user when a run fails because the client that owned one of its\n+ * capabilities (hooks, client tools) went away mid-request. Client ids stay in\n+ * the hub log (targetClientId), not in this text.\n+ */\n+export const CAPABILITY_OWNER_GONE_MESSAGE =\n+\t\"The app running this task disconnected before it could respond. Send a message to continue.\";\n+\n+export function recordCapabilityClients(\n+\tctx: HubTransportContext,\n+\tsessionId: string,\n+\tclientId: string,\n+\tcontributions: readonly { capabilityName: string }[],\n+): void {\n+\tif (!ctx.capabilityClientsBySession || contributions.length === 0) return;\n+\t// ponytail: entries live as long as the hub process; prune on session delete if it grows.\n+\tlet byCapability = ctx.capabilityClientsBySession.get(sessionId);\n+\tif (!byCapability) {\n+\t\tbyCapability = new Map();\n+\t\tctx.capabilityClientsBySession.set(sessionId, byCapability);\n+\t}\n+\tfor (const { capabilityName } of contributions) {\n+\t\tconst clients = byCapability.get(capabilityName) ?? [];\n+\t\tif (!clients.includes(clientId)) clients.push(clientId);\n+\t\tbyCapability.set(capabilityName, clients);\n+\t}\n+}\n+\n+/**\n+ * The requested owner if connected, else another client that registered the\n+ * capability and is still connected and attached to the session (a client\n+ * that detached no longer receives the session's requests).\n+ */\n+function resolveCapabilityOwner(\n+\tctx: HubTransportContext,\n+\tsessionId: string,\n+\tcapabilityName: string,\n+\ttargetClientId: string,\n+): string | undefined {\n+\tif (ctx.clients.has(targetClientId)) return targetClientId;",
+        "comment_created_at": "2026-10-21T20:39:31+00:00",
+        "comment_author": "maxpaulus43",
+        "comment_body": "Done in b9871407b6. The hub now remembers clients that explicitly detached from a session. Their pending requests are still cancelled on detach, and any later request aimed at them fails right away. Attaching again, or re-creating the session, clears this, so callbacks raised while the session starts still reach the creator. Covered by \"fails capability requests to an owner that left the task but stays connected\".\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4344169853",
+    "pr_number": 15244,
+    "pr_file": "sdk/packages/core/src/hub/server/hub-server-transport.ts",
+    "created_at": "2026-10-22T03:08:42+00:00",
+    "commented_code": "cancelPendingCapabilityRequests(\n \t\t\tthis.ctx,\n \t\t\t(request) => request.targetClientId === clientId,\n-\t\t\t`Capability owner client ${clientId} disconnected before request was resolved.`,\n+\t\t\tCAPABILITY_OWNER_GONE_MESSAGE,",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4344169853",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15244,
+        "pr_file": "sdk/packages/core/src/hub/server/hub-server-transport.ts",
+        "discussion_id": "4344169853",
+        "commented_code": "@@ -1307,7 +1309,7 @@ export class HubServerTransport implements NativeHubTransport {\n \t\tcancelPendingCapabilityRequests(\n \t\t\tthis.ctx,\n \t\t\t(request) => request.targetClientId === clientId,\n-\t\t\t`Capability owner client ${clientId} disconnected before request was resolved.`,\n+\t\t\tCAPABILITY_OWNER_GONE_MESSAGE,",
+        "comment_created_at": "2026-10-22T03:08:42+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "[Follow-up, non-blocking] Consider applying reconnect grace to already-pending requests. An open askQuestion is cancelled immediately on disconnect today; this behavior predates this PR, so extending grace is a policy/consistency improvement, not a regression fix required here. If we choose to preserve open questions through brief socket drops, keep the same pending request in the shared hub lifecycle, cancel on grace expiry, and let explicit detach or Stop cancel immediately. Do not transfer or re-execute the callback.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

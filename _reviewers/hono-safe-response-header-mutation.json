@@ -1,0 +1,252 @@
+[
+  {
+    "discussion_id": "1744941058",
+    "pr_number": 3367,
+    "pr_file": "src/middleware/cache/index.ts",
+    "created_at": "2024-09-05T07:23:04+00:00",
+    "commented_code": "}\n     addHeader(c)\n     const res = c.res.clone()\n+    if (options.duration) {\n+      const expiration = Date.now() + options.duration * 1000\n+      res.headers.set(expirationHeader, String(expiration))",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1744941058",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3367,
+        "pr_file": "src/middleware/cache/index.ts",
+        "discussion_id": "1744941058",
+        "commented_code": "@@ -118,6 +135,10 @@ export const cache = (options: {\n     }\n     addHeader(c)\n     const res = c.res.clone()\n+    if (options.duration) {\n+      const expiration = Date.now() + options.duration * 1000\n+      res.headers.set(expirationHeader, String(expiration))",
+        "comment_created_at": "2024-09-05T07:23:04+00:00",
+        "comment_author": "usualoma",
+        "comment_body": "If the fetch API response is returned directly from the handler, c.res contains the raw fetch API response. In that case, even if c.res.clone() is done, the header is still immutable, so I think this would result in the same error as the following issue.\r\n\r\nhttps://github.com/honojs/hono/issues/3316\r\n\r\n\r\n\r\n```\r\n> const req = (await fetch('https://hono.dev/')).clone()\r\n> req.headers.set('Hono-Cache-Expiration', '1')\r\nUncaught TypeError: immutable\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1752355715",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3367,
+        "pr_file": "src/middleware/cache/index.ts",
+        "discussion_id": "1744941058",
+        "commented_code": "@@ -118,6 +135,10 @@ export const cache = (options: {\n     }\n     addHeader(c)\n     const res = c.res.clone()\n+    if (options.duration) {\n+      const expiration = Date.now() + options.duration * 1000\n+      res.headers.set(expirationHeader, String(expiration))",
+        "comment_created_at": "2024-09-10T17:12:08+00:00",
+        "comment_author": "ryuapp",
+        "comment_body": "https://github.com/honojs/hono/pull/3318 will solve the issue, right?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1752925728",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3367,
+        "pr_file": "src/middleware/cache/index.ts",
+        "discussion_id": "1744941058",
+        "commented_code": "@@ -118,6 +135,10 @@ export const cache = (options: {\n     }\n     addHeader(c)\n     const res = c.res.clone()\n+    if (options.duration) {\n+      const expiration = Date.now() + options.duration * 1000\n+      res.headers.set(expirationHeader, String(expiration))",
+        "comment_created_at": "2024-09-10T23:19:30+00:00",
+        "comment_author": "usualoma",
+        "comment_body": "Thanks for confirming.\r\nI guess #3318 doesn't solve the problem.\r\n\r\nIf you run the following app with deno, you will see that `TypeError: Headers are immutable.`\r\n\r\n```ts\r\nimport { Hono } from './src/hono'\r\nimport { cache } from './src/middleware/cache'\r\n\r\nconst app = new Hono()\r\napp.use(cache({\r\n  cacheName: Math.random().toString(),\r\n  cacheControl: 'max-age=3600',\r\n  wait: true,\r\n  duration: 100,\r\n}))\r\napp.get('/', (c) => fetch('https://hono.dev/'))\r\n\r\nexport default app\r\n```\r\n\r\n```\r\nTypeError: Headers are immutable.\r\n    at Headers.set (ext:deno_fetch/20_headers.js:425:13)\r\n    at cache (file:///Users/taku/src/github.com/honojs/hono/src/middleware/cache/index.ts:135:19)\r\n    at eventLoopTick (ext:core/01_core.js:168:7)\r\n    at async dispatch (file:///Users/taku/src/github.com/honojs/hono/src/compose.ts:74:17)\r\n    at async file:///Users/taku/src/github.com/honojs/hono/src/hono-base.ts:444:25\r\n    at async ext:deno_http/00_serve.ts:364:18\r\n```\r\n\r\nThis is a very redundant cloning process, but to avoid this, the following should be done.\r\n\r\n```diff\r\ndiff --git a/src/middleware/cache/index.ts b/src/middleware/cache/index.ts\r\nindex 6c04207d..6d122589 100644\r\n--- a/src/middleware/cache/index.ts\r\n+++ b/src/middleware/cache/index.ts\r\n@@ -130,7 +132,10 @@ export const cache = (options: {\r\n       return\r\n     }\r\n     addHeader(c)\r\n-    const res = c.res.clone()\r\n+    const res = new Response(c.res.clone().body, {\r\n+      status: c.res.status,\r\n+      headers: c.res.headers,\r\n+    })\r\n     if (options.duration) {\r\n       res.headers.set(cachedTime, String(Date.now()))\r\n     }\r\n```\r\n\r\nAlternatively, if one were to avoid this overhead in the normal case, this might be a good approach.\r\n\r\n```diff\r\ndiff --git a/src/middleware/cache/index.ts b/src/middleware/cache/index.ts\r\nindex 6c04207d..0be76724 100644\r\n--- a/src/middleware/cache/index.ts\r\n+++ b/src/middleware/cache/index.ts\r\n@@ -130,9 +132,22 @@ export const cache = (options: {\r\n       return\r\n     }\r\n     addHeader(c)\r\n-    const res = c.res.clone()\r\n+    let res = c.res.clone()\r\n     if (options.duration) {\r\n-      res.headers.set(cachedTime, String(Date.now()))\r\n+      try {\r\n+        res.headers.set(cachedTime, String(Date.now()))\r\n+      } catch (e) {\r\n+        if (e instanceof TypeError && e.message.includes('immutable')) {\r\n+          // `res` is immutable (probably a response from a fetch API), so retry with a new response.\r\n+          res = new Response(res.body, {\r\n+            headers: res.headers,\r\n+            status: res.status,\r\n+          })\r\n+          res.headers.set(cachedTime, String(Date.now()))\r\n+        } else {\r\n+          throw e\r\n+        }\r\n+      }\r\n     }\r\n     if (options.wait) {\r\n       await cache.put(key, res)\r\n```\r\n\r\nIt may be possible to provide a utility method, but that is up to preference.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1767628663",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3367,
+        "pr_file": "src/middleware/cache/index.ts",
+        "discussion_id": "1744941058",
+        "commented_code": "@@ -118,6 +135,10 @@ export const cache = (options: {\n     }\n     addHeader(c)\n     const res = c.res.clone()\n+    if (options.duration) {\n+      const expiration = Date.now() + options.duration * 1000\n+      res.headers.set(expirationHeader, String(expiration))",
+        "comment_created_at": "2024-09-19T21:36:27+00:00",
+        "comment_author": "usualoma",
+        "comment_body": "Thank you for the fix!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1744955621",
+    "pr_number": 3367,
+    "pr_file": "src/middleware/cache/index.ts",
+    "created_at": "2024-09-05T07:31:22+00:00",
+    "commented_code": "const cache = await caches.open(cacheName)\n     const response = await cache.match(key)\n     if (response) {\n-      return new Response(response.body, response)\n+      if (options.duration) {\n+        const duration = Number(response.headers.get(expirationHeader))\n+        if (duration) {\n+          const now = Date.now()\n+          response.headers.delete(expirationHeader)",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1744955621",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3367,
+        "pr_file": "src/middleware/cache/index.ts",
+        "discussion_id": "1744955621",
+        "commented_code": "@@ -109,7 +115,18 @@ export const cache = (options: {\n     const cache = await caches.open(cacheName)\n     const response = await cache.match(key)\n     if (response) {\n-      return new Response(response.body, response)\n+      if (options.duration) {\n+        const duration = Number(response.headers.get(expirationHeader))\n+        if (duration) {\n+          const now = Date.now()\n+          response.headers.delete(expirationHeader)",
+        "comment_created_at": "2024-09-05T07:31:22+00:00",
+        "comment_author": "usualoma",
+        "comment_body": "I ran it in a Cloudflare environment and got the following error\r\n\r\n```\r\n\u2718 [ERROR] TypeError: Can't modify immutable headers.\r\n\r\n      at cache2 (file:///Users/taku/src/github.com/honojs/hono/src/middleware/cache/index.ts:122:28)\r\n      at async dispatch (file:///Users/taku/src/github.com/honojs/hono/src/compose.ts:74:17)\r\n```\r\n\r\nI rewrote it as follows and the error no longer occurs.\r\n\r\n```ts\r\ndiff --git a/src/middleware/cache/index.ts b/src/middleware/cache/index.ts\r\nindex 07a3844f..2b78ec91 100644\r\n--- a/src/middleware/cache/index.ts\r\n+++ b/src/middleware/cache/index.ts\r\n@@ -119,9 +119,10 @@ export const cache = (options: {\r\n         const duration = Number(response.headers.get(expirationHeader))\r\n         if (duration) {\r\n           const now = Date.now()\r\n-          response.headers.delete(expirationHeader)\r\n           if (duration > now) {\r\n-            return new Response(response.body, response)\r\n+            const newResponse = new Response(response.body, response)\r\n+            newResponse.headers.delete(expirationHeader)\r\n+            return newResponse\r\n           }\r\n         }\r\n       } else {\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1767628516",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3367,
+        "pr_file": "src/middleware/cache/index.ts",
+        "discussion_id": "1744955621",
+        "commented_code": "@@ -109,7 +115,18 @@ export const cache = (options: {\n     const cache = await caches.open(cacheName)\n     const response = await cache.match(key)\n     if (response) {\n-      return new Response(response.body, response)\n+      if (options.duration) {\n+        const duration = Number(response.headers.get(expirationHeader))\n+        if (duration) {\n+          const now = Date.now()\n+          response.headers.delete(expirationHeader)",
+        "comment_created_at": "2024-09-19T21:36:22+00:00",
+        "comment_author": "usualoma",
+        "comment_body": "Thank you for the fix!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1263263571",
+    "pr_number": 1199,
+    "pr_file": "deno_dist/middleware/etag/index.ts",
+    "created_at": "2023-07-14T03:55:30+00:00",
+    "commented_code": "import { sha1 } from '../../utils/crypto.ts'\n \n type ETagOptions = {\n-  weak: boolean\n+  retainedHeaders?: string[],\n+  weak?: boolean\n }\n \n-export const etag = (options: ETagOptions = { weak: false }): MiddlewareHandler => {\n+/**\n+ * Default headers to pass through on 304 responses. From the spec:\n+ * > The response must not contain a body and must include the headers that\n+ * > would have been sent in an equivalent 200 OK response: Cache-Control,\n+ * > Content-Location, Date, ETag, Expires, and Vary.\n+ */\n+const RETAINED_304_HEADERS = [\n+  'cache-control', 'content-location', 'date', 'etag', 'expires', 'vary'\n+]\n+\n+function etagMatches(etag: string, ifNoneMatch: string | null) {\n+  return ifNoneMatch != null && ifNoneMatch.split(/,\\s*/).indexOf(etag) > -1\n+}\n+\n+export const etag = (options?: ETagOptions): MiddlewareHandler => {\n+  const retainedHeaders = options?.retainedHeaders ?? RETAINED_304_HEADERS\n+  const weak = options?.weak ?? false\n+\n   return async (c, next) => {\n-    const ifNoneMatch = c.req.header('If-None-Match') || c.req.header('if-none-match')\n+    const ifNoneMatch = c.req.headers.get('If-None-Match')\n \n     await next()\n \n     const res = c.res as Response\n-    const clone = res.clone()\n-    const hash = await sha1(res.body || '')\n+    let undisturbedRes = res\n+    let etag = res.headers.get('ETag')\n \n-    const etag = options.weak ? `W/\"${hash}\"` : `\"${hash}\"`\n+    if (!etag) {\n+      undisturbedRes = res.clone()\n+      const hash = await sha1(res.body || '')\n+      etag = weak ? `W/\"${hash}\"` : `\"${hash}\"`\n+    }\n \n-    if (ifNoneMatch && ifNoneMatch === etag) {\n-      await clone.blob() // Force using body\n+    if (etagMatches(etag, ifNoneMatch)) {\n+      await undisturbedRes.blob() // Force using body\n       c.res = new Response(null, {\n         status: 304,\n         statusText: 'Not Modified',\n         headers: {\n           ETag: etag,\n         },\n       })\n-      c.res.headers.delete('Content-Length')\n+      c.res.headers.forEach((_, key) => {\n+        if (retainedHeaders.indexOf(key.toLowerCase()) === -1) {\n+          c.res.headers.delete(key)\n+        }\n+      })\n     } else {\n-      c.res = new Response(clone.body, clone)\n+      c.res = new Response(undisturbedRes.body, undisturbedRes)",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1263263571",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 1199,
+        "pr_file": "deno_dist/middleware/etag/index.ts",
+        "discussion_id": "1263263571",
+        "commented_code": "@@ -2,33 +2,59 @@ import type { MiddlewareHandler } from '../../types.ts'\n import { sha1 } from '../../utils/crypto.ts'\n \n type ETagOptions = {\n-  weak: boolean\n+  retainedHeaders?: string[],\n+  weak?: boolean\n }\n \n-export const etag = (options: ETagOptions = { weak: false }): MiddlewareHandler => {\n+/**\n+ * Default headers to pass through on 304 responses. From the spec:\n+ * > The response must not contain a body and must include the headers that\n+ * > would have been sent in an equivalent 200 OK response: Cache-Control,\n+ * > Content-Location, Date, ETag, Expires, and Vary.\n+ */\n+const RETAINED_304_HEADERS = [\n+  'cache-control', 'content-location', 'date', 'etag', 'expires', 'vary'\n+]\n+\n+function etagMatches(etag: string, ifNoneMatch: string | null) {\n+  return ifNoneMatch != null && ifNoneMatch.split(/,\\s*/).indexOf(etag) > -1\n+}\n+\n+export const etag = (options?: ETagOptions): MiddlewareHandler => {\n+  const retainedHeaders = options?.retainedHeaders ?? RETAINED_304_HEADERS\n+  const weak = options?.weak ?? false\n+\n   return async (c, next) => {\n-    const ifNoneMatch = c.req.header('If-None-Match') || c.req.header('if-none-match')\n+    const ifNoneMatch = c.req.headers.get('If-None-Match')\n \n     await next()\n \n     const res = c.res as Response\n-    const clone = res.clone()\n-    const hash = await sha1(res.body || '')\n+    let undisturbedRes = res\n+    let etag = res.headers.get('ETag')\n \n-    const etag = options.weak ? `W/\"${hash}\"` : `\"${hash}\"`\n+    if (!etag) {\n+      undisturbedRes = res.clone()\n+      const hash = await sha1(res.body || '')\n+      etag = weak ? `W/\"${hash}\"` : `\"${hash}\"`\n+    }\n \n-    if (ifNoneMatch && ifNoneMatch === etag) {\n-      await clone.blob() // Force using body\n+    if (etagMatches(etag, ifNoneMatch)) {\n+      await undisturbedRes.blob() // Force using body\n       c.res = new Response(null, {\n         status: 304,\n         statusText: 'Not Modified',\n         headers: {\n           ETag: etag,\n         },\n       })\n-      c.res.headers.delete('Content-Length')\n+      c.res.headers.forEach((_, key) => {\n+        if (retainedHeaders.indexOf(key.toLowerCase()) === -1) {\n+          c.res.headers.delete(key)\n+        }\n+      })\n     } else {\n-      c.res = new Response(clone.body, clone)\n+      c.res = new Response(undisturbedRes.body, undisturbedRes)",
+        "comment_created_at": "2023-07-14T03:55:30+00:00",
+        "comment_author": "jamesarosen",
+        "comment_body": "After some real-world testing, I think this should be\r\n\r\n```ts\r\nc.res = undisturbedRes\r\n```\r\n\r\nThere are some environments where this is causing the non-304 responses to have empty body.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1264326396",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 1199,
+        "pr_file": "deno_dist/middleware/etag/index.ts",
+        "discussion_id": "1263263571",
+        "commented_code": "@@ -2,33 +2,59 @@ import type { MiddlewareHandler } from '../../types.ts'\n import { sha1 } from '../../utils/crypto.ts'\n \n type ETagOptions = {\n-  weak: boolean\n+  retainedHeaders?: string[],\n+  weak?: boolean\n }\n \n-export const etag = (options: ETagOptions = { weak: false }): MiddlewareHandler => {\n+/**\n+ * Default headers to pass through on 304 responses. From the spec:\n+ * > The response must not contain a body and must include the headers that\n+ * > would have been sent in an equivalent 200 OK response: Cache-Control,\n+ * > Content-Location, Date, ETag, Expires, and Vary.\n+ */\n+const RETAINED_304_HEADERS = [\n+  'cache-control', 'content-location', 'date', 'etag', 'expires', 'vary'\n+]\n+\n+function etagMatches(etag: string, ifNoneMatch: string | null) {\n+  return ifNoneMatch != null && ifNoneMatch.split(/,\\s*/).indexOf(etag) > -1\n+}\n+\n+export const etag = (options?: ETagOptions): MiddlewareHandler => {\n+  const retainedHeaders = options?.retainedHeaders ?? RETAINED_304_HEADERS\n+  const weak = options?.weak ?? false\n+\n   return async (c, next) => {\n-    const ifNoneMatch = c.req.header('If-None-Match') || c.req.header('if-none-match')\n+    const ifNoneMatch = c.req.headers.get('If-None-Match')\n \n     await next()\n \n     const res = c.res as Response\n-    const clone = res.clone()\n-    const hash = await sha1(res.body || '')\n+    let undisturbedRes = res\n+    let etag = res.headers.get('ETag')\n \n-    const etag = options.weak ? `W/\"${hash}\"` : `\"${hash}\"`\n+    if (!etag) {\n+      undisturbedRes = res.clone()\n+      const hash = await sha1(res.body || '')\n+      etag = weak ? `W/\"${hash}\"` : `\"${hash}\"`\n+    }\n \n-    if (ifNoneMatch && ifNoneMatch === etag) {\n-      await clone.blob() // Force using body\n+    if (etagMatches(etag, ifNoneMatch)) {\n+      await undisturbedRes.blob() // Force using body\n       c.res = new Response(null, {\n         status: 304,\n         statusText: 'Not Modified',\n         headers: {\n           ETag: etag,\n         },\n       })\n-      c.res.headers.delete('Content-Length')\n+      c.res.headers.forEach((_, key) => {\n+        if (retainedHeaders.indexOf(key.toLowerCase()) === -1) {\n+          c.res.headers.delete(key)\n+        }\n+      })\n     } else {\n-      c.res = new Response(clone.body, clone)\n+      c.res = new Response(undisturbedRes.body, undisturbedRes)",
+        "comment_created_at": "2023-07-15T04:55:35+00:00",
+        "comment_author": "yusukebe",
+        "comment_body": "Ah, it appears that copying the Response might be unnecessary. Could you create a PR for this?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1266165915",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 1199,
+        "pr_file": "deno_dist/middleware/etag/index.ts",
+        "discussion_id": "1263263571",
+        "commented_code": "@@ -2,33 +2,59 @@ import type { MiddlewareHandler } from '../../types.ts'\n import { sha1 } from '../../utils/crypto.ts'\n \n type ETagOptions = {\n-  weak: boolean\n+  retainedHeaders?: string[],\n+  weak?: boolean\n }\n \n-export const etag = (options: ETagOptions = { weak: false }): MiddlewareHandler => {\n+/**\n+ * Default headers to pass through on 304 responses. From the spec:\n+ * > The response must not contain a body and must include the headers that\n+ * > would have been sent in an equivalent 200 OK response: Cache-Control,\n+ * > Content-Location, Date, ETag, Expires, and Vary.\n+ */\n+const RETAINED_304_HEADERS = [\n+  'cache-control', 'content-location', 'date', 'etag', 'expires', 'vary'\n+]\n+\n+function etagMatches(etag: string, ifNoneMatch: string | null) {\n+  return ifNoneMatch != null && ifNoneMatch.split(/,\\s*/).indexOf(etag) > -1\n+}\n+\n+export const etag = (options?: ETagOptions): MiddlewareHandler => {\n+  const retainedHeaders = options?.retainedHeaders ?? RETAINED_304_HEADERS\n+  const weak = options?.weak ?? false\n+\n   return async (c, next) => {\n-    const ifNoneMatch = c.req.header('If-None-Match') || c.req.header('if-none-match')\n+    const ifNoneMatch = c.req.headers.get('If-None-Match')\n \n     await next()\n \n     const res = c.res as Response\n-    const clone = res.clone()\n-    const hash = await sha1(res.body || '')\n+    let undisturbedRes = res\n+    let etag = res.headers.get('ETag')\n \n-    const etag = options.weak ? `W/\"${hash}\"` : `\"${hash}\"`\n+    if (!etag) {\n+      undisturbedRes = res.clone()\n+      const hash = await sha1(res.body || '')\n+      etag = weak ? `W/\"${hash}\"` : `\"${hash}\"`\n+    }\n \n-    if (ifNoneMatch && ifNoneMatch === etag) {\n-      await clone.blob() // Force using body\n+    if (etagMatches(etag, ifNoneMatch)) {\n+      await undisturbedRes.blob() // Force using body\n       c.res = new Response(null, {\n         status: 304,\n         statusText: 'Not Modified',\n         headers: {\n           ETag: etag,\n         },\n       })\n-      c.res.headers.delete('Content-Length')\n+      c.res.headers.forEach((_, key) => {\n+        if (retainedHeaders.indexOf(key.toLowerCase()) === -1) {\n+          c.res.headers.delete(key)\n+        }\n+      })\n     } else {\n-      c.res = new Response(clone.body, clone)\n+      c.res = new Response(undisturbedRes.body, undisturbedRes)",
+        "comment_created_at": "2023-07-18T03:46:44+00:00",
+        "comment_author": "jamesarosen",
+        "comment_body": "Voil\u00e0: https://github.com/honojs/hono/pull/1242",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1729995193",
+    "pr_number": 3317,
+    "pr_file": "src/middleware/compress/index.ts",
+    "created_at": "2024-08-24T13:56:18+00:00",
+    "commented_code": "*/\n \n import type { MiddlewareHandler } from '../../types'\n+import compressible from './compressible'\n \n const ENCODING_TYPES = ['gzip', 'deflate'] as const\n \n interface CompressionOptions {\n   encoding?: (typeof ENCODING_TYPES)[number]\n+  threshold?: number\n }\n \n+const cacheControlNoTransformRegExp = /(?:^|,)\\s*?no-transform\\s*?(?:,|$)/",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1729995193",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3317,
+        "pr_file": "src/middleware/compress/index.ts",
+        "discussion_id": "1729995193",
+        "commented_code": "@@ -4,20 +4,25 @@\n  */\n \n import type { MiddlewareHandler } from '../../types'\n+import compressible from './compressible'\n \n const ENCODING_TYPES = ['gzip', 'deflate'] as const\n \n interface CompressionOptions {\n   encoding?: (typeof ENCODING_TYPES)[number]\n+  threshold?: number\n }\n \n+const cacheControlNoTransformRegExp = /(?:^|,)\\s*?no-transform\\s*?(?:,|$)/",
+        "comment_created_at": "2024-08-24T13:56:18+00:00",
+        "comment_author": "usualoma",
+        "comment_body": "According to https://datatracker.ietf.org/doc/html/rfc7234#section-5.2 it is case insensitive, so it is better to add `i`.\r\n\r\n```suggestion\r\nconst cacheControlNoTransformRegExp = /(?:^|,)\\s*?no-transform\\s*?(?:,|$)/i\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1540755845",
+    "pr_number": 2426,
+    "pr_file": "src/middleware/cache/index.ts",
+    "created_at": "2024-03-27T09:37:58+00:00",
+    "commented_code": "cacheName: string\n   wait?: boolean\n   cacheControl?: string\n+  vary?: string\n }): MiddlewareHandler => {\n   if (options.wait === undefined) {\n     options.wait = false\n   }\n \n-  const directives = options.cacheControl?.split(',').map((directive) => directive.toLowerCase())\n+  const cacheControlDirectives = options.cacheControl\n+    ?.split(',')\n+    .map((directive) => directive.toLowerCase())\n+  const varyDirectives = options.vary?.split(',').map((directive) => directive.trim())\n+  // RFC 7231 Section 7.1.4 specifies that \"*\" is not allowed in Vary header.\n+  // See: https://datatracker.ietf.org/doc/html/rfc7231#section-7.1.4\n+  if (varyDirectives?.includes('*')) {\n+    throw new Error(\n+      'Middleware vary configuration cannot include \"*\", as it disallows effective caching.'\n+    )",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1540755845",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 2426,
+        "pr_file": "src/middleware/cache/index.ts",
+        "discussion_id": "1540755845",
+        "commented_code": "@@ -5,28 +5,60 @@ export const cache = (options: {\n   cacheName: string\n   wait?: boolean\n   cacheControl?: string\n+  vary?: string\n }): MiddlewareHandler => {\n   if (options.wait === undefined) {\n     options.wait = false\n   }\n \n-  const directives = options.cacheControl?.split(',').map((directive) => directive.toLowerCase())\n+  const cacheControlDirectives = options.cacheControl\n+    ?.split(',')\n+    .map((directive) => directive.toLowerCase())\n+  const varyDirectives = options.vary?.split(',').map((directive) => directive.trim())\n+  // RFC 7231 Section 7.1.4 specifies that \"*\" is not allowed in Vary header.\n+  // See: https://datatracker.ietf.org/doc/html/rfc7231#section-7.1.4\n+  if (varyDirectives?.includes('*')) {\n+    throw new Error(\n+      'Middleware vary configuration cannot include \"*\", as it disallows effective caching.'\n+    )",
+        "comment_created_at": "2024-03-27T09:37:58+00:00",
+        "comment_author": "naporin0624",
+        "comment_body": "> A proxy MUST NOT generate a Vary field with a \"*\" value.\r\n\r\ncf: https://datatracker.ietf.org/doc/html/rfc7231#section-7.1.4\r\n\r\nSeeing this in the RFC, we now throw when `Vary` is set to `*`.\r\n\r\nPlease check this.\r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1542241348",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 2426,
+        "pr_file": "src/middleware/cache/index.ts",
+        "discussion_id": "1540755845",
+        "commented_code": "@@ -5,28 +5,60 @@ export const cache = (options: {\n   cacheName: string\n   wait?: boolean\n   cacheControl?: string\n+  vary?: string\n }): MiddlewareHandler => {\n   if (options.wait === undefined) {\n     options.wait = false\n   }\n \n-  const directives = options.cacheControl?.split(',').map((directive) => directive.toLowerCase())\n+  const cacheControlDirectives = options.cacheControl\n+    ?.split(',')\n+    .map((directive) => directive.toLowerCase())\n+  const varyDirectives = options.vary?.split(',').map((directive) => directive.trim())\n+  // RFC 7231 Section 7.1.4 specifies that \"*\" is not allowed in Vary header.\n+  // See: https://datatracker.ietf.org/doc/html/rfc7231#section-7.1.4\n+  if (varyDirectives?.includes('*')) {\n+    throw new Error(\n+      'Middleware vary configuration cannot include \"*\", as it disallows effective caching.'\n+    )",
+        "comment_created_at": "2024-03-28T02:37:38+00:00",
+        "comment_author": "yusukebe",
+        "comment_body": "I think this is a good behavior.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1540757393",
+    "pr_number": 2426,
+    "pr_file": "src/middleware/cache/index.ts",
+    "created_at": "2024-03-27T09:39:08+00:00",
+    "commented_code": "cacheName: string\n   wait?: boolean\n   cacheControl?: string\n+  vary?: string\n }): MiddlewareHandler => {\n   if (options.wait === undefined) {\n     options.wait = false\n   }\n \n-  const directives = options.cacheControl?.split(',').map((directive) => directive.toLowerCase())\n+  const cacheControlDirectives = options.cacheControl\n+    ?.split(',')\n+    .map((directive) => directive.toLowerCase())\n+  const varyDirectives = options.vary?.split(',').map((directive) => directive.trim())\n+  // RFC 7231 Section 7.1.4 specifies that \"*\" is not allowed in Vary header.\n+  // See: https://datatracker.ietf.org/doc/html/rfc7231#section-7.1.4\n+  if (varyDirectives?.includes('*')) {\n+    throw new Error(\n+      'Middleware vary configuration cannot include \"*\", as it disallows effective caching.'\n+    )\n+  }\n \n   const addHeader = (c: Context) => {\n-    if (directives) {\n+    if (cacheControlDirectives) {\n       const existingDirectives =\n         c.res.headers\n           .get('Cache-Control')\n           ?.split(',')\n           .map((d) => d.trim().split('=', 1)[0]) ?? []\n-      for (const directive of directives) {\n+      for (const directive of cacheControlDirectives) {\n         let [name, value] = directive.trim().split('=', 2)\n         name = name.toLowerCase()\n         if (!existingDirectives.includes(name)) {\n           c.header('Cache-Control', `${name}${value ? `=${value}` : ''}`, { append: true })\n         }\n       }\n     }\n+\n+    if (varyDirectives) {\n+      const existingDirectives =\n+        c.res.headers\n+          .get('Vary')\n+          ?.split(',')\n+          .map((d) => d.trim()) ?? []\n+      const vary = Array.from(\n+        new Set(\n+          [...existingDirectives, ...varyDirectives].map((directive) =>\n+            directive.toLocaleLowerCase()\n+          )\n+        )\n+      ).sort((a, b) => a.localeCompare(b))",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1540757393",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 2426,
+        "pr_file": "src/middleware/cache/index.ts",
+        "discussion_id": "1540757393",
+        "commented_code": "@@ -5,28 +5,60 @@ export const cache = (options: {\n   cacheName: string\n   wait?: boolean\n   cacheControl?: string\n+  vary?: string\n }): MiddlewareHandler => {\n   if (options.wait === undefined) {\n     options.wait = false\n   }\n \n-  const directives = options.cacheControl?.split(',').map((directive) => directive.toLowerCase())\n+  const cacheControlDirectives = options.cacheControl\n+    ?.split(',')\n+    .map((directive) => directive.toLowerCase())\n+  const varyDirectives = options.vary?.split(',').map((directive) => directive.trim())\n+  // RFC 7231 Section 7.1.4 specifies that \"*\" is not allowed in Vary header.\n+  // See: https://datatracker.ietf.org/doc/html/rfc7231#section-7.1.4\n+  if (varyDirectives?.includes('*')) {\n+    throw new Error(\n+      'Middleware vary configuration cannot include \"*\", as it disallows effective caching.'\n+    )\n+  }\n \n   const addHeader = (c: Context) => {\n-    if (directives) {\n+    if (cacheControlDirectives) {\n       const existingDirectives =\n         c.res.headers\n           .get('Cache-Control')\n           ?.split(',')\n           .map((d) => d.trim().split('=', 1)[0]) ?? []\n-      for (const directive of directives) {\n+      for (const directive of cacheControlDirectives) {\n         let [name, value] = directive.trim().split('=', 2)\n         name = name.toLowerCase()\n         if (!existingDirectives.includes(name)) {\n           c.header('Cache-Control', `${name}${value ? `=${value}` : ''}`, { append: true })\n         }\n       }\n     }\n+\n+    if (varyDirectives) {\n+      const existingDirectives =\n+        c.res.headers\n+          .get('Vary')\n+          ?.split(',')\n+          .map((d) => d.trim()) ?? []\n+      const vary = Array.from(\n+        new Set(\n+          [...existingDirectives, ...varyDirectives].map((directive) =>\n+            directive.toLocaleLowerCase()\n+          )\n+        )\n+      ).sort((a, b) => a.localeCompare(b))",
+        "comment_created_at": "2024-03-27T09:39:08+00:00",
+        "comment_author": "naporin0624",
+        "comment_body": "I sorted the `Vary` to be given to the header, but I am willing to remove it if it affects performance.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1542243672",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 2426,
+        "pr_file": "src/middleware/cache/index.ts",
+        "discussion_id": "1540757393",
+        "commented_code": "@@ -5,28 +5,60 @@ export const cache = (options: {\n   cacheName: string\n   wait?: boolean\n   cacheControl?: string\n+  vary?: string\n }): MiddlewareHandler => {\n   if (options.wait === undefined) {\n     options.wait = false\n   }\n \n-  const directives = options.cacheControl?.split(',').map((directive) => directive.toLowerCase())\n+  const cacheControlDirectives = options.cacheControl\n+    ?.split(',')\n+    .map((directive) => directive.toLowerCase())\n+  const varyDirectives = options.vary?.split(',').map((directive) => directive.trim())\n+  // RFC 7231 Section 7.1.4 specifies that \"*\" is not allowed in Vary header.\n+  // See: https://datatracker.ietf.org/doc/html/rfc7231#section-7.1.4\n+  if (varyDirectives?.includes('*')) {\n+    throw new Error(\n+      'Middleware vary configuration cannot include \"*\", as it disallows effective caching.'\n+    )\n+  }\n \n   const addHeader = (c: Context) => {\n-    if (directives) {\n+    if (cacheControlDirectives) {\n       const existingDirectives =\n         c.res.headers\n           .get('Cache-Control')\n           ?.split(',')\n           .map((d) => d.trim().split('=', 1)[0]) ?? []\n-      for (const directive of directives) {\n+      for (const directive of cacheControlDirectives) {\n         let [name, value] = directive.trim().split('=', 2)\n         name = name.toLowerCase()\n         if (!existingDirectives.includes(name)) {\n           c.header('Cache-Control', `${name}${value ? `=${value}` : ''}`, { append: true })\n         }\n       }\n     }\n+\n+    if (varyDirectives) {\n+      const existingDirectives =\n+        c.res.headers\n+          .get('Vary')\n+          ?.split(',')\n+          .map((d) => d.trim()) ?? []\n+      const vary = Array.from(\n+        new Set(\n+          [...existingDirectives, ...varyDirectives].map((directive) =>\n+            directive.toLocaleLowerCase()\n+          )\n+        )\n+      ).sort((a, b) => a.localeCompare(b))",
+        "comment_created_at": "2024-03-28T02:42:22+00:00",
+        "comment_author": "yusukebe",
+        "comment_body": "This is a matter for discussion, but I think sorting is good. Because there are cases where the cache keys are different if the header values are in a different order.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1445972787",
+    "pr_number": 1922,
+    "pr_file": "src/middleware/cache/index.test.ts",
+    "created_at": "2024-01-09T11:29:24+00:00",
+    "commented_code": "})\n \n   app.use('/wait2/*', cache({ cacheName: 'my-app-v1', wait: true, cacheControl: 'max-age=10' }))\n-  app.use('/wait2/*', cache({ cacheName: 'my-app-v1', wait: true, cacheControl: 'max-age=10' }))\n+  app.use('/wait2/*', cache({ cacheName: 'my-app-v1', wait: true, cacheControl: 'max-age=20' }))",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1445972787",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 1922,
+        "pr_file": "src/middleware/cache/index.test.ts",
+        "discussion_id": "1445972787",
+        "commented_code": "@@ -31,11 +31,23 @@ describe('Cache Middleware', () => {\n   })\n \n   app.use('/wait2/*', cache({ cacheName: 'my-app-v1', wait: true, cacheControl: 'max-age=10' }))\n-  app.use('/wait2/*', cache({ cacheName: 'my-app-v1', wait: true, cacheControl: 'max-age=10' }))\n+  app.use('/wait2/*', cache({ cacheName: 'my-app-v1', wait: true, cacheControl: 'max-age=20' }))",
+        "comment_created_at": "2024-01-09T11:29:24+00:00",
+        "comment_author": "yusukebe",
+        "comment_body": "If `max-age=20` is `Max-age=20`, the test will fail. If it compares the names of the directives, I think we have to make all uppercase letters lowercase first.\r\n\r\nIf there is a cost to lowercase, you might prefer to lowercase everything first, even if only `directives`.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

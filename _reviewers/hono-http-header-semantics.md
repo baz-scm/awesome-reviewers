@@ -1,21 +1,35 @@
 ---
 title: HTTP header semantics
-description: 'When reading, merging, or mutating HTTP headers in middleware/proxy/helper
-  code, implement behavior that matches the HTTP spec rather than naive string checks.
-  Concretely:'
-repository: HONOJS/HONO
+description: When implementing networking middleware (proxy, compress, CORS, etc.),
+  handle HTTP headers according to their exact RFC semantics rather than naive string
+  checks, and be deliberate about merge/overwrite order.
+repository: honojs/Hono
 label: Networking
 language: TypeScript
-comments_count: 9
+comments_count: 8
 repository_stars: 32741
 ---
 
-When reading, merging, or mutating HTTP headers in middleware/proxy/helper code, implement behavior that matches the HTTP spec rather than naive string checks. Concretely:
+When implementing networking middleware (proxy, compress, CORS, etc.), handle HTTP headers according to their exact RFC semantics rather than naive string checks, and be deliberate about merge/overwrite order.
 
-- Parse multi-value headers (e.g. `Accept-Encoding`, `Connection`) properly, honoring quality values (`q=0` means "not acceptable"), wildcards (`*`), and case-insensitive tokens, instead of using `String#includes`. For example, prefer a proper accept-parsing helper over `accepted?.includes(options.encoding)`.
-- Use the `Headers` API idioms correctly: `headers.has('Content-Encoding')` instead of truthiness checks on `get`, and don't `.toLowerCase()` header names before `Headers#delete/get/set` since `Headers` already normalizes case.
-- When merging/forwarding headers (proxy, CORS `Vary`, duplicate request headers), decide explicitly between `append` (to preserve multiple values) and `set` (to replace), and merge existing values instead of blindly overwriting them, e.g. union the existing `Vary` header with `Origin` rather than replacing it.
-- Be careful with the order of object spreads when combining computed defaults with user-supplied `RequestInit`/options so that explicit user values win (or lose) predictably — don't let a later spread silently clobber `headers`, `method`, `body`, or `duplex`.
-- Only strip/rewrite response headers like `Content-Length`/`Content-Range` when semantically required (e.g. strip `Content-Length` only if the body was recompressed; preserve `Content-Range` as-is), and verify side effects in tests (e.g. a deleted cookie must produce `Set-Cookie: name=; Max-Age=0`, not a missing header).
-
-Add targeted tests for these edge cases (case variations, multiple headers, q-values, wildcards, overwritten options) to prevent regressions, since header-handling bugs are easy to introduce and hard to notice.
+- Parse multi-value headers (e.g. `Accept-Encoding`, `Connection`) properly: respect q-values, wildcards, case-insensitivity, and comma-separated tokens instead of using `String.includes()`, which gives false positives/negatives (e.g. matching `x-gzip` as `gzip`).
+- When merging options into a base `RequestInit`/header set, be explicit about which side wins. Spread user-supplied overrides *before* setting required fields so they can't silently clobber critical values, or vice versa depending on intent — but always document and test the resulting precedence:
+  ```ts
+  // user-supplied requestInit must not override required fields
+  const init: RequestInit = {
+    ...requestInit,
+    method: request.method,
+    body: request.body,
+    duplex: request.body ? 'half' : undefined,
+    headers,
+  }
+  ```
+- For headers that combine across requests/responses (e.g. `Vary`), merge with existing values instead of overwriting:
+  ```ts
+  const vary = new Set(c.res.headers.get('Vary')?.split(/\s*,\s*/) ?? [])
+  vary.add('Origin')
+  set('Vary', [...vary].join(', '))
+  ```
+- When one header changes the semantics of another (e.g. re-compressing a body invalidates `Content-Length`, or stripping `Content-Encoding` while keeping `Content-Range`), reason through RFC-defined dependencies rather than deleting/keeping headers unconditionally. Only remove/modify what is actually invalidated.
+- Use header APIs that normalize names/values for you (`Headers#delete`, `Headers#has`) instead of manual case normalization, and prefer `append` vs `set` deliberately based on whether duplicate values are expected.
+- Add targeted tests covering RFC edge cases (q=0, wildcard `*`, case differences, duplicate headers, compressed vs. uncompressed responses) to lock in correct behavior.

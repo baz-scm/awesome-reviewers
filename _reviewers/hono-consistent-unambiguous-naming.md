@@ -1,39 +1,39 @@
 ---
 title: Consistent, unambiguous naming
-description: Names must be consistent with existing conventions elsewhere in the codebase
-  and must clearly convey their purpose and scope, avoiding ambiguity or collisions.
-repository: honojs/hono
+description: Choose identifier names that are unambiguous, self-explanatory, and consistent
+  with existing conventions already used elsewhere in the codebase or in the relevant
+  external spec/ecosystem. Before introducing a new name, check how similar concepts
+  are named in sibling modules (e.g. other middlewares, adapters, generics) and reuse
+  that convention rather than...
+repository: honojs/Hono
 label: Naming Conventions
 language: TypeScript
-comments_count: 17
+comments_count: 15
 repository_stars: 32741
 ---
 
-Names must be consistent with existing conventions elsewhere in the codebase and must clearly convey their purpose and scope, avoiding ambiguity or collisions.
+Choose identifier names that are unambiguous, self-explanatory, and consistent with existing conventions already used elsewhere in the codebase or in the relevant external spec/ecosystem. Before introducing a new name, check how similar concepts are named in sibling modules (e.g. other middlewares, adapters, generics) and reuse that convention rather than inventing a new one.
 
-Apply the following when naming identifiers:
-- Reuse the naming pattern already established for similar concepts instead of inventing a new one. For example, use `headerName` to match the JWT middleware instead of introducing `authorization`, use the generic parameter `E` instead of `TEnv` to match the rest of the codebase, and keep platform-specific exports like `toSSG` consistent across adapters rather than renaming per-platform (`toDenoSSG`).
-- Prefer explicit, descriptive names over shortening or reusing a borrowed/external name verbatim. Internal utility names can stay short if well-documented, but publicly exported or widely-used identifiers should describe what they do (e.g., prefer `headerName`-style clarity over a playful name like `fetchRP` without context).
-- Avoid names that are ambiguous about their scope or usage. If an option/property applies to only part of a larger API surface, name it accordingly (e.g., `defaultAppOptions` instead of `defaultOptions` on a `Factory` that also creates middleware and handlers).
-- Do not let a parameter shadow the name of its enclosing function or another identifier in scope; pick a distinct name (e.g., rename a `generateDigest` parameter to `generator` inside a `generateDigest` function).
-- When extending or wrapping a well-known external type, prefix it with the project name to signal the difference (e.g., `HonoJsonWebKey` extending `JsonWebKey`), and export such types from a shared location if they're used across multiple modules.
-- For generic/compound type fields whose names could be confused with each other (e.g., an `Input` type with both `input` and `output` keys), pick short, distinct names that reduce ambiguity, such as `in`/`out`.
-- All middleware and handlers returned from factory functions must be named function expressions, not anonymous functions, so the name is visible for debugging/dev tooling:
+Specifically:
+- Prefer names whose meaning is unambiguous even without reading the docs. Avoid terms that can be read in opposite ways (e.g. `strict` was rejected because it was unclear whether `true` meant "always redirect" or "only on 404"; it was replaced with the explicit `alwaysRedirect`). Likewise avoid overloading well-known terms incorrectly (e.g. don't call something a "Factory" if it's a single function, not something that creates multiple instances — use `ExceptionFunction`/`HTTPExceptionFunction` instead).
+- Reuse the same option/parameter name across similar APIs. If one middleware uses `headerName` to configure a header, a new middleware with the same concept should also use `headerName` rather than `header` or `authorization`.
+- When exporting a named function for a middleware/handler, make sure the function's internal name matches its exported/public name (e.g. `export const languageDetector = ... return async function languageDetector(...)`), and always use a named function (not an anonymous one) so it's identifiable in stack traces/debugging tools.
+- When introducing a type/option that is specific to this project (not part of a native/standard type), prefix it clearly (e.g. `HonoJsonWebKey` extends the standard `JsonWebKey`) and export it consistently from the shared types module.
+- When wrapping or re-declaring web/platform APIs (HTML attributes, DOM options, etc.), match the exact casing/spelling defined by the official spec or MDN documentation rather than guessing (e.g. `srcdoc`, `datetime`, `disablePictureInPicture`).
+- Use the same generic type parameter conventions already established in the codebase (e.g. `E` for `Env`, not `TEnv`) and keep naming consistent across platform-specific builds (e.g. keep `toSSG` consistent between `deno`/`bun` adapters instead of renaming per-platform).
+- Double check for typos in exported names (e.g. `Uint` → `Unit`) since these become part of the public API and are hard to fix later.
+
+Example:
 ```ts
-// Good
-export const contextStorage = (): MiddlewareHandler => {
-  return async function contextStorage(c, next) {
-    ...
-  }
+// Bad: ambiguous option name, anonymous function, inconsistent with sibling middleware
+export const myMiddleware = (options: { authorization?: string; strict?: boolean }) => {
+  return async (c, next) => { ... }
 }
 
-// Avoid
-export const contextStorage = (): MiddlewareHandler => {
-  return async (c, next) => {
-    ...
-  }
+// Good: name matches existing convention, named function, avoids ambiguity
+export const myMiddleware = (options: { headerName?: string; alwaysRedirect?: boolean }) => {
+  return async function myMiddleware(c, next) { ... }
 }
 ```
-- When modeling well-known external specs (e.g., native HTML attributes), match the external casing/spelling convention exactly (e.g., `srcdoc`, `datetime` as lowercase HTML attributes) while keeping JS-only/non-standard properties in camelCase (e.g., `disablePictureInPicture`, `disableRemotePlayback`).
 
-Following these rules keeps the API surface predictable, reduces confusion for both maintainers and consumers, and makes debugging easier.
+Applying this standard reduces confusion during code review, prevents churn from repeated renames, and keeps the public API coherent across the whole library.

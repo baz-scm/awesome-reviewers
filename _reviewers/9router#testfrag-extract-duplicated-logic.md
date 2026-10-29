@@ -1,39 +1,41 @@
 ---
 title: Extract duplicated logic
-description: When the same logic (parsing, HTTP calls, header construction, token
-  unwrapping, or computed values like finish-reason) appears in more than one place—whether
-  across different files or in separate branches of the same function—extract it into
-  a single shared helper function or module instead of duplicating the implementation.
-  Duplicated code increases the...
+description: 'When the same or near-identical logic appears in more than one place—whether
+  in separate files, separate classes, or separate branches of the same function—extract
+  it into a single shared helper, module, or service method rather than copy-pasting.
+  Duplicated code drifts over time: a bug fix or behavior change applied to one copy
+  is easily forgotten in the...'
 repository: decolua/9router#testfrag
 label: Code Style
 language: JavaScript
 comments_count: 3
-repository_stars: 31419
+repository_stars: 31643
 ---
 
-When the same logic (parsing, HTTP calls, header construction, token unwrapping, or computed values like finish-reason) appears in more than one place—whether across different files or in separate branches of the same function—extract it into a single shared helper function or module instead of duplicating the implementation. Duplicated code increases the risk that a future bug fix or behavior change is applied in only one location, causing silent drift between the copies.
+When the same or near-identical logic appears in more than one place—whether in separate files, separate classes, or separate branches of the same function—extract it into a single shared helper, module, or service method rather than copy-pasting. Duplicated code drifts over time: a bug fix or behavior change applied to one copy is easily forgotten in the other(s), leading to inconsistent behavior.
 
 Apply this by:
-- Identifying a canonical home for the shared logic (e.g., a `concerns/` utility module or an existing service class) and having all call sites import/delegate to it, rather than copy-pasting.
-- When duplication occurs within a single function (e.g., identical logic computed in two conditional branches), factor it into a small named helper, e.g. `computeFinishReason(state)`, and call it from both branches.
-- Preferring delegation to an existing service over introducing a second implementation, e.g. `ZedExecutor.refreshCredentials()` should delegate to `ZedService.refreshLlmToken()` rather than reimplementing the HTTP call and token-unwrap logic inline.
+1. Identifying repeated blocks (e.g., identical HTTP calls, same header construction, same parsing/unwrap logic, or the same computation performed in two code paths).
+2. Moving the shared logic into a single function/module (e.g., a `concerns/` utility, a shared service method, or a small helper function) and having all call sites use it.
+3. Naming the extracted helper clearly to convey intent (e.g., `computeFinishReason(state)` instead of inlining the same finish-reason calculation twice).
 
-Example refactor:
+Example:
 ```js
-// Before: duplicated in two files
-function sanitizeToolArgs(toolName, argsJson) {
-  const repaired = repairDuplicatedJsonArguments(argsJson); // defined locally
+// Before: same finish-reason logic duplicated in two branches
+if (flushPath) {
+  const finishReason = state.toolCallIndex > 0 ? "tool_calls" : "stop";
+  ...
+}
+if (completedPath) {
+  const finishReason = state.toolCallIndex > 0 ? "tool_calls" : "stop";
   ...
 }
 
-// After: shared module
-// open-sse/translator/concerns/toolArgs.js
-export function repairDuplicatedJsonArguments(raw) { ... }
-export function appendToolArgs(...) { ... }
-
-// openai-to-claude.js & kiro-to-claude.js
-import { repairDuplicatedJsonArguments } from "../concerns/toolArgs.js";
+// After: single source of truth
+function computeFinishReason(state) {
+  return state.toolCallIndex > 0 || state.currentToolCallId ? "tool_calls" : "stop";
+}
 ```
 
-This keeps behavior consistent, reduces maintenance burden, and improves readability by giving the shared logic one clear, well-named location.
+This keeps the codebase consistent, easier to review, and ensures fixes automatically apply everywhere the logic is used.</description>
+</invoke>

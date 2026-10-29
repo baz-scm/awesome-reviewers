@@ -1,0 +1,296 @@
+[
+  {
+    "discussion_id": "3279632103",
+    "pr_number": 4951,
+    "pr_file": "src/middleware/compress/index.ts",
+    "created_at": "2026-05-21T08:11:32+00:00",
+    "commented_code": "}\n \n     const accepted = ctx.req.header('Accept-Encoding')\n-    const encoding =\n-      options?.encoding ?? ENCODING_TYPES.find((encoding) => accepted?.includes(encoding))\n+    const encoding = options?.encoding\n+      ? accepted?.includes(options.encoding)\n+        ? options.encoding\n+        : undefined\n+      : ENCODING_TYPES.find((encoding) => accepted?.includes(encoding))",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "3279632103",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 4951,
+        "pr_file": "src/middleware/compress/index.ts",
+        "discussion_id": "3279632103",
+        "commented_code": "@@ -52,8 +52,11 @@ export const compress = (options?: CompressionOptions): MiddlewareHandler => {\n     }\n \n     const accepted = ctx.req.header('Accept-Encoding')\n-    const encoding =\n-      options?.encoding ?? ENCODING_TYPES.find((encoding) => accepted?.includes(encoding))\n+    const encoding = options?.encoding\n+      ? accepted?.includes(options.encoding)\n+        ? options.encoding\n+        : undefined\n+      : ENCODING_TYPES.find((encoding) => accepted?.includes(encoding))",
+        "comment_created_at": "2026-05-21T08:11:32+00:00",
+        "comment_author": "yusukebe",
+        "comment_body": "`includes` can not cover all cases.\n\nI think the following patch should be applied:\n\n```diff\ndiff --git a/src/middleware/compress/index.test.ts b/src/middleware/compress/index.test.ts\nindex 827c74ef..e62b5ac3 100644\n--- a/src/middleware/compress/index.test.ts\n+++ b/src/middleware/compress/index.test.ts\n@@ -301,6 +301,86 @@ describe('Compress Middleware', () => {\n       expect(res.headers.get('Content-Encoding')).toBeNull()\n     })\n   })\n+\n+  describe('Accept-Encoding parsing', () => {\n+    const buildAppDefault = () => {\n+      const app = new Hono()\n+      app.use('*', compress())\n+      app.get('/large', (c) => {\n+        c.header('Content-Type', 'text/plain')\n+        c.header('Content-Length', '1024')\n+        return c.text('a'.repeat(1024))\n+      })\n+      return app\n+    }\n+\n+    const buildAppWithEncoding = (encoding: 'gzip' | 'deflate') => {\n+      const app = new Hono()\n+      app.use('*', compress({ encoding }))\n+      app.get('/large', (c) => {\n+        c.header('Content-Type', 'text/plain')\n+        c.header('Content-Length', '1024')\n+        return c.text('a'.repeat(1024))\n+      })\n+      return app\n+    }\n+\n+    it('should not compress when configured encoding has q=0', async () => {\n+      const app = buildAppWithEncoding('gzip')\n+      const res = await app.request('/large', {\n+        headers: { 'Accept-Encoding': 'gzip;q=0' },\n+      })\n+      expect(res.headers.get('Content-Encoding')).toBeNull()\n+    })\n+\n+    it('should fall back to another encoding when the preferred one has q=0', async () => {\n+      const app = buildAppDefault()\n+      const res = await app.request('/large', {\n+        headers: { 'Accept-Encoding': 'gzip;q=0, deflate' },\n+      })\n+      expect(res.headers.get('Content-Encoding')).toBe('deflate')\n+    })\n+\n+    it('should compress when Accept-Encoding is the wildcard *', async () => {\n+      const app = buildAppWithEncoding('gzip')\n+      const res = await app.request('/large', {\n+        headers: { 'Accept-Encoding': '*' },\n+      })\n+      expect(res.headers.get('Content-Encoding')).toBe('gzip')\n+    })\n+\n+    it('should compress when Accept-Encoding token differs only in case', async () => {\n+      const app = buildAppWithEncoding('gzip')\n+      const res = await app.request('/large', {\n+        headers: { 'Accept-Encoding': 'GZIP' },\n+      })\n+      expect(res.headers.get('Content-Encoding')).toBe('gzip')\n+    })\n+\n+    it('should not treat x-gzip as gzip', async () => {\n+      const app = buildAppWithEncoding('gzip')\n+      const res = await app.request('/large', {\n+        headers: { 'Accept-Encoding': 'x-gzip' },\n+      })\n+      expect(res.headers.get('Content-Encoding')).toBeNull()\n+    })\n+\n+    it('should pick the encoding with the highest q value', async () => {\n+      const app = buildAppDefault()\n+      const res = await app.request('/large', {\n+        headers: { 'Accept-Encoding': 'gzip;q=0.5, deflate;q=0.9' },\n+      })\n+      expect(res.headers.get('Content-Encoding')).toBe('deflate')\n+    })\n+\n+    it('should prefer gzip over deflate when q values are equal', async () => {\n+      const app = buildAppDefault()\n+      const res = await app.request('/large', {\n+        headers: { 'Accept-Encoding': 'gzip;q=0.5, deflate;q=0.5' },\n+      })\n+      expect(res.headers.get('Content-Encoding')).toBe('gzip')\n+    })\n+  })\n })\n \n async function decompressResponse(res: Response): Promise<string> {\ndiff --git a/src/middleware/compress/index.ts b/src/middleware/compress/index.ts\nindex e400eaf0..5e08e572 100644\n--- a/src/middleware/compress/index.ts\n+++ b/src/middleware/compress/index.ts\n@@ -4,16 +4,38 @@\n  */\n \n import type { MiddlewareHandler } from '../../types'\n+import { parseAccept } from '../../utils/accept'\n import { COMPRESSIBLE_CONTENT_TYPE_REGEX } from '../../utils/compress'\n \n const ENCODING_TYPES = ['gzip', 'deflate'] as const\n+type Encoding = (typeof ENCODING_TYPES)[number]\n const cacheControlNoTransformRegExp = /(?:^|,)\\s*?no-transform\\s*?(?:,|$)/i\n \n interface CompressionOptions {\n-  encoding?: (typeof ENCODING_TYPES)[number]\n+  encoding?: Encoding\n   threshold?: number\n }\n \n+const selectEncoding = (\n+  header: string | undefined,\n+  candidates: readonly Encoding[]\n+): Encoding | undefined => {\n+  if (header === undefined) {\n+    return undefined\n+  }\n+  const accepts = parseAccept(header)\n+  const wildcardQ = accepts.find((a) => a.type === '*')?.q\n+  let best: { encoding: Encoding; q: number } | undefined\n+  for (const enc of candidates) {\n+    const explicit = accepts.find((a) => a.type.toLowerCase() === enc)\n+    const q = explicit ? explicit.q : (wildcardQ ?? 0)\n+    if (q > 0 && (!best || q > best.q)) {\n+      best = { encoding: enc, q }\n+    }\n+  }\n+  return best?.encoding\n+}\n+\n /**\n  * Compress Middleware for Hono.\n  *\n@@ -33,6 +55,7 @@ interface CompressionOptions {\n  */\n export const compress = (options?: CompressionOptions): MiddlewareHandler => {\n   const threshold = options?.threshold ?? 1024\n+  const candidates: readonly Encoding[] = options?.encoding ? [options.encoding] : ENCODING_TYPES\n \n   return async function compress(ctx, next) {\n     await next()\n@@ -52,11 +75,7 @@ export const compress = (options?: CompressionOptions): MiddlewareHandler => {\n     }\n \n     const accepted = ctx.req.header('Accept-Encoding')\n-    const encoding = options?.encoding\n-      ? accepted?.includes(options.encoding)\n-        ? options.encoding\n-        : undefined\n-      : ENCODING_TYPES.find((encoding) => accepted?.includes(encoding))\n+    const encoding = selectEncoding(accepted, candidates)\n     if (!encoding || !ctx.res.body) {\n       return\n     }\n\n```\n\nHey @usualoma ! What do you think of this? If you have some time, can you take a look?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2430547359",
+    "pr_number": 4459,
+    "pr_file": "src/helper/proxy/index.ts",
+    "created_at": "2025-10-14T21:38:43+00:00",
+    "commented_code": "}\n \n   const headers = new Headers(request.headers)\n+\n+  // https://datatracker.ietf.org/doc/html/rfc9110#section-7.6.1\n+  // Parse Connection header and remove listed headers (MUST per RFC 9110)\n+  const connectionValue = headers.get('connection')\n+  if (connectionValue) {\n+    connectionValue\n+      .split(',')\n+      .map((h) => h.trim().toLowerCase())",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "2430547359",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 4459,
+        "pr_file": "src/helper/proxy/index.ts",
+        "discussion_id": "2430547359",
+        "commented_code": "@@ -38,6 +39,17 @@ const buildRequestInitFromRequest = (\n   }\n \n   const headers = new Headers(request.headers)\n+\n+  // https://datatracker.ietf.org/doc/html/rfc9110#section-7.6.1\n+  // Parse Connection header and remove listed headers (MUST per RFC 9110)\n+  const connectionValue = headers.get('connection')\n+  if (connectionValue) {\n+    connectionValue\n+      .split(',')\n+      .map((h) => h.trim().toLowerCase())",
+        "comment_created_at": "2025-10-14T21:38:43+00:00",
+        "comment_author": "usualoma",
+        "comment_body": "The header name is normalized within `headers.delete()`, so I believe `.toLowerCase()` is unnecessary.\r\n\r\n```suggestion\r\n      .map((h) => h.trim()\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1957236580",
+    "pr_number": 3921,
+    "pr_file": "src/helper/proxy/index.ts",
+    "created_at": "2025-02-16T04:09:13+00:00",
+    "commented_code": "method: request.method,\n     body: request.body,\n     duplex: request.body ? 'half' : undefined,\n+    ...requestInit,\n     headers,",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1957236580",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3921,
+        "pr_file": "src/helper/proxy/index.ts",
+        "discussion_id": "1957236580",
+        "commented_code": "@@ -45,6 +68,7 @@ const buildRequestInitFromRequest = (\n     method: request.method,\n     body: request.body,\n     duplex: request.body ? 'half' : undefined,\n+    ...requestInit,\n     headers,",
+        "comment_created_at": "2025-02-16T04:09:13+00:00",
+        "comment_author": "BarryThePenguin",
+        "comment_body": "Previously the `headers` from `buildRequestInitFromRequest(raw)` were being overwritten by `...requestInit` on line 97\r\n\r\nhttps://github.com/honojs/hono/blob/e7fbc3e2d60a657f5a330daa59b068073f061d5e/src/helper/proxy/index.ts#L95-L98",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1957237668",
+    "pr_number": 3921,
+    "pr_file": "src/helper/proxy/index.test.ts",
+    "created_at": "2025-02-16T04:19:47+00:00",
+    "commented_code": "...c.req,\n           headers: {\n             Authorization: undefined,\n+            'X-Request-Id': '123',\n           },\n         })\n       )\n       const res = await app.request('/proxy/no-propagate', {\n         headers: {\n           Authorization: 'Bearer 123',\n+          'X-Request-Id': '123',\n         },\n       })\n       const req = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]\n       expect(req.headers.get('Authorization')).toBeNull()\n+      expect(req.headers.get('X-Request-Id')).toBe('123, 123')",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1957237668",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3921,
+        "pr_file": "src/helper/proxy/index.test.ts",
+        "discussion_id": "1957237668",
+        "commented_code": "@@ -191,16 +191,19 @@ describe('Proxy Middleware', () => {\n           ...c.req,\n           headers: {\n             Authorization: undefined,\n+            'X-Request-Id': '123',\n           },\n         })\n       )\n       const res = await app.request('/proxy/no-propagate', {\n         headers: {\n           Authorization: 'Bearer 123',\n+          'X-Request-Id': '123',\n         },\n       })\n       const req = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]\n       expect(req.headers.get('Authorization')).toBeNull()\n+      expect(req.headers.get('X-Request-Id')).toBe('123, 123')",
+        "comment_created_at": "2025-02-16T04:19:47+00:00",
+        "comment_author": "BarryThePenguin",
+        "comment_body": "Duplicate request headers using `Header#append`. Alternatively, using `Header#set`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1957238834",
+    "pr_number": 3921,
+    "pr_file": "src/helper/proxy/index.ts",
+    "created_at": "2025-02-16T04:31:32+00:00",
+    "commented_code": "method: request.method,\n     body: request.body,\n     duplex: request.body ? 'half' : undefined,\n+    ...requestInit,\n     headers,",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1957238834",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3921,
+        "pr_file": "src/helper/proxy/index.ts",
+        "discussion_id": "1957238834",
+        "commented_code": "@@ -45,6 +68,7 @@ const buildRequestInitFromRequest = (\n     method: request.method,\n     body: request.body,\n     duplex: request.body ? 'half' : undefined,\n+    ...requestInit,\n     headers,",
+        "comment_created_at": "2025-02-16T04:31:32+00:00",
+        "comment_author": "BarryThePenguin",
+        "comment_body": "Looking at this again, maybe this should actually be..\r\n\r\n```suggestion\r\n    ...requestInit,\r\n    method: request.method,\r\n    body: request.body,\r\n    duplex: request.body ? 'half' : undefined,\r\n    headers,\r\n```\r\n\r\n..to avoid `requestInit` overwriting any of `method`, `body`, `duplex` and `headers`?",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1822618482",
+    "pr_number": 3589,
+    "pr_file": "src/helper/proxy/index.ts",
+    "created_at": "2024-10-30T13:22:38+00:00",
+    "commented_code": "+/**\n+ * @module\n+ * Proxy Helper for Hono.\n+ */\n+\n+/*\n+ * The following headers will be deleted from the response:\n+ * * Content-Encoding\n+ * * Content-Length\n+ * * Content-Range\n+ */\n+const forceDeleteResponseHeaderNames = ['Content-Encoding', 'Content-Length', 'Content-Range']",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1822618482",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3589,
+        "pr_file": "src/helper/proxy/index.ts",
+        "discussion_id": "1822618482",
+        "commented_code": "@@ -0,0 +1,85 @@\n+/**\n+ * @module\n+ * Proxy Helper for Hono.\n+ */\n+\n+/*\n+ * The following headers will be deleted from the response:\n+ * * Content-Encoding\n+ * * Content-Length\n+ * * Content-Range\n+ */\n+const forceDeleteResponseHeaderNames = ['Content-Encoding', 'Content-Length', 'Content-Range']",
+        "comment_created_at": "2024-10-30T13:22:38+00:00",
+        "comment_author": "haochenx",
+        "comment_body": "i'm not sure about `Content-Length` and `Content-Range`, as if the original request is for a byte range, the semantics is not preserved. a probable semantically correct implementation:\r\n\r\n1. if the original request contains `Range` header, fast-fail with 400 status code\r\n1. strip `Accept-Range` from response header\r\n2. indicate upstream error if response header contain `Content-Range`\r\n\r\n`Content-Length` should be left alone in all case IMO",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1823406141",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3589,
+        "pr_file": "src/helper/proxy/index.ts",
+        "discussion_id": "1822618482",
+        "commented_code": "@@ -0,0 +1,85 @@\n+/**\n+ * @module\n+ * Proxy Helper for Hono.\n+ */\n+\n+/*\n+ * The following headers will be deleted from the response:\n+ * * Content-Encoding\n+ * * Content-Length\n+ * * Content-Range\n+ */\n+const forceDeleteResponseHeaderNames = ['Content-Encoding', 'Content-Length', 'Content-Range']",
+        "comment_created_at": "2024-10-30T21:19:53+00:00",
+        "comment_author": "usualoma",
+        "comment_body": "Thank you! This certainly needs fixing.\r\n\r\n### Content-Length\r\n\r\nAs you can see from the results below, in the case of a compressed response, Content-Length is the \u201csize after compression\u201d, so it cannot be returned as is.\r\n\r\n```\r\n% curl -I 'https://example.com/'\r\nHTTP/2 200\r\naccept-ranges: bytes\r\nage: 526496\r\ncache-control: max-age=604800\r\ncontent-type: text/html; charset=UTF-8\r\ndate: Wed, 30 Oct 2024 21:13:42 GMT\r\netag: \"3147526947\"\r\nexpires: Wed, 06 Nov 2024 21:13:42 GMT\r\nlast-modified: Thu, 17 Oct 2019 07:18:26 GMT\r\nserver: ECAcc (lac/55F5)\r\nx-cache: HIT\r\ncontent-length: 1256\r\n% curl --compressed --raw -i 'https://example.com/'\r\nHTTP/2 200\r\ncontent-encoding: gzip\r\nage: 527039\r\ncache-control: max-age=604800\r\ncontent-type: text/html; charset=UTF-8\r\ndate: Wed, 30 Oct 2024 21:07:12 GMT\r\netag: \"3147526947+gzip\"\r\nexpires: Wed, 06 Nov 2024 21:07:12 GMT\r\nlast-modified: Thu, 17 Oct 2019 07:18:26 GMT\r\nserver: ECAcc (lac/55AA)\r\nvary: Accept-Encoding\r\nx-cache: HIT\r\ncontent-length: 648\r\n```\r\n\r\n* Delete <- This is the current implementation\r\n* Load the body and reset it <- There is an overhead because you have to clone() and load all the data\r\n\r\nSome people may expect the latter, but since hono does not actively add Content-Length to other requests either, I think this is a reasonable response for hono.\r\n\r\nHowever, if there is no `Content-Encoding` in the first place, there is no need to delete the `Content-Length`. I think this should be improved.\r\n\r\n\r\n### Content-Range\r\n\r\nI think the current implementation is incorrect.\r\nIt seems that this will not change depending on `Content-Encoding` (although in a real environment, it seems that the result of compression will almost never be returned in a request with Range), so I think it is correct to always return it as is.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1823434344",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3589,
+        "pr_file": "src/helper/proxy/index.ts",
+        "discussion_id": "1822618482",
+        "commented_code": "@@ -0,0 +1,85 @@\n+/**\n+ * @module\n+ * Proxy Helper for Hono.\n+ */\n+\n+/*\n+ * The following headers will be deleted from the response:\n+ * * Content-Encoding\n+ * * Content-Length\n+ * * Content-Range\n+ */\n+const forceDeleteResponseHeaderNames = ['Content-Encoding', 'Content-Length', 'Content-Range']",
+        "comment_created_at": "2024-10-30T21:46:28+00:00",
+        "comment_author": "usualoma",
+        "comment_body": "Fixed in 5998770 and 3a5ef0f.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1825303837",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3589,
+        "pr_file": "src/helper/proxy/index.ts",
+        "discussion_id": "1822618482",
+        "commented_code": "@@ -0,0 +1,85 @@\n+/**\n+ * @module\n+ * Proxy Helper for Hono.\n+ */\n+\n+/*\n+ * The following headers will be deleted from the response:\n+ * * Content-Encoding\n+ * * Content-Length\n+ * * Content-Range\n+ */\n+const forceDeleteResponseHeaderNames = ['Content-Encoding', 'Content-Length', 'Content-Range']",
+        "comment_created_at": "2024-11-01T00:22:36+00:00",
+        "comment_author": "haochenx",
+        "comment_body": "> Content-Length is the \u201csize after compression\u201d, so it cannot be returned as is.\r\n\r\nOh, in that case I am in favor of unconditionally deleting it.\r\n\r\n>It seems that this will not change depending on Content-Encoding (although in a real environment, it seems that the result of compression will almost never be returned in a request with Range), so I think it is correct to always return it as is.\r\n\r\nI have no reason to believe the new implementation is incorrect and this seems to be a suitable strategy.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1825305328",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3589,
+        "pr_file": "src/helper/proxy/index.ts",
+        "discussion_id": "1822618482",
+        "commented_code": "@@ -0,0 +1,85 @@\n+/**\n+ * @module\n+ * Proxy Helper for Hono.\n+ */\n+\n+/*\n+ * The following headers will be deleted from the response:\n+ * * Content-Encoding\n+ * * Content-Length\n+ * * Content-Range\n+ */\n+const forceDeleteResponseHeaderNames = ['Content-Encoding', 'Content-Length', 'Content-Range']",
+        "comment_created_at": "2024-11-01T00:26:03+00:00",
+        "comment_author": "usualoma",
+        "comment_body": "Thank you!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1729530643",
+    "pr_number": 3317,
+    "pr_file": "src/middleware/compress/index.ts",
+    "created_at": "2024-08-23T21:24:47+00:00",
+    "commented_code": "* ```\n  */\n export const compress = (options?: CompressionOptions): MiddlewareHandler => {\n+  const threshold = options?.threshold ?? 1024\n+\n   return async function compress(ctx, next) {\n     await next()\n+\n+    const res = ctx.res\n+    const req = ctx.req\n+    const contentEncoding = res.headers.get('Content-Encoding') || 'identity'\n+    const contentLength = res.headers.get('Content-Length')\n+\n+    // Check if response should be compressed\n+    if (\n+      contentEncoding !== 'identity' || // already encoded",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1729530643",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 3317,
+        "pr_file": "src/middleware/compress/index.ts",
+        "discussion_id": "1729530643",
+        "commented_code": "@@ -28,19 +33,54 @@ interface CompressionOptions {\n  * ```\n  */\n export const compress = (options?: CompressionOptions): MiddlewareHandler => {\n+  const threshold = options?.threshold ?? 1024\n+\n   return async function compress(ctx, next) {\n     await next()\n+\n+    const res = ctx.res\n+    const req = ctx.req\n+    const contentEncoding = res.headers.get('Content-Encoding') || 'identity'\n+    const contentLength = res.headers.get('Content-Length')\n+\n+    // Check if response should be compressed\n+    if (\n+      contentEncoding !== 'identity' || // already encoded",
+        "comment_created_at": "2024-08-23T21:24:47+00:00",
+        "comment_author": "usualoma",
+        "comment_body": "What is essentially being checked here is \u2018whether Content-Encoding is set\u2019, and since Content-Encoding cannot be an empty string (except for bugs), `has` is sufficient.\r\n\r\n```suggestion\r\n      ctx.res.headers.has('Content-Encoding') || // already encoded\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1631702503",
+    "pr_number": 2934,
+    "pr_file": "src/middleware/cors/index.ts",
+    "created_at": "2024-06-07T21:16:13+00:00",
+    "commented_code": "// Suppose the server sends a response with an Access-Control-Allow-Origin value with an explicit origin (rather than the \"*\" wildcard).\n     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin\n     if (opts.origin !== '*') {\n-      set('Vary', 'Origin')\n+      const existingVary = c.req.header('Vary')\n+\n+      if (existingVary) {\n+        set('Vary', existingVary)",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1631702503",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 2934,
+        "pr_file": "src/middleware/cors/index.ts",
+        "discussion_id": "1631702503",
+        "commented_code": "@@ -89,7 +89,13 @@ export const cors = (options?: CORSOptions): MiddlewareHandler => {\n     // Suppose the server sends a response with an Access-Control-Allow-Origin value with an explicit origin (rather than the \"*\" wildcard).\n     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin\n     if (opts.origin !== '*') {\n-      set('Vary', 'Origin')\n+      const existingVary = c.req.header('Vary')\n+\n+      if (existingVary) {\n+        set('Vary', existingVary)",
+        "comment_created_at": "2024-06-07T21:16:13+00:00",
+        "comment_author": "fishcakeday",
+        "comment_body": "Do you think something like the following would work better?\r\n```typescript\r\n    if (opts.origin !== '*') {\r\n      const vary = new Set<string>(c.res.headers.get('Vary')?.split(/\\s*,\\s*/) ?? [])\r\n      vary.add('Origin')\r\n      set('Vary', [...vary].join(', '))\r\n    }\r\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1631712702",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 2934,
+        "pr_file": "src/middleware/cors/index.ts",
+        "discussion_id": "1631702503",
+        "commented_code": "@@ -89,7 +89,13 @@ export const cors = (options?: CORSOptions): MiddlewareHandler => {\n     // Suppose the server sends a response with an Access-Control-Allow-Origin value with an explicit origin (rather than the \"*\" wildcard).\n     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin\n     if (opts.origin !== '*') {\n-      set('Vary', 'Origin')\n+      const existingVary = c.req.header('Vary')\n+\n+      if (existingVary) {\n+        set('Vary', existingVary)",
+        "comment_created_at": "2024-06-07T21:30:35+00:00",
+        "comment_author": "fzn0x",
+        "comment_body": "We may need to create another method for that :)\r\n\r\nI believe forcing users to process the input by themself is better",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1631713463",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 2934,
+        "pr_file": "src/middleware/cors/index.ts",
+        "discussion_id": "1631702503",
+        "commented_code": "@@ -89,7 +89,13 @@ export const cors = (options?: CORSOptions): MiddlewareHandler => {\n     // Suppose the server sends a response with an Access-Control-Allow-Origin value with an explicit origin (rather than the \"*\" wildcard).\n     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin\n     if (opts.origin !== '*') {\n-      set('Vary', 'Origin')\n+      const existingVary = c.req.header('Vary')\n+\n+      if (existingVary) {\n+        set('Vary', existingVary)",
+        "comment_created_at": "2024-06-07T21:31:55+00:00",
+        "comment_author": "fzn0x",
+        "comment_body": "Whether they want to create another method on top of it or just input a string for multiple forbidden header names\r\n\r\ne.g `accept-encoding, origin`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1631721941",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 2934,
+        "pr_file": "src/middleware/cors/index.ts",
+        "discussion_id": "1631702503",
+        "commented_code": "@@ -89,7 +89,13 @@ export const cors = (options?: CORSOptions): MiddlewareHandler => {\n     // Suppose the server sends a response with an Access-Control-Allow-Origin value with an explicit origin (rather than the \"*\" wildcard).\n     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin\n     if (opts.origin !== '*') {\n-      set('Vary', 'Origin')\n+      const existingVary = c.req.header('Vary')\n+\n+      if (existingVary) {\n+        set('Vary', existingVary)",
+        "comment_created_at": "2024-06-07T21:41:18+00:00",
+        "comment_author": "fzn0x",
+        "comment_body": "Another concern is if we always include `Origin` some services like Cloudflare Polish may not work\r\n\r\n> Polish will still work if accept-encoding is the only header listed within the Vary header.\r\n[ref](https://developers.cloudflare.com/images/polish/cf-polished-statuses/)",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "1631729203",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 2934,
+        "pr_file": "src/middleware/cors/index.ts",
+        "discussion_id": "1631702503",
+        "commented_code": "@@ -89,7 +89,13 @@ export const cors = (options?: CORSOptions): MiddlewareHandler => {\n     // Suppose the server sends a response with an Access-Control-Allow-Origin value with an explicit origin (rather than the \"*\" wildcard).\n     // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin\n     if (opts.origin !== '*') {\n-      set('Vary', 'Origin')\n+      const existingVary = c.req.header('Vary')\n+\n+      if (existingVary) {\n+        set('Vary', existingVary)",
+        "comment_created_at": "2024-06-07T21:44:37+00:00",
+        "comment_author": "fishcakeday",
+        "comment_body": "I see. The funny part is, for Polish you would want `Vary: Accept` not `Accept-Encoding`. In the end, it does not really matter to me personally how you want to implement it, either way works.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "1239536833",
+    "pr_number": 1190,
+    "pr_file": "src/middleware/cookie/index.test.ts",
+    "created_at": "2023-06-23T08:37:25+00:00",
+    "commented_code": "expect(header).toBe('delicious_cookie=macha, delicious_cookie=choco')\n     })\n   })\n+\n+  describe('Delete cookie', () => {\n+    const app = new Hono()\n+\n+    app.get('/set-cookie', (c) => {\n+      setCookie(c, 'delicious_cookie', 'macha')\n+      return c.text('Give cookie')\n+    })\n+\n+    app.get('/delete-cookie', (c) => {\n+      deleteCookie(c, 'delicious_cookie')\n+      return c.text('Give cookie')\n+    })\n+\n+    it('Delete cookie with setCookie()', async () => {\n+      const res = await app.request('http://localhost/set-cookie')\n+      expect(res.status).toBe(200)\n+      const header = res.headers.get('Set-Cookie')\n+      expect(header).toBe('delicious_cookie=macha')\n+\n+      const res2 = await app.request('http://localhost/delete-cookie')\n+      expect(res2.status).toBe(200)\n+      const header2 = res2.headers.get('Set-Cookie')\n+      expect(header2).toBe(null)",
+    "repo_full_name": "honojs/hono",
+    "discussion_comments": [
+      {
+        "comment_id": "1239536833",
+        "repo_full_name": "honojs/hono",
+        "pr_number": 1190,
+        "pr_file": "src/middleware/cookie/index.test.ts",
+        "discussion_id": "1239536833",
+        "commented_code": "@@ -99,4 +99,53 @@ describe('Cookie Middleware', () => {\n       expect(header).toBe('delicious_cookie=macha, delicious_cookie=choco')\n     })\n   })\n+\n+  describe('Delete cookie', () => {\n+    const app = new Hono()\n+\n+    app.get('/set-cookie', (c) => {\n+      setCookie(c, 'delicious_cookie', 'macha')\n+      return c.text('Give cookie')\n+    })\n+\n+    app.get('/delete-cookie', (c) => {\n+      deleteCookie(c, 'delicious_cookie')\n+      return c.text('Give cookie')\n+    })\n+\n+    it('Delete cookie with setCookie()', async () => {\n+      const res = await app.request('http://localhost/set-cookie')\n+      expect(res.status).toBe(200)\n+      const header = res.headers.get('Set-Cookie')\n+      expect(header).toBe('delicious_cookie=macha')\n+\n+      const res2 = await app.request('http://localhost/delete-cookie')\n+      expect(res2.status).toBe(200)\n+      const header2 = res2.headers.get('Set-Cookie')\n+      expect(header2).toBe(null)",
+        "comment_created_at": "2023-06-23T08:37:25+00:00",
+        "comment_author": "yusukebe",
+        "comment_body": "This should be `delicious_cookie=; Max-Age=0` instead of `null`.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

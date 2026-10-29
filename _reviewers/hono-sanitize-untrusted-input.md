@@ -1,21 +1,32 @@
 ---
 title: Sanitize untrusted input
-description: 'Treat any value derived from user input (headers, paths, query/form
-  data, or option strings) as untrusted whenever it flows into HTML output, CSS output,
-  regex construction, file-path resolution, or security-critical attributes. Concretely:'
-repository: honojs/hono
+description: Any value that comes from the client or another external source (headers,
+  query params, path segments, class names, cookie values, etc.) must be validated,
+  escaped, or restricted to a known-safe set before it is used in a context where
+  it can change the meaning of surrounding code — dynamic `RegExp` construction, HTML/attribute
+  output, or file-system path...
+repository: HONOJS/HONO
 label: Security
 language: TypeScript
-comments_count: 5
+comments_count: 7
 repository_stars: 32741
 ---
 
-Treat any value derived from user input (headers, paths, query/form data, or option strings) as untrusted whenever it flows into HTML output, CSS output, regex construction, file-path resolution, or security-critical attributes. Concretely:
+Any value that comes from the client or another external source (headers, query params, path segments, class names, cookie values, etc.) must be validated, escaped, or restricted to a known-safe set before it is used in a context where it can change the meaning of surrounding code — dynamic `RegExp` construction, HTML/attribute output, or file-system path resolution.
 
-- When interpolating user-controlled values into HTML, always escape them (e.g. use the `html` template helper) instead of concatenating raw strings, even for "unlikely" inputs like redirect targets.
-- When user-controlled values become CSS class names or other CSS tokens, restrict them to a safe character set (e.g. `[a-zA-Z0-9_-]`) rather than attempting to escape them, to avoid breaking out of the attribute/selector context.
-- When building regular expressions from user-supplied separators or tokens (e.g. splitting header values), avoid patterns prone to catastrophic backtracking (ReDoS). Prefer simple `split()` + `trim()` over complex whitespace regexes like `/\s*,\s*/`.
-- When resolving file paths from request input, normalize leading slashes/dots defensively (e.g. collapse repeated leading slashes with `/^\.?[\/\\]+/`) and explicitly guard against path traversal when combining a relative `root` with a user-supplied path — reject the result if it would resolve outside the intended root.
-- When implementing security-relevant features with "secure-by-default" attributes (e.g. cookie `__Secure-`/`__Host-` prefixes requiring `secure: true`, `path: '/'`, no `domain`), do not let caller-supplied options silently override these mandated attributes; apply caller options first, then enforce the required security attributes last.
+- Dynamic RegExp: never interpolate raw user input into a `RegExp`. Escape metacharacters first, and avoid patterns prone to catastrophic backtracking (e.g. `/\s*,\s*/`); prefer a simple `split(',').map(s => s.trim())` instead.
+- HTML output: never build HTML via raw template literals with untrusted values. Use the project's escaping helper, e.g. ``${html`${to}`}``, so injected markup/scripts can't execute.
+- Identifiers emitted into CSS/HTML (e.g. generated class names): don't try to escape after the fact — restrict the allowed input to a safe character set such as `[a-zA-Z0-9_-]` up front.
+- Finite-domain inputs (e.g. `Sec-Fetch-Site` values): model them as a closed TypeScript union/allow-list and validate at runtime with a type guard instead of accepting an open `string`.
+- File paths derived from request input: normalize and verify the resolved path cannot escape the configured root. Watch for encoded traversal sequences (`%2e%2e`), repeated/leading slashes, and absolute-path overrides — add an explicit "is still inside root" check in addition to normalization, since normalization alone (e.g. via `URL`) can silently resolve `..` segments in unsafe ways.
 
-Add targeted tests for the malicious/edge-case inputs (e.g. script payloads in redirect targets, `///etc/passwd`-style paths, malformed class names) alongside the fix.
+Example — safe RegExp construction:
+```ts
+// Bad: user-controlled prefix used unescaped in a RegExp
+const prefixRegexStr = options.prefix === '' ? '' : `${options.prefix} +`
+
+// Good: escape regex metacharacters first
+const prefixRegexStr = options.prefix === '' ? '' : `${escapeRegExp(options.prefix)} +`
+```
+
+Treat every external input as hostile until it has been constrained to a safe shape for its destination context.

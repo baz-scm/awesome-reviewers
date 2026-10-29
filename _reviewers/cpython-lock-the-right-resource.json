@@ -1,0 +1,270 @@
+[
+  {
+    "discussion_id": "3635375674",
+    "pr_number": 154494,
+    "pr_file": "Python/sysmodule.c",
+    "created_at": "2026-07-23T03:31:23+00:00",
+    "commented_code": "}\n \n     PyInterpreterState *interp = tstate->interp;\n-    PyMutex mutex = interp->audit_hooks_mutex;\n+    PyMutex mutex = interp->runtime->audit_hooks.mutex;",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "3635375674",
+        "repo_full_name": "python/cpython",
+        "pr_number": 154494,
+        "pr_file": "Python/sysmodule.c",
+        "discussion_id": "3635375674",
+        "commented_code": "@@ -537,7 +537,7 @@ sys_addaudithook_impl(PyObject *module, PyObject *hook)\n     }\n \n     PyInterpreterState *interp = tstate->interp;\n-    PyMutex mutex = interp->audit_hooks_mutex;\n+    PyMutex mutex = interp->runtime->audit_hooks.mutex;",
+        "comment_created_at": "2026-07-23T03:31:23+00:00",
+        "comment_author": "weixlu",
+        "comment_body": "Hi, I noticed the mutex here is copied by value onto the stack, then being locked. I'm worried this subtly changes the semantics into locking a stack-local object instead. The typical usage may be to lock the address directly, i.e. `PyMutex_Lock(&interp->runtime->audit_hooks.mutex);`",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3635407672",
+        "repo_full_name": "python/cpython",
+        "pr_number": 154494,
+        "pr_file": "Python/sysmodule.c",
+        "discussion_id": "3635375674",
+        "commented_code": "@@ -537,7 +537,7 @@ sys_addaudithook_impl(PyObject *module, PyObject *hook)\n     }\n \n     PyInterpreterState *interp = tstate->interp;\n-    PyMutex mutex = interp->audit_hooks_mutex;\n+    PyMutex mutex = interp->runtime->audit_hooks.mutex;",
+        "comment_created_at": "2026-07-23T03:42:29+00:00",
+        "comment_author": "weixlu",
+        "comment_body": "Here is a demo shows locking a stack-local mutex won't affect the real mutex.\r\n```c\r\n#include <Python.h>\r\n#include <stdio.h>\r\n\r\nstatic PyMutex shared = {0};\r\n\r\nint main(void)\r\n{\r\n    PyMutex mutex = shared;\r\n    PyMutex_Lock(&mutex);\r\n    printf(\"locked the COPY:  shared=%d copy=%d\\n\", PyMutex_IsLocked(&shared), PyMutex_IsLocked(&mutex));\r\n    PyMutex_Unlock(&mutex);\r\n\r\n    PyMutex_Lock(&shared);\r\n    printf(\"locked the FIELD: shared=%d\\n\", PyMutex_IsLocked(&shared));\r\n    PyMutex_Unlock(&shared);\r\n    return 0;\r\n}\r\n```\r\nRun `gcc mutex_copy_demo.c -I Include -I . libpython3.16.a -lpthread -lm -ldl -lutil -o demo && ./demo` then it print\r\n```\r\nlocked the COPY:  shared=0 copy=1\r\nlocked the FIELD: shared=1\r\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3831674830",
+    "pr_number": 156134,
+    "pr_file": "Objects/frameobject.c",
+    "created_at": "2026-08-21T15:51:15+00:00",
+    "commented_code": "}\n \n \n+PyObject *\n+PyUnstable_InterpreterFrame_GetLocal(_PyInterpreterFrame *frame,\n+                                     Py_ssize_t index)\n+{\n+    PyCodeObject *co = _PyFrame_GetCode(frame);\n+    if (index < 0 || index >= co->co_nlocalsplus) {\n+        PyErr_Format(\n+            PyExc_IndexError,\n+            \"PyUnstable_InterpreterFrame_GetLocal: index %zd out of range [0, %d)\",\n+            index, co->co_nlocalsplus);\n+        return NULL;\n+    }\n+\n+    int offset = PyUnstable_Code_GetFirstFree(co);  // co_nlocalsplus - co_nfreevars\n+    if (index < offset) {\n+        // Local or cell variable. frame_get_var unboxes cells and copes with\n+        // not-yet-started frames and arguments not yet promoted by MAKE_CELL.\n+        if (_PyLocals_GetKind(co->co_localspluskinds, (int)index) & CO_FAST_HIDDEN) {\n+            return NULL;\n+        }\n+        PyObject *value = NULL;\n+        frame_get_var(frame, co, (int)index, &value);\n+        return value;  // strong reference, or NULL if unset\n+    }\n+\n+    // Free variable: read from the function closure rather than localsplus.\n+    if ((co->co_flags & CO_OPTIMIZED)\n+            && PyStackRef_FunctionCheck(frame->f_funcobj)) {\n+        PyFunctionObject *func = _PyFrame_GetFunction(frame);\n+        PyObject *cell = PyTuple_GET_ITEM(func->func_closure, index - offset);\n+        return Py_XNewRef(PyCell_GET(cell));",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "3831674830",
+        "repo_full_name": "python/cpython",
+        "pr_number": 156134,
+        "pr_file": "Objects/frameobject.c",
+        "discussion_id": "3831674830",
+        "commented_code": "@@ -2247,6 +2247,42 @@ frame_get_var(_PyInterpreterFrame *frame, PyCodeObject *co, int i,\n }\n \n \n+PyObject *\n+PyUnstable_InterpreterFrame_GetLocal(_PyInterpreterFrame *frame,\n+                                     Py_ssize_t index)\n+{\n+    PyCodeObject *co = _PyFrame_GetCode(frame);\n+    if (index < 0 || index >= co->co_nlocalsplus) {\n+        PyErr_Format(\n+            PyExc_IndexError,\n+            \"PyUnstable_InterpreterFrame_GetLocal: index %zd out of range [0, %d)\",\n+            index, co->co_nlocalsplus);\n+        return NULL;\n+    }\n+\n+    int offset = PyUnstable_Code_GetFirstFree(co);  // co_nlocalsplus - co_nfreevars\n+    if (index < offset) {\n+        // Local or cell variable. frame_get_var unboxes cells and copes with\n+        // not-yet-started frames and arguments not yet promoted by MAKE_CELL.\n+        if (_PyLocals_GetKind(co->co_localspluskinds, (int)index) & CO_FAST_HIDDEN) {\n+            return NULL;\n+        }\n+        PyObject *value = NULL;\n+        frame_get_var(frame, co, (int)index, &value);\n+        return value;  // strong reference, or NULL if unset\n+    }\n+\n+    // Free variable: read from the function closure rather than localsplus.\n+    if ((co->co_flags & CO_OPTIMIZED)\n+            && PyStackRef_FunctionCheck(frame->f_funcobj)) {\n+        PyFunctionObject *func = _PyFrame_GetFunction(frame);\n+        PyObject *cell = PyTuple_GET_ITEM(func->func_closure, index - offset);\n+        return Py_XNewRef(PyCell_GET(cell));",
+        "comment_created_at": "2026-08-21T15:51:15+00:00",
+        "comment_author": "aisk",
+        "comment_body": "This may have concurrency issue under free-thread build, we can use PyCell_GetRef here instead, see it's defination: https://github.com/python/cpython/blob/65e149a15f31def0b7c44bf087b69428b615bcc3/Include/internal/pycore_cell.h#L36-L49\n\n```suggestion\n        return PyCell_GetRef((PyCellObject *)cell);\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3557620344",
+    "pr_number": 151634,
+    "pr_file": "Modules/_collectionsmodule.c",
+    "created_at": "2026-07-10T08:54:47+00:00",
+    "commented_code": "if (key == NULL)\n                 break;\n \n-            hash = _PyObject_HashDictKey(key);\n+            hash = _PyObject_HashFast(key);\n             if (hash == -1) {\n                 goto done;\n             }\n \n-            oldval = _PyDict_GetItem_KnownHash(mapping, key, hash);\n-            if (oldval == NULL) {\n-                if (PyErr_Occurred())\n-                    goto done;\n-                if (_PyDict_SetItem_KnownHash(mapping, key, one, hash) < 0)\n-                    goto done;\n-            } else {\n-                /* oldval is a borrowed reference.  Keep it alive across\n-                   PyNumber_Add(), which can execute arbitrary user code and\n-                   mutate (or even clear) the underlying dict. */\n-                Py_INCREF(oldval);\n+            int found;\n+            int cs_err = 0;\n+            PyObject *newval = NULL;\n+            Py_BEGIN_CRITICAL_SECTION(mapping);",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "3557620344",
+        "repo_full_name": "python/cpython",
+        "pr_number": 151634,
+        "pr_file": "Modules/_collectionsmodule.c",
+        "discussion_id": "3557620344",
+        "commented_code": "@@ -2590,29 +2589,41 @@ _collections__count_elements_impl(PyObject *module, PyObject *mapping,\n             if (key == NULL)\n                 break;\n \n-            hash = _PyObject_HashDictKey(key);\n+            hash = _PyObject_HashFast(key);\n             if (hash == -1) {\n                 goto done;\n             }\n \n-            oldval = _PyDict_GetItem_KnownHash(mapping, key, hash);\n-            if (oldval == NULL) {\n-                if (PyErr_Occurred())\n-                    goto done;\n-                if (_PyDict_SetItem_KnownHash(mapping, key, one, hash) < 0)\n-                    goto done;\n-            } else {\n-                /* oldval is a borrowed reference.  Keep it alive across\n-                   PyNumber_Add(), which can execute arbitrary user code and\n-                   mutate (or even clear) the underlying dict. */\n-                Py_INCREF(oldval);\n+            int found;\n+            int cs_err = 0;\n+            PyObject *newval = NULL;\n+            Py_BEGIN_CRITICAL_SECTION(mapping);",
+        "comment_created_at": "2026-07-10T08:54:47+00:00",
+        "comment_author": "eendebakpt",
+        "comment_body": "The current PR looks good, but I think we can improve a bit more. The locking via the critical section now happens on each iteration, which seems a bit of a waste.\n\nCan we place the critical section outside the while loop and then extract most (all?) of the code into a method `_count_elements_dict_lock_held`?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3577537904",
+        "repo_full_name": "python/cpython",
+        "pr_number": 151634,
+        "pr_file": "Modules/_collectionsmodule.c",
+        "discussion_id": "3557620344",
+        "commented_code": "@@ -2590,29 +2589,41 @@ _collections__count_elements_impl(PyObject *module, PyObject *mapping,\n             if (key == NULL)\n                 break;\n \n-            hash = _PyObject_HashDictKey(key);\n+            hash = _PyObject_HashFast(key);\n             if (hash == -1) {\n                 goto done;\n             }\n \n-            oldval = _PyDict_GetItem_KnownHash(mapping, key, hash);\n-            if (oldval == NULL) {\n-                if (PyErr_Occurred())\n-                    goto done;\n-                if (_PyDict_SetItem_KnownHash(mapping, key, one, hash) < 0)\n-                    goto done;\n-            } else {\n-                /* oldval is a borrowed reference.  Keep it alive across\n-                   PyNumber_Add(), which can execute arbitrary user code and\n-                   mutate (or even clear) the underlying dict. */\n-                Py_INCREF(oldval);\n+            int found;\n+            int cs_err = 0;\n+            PyObject *newval = NULL;\n+            Py_BEGIN_CRITICAL_SECTION(mapping);",
+        "comment_created_at": "2026-07-14T09:12:21+00:00",
+        "comment_author": "KowalskiThomas",
+        "comment_body": "I'll look into this as soon as possible, thanks for reporting. \r\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4367821560",
+        "repo_full_name": "python/cpython",
+        "pr_number": 151634,
+        "pr_file": "Modules/_collectionsmodule.c",
+        "discussion_id": "3557620344",
+        "commented_code": "@@ -2590,29 +2589,41 @@ _collections__count_elements_impl(PyObject *module, PyObject *mapping,\n             if (key == NULL)\n                 break;\n \n-            hash = _PyObject_HashDictKey(key);\n+            hash = _PyObject_HashFast(key);\n             if (hash == -1) {\n                 goto done;\n             }\n \n-            oldval = _PyDict_GetItem_KnownHash(mapping, key, hash);\n-            if (oldval == NULL) {\n-                if (PyErr_Occurred())\n-                    goto done;\n-                if (_PyDict_SetItem_KnownHash(mapping, key, one, hash) < 0)\n-                    goto done;\n-            } else {\n-                /* oldval is a borrowed reference.  Keep it alive across\n-                   PyNumber_Add(), which can execute arbitrary user code and\n-                   mutate (or even clear) the underlying dict. */\n-                Py_INCREF(oldval);\n+            int found;\n+            int cs_err = 0;\n+            PyObject *newval = NULL;\n+            Py_BEGIN_CRITICAL_SECTION(mapping);",
+        "comment_created_at": "2026-10-24T17:00:57+00:00",
+        "comment_author": "KowalskiThomas",
+        "comment_body": "@eendebakpt  Sorry, I completely forgot about that for some reason... I just changed it to do what you proposed, let me know how that looks!",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3373004852",
+    "pr_number": 149918,
+    "pr_file": "Modules/_elementtree.c",
+    "created_at": "2026-06-08T12:00:48+00:00",
+    "commented_code": "Py_VISIT(JOIN_OBJ(self->text));\n     Py_VISIT(JOIN_OBJ(self->tail));\n \n+    Py_BEGIN_CRITICAL_SECTION(self);\n     if (self->extra) {\n         Py_ssize_t i;\n         Py_VISIT(self->extra->attrib);\n \n         for (i = 0; i < self->extra->length; ++i)\n             Py_VISIT(self->extra->children[i]);\n     }\n+    Py_END_CRITICAL_SECTION();\n     return 0;\n }\n \n static int\n element_gc_clear(PyObject *op)\n {\n     ElementObject *self = _Element_CAST(op);\n+    Py_BEGIN_CRITICAL_SECTION(self);",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "3373004852",
+        "repo_full_name": "python/cpython",
+        "pr_number": 149918,
+        "pr_file": "Modules/_elementtree.c",
+        "discussion_id": "3373004852",
+        "commented_code": "@@ -667,20 +693,23 @@ element_gc_traverse(PyObject *op, visitproc visit, void *arg)\n     Py_VISIT(JOIN_OBJ(self->text));\n     Py_VISIT(JOIN_OBJ(self->tail));\n \n+    Py_BEGIN_CRITICAL_SECTION(self);\n     if (self->extra) {\n         Py_ssize_t i;\n         Py_VISIT(self->extra->attrib);\n \n         for (i = 0; i < self->extra->length; ++i)\n             Py_VISIT(self->extra->children[i]);\n     }\n+    Py_END_CRITICAL_SECTION();\n     return 0;\n }\n \n static int\n element_gc_clear(PyObject *op)\n {\n     ElementObject *self = _Element_CAST(op);\n+    Py_BEGIN_CRITICAL_SECTION(self);",
+        "comment_created_at": "2026-06-08T12:00:48+00:00",
+        "comment_author": "dpdani",
+        "comment_body": "Deallocation code paths do not require (and should not use) locking. Reference counting logic of [PEP 703](https://peps.python.org/pep-0703/) already avoids concurrent deallocations.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3656098521",
+    "pr_number": 149918,
+    "pr_file": "Modules/_elementtree.c",
+    "created_at": "2026-07-27T09:56:22+00:00",
+    "commented_code": "PyErr_NoMemory();\n         return -1;\n     }\n-\n+    Py_BEGIN_CRITICAL_SECTION(self);",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "3656098521",
+        "repo_full_name": "python/cpython",
+        "pr_number": 149918,
+        "pr_file": "Modules/_elementtree.c",
+        "discussion_id": "3656098521",
+        "commented_code": "@@ -276,13 +276,14 @@ create_extra(ElementObject* self, PyObject* attrib)\n         PyErr_NoMemory();\n         return -1;\n     }\n-\n+    Py_BEGIN_CRITICAL_SECTION(self);",
+        "comment_created_at": "2026-07-27T09:56:22+00:00",
+        "comment_author": "dpdani",
+        "comment_body": "Don't do locking here. There are a few callers of this function, and locking should be moved to the callers. For instance, this code in `element_resize` would not be thread safe with an inner critical section:\n\n```c\n    if (!self->extra) {\n        if (create_extra(self, NULL) < 0)\n            return -1;\n    }\n```\n\nAllocations and init functions need not be thread safe.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3656139625",
+    "pr_number": 149918,
+    "pr_file": "Modules/_elementtree.c",
+    "created_at": "2026-07-27T10:02:24+00:00",
+    "commented_code": "{\n     ElementObjectExtra *myextra;\n \n-    if (!self->extra)\n-        return;\n+    Py_BEGIN_CRITICAL_SECTION(self);",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "3656139625",
+        "repo_full_name": "python/cpython",
+        "pr_number": 149918,
+        "pr_file": "Modules/_elementtree.c",
+        "discussion_id": "3656139625",
+        "commented_code": "@@ -311,15 +312,16 @@ clear_extra(ElementObject* self)\n {\n     ElementObjectExtra *myextra;\n \n-    if (!self->extra)\n-        return;\n+    Py_BEGIN_CRITICAL_SECTION(self);",
+        "comment_created_at": "2026-07-27T10:02:24+00:00",
+        "comment_author": "dpdani",
+        "comment_body": "Do not add locking here. The only code path that may call this code concurrently is in `element_setstate_from_attributes`, and locking should be moved there. It is probably needed anyway by the looks of it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4363228302",
+    "pr_number": 160318,
+    "pr_file": "Modules/_ssl.c",
+    "created_at": "2026-10-23T19:00:27+00:00",
+    "commented_code": ");\n }\n \n+#ifdef HAVE_OPENSSL_ECH\n+/*[clinic input]\n+@critical_section\n+_ssl._SSLSocket.get_ech_status\n+[clinic start generated code]*/\n+\n+static PyObject *\n+_ssl__SSLSocket_get_ech_status_impl(PySSLSocket *self)\n+/*[clinic end generated code: output=263bf7fc7888e2d6 input=71320052d6f2a10f]*/\n+{\n+    char *inner_sni = NULL, *outer_sni = NULL;\n+    if (self->ssl == NULL) {\n+        Py_RETURN_NONE;\n+    }\n+    int status = SSL_ech_get1_status(self->ssl, &inner_sni, &outer_sni);\n+    PyObject *result = Py_BuildValue(\"(izz)\", status, inner_sni, outer_sni);\n+    OPENSSL_free(inner_sni);\n+    OPENSSL_free(outer_sni);\n+    return result;\n+}\n+\n+/*[clinic input]\n+@critical_section\n+_ssl._SSLSocket.get_ech_retry_config\n+[clinic start generated code]*/\n+\n+static PyObject *\n+_ssl__SSLSocket_get_ech_retry_config_impl(PySSLSocket *self)\n+/*[clinic end generated code: output=967da2032df9a37a input=0e51b545e93f43ba]*/\n+{\n+    if (self->ssl == NULL) {\n+        Py_RETURN_NONE;\n+    }\n+    unsigned char *config = NULL;\n+    size_t config_len;\n+    if (SSL_ech_get1_retry_config(self->ssl, &config, &config_len) != 1) {\n+        _setSSLError(get_state_sock(self), NULL, 0, __FILE__, __LINE__);\n+        return NULL;\n+    }\n+    PyObject *result = PyBytes_FromStringAndSize((char *)config, config_len);\n+    OPENSSL_free(config);\n+    return result;\n+}\n+\n+static OSSL_ECHSTORE *ech_store_from_config(_sslmodulestate *state,\n+                                            Py_buffer *ech_config);\n+\n+/*[clinic input]\n+@critical_section\n+_ssl._SSLSocket.set_ech_config\n+\n+    ech_config: Py_buffer\n+    /\n+\n+Set the ECH configuration for this connection.\n+\n+This replaces any configuration inherited from the context and\n+must be called before the handshake starts.\n+[clinic start generated code]*/\n+\n+static PyObject *\n+_ssl__SSLSocket_set_ech_config_impl(PySSLSocket *self, Py_buffer *ech_config)\n+/*[clinic end generated code: output=c9d2639cc222eae9 input=c331e306213d39d9]*/\n+{\n+    if (self->socket_type != PY_SSL_CLIENT) {\n+        PyErr_SetString(PyExc_ValueError,\n+                        \"Cannot set ECH configuration for server-side SSLSocket.\");\n+        return NULL;\n+    }\n+    if (!SSL_in_before(self->ssl)) {\n+        PyErr_SetString(PyExc_ValueError,\n+                        \"Cannot set ECH configuration after handshake.\");\n+        return NULL;\n+    }\n+    _sslmodulestate *state = get_state_sock(self);\n+    OSSL_ECHSTORE *store = ech_store_from_config(state, ech_config);\n+    if (store == NULL) {\n+        return NULL;\n+    }\n+    int result = SSL_set1_echstore(self->ssl, store);\n+    OSSL_ECHSTORE_free(store);\n+    if (result != 1) {\n+        _setSSLError(state, NULL, 0, __FILE__, __LINE__);\n+        return NULL;\n+    }\n+    /* Restore the outer ALPN cleared when this socket was created without\n+     * an ECH configuration. */\n+    PySSLContext *ctx = self->ctx;\n+    if (ctx->outer_alpn_protocols != NULL",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "4363228302",
+        "repo_full_name": "python/cpython",
+        "pr_number": 160318,
+        "pr_file": "Modules/_ssl.c",
+        "discussion_id": "4363228302",
+        "commented_code": "@@ -2117,6 +2174,135 @@ cipher_to_dict(const SSL_CIPHER *cipher)\n        );\n }\n \n+#ifdef HAVE_OPENSSL_ECH\n+/*[clinic input]\n+@critical_section\n+_ssl._SSLSocket.get_ech_status\n+[clinic start generated code]*/\n+\n+static PyObject *\n+_ssl__SSLSocket_get_ech_status_impl(PySSLSocket *self)\n+/*[clinic end generated code: output=263bf7fc7888e2d6 input=71320052d6f2a10f]*/\n+{\n+    char *inner_sni = NULL, *outer_sni = NULL;\n+    if (self->ssl == NULL) {\n+        Py_RETURN_NONE;\n+    }\n+    int status = SSL_ech_get1_status(self->ssl, &inner_sni, &outer_sni);\n+    PyObject *result = Py_BuildValue(\"(izz)\", status, inner_sni, outer_sni);\n+    OPENSSL_free(inner_sni);\n+    OPENSSL_free(outer_sni);\n+    return result;\n+}\n+\n+/*[clinic input]\n+@critical_section\n+_ssl._SSLSocket.get_ech_retry_config\n+[clinic start generated code]*/\n+\n+static PyObject *\n+_ssl__SSLSocket_get_ech_retry_config_impl(PySSLSocket *self)\n+/*[clinic end generated code: output=967da2032df9a37a input=0e51b545e93f43ba]*/\n+{\n+    if (self->ssl == NULL) {\n+        Py_RETURN_NONE;\n+    }\n+    unsigned char *config = NULL;\n+    size_t config_len;\n+    if (SSL_ech_get1_retry_config(self->ssl, &config, &config_len) != 1) {\n+        _setSSLError(get_state_sock(self), NULL, 0, __FILE__, __LINE__);\n+        return NULL;\n+    }\n+    PyObject *result = PyBytes_FromStringAndSize((char *)config, config_len);\n+    OPENSSL_free(config);\n+    return result;\n+}\n+\n+static OSSL_ECHSTORE *ech_store_from_config(_sslmodulestate *state,\n+                                            Py_buffer *ech_config);\n+\n+/*[clinic input]\n+@critical_section\n+_ssl._SSLSocket.set_ech_config\n+\n+    ech_config: Py_buffer\n+    /\n+\n+Set the ECH configuration for this connection.\n+\n+This replaces any configuration inherited from the context and\n+must be called before the handshake starts.\n+[clinic start generated code]*/\n+\n+static PyObject *\n+_ssl__SSLSocket_set_ech_config_impl(PySSLSocket *self, Py_buffer *ech_config)\n+/*[clinic end generated code: output=c9d2639cc222eae9 input=c331e306213d39d9]*/\n+{\n+    if (self->socket_type != PY_SSL_CLIENT) {\n+        PyErr_SetString(PyExc_ValueError,\n+                        \"Cannot set ECH configuration for server-side SSLSocket.\");\n+        return NULL;\n+    }\n+    if (!SSL_in_before(self->ssl)) {\n+        PyErr_SetString(PyExc_ValueError,\n+                        \"Cannot set ECH configuration after handshake.\");\n+        return NULL;\n+    }\n+    _sslmodulestate *state = get_state_sock(self);\n+    OSSL_ECHSTORE *store = ech_store_from_config(state, ech_config);\n+    if (store == NULL) {\n+        return NULL;\n+    }\n+    int result = SSL_set1_echstore(self->ssl, store);\n+    OSSL_ECHSTORE_free(store);\n+    if (result != 1) {\n+        _setSSLError(state, NULL, 0, __FILE__, __LINE__);\n+        return NULL;\n+    }\n+    /* Restore the outer ALPN cleared when this socket was created without\n+     * an ECH configuration. */\n+    PySSLContext *ctx = self->ctx;\n+    if (ctx->outer_alpn_protocols != NULL",
+        "comment_created_at": "2026-10-23T19:00:27+00:00",
+        "comment_author": "gpshead",
+        "comment_body": "This reads ctx->outer_alpn_protocols and its length while holding only the socket's critical section. _SSLContext._set_outer_alpn_protocols() frees and replaces that buffer under the context's critical section, which is a different lock. On a free-threaded build, one thread calling SSLSocket.set_ech_config() while another calls SSLContext.set_outer_alpn_protocols() on the shared context can pass a freed pointer to SSL_ech_set1_outer_alpn_protos().\r\n\r\nWrapping the read and the OpenSSL call in Py_BEGIN_CRITICAL_SECTION(ctx) should be enough, since OpenSSL copies the buffer.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4351087350",
+    "pr_number": 160256,
+    "pr_file": "Objects/frameobject.c",
+    "created_at": "2026-10-22T16:51:47+00:00",
+    "commented_code": "return true;\n }\n \n+/* *seen is NULL when dedup is known to be unnecessary.\n+   Otherwise it maps each localsplus name to Py_True if a value was already\n+   kept, or Py_False if the name was only seen on an empty slot. An empty\n+   slot must not count as the kept value, but it still proves the name is\n+   repeated, so it is recorded while _co_localsplus_dedup is unknown.\n+   Returns -1 if the map cannot be created. */\n static int\n-framelocalsproxy_is_first_occurrence(PyObject *seen, PyObject *name)\n+framelocalsproxy_prepare_dedup(PyCodeObject *co, PyObject **seen)\n {\n-    int found = PySet_Contains(seen, name);\n-    if (found < 0) {\n+    *seen = NULL;\n+    if (co->_co_localsplus_dedup == _PYCODE_LOCALSPLUS_DEDUP_UNIQUE) {\n+        return 0;\n+    }\n+    *seen = PyDict_New();\n+    if (*seen == NULL) {\n         return -1;\n     }\n-    if (found) {\n+    return 0;\n+}\n+\n+/* Returns 1 if this slot's value should be kept, 0 if not, -1 on error.\n+   An empty slot is skipped once _co_localsplus_dedup is known. A repeated\n+   name stores _PYCODE_LOCALSPLUS_DEDUP_NEEDED. UNIQUE is stored by the\n+   caller only after the walk finishes without one. */\n+static int\n+framelocalsproxy_visit_name(PyCodeObject *co, int i, PyObject *seen,\n+                            int has_value)\n+{\n+    if (seen == NULL) {\n+        return has_value;\n+    }\n+    if (!has_value &&\n+        co->_co_localsplus_dedup != _PYCODE_LOCALSPLUS_DEDUP_UNKNOWN) {\n         return 0;\n     }\n-    if (PySet_Add(seen, name) < 0) {\n-        return -1;\n+    PyObject *name = PyTuple_GET_ITEM(co->co_localsplusnames, i);\n+    PyObject *prev = PyDict_GetItemWithError(seen, name);\n+    if (prev == NULL) {\n+        if (PyErr_Occurred()) {\n+            return -1;\n+        }\n+        if (PyDict_SetItem(seen, name, has_value ? Py_True : Py_False) < 0) {\n+            return -1;\n+        }\n+        return has_value;\n+    }\n+    else {\n+        co->_co_localsplus_dedup = _PYCODE_LOCALSPLUS_DEDUP_NEEDED;",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "4351087350",
+        "repo_full_name": "python/cpython",
+        "pr_number": 160256,
+        "pr_file": "Objects/frameobject.c",
+        "discussion_id": "4351087350",
+        "commented_code": "@@ -94,20 +94,62 @@ framelocalsproxy_hasval(_PyInterpreterFrame *frame, PyCodeObject *co, int i)\n     return true;\n }\n \n+/* *seen is NULL when dedup is known to be unnecessary.\n+   Otherwise it maps each localsplus name to Py_True if a value was already\n+   kept, or Py_False if the name was only seen on an empty slot. An empty\n+   slot must not count as the kept value, but it still proves the name is\n+   repeated, so it is recorded while _co_localsplus_dedup is unknown.\n+   Returns -1 if the map cannot be created. */\n static int\n-framelocalsproxy_is_first_occurrence(PyObject *seen, PyObject *name)\n+framelocalsproxy_prepare_dedup(PyCodeObject *co, PyObject **seen)\n {\n-    int found = PySet_Contains(seen, name);\n-    if (found < 0) {\n+    *seen = NULL;\n+    if (co->_co_localsplus_dedup == _PYCODE_LOCALSPLUS_DEDUP_UNIQUE) {\n+        return 0;\n+    }\n+    *seen = PyDict_New();\n+    if (*seen == NULL) {\n         return -1;\n     }\n-    if (found) {\n+    return 0;\n+}\n+\n+/* Returns 1 if this slot's value should be kept, 0 if not, -1 on error.\n+   An empty slot is skipped once _co_localsplus_dedup is known. A repeated\n+   name stores _PYCODE_LOCALSPLUS_DEDUP_NEEDED. UNIQUE is stored by the\n+   caller only after the walk finishes without one. */\n+static int\n+framelocalsproxy_visit_name(PyCodeObject *co, int i, PyObject *seen,\n+                            int has_value)\n+{\n+    if (seen == NULL) {\n+        return has_value;\n+    }\n+    if (!has_value &&\n+        co->_co_localsplus_dedup != _PYCODE_LOCALSPLUS_DEDUP_UNKNOWN) {\n         return 0;\n     }\n-    if (PySet_Add(seen, name) < 0) {\n-        return -1;\n+    PyObject *name = PyTuple_GET_ITEM(co->co_localsplusnames, i);\n+    PyObject *prev = PyDict_GetItemWithError(seen, name);\n+    if (prev == NULL) {\n+        if (PyErr_Occurred()) {\n+            return -1;\n+        }\n+        if (PyDict_SetItem(seen, name, has_value ? Py_True : Py_False) < 0) {\n+            return -1;\n+        }\n+        return has_value;\n+    }\n+    else {\n+        co->_co_localsplus_dedup = _PYCODE_LOCALSPLUS_DEDUP_NEEDED;",
+        "comment_created_at": "2026-10-22T16:51:47+00:00",
+        "comment_author": "carljm",
+        "comment_body": "For free-threading I think we might need to use `FT_ATOMIC_LOAD_CHAR_RELAXED` / `FT_ATOMIC_STORE_CHAR_RELAXED` for all runtime accesses to this field, including the final `UNIQUE` stores? Different threads can inspect their own frames while sharing the same code object. This assignment races with the reads in the proxy methods, even after the cache is initialized, because each duplicate-name visit writes `NEEDED` again.\n\nThe following reproduces a TSan read/write data race between `framelocalsproxy_keys` and `framelocalsproxy_visit_name` with a free-threaded debug build of this commit:\n\n```python\nimport sys\nimport threading\n\nassert not sys._is_gil_enabled()\n\ndef make_worker(x):\n    def worker():\n        return [sys._getframe().f_locals.keys() for x in x]\n    return worker\n\nworker = make_worker([1, 2])\nworker()  # Initialize the cache before starting either thread.\nbarrier = threading.Barrier(2)\n\ndef run():\n    barrier.wait()\n    for _ in range(1000):\n        worker()\n\nthreads = [threading.Thread(target=run) for _ in range(2)]\nfor thread in threads:\n    thread.start()\nfor thread in threads:\n    thread.join()\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3568268330",
+    "pr_number": 143305,
+    "pr_file": "Objects/memoryobject.c",
+    "created_at": "2026-07-13T05:39:12+00:00",
+    "commented_code": "goto result;\n         }\n     }\n+    /* Prevent memoryview object from being released and its underlying buffer\n+       reshaped during a mixed format comparison loop. */\n+    // See https://github.com/python/cpython/issues/142663.\n+    ((PyMemoryViewObject *)v)->exports++;",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "3568268330",
+        "repo_full_name": "python/cpython",
+        "pr_number": 143305,
+        "pr_file": "Objects/memoryobject.c",
+        "discussion_id": "3568268330",
+        "commented_code": "@@ -3286,6 +3287,13 @@ memory_richcompare(PyObject *v, PyObject *w, int op)\n             goto result;\n         }\n     }\n+    /* Prevent memoryview object from being released and its underlying buffer\n+       reshaped during a mixed format comparison loop. */\n+    // See https://github.com/python/cpython/issues/142663.\n+    ((PyMemoryViewObject *)v)->exports++;",
+        "comment_created_at": "2026-07-13T05:39:12+00:00",
+        "comment_author": "serhiy-storchaka",
+        "comment_body": "All other modifications of `exports` use `FT_ATOMIC_ADD_SSIZE`. Please use it here and in other 3 sites.\n```suggestion\n    FT_ATOMIC_ADD_SSIZE(((PyMemoryViewObject *)v)->exports, 1);\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3730300529",
+        "repo_full_name": "python/cpython",
+        "pr_number": 143305,
+        "pr_file": "Objects/memoryobject.c",
+        "discussion_id": "3568268330",
+        "commented_code": "@@ -3286,6 +3287,13 @@ memory_richcompare(PyObject *v, PyObject *w, int op)\n             goto result;\n         }\n     }\n+    /* Prevent memoryview object from being released and its underlying buffer\n+       reshaped during a mixed format comparison loop. */\n+    // See https://github.com/python/cpython/issues/142663.\n+    ((PyMemoryViewObject *)v)->exports++;",
+        "comment_created_at": "2026-08-06T15:56:04+00:00",
+        "comment_author": "vstinner",
+        "comment_body": "Oh right. I pushed a change to use FT_ATOMIC_ADD_SSIZE().",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3730297059",
+    "pr_number": 143305,
+    "pr_file": "Objects/memoryobject.c",
+    "created_at": "2026-08-06T15:55:28+00:00",
+    "commented_code": "vfmt, unpack_v, unpack_w);\n     }\n \n+    _PyMemoryView_CAST(v)->exports--;\n+    if (w_is_mv) {\n+        _PyMemoryView_CAST(w)->exports--;\n+    }",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "3730297059",
+        "repo_full_name": "python/cpython",
+        "pr_number": 143305,
+        "pr_file": "Objects/memoryobject.c",
+        "discussion_id": "3730297059",
+        "commented_code": "@@ -3321,6 +3329,11 @@ memory_richcompare(PyObject *v, PyObject *w, int op)\n                         vfmt, unpack_v, unpack_w);\n     }\n \n+    _PyMemoryView_CAST(v)->exports--;\n+    if (w_is_mv) {\n+        _PyMemoryView_CAST(w)->exports--;\n+    }",
+        "comment_created_at": "2026-08-06T15:55:28+00:00",
+        "comment_author": "vstinner",
+        "comment_body": "```suggestion\n    FT_ATOMIC_ADD_SSIZE(_PyMemoryView_CAST(v)->exports, -1);\n    if (w_is_mv) {\n        FT_ATOMIC_ADD_SSIZE(_PyMemoryView_CAST(w)->exports, -1);\n    }\n```",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

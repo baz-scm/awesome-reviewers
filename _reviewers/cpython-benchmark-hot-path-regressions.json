@@ -1,0 +1,162 @@
+[
+  {
+    "discussion_id": "4371847291",
+    "pr_number": 160662,
+    "pr_file": "Python/gc.c",
+    "created_at": "2026-10-25T18:12:20+00:00",
+    "commented_code": "/* Collect statistics on uncollectable objects found and print\n      * debugging information. */\n-    Py_ssize_t n = 0;\n-    for (gc = GC_NEXT(&finalizers); gc != &finalizers; gc = GC_NEXT(gc)) {\n-        n++;\n-        if (gcstate->debug & _PyGC_DEBUG_UNCOLLECTABLE)\n-            debug_cycle(\"uncollectable\", FROM_GC(gc));\n+    if (gcstate->debug & _PyGC_DEBUG_UNCOLLECTABLE) {\n+        debug_cycles(\"uncollectable\", &finalizers);\n     }\n-    stats.uncollectable = n;\n+    stats.uncollectable = gc_list_size(&finalizers);",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "4371847291",
+        "repo_full_name": "python/cpython",
+        "pr_number": 160662,
+        "pr_file": "Python/gc.c",
+        "discussion_id": "4371847291",
+        "commented_code": "@@ -1603,13 +1621,10 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)\n \n     /* Collect statistics on uncollectable objects found and print\n      * debugging information. */\n-    Py_ssize_t n = 0;\n-    for (gc = GC_NEXT(&finalizers); gc != &finalizers; gc = GC_NEXT(gc)) {\n-        n++;\n-        if (gcstate->debug & _PyGC_DEBUG_UNCOLLECTABLE)\n-            debug_cycle(\"uncollectable\", FROM_GC(gc));\n+    if (gcstate->debug & _PyGC_DEBUG_UNCOLLECTABLE) {\n+        debug_cycles(\"uncollectable\", &finalizers);\n     }\n-    stats.uncollectable = n;\n+    stats.uncollectable = gc_list_size(&finalizers);",
+        "comment_created_at": "2026-10-25T18:12:20+00:00",
+        "comment_author": "sergey-miryanov",
+        "comment_body": "This requires an extra pass, which we should avoid.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4375446653",
+        "repo_full_name": "python/cpython",
+        "pr_number": 160662,
+        "pr_file": "Python/gc.c",
+        "discussion_id": "4371847291",
+        "commented_code": "@@ -1603,13 +1621,10 @@ gc_collect_main(PyThreadState *tstate, int generation, _PyGC_Reason reason)\n \n     /* Collect statistics on uncollectable objects found and print\n      * debugging information. */\n-    Py_ssize_t n = 0;\n-    for (gc = GC_NEXT(&finalizers); gc != &finalizers; gc = GC_NEXT(gc)) {\n-        n++;\n-        if (gcstate->debug & _PyGC_DEBUG_UNCOLLECTABLE)\n-            debug_cycle(\"uncollectable\", FROM_GC(gc));\n+    if (gcstate->debug & _PyGC_DEBUG_UNCOLLECTABLE) {\n+        debug_cycles(\"uncollectable\", &finalizers);\n     }\n-    stats.uncollectable = n;\n+    stats.uncollectable = gc_list_size(&finalizers);",
+        "comment_created_at": "2026-10-26T08:53:06+00:00",
+        "comment_author": "johng",
+        "comment_body": "This can be avoided by returning number of seen items in the debug case, in the non debug case we calculate as before but it's not a duplicate call",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4364562929",
+    "pr_number": 160256,
+    "pr_file": "Objects/frameobject.c",
+    "created_at": "2026-10-23T21:55:35+00:00",
+    "commented_code": "return true;\n }\n \n+/* *seen is NULL when dedup is known to be unnecessary.\n+   Otherwise it maps each localsplus name to Py_True if a value was already\n+   kept, or Py_False if the name was only seen on an empty slot. An empty\n+   slot must not count as the kept value, but it still proves the name is\n+   repeated, so it is recorded while _co_localsplus_dedup is unknown.\n+   Returns -1 if the map cannot be created. */\n static int\n-framelocalsproxy_is_first_occurrence(PyObject *seen, PyObject *name)\n+framelocalsproxy_prepare_dedup(PyCodeObject *co, PyObject **seen)\n {\n-    int found = PySet_Contains(seen, name);\n-    if (found < 0) {\n+    *seen = NULL;\n+    if (FT_ATOMIC_LOAD_CHAR_RELAXED(co->_co_localsplus_dedup) ==\n+            _PYCODE_LOCALSPLUS_DEDUP_UNIQUE) {\n+        return 0;\n+    }\n+    *seen = PyDict_New();\n+    if (*seen == NULL) {\n         return -1;\n     }\n-    if (found) {\n+    return 0;\n+}\n+\n+/* Returns 1 if this slot's value should be kept, 0 if not, -1 on error.\n+   An empty slot is skipped once _co_localsplus_dedup is known. A repeated\n+   name stores _PYCODE_LOCALSPLUS_DEDUP_NEEDED. UNIQUE is stored by the\n+   caller only after the walk finishes without one. */\n+static int\n+framelocalsproxy_visit_name(PyCodeObject *co, int i, PyObject *seen,\n+                            int has_value)\n+{\n+    if (seen == NULL) {\n+        return has_value;\n+    }\n+    if (!has_value &&\n+        FT_ATOMIC_LOAD_CHAR_RELAXED(co->_co_localsplus_dedup) !=\n+            _PYCODE_LOCALSPLUS_DEDUP_UNKNOWN) {\n         return 0;\n     }\n-    if (PySet_Add(seen, name) < 0) {\n-        return -1;\n+    PyObject *name = PyTuple_GET_ITEM(co->co_localsplusnames, i);\n+    PyObject *prev = PyDict_GetItemWithError(seen, name);\n+    if (prev == NULL) {\n+        if (PyErr_Occurred()) {\n+            return -1;\n+        }\n+        if (PyDict_SetItem(seen, name, has_value ? Py_True : Py_False) < 0) {",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "4364562929",
+        "repo_full_name": "python/cpython",
+        "pr_number": 160256,
+        "pr_file": "Objects/frameobject.c",
+        "discussion_id": "4364562929",
+        "commented_code": "@@ -94,20 +94,65 @@ framelocalsproxy_hasval(_PyInterpreterFrame *frame, PyCodeObject *co, int i)\n     return true;\n }\n \n+/* *seen is NULL when dedup is known to be unnecessary.\n+   Otherwise it maps each localsplus name to Py_True if a value was already\n+   kept, or Py_False if the name was only seen on an empty slot. An empty\n+   slot must not count as the kept value, but it still proves the name is\n+   repeated, so it is recorded while _co_localsplus_dedup is unknown.\n+   Returns -1 if the map cannot be created. */\n static int\n-framelocalsproxy_is_first_occurrence(PyObject *seen, PyObject *name)\n+framelocalsproxy_prepare_dedup(PyCodeObject *co, PyObject **seen)\n {\n-    int found = PySet_Contains(seen, name);\n-    if (found < 0) {\n+    *seen = NULL;\n+    if (FT_ATOMIC_LOAD_CHAR_RELAXED(co->_co_localsplus_dedup) ==\n+            _PYCODE_LOCALSPLUS_DEDUP_UNIQUE) {\n+        return 0;\n+    }\n+    *seen = PyDict_New();\n+    if (*seen == NULL) {\n         return -1;\n     }\n-    if (found) {\n+    return 0;\n+}\n+\n+/* Returns 1 if this slot's value should be kept, 0 if not, -1 on error.\n+   An empty slot is skipped once _co_localsplus_dedup is known. A repeated\n+   name stores _PYCODE_LOCALSPLUS_DEDUP_NEEDED. UNIQUE is stored by the\n+   caller only after the walk finishes without one. */\n+static int\n+framelocalsproxy_visit_name(PyCodeObject *co, int i, PyObject *seen,\n+                            int has_value)\n+{\n+    if (seen == NULL) {\n+        return has_value;\n+    }\n+    if (!has_value &&\n+        FT_ATOMIC_LOAD_CHAR_RELAXED(co->_co_localsplus_dedup) !=\n+            _PYCODE_LOCALSPLUS_DEDUP_UNKNOWN) {\n         return 0;\n     }\n-    if (PySet_Add(seen, name) < 0) {\n-        return -1;\n+    PyObject *name = PyTuple_GET_ITEM(co->co_localsplusnames, i);\n+    PyObject *prev = PyDict_GetItemWithError(seen, name);\n+    if (prev == NULL) {\n+        if (PyErr_Occurred()) {\n+            return -1;\n+        }\n+        if (PyDict_SetItem(seen, name, has_value ? Py_True : Py_False) < 0) {",
+        "comment_created_at": "2026-10-23T21:55:35+00:00",
+        "comment_author": "carljm",
+        "comment_body": "While the cache is `UNKNOWN`, this inserts an entry even for a local that hasn't been bound yet. A debugger enumerating locals on function entry can hit this with most slots still empty. I measured the first `len(proxy)` on a generator suspended at its first `yield`, with one bound argument and 256 unbound locals. The median went from 149 ns on the parent to 6,239 ns on this PR, and peak traced allocation during the call went from 216 to 9,776 bytes. I used matched GIL-enabled macOS arm64 release builds, seven runs per revision, and a fresh code object for each first read. Frame and proxy creation were outside the timer.\n\nCould we track just the bound names on a sparse walk, mark `NEEDED` if two of them match, and otherwise leave the cache `UNKNOWN` until a walk can establish uniqueness?",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4366980054",
+        "repo_full_name": "python/cpython",
+        "pr_number": 160256,
+        "pr_file": "Objects/frameobject.c",
+        "discussion_id": "4364562929",
+        "commented_code": "@@ -94,20 +94,65 @@ framelocalsproxy_hasval(_PyInterpreterFrame *frame, PyCodeObject *co, int i)\n     return true;\n }\n \n+/* *seen is NULL when dedup is known to be unnecessary.\n+   Otherwise it maps each localsplus name to Py_True if a value was already\n+   kept, or Py_False if the name was only seen on an empty slot. An empty\n+   slot must not count as the kept value, but it still proves the name is\n+   repeated, so it is recorded while _co_localsplus_dedup is unknown.\n+   Returns -1 if the map cannot be created. */\n static int\n-framelocalsproxy_is_first_occurrence(PyObject *seen, PyObject *name)\n+framelocalsproxy_prepare_dedup(PyCodeObject *co, PyObject **seen)\n {\n-    int found = PySet_Contains(seen, name);\n-    if (found < 0) {\n+    *seen = NULL;\n+    if (FT_ATOMIC_LOAD_CHAR_RELAXED(co->_co_localsplus_dedup) ==\n+            _PYCODE_LOCALSPLUS_DEDUP_UNIQUE) {\n+        return 0;\n+    }\n+    *seen = PyDict_New();\n+    if (*seen == NULL) {\n         return -1;\n     }\n-    if (found) {\n+    return 0;\n+}\n+\n+/* Returns 1 if this slot's value should be kept, 0 if not, -1 on error.\n+   An empty slot is skipped once _co_localsplus_dedup is known. A repeated\n+   name stores _PYCODE_LOCALSPLUS_DEDUP_NEEDED. UNIQUE is stored by the\n+   caller only after the walk finishes without one. */\n+static int\n+framelocalsproxy_visit_name(PyCodeObject *co, int i, PyObject *seen,\n+                            int has_value)\n+{\n+    if (seen == NULL) {\n+        return has_value;\n+    }\n+    if (!has_value &&\n+        FT_ATOMIC_LOAD_CHAR_RELAXED(co->_co_localsplus_dedup) !=\n+            _PYCODE_LOCALSPLUS_DEDUP_UNKNOWN) {\n         return 0;\n     }\n-    if (PySet_Add(seen, name) < 0) {\n-        return -1;\n+    PyObject *name = PyTuple_GET_ITEM(co->co_localsplusnames, i);\n+    PyObject *prev = PyDict_GetItemWithError(seen, name);\n+    if (prev == NULL) {\n+        if (PyErr_Occurred()) {\n+            return -1;\n+        }\n+        if (PyDict_SetItem(seen, name, has_value ? Py_True : Py_False) < 0) {",
+        "comment_created_at": "2026-10-24T11:27:01+00:00",
+        "comment_author": "iritkatriel",
+        "comment_body": "Yes, I had that initially but then tried to be too clever. I'll do that.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4367074799",
+        "repo_full_name": "python/cpython",
+        "pr_number": 160256,
+        "pr_file": "Objects/frameobject.c",
+        "discussion_id": "4364562929",
+        "commented_code": "@@ -94,20 +94,65 @@ framelocalsproxy_hasval(_PyInterpreterFrame *frame, PyCodeObject *co, int i)\n     return true;\n }\n \n+/* *seen is NULL when dedup is known to be unnecessary.\n+   Otherwise it maps each localsplus name to Py_True if a value was already\n+   kept, or Py_False if the name was only seen on an empty slot. An empty\n+   slot must not count as the kept value, but it still proves the name is\n+   repeated, so it is recorded while _co_localsplus_dedup is unknown.\n+   Returns -1 if the map cannot be created. */\n static int\n-framelocalsproxy_is_first_occurrence(PyObject *seen, PyObject *name)\n+framelocalsproxy_prepare_dedup(PyCodeObject *co, PyObject **seen)\n {\n-    int found = PySet_Contains(seen, name);\n-    if (found < 0) {\n+    *seen = NULL;\n+    if (FT_ATOMIC_LOAD_CHAR_RELAXED(co->_co_localsplus_dedup) ==\n+            _PYCODE_LOCALSPLUS_DEDUP_UNIQUE) {\n+        return 0;\n+    }\n+    *seen = PyDict_New();\n+    if (*seen == NULL) {\n         return -1;\n     }\n-    if (found) {\n+    return 0;\n+}\n+\n+/* Returns 1 if this slot's value should be kept, 0 if not, -1 on error.\n+   An empty slot is skipped once _co_localsplus_dedup is known. A repeated\n+   name stores _PYCODE_LOCALSPLUS_DEDUP_NEEDED. UNIQUE is stored by the\n+   caller only after the walk finishes without one. */\n+static int\n+framelocalsproxy_visit_name(PyCodeObject *co, int i, PyObject *seen,\n+                            int has_value)\n+{\n+    if (seen == NULL) {\n+        return has_value;\n+    }\n+    if (!has_value &&\n+        FT_ATOMIC_LOAD_CHAR_RELAXED(co->_co_localsplus_dedup) !=\n+            _PYCODE_LOCALSPLUS_DEDUP_UNKNOWN) {\n         return 0;\n     }\n-    if (PySet_Add(seen, name) < 0) {\n-        return -1;\n+    PyObject *name = PyTuple_GET_ITEM(co->co_localsplusnames, i);\n+    PyObject *prev = PyDict_GetItemWithError(seen, name);\n+    if (prev == NULL) {\n+        if (PyErr_Occurred()) {\n+            return -1;\n+        }\n+        if (PyDict_SetItem(seen, name, has_value ? Py_True : Py_False) < 0) {",
+        "comment_created_at": "2026-10-24T12:10:48+00:00",
+        "comment_author": "iritkatriel",
+        "comment_body": "Well, not exactly that but I had a separate one-time scan to decide dedup based on the names so everything else is simple.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4367152565",
+        "repo_full_name": "python/cpython",
+        "pr_number": 160256,
+        "pr_file": "Objects/frameobject.c",
+        "discussion_id": "4364562929",
+        "commented_code": "@@ -94,20 +94,65 @@ framelocalsproxy_hasval(_PyInterpreterFrame *frame, PyCodeObject *co, int i)\n     return true;\n }\n \n+/* *seen is NULL when dedup is known to be unnecessary.\n+   Otherwise it maps each localsplus name to Py_True if a value was already\n+   kept, or Py_False if the name was only seen on an empty slot. An empty\n+   slot must not count as the kept value, but it still proves the name is\n+   repeated, so it is recorded while _co_localsplus_dedup is unknown.\n+   Returns -1 if the map cannot be created. */\n static int\n-framelocalsproxy_is_first_occurrence(PyObject *seen, PyObject *name)\n+framelocalsproxy_prepare_dedup(PyCodeObject *co, PyObject **seen)\n {\n-    int found = PySet_Contains(seen, name);\n-    if (found < 0) {\n+    *seen = NULL;\n+    if (FT_ATOMIC_LOAD_CHAR_RELAXED(co->_co_localsplus_dedup) ==\n+            _PYCODE_LOCALSPLUS_DEDUP_UNIQUE) {\n+        return 0;\n+    }\n+    *seen = PyDict_New();\n+    if (*seen == NULL) {\n         return -1;\n     }\n-    if (found) {\n+    return 0;\n+}\n+\n+/* Returns 1 if this slot's value should be kept, 0 if not, -1 on error.\n+   An empty slot is skipped once _co_localsplus_dedup is known. A repeated\n+   name stores _PYCODE_LOCALSPLUS_DEDUP_NEEDED. UNIQUE is stored by the\n+   caller only after the walk finishes without one. */\n+static int\n+framelocalsproxy_visit_name(PyCodeObject *co, int i, PyObject *seen,\n+                            int has_value)\n+{\n+    if (seen == NULL) {\n+        return has_value;\n+    }\n+    if (!has_value &&\n+        FT_ATOMIC_LOAD_CHAR_RELAXED(co->_co_localsplus_dedup) !=\n+            _PYCODE_LOCALSPLUS_DEDUP_UNKNOWN) {\n         return 0;\n     }\n-    if (PySet_Add(seen, name) < 0) {\n-        return -1;\n+    PyObject *name = PyTuple_GET_ITEM(co->co_localsplusnames, i);\n+    PyObject *prev = PyDict_GetItemWithError(seen, name);\n+    if (prev == NULL) {\n+        if (PyErr_Occurred()) {\n+            return -1;\n+        }\n+        if (PyDict_SetItem(seen, name, has_value ? Py_True : Py_False) < 0) {",
+        "comment_created_at": "2026-10-24T12:44:21+00:00",
+        "comment_author": "iritkatriel",
+        "comment_body": "I changed it to what you suggested. So it's optimised for the sparse case now. Does that make sense? ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4364562938",
+    "pr_number": 160256,
+    "pr_file": "Objects/frameobject.c",
+    "created_at": "2026-10-23T21:55:35+00:00",
+    "commented_code": "return true;\n }\n \n+/* *seen is NULL when dedup is known to be unnecessary.\n+   Otherwise it maps each localsplus name to Py_True if a value was already\n+   kept, or Py_False if the name was only seen on an empty slot. An empty\n+   slot must not count as the kept value, but it still proves the name is\n+   repeated, so it is recorded while _co_localsplus_dedup is unknown.\n+   Returns -1 if the map cannot be created. */\n static int\n-framelocalsproxy_is_first_occurrence(PyObject *seen, PyObject *name)\n+framelocalsproxy_prepare_dedup(PyCodeObject *co, PyObject **seen)\n {\n-    int found = PySet_Contains(seen, name);\n-    if (found < 0) {\n+    *seen = NULL;\n+    if (FT_ATOMIC_LOAD_CHAR_RELAXED(co->_co_localsplus_dedup) ==\n+            _PYCODE_LOCALSPLUS_DEDUP_UNIQUE) {\n+        return 0;\n+    }\n+    *seen = PyDict_New();",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "4364562938",
+        "repo_full_name": "python/cpython",
+        "pr_number": 160256,
+        "pr_file": "Objects/frameobject.c",
+        "discussion_id": "4364562938",
+        "commented_code": "@@ -94,20 +94,65 @@ framelocalsproxy_hasval(_PyInterpreterFrame *frame, PyCodeObject *co, int i)\n     return true;\n }\n \n+/* *seen is NULL when dedup is known to be unnecessary.\n+   Otherwise it maps each localsplus name to Py_True if a value was already\n+   kept, or Py_False if the name was only seen on an empty slot. An empty\n+   slot must not count as the kept value, but it still proves the name is\n+   repeated, so it is recorded while _co_localsplus_dedup is unknown.\n+   Returns -1 if the map cannot be created. */\n static int\n-framelocalsproxy_is_first_occurrence(PyObject *seen, PyObject *name)\n+framelocalsproxy_prepare_dedup(PyCodeObject *co, PyObject **seen)\n {\n-    int found = PySet_Contains(seen, name);\n-    if (found < 0) {\n+    *seen = NULL;\n+    if (FT_ATOMIC_LOAD_CHAR_RELAXED(co->_co_localsplus_dedup) ==\n+            _PYCODE_LOCALSPLUS_DEDUP_UNIQUE) {\n+        return 0;\n+    }\n+    *seen = PyDict_New();",
+        "comment_created_at": "2026-10-23T21:55:35+00:00",
+        "comment_author": "carljm",
+        "comment_body": "Once the cache says `NEEDED`, we skip unbound slots, so every value we put in this dict is `True`. Could we keep the old set of bound names for that case and only write `NEEDED` when we first discover a duplicate?\n\nI timed repeated reads inside `[probe(sys._getframe().f_locals) for x in x]`, with 14 bound arguments plus the comprehension target and the enclosing `x`. Both `x` slots were live. These are median times per call over seven runs per revision on GIL-enabled macOS arm64 release builds.\n\n| Call | PR parent | This PR |\n| --- | ---: | ---: |\n| `len(proxy)` | 191 ns | 345 ns |\n| `proxy.keys()` | 239 ns | 390 ns |\n| `proxy.values()` | 243 ns | 391 ns |\n| `proxy.items()` | 346 ns | 507 ns |\n\nChanging only the target to `y` gives 16 unique names and shows the intended speedup for `len(proxy)`, from 198 ns to 25 ns.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4063532771",
+    "pr_number": 156819,
+    "pr_file": "Objects/frameobject.c",
+    "created_at": "2026-09-21T15:16:23+00:00",
+    "commented_code": "if (names == NULL) {\n         return NULL;\n     }\n+    // An inlined comprehension cell can share a name with a free var.\n+    PyObject *seen = PySet_New(NULL);",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "4063532771",
+        "repo_full_name": "python/cpython",
+        "pr_number": 156819,
+        "pr_file": "Objects/frameobject.c",
+        "discussion_id": "4063532771",
+        "commented_code": "@@ -380,16 +396,28 @@ framelocalsproxy_keys(PyObject *self, PyObject *Py_UNUSED(ignored))\n     if (names == NULL) {\n         return NULL;\n     }\n+    // An inlined comprehension cell can share a name with a free var.\n+    PyObject *seen = PySet_New(NULL);",
+        "comment_created_at": "2026-09-21T15:16:23+00:00",
+        "comment_author": "carljm",
+        "comment_body": "I wonder if we need to do any compilation performance testing of this PR on release builds? We are now doing this set allocation and per-name deduplication for every frame, including ordinary functions with no comprehensions, cells, or free variables. (Same for `values()`, `items()`, and `len()`.)\r\n\r\nIf this cost is totally invisible in real workloads, maybe this is fine and we just keep the code simpler. But it also seems quite feasible to limit the duplicate-tracking cost to code objects that could actually be affected by it.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4064712365",
+        "repo_full_name": "python/cpython",
+        "pr_number": 156819,
+        "pr_file": "Objects/frameobject.c",
+        "discussion_id": "4063532771",
+        "commented_code": "@@ -380,16 +396,28 @@ framelocalsproxy_keys(PyObject *self, PyObject *Py_UNUSED(ignored))\n     if (names == NULL) {\n         return NULL;\n     }\n+    // An inlined comprehension cell can share a name with a free var.\n+    PyObject *seen = PySet_New(NULL);",
+        "comment_created_at": "2026-09-21T17:30:02+00:00",
+        "comment_author": "iritkatriel",
+        "comment_body": "Good point, though I think this code impacts introspection tools rather than the compiler. Let me see if it's easy to optimize.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4070036919",
+        "repo_full_name": "python/cpython",
+        "pr_number": 156819,
+        "pr_file": "Objects/frameobject.c",
+        "discussion_id": "4063532771",
+        "commented_code": "@@ -380,16 +396,28 @@ framelocalsproxy_keys(PyObject *self, PyObject *Py_UNUSED(ignored))\n     if (names == NULL) {\n         return NULL;\n     }\n+    // An inlined comprehension cell can share a name with a free var.\n+    PyObject *seen = PySet_New(NULL);",
+        "comment_created_at": "2026-09-22T09:07:29+00:00",
+        "comment_author": "iritkatriel",
+        "comment_body": "Doable, but not trivial. I'd like to defer the optimisation to a separate PR. ",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

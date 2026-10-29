@@ -1,0 +1,136 @@
+[
+  {
+    "discussion_id": "4212414829",
+    "pr_number": 158571,
+    "pr_file": "Lib/test/test_concurrent_futures/test_deadlock.py",
+    "created_at": "2026-10-07T21:56:44+00:00",
+    "commented_code": "signal.signal(signal.SIGALRM, old_handler)\n \n \n+    @warnings_helper.ignore_fork_in_thread_deprecation_warnings()\n+    def test_shutdown_should_not_deadlock_if_result_pipe_full(self):\n+        # Exiting workers put their pid on the result queue while shutdown()\n+        # joins them. If nothing drains the queue, a full pipe blocks the\n+        # workers forever. Fill the pipe once the executor manager thread\n+        # stops reading results, right before the workers are told to exit.\n+        self.executor.shutdown(wait=True)\n+\n+        data = b\"a\" * support.PIPE_MAX_SIZE\n+        fillers = []\n+        shutdown_workers = futures.process._ExecutorManagerThread.shutdown_workers\n+        def mock_shutdown_workers(self):\n+            # The put() blocks holding the result queue's write lock until\n+            # the pipe is drained, so every exiting worker blocks behind it.\n+            filler = threading.Thread(target=self.result_queue.put,\n+                                      args=(data,))\n+            filler.start()",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "4212414829",
+        "repo_full_name": "python/cpython",
+        "pr_number": 158571,
+        "pr_file": "Lib/test/test_concurrent_futures/test_deadlock.py",
+        "discussion_id": "4212414829",
+        "commented_code": "@@ -329,6 +330,44 @@ def clear(self):\n                     signal.signal(signal.SIGALRM, old_handler)\n \n \n+    @warnings_helper.ignore_fork_in_thread_deprecation_warnings()\n+    def test_shutdown_should_not_deadlock_if_result_pipe_full(self):\n+        # Exiting workers put their pid on the result queue while shutdown()\n+        # joins them. If nothing drains the queue, a full pipe blocks the\n+        # workers forever. Fill the pipe once the executor manager thread\n+        # stops reading results, right before the workers are told to exit.\n+        self.executor.shutdown(wait=True)\n+\n+        data = b\"a\" * support.PIPE_MAX_SIZE\n+        fillers = []\n+        shutdown_workers = futures.process._ExecutorManagerThread.shutdown_workers\n+        def mock_shutdown_workers(self):\n+            # The put() blocks holding the result queue's write lock until\n+            # the pipe is drained, so every exiting worker blocks behind it.\n+            filler = threading.Thread(target=self.result_queue.put,\n+                                      args=(data,))\n+            filler.start()",
+        "comment_created_at": "2026-10-07T21:56:44+00:00",
+        "comment_author": "ngoldbaum",
+        "comment_body": "`filler.start()` does not guarantee that the filler has acquired the result queue\u2019s write lock before `shutdown_workers()` releases the workers.\n\nI think you need to add additional synchronization to make the race deterministic.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4231291564",
+    "pr_number": 158571,
+    "pr_file": "Lib/test/test_concurrent_futures/test_deadlock.py",
+    "created_at": "2026-10-09T14:38:02+00:00",
+    "commented_code": "signal.signal(signal.SIGALRM, old_handler)\n \n \n+    @warnings_helper.ignore_fork_in_thread_deprecation_warnings()\n+    def test_shutdown_should_not_deadlock_if_result_pipe_full(self):\n+        # Workers must not write to the result queue on shutdown: the\n+        # executor manager thread does not read it while it joins them.\n+        # Fill the pipe once the executor manager thread stops reading\n+        # results, right before the workers are told to exit.\n+        self.executor.shutdown(wait=True)\n+\n+        data = b\"a\" * support.PIPE_MAX_SIZE\n+        join_executor_internals = (\n+            futures.process._ExecutorManagerThread._join_executor_internals)\n+        def mock_join_executor_internals(self, broken=False):\n+            # The put() blocks holding the result queue's write lock until\n+            # the pipe is drained, so any worker writing to the result queue\n+            # on exit blocks behind it.\n+            filler = threading.Thread(target=self.result_queue.put,\n+                                      args=(data,))\n+            filler.start()\n+            wlock = self.result_queue._wlock\n+            if wlock is not None:\n+                # Wait for the filler to hold the write lock.\n+                while wlock.acquire(block=False):\n+                    wlock.release()\n+                    time.sleep(0.001)\n+            join_executor_internals(self, broken)\n+            # Unblock the filler.\n+            self.result_queue.get()\n+            filler.join()\n+\n+        executor = self.executor_type(max_workers=2,\n+                                      mp_context=self.get_context())\n+        self.executor = executor  # Allow clean up in fail_on_deadlock\n+        with unittest.mock.patch.object(futures.process._ExecutorManagerThread,\n+                                        '_join_executor_internals',\n+                                        mock_join_executor_internals):\n+            self.assertEqual(list(executor.map(int, range(10))),\n+                             list(range(10)))\n+            shutdown = threading.Thread(target=executor.shutdown)\n+            shutdown.start()\n+            shutdown.join(self.TIMEOUT)\n+            if shutdown.is_alive():\n+                self._fail_on_deadlock(executor)",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "4231291564",
+        "repo_full_name": "python/cpython",
+        "pr_number": 158571,
+        "pr_file": "Lib/test/test_concurrent_futures/test_deadlock.py",
+        "discussion_id": "4231291564",
+        "commented_code": "@@ -329,6 +330,50 @@ def clear(self):\n                     signal.signal(signal.SIGALRM, old_handler)\n \n \n+    @warnings_helper.ignore_fork_in_thread_deprecation_warnings()\n+    def test_shutdown_should_not_deadlock_if_result_pipe_full(self):\n+        # Workers must not write to the result queue on shutdown: the\n+        # executor manager thread does not read it while it joins them.\n+        # Fill the pipe once the executor manager thread stops reading\n+        # results, right before the workers are told to exit.\n+        self.executor.shutdown(wait=True)\n+\n+        data = b\"a\" * support.PIPE_MAX_SIZE\n+        join_executor_internals = (\n+            futures.process._ExecutorManagerThread._join_executor_internals)\n+        def mock_join_executor_internals(self, broken=False):\n+            # The put() blocks holding the result queue's write lock until\n+            # the pipe is drained, so any worker writing to the result queue\n+            # on exit blocks behind it.\n+            filler = threading.Thread(target=self.result_queue.put,\n+                                      args=(data,))\n+            filler.start()\n+            wlock = self.result_queue._wlock\n+            if wlock is not None:\n+                # Wait for the filler to hold the write lock.\n+                while wlock.acquire(block=False):\n+                    wlock.release()\n+                    time.sleep(0.001)\n+            join_executor_internals(self, broken)\n+            # Unblock the filler.\n+            self.result_queue.get()\n+            filler.join()\n+\n+        executor = self.executor_type(max_workers=2,\n+                                      mp_context=self.get_context())\n+        self.executor = executor  # Allow clean up in fail_on_deadlock\n+        with unittest.mock.patch.object(futures.process._ExecutorManagerThread,\n+                                        '_join_executor_internals',\n+                                        mock_join_executor_internals):\n+            self.assertEqual(list(executor.map(int, range(10))),\n+                             list(range(10)))\n+            shutdown = threading.Thread(target=executor.shutdown)\n+            shutdown.start()\n+            shutdown.join(self.TIMEOUT)\n+            if shutdown.is_alive():\n+                self._fail_on_deadlock(executor)",
+        "comment_created_at": "2026-10-09T14:38:02+00:00",
+        "comment_author": "ngoldbaum",
+        "comment_body": "The timeout helper calls `shutdown()` concurrently with the shutdown thread, which can double-close `_result_queue` during cleanup.\nCould we follow the existing `test_shutdown_no_wait()` pattern instead, saving and joining the executor manager thread directly?\nHere's a way around this, using the internal `threading_helper`, available in `test.support`:\n\n```suggestion\n            manager_thread = executor._executor_manager_thread\n            processes = tuple(executor._processes.values())\n            executor.shutdown(wait=False)\n            try:\n                threading_helper.join_thread(manager_thread, self.TIMEOUT)\n            finally:\n                if manager_thread.is_alive():\n                    for process in processes:\n                        process.terminate()\n                    threading_helper.join_thread(manager_thread, self.TIMEOUT)\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4245524002",
+        "repo_full_name": "python/cpython",
+        "pr_number": 158571,
+        "pr_file": "Lib/test/test_concurrent_futures/test_deadlock.py",
+        "discussion_id": "4231291564",
+        "commented_code": "@@ -329,6 +330,50 @@ def clear(self):\n                     signal.signal(signal.SIGALRM, old_handler)\n \n \n+    @warnings_helper.ignore_fork_in_thread_deprecation_warnings()\n+    def test_shutdown_should_not_deadlock_if_result_pipe_full(self):\n+        # Workers must not write to the result queue on shutdown: the\n+        # executor manager thread does not read it while it joins them.\n+        # Fill the pipe once the executor manager thread stops reading\n+        # results, right before the workers are told to exit.\n+        self.executor.shutdown(wait=True)\n+\n+        data = b\"a\" * support.PIPE_MAX_SIZE\n+        join_executor_internals = (\n+            futures.process._ExecutorManagerThread._join_executor_internals)\n+        def mock_join_executor_internals(self, broken=False):\n+            # The put() blocks holding the result queue's write lock until\n+            # the pipe is drained, so any worker writing to the result queue\n+            # on exit blocks behind it.\n+            filler = threading.Thread(target=self.result_queue.put,\n+                                      args=(data,))\n+            filler.start()\n+            wlock = self.result_queue._wlock\n+            if wlock is not None:\n+                # Wait for the filler to hold the write lock.\n+                while wlock.acquire(block=False):\n+                    wlock.release()\n+                    time.sleep(0.001)\n+            join_executor_internals(self, broken)\n+            # Unblock the filler.\n+            self.result_queue.get()\n+            filler.join()\n+\n+        executor = self.executor_type(max_workers=2,\n+                                      mp_context=self.get_context())\n+        self.executor = executor  # Allow clean up in fail_on_deadlock\n+        with unittest.mock.patch.object(futures.process._ExecutorManagerThread,\n+                                        '_join_executor_internals',\n+                                        mock_join_executor_internals):\n+            self.assertEqual(list(executor.map(int, range(10))),\n+                             list(range(10)))\n+            shutdown = threading.Thread(target=executor.shutdown)\n+            shutdown.start()\n+            shutdown.join(self.TIMEOUT)\n+            if shutdown.is_alive():\n+                self._fail_on_deadlock(executor)",
+        "comment_created_at": "2026-10-12T07:20:23+00:00",
+        "comment_author": "tfzee",
+        "comment_body": "Yeah fixed it, thanks for the reviews and fixes \ud83d\udc4d ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3537083640",
+    "pr_number": 151634,
+    "pr_file": "Lib/test/test_free_threading/test_collections.py",
+    "created_at": "2026-07-07T14:04:11+00:00",
+    "commented_code": ")\n \n \n+class TestCounter(unittest.TestCase):\n+    def test_update_concurrent(self):\n+        # gh-151633: concurrent Counter.update calls must not cause use-after-free\n+        # under free-threading.\n+        NTHREADS = 4\n+        PER_THREAD = 5000\n+        c = Counter()\n+        data = ['x'] * PER_THREAD\n+        threads = [threading.Thread(target=c.update, args=(data,))\n+                   for _ in range(NTHREADS)]\n+        for t in threads:",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "3537083640",
+        "repo_full_name": "python/cpython",
+        "pr_number": 151634,
+        "pr_file": "Lib/test/test_free_threading/test_collections.py",
+        "discussion_id": "3537083640",
+        "commented_code": "@@ -49,5 +50,21 @@ def mutate():\n         )\n \n \n+class TestCounter(unittest.TestCase):\n+    def test_update_concurrent(self):\n+        # gh-151633: concurrent Counter.update calls must not cause use-after-free\n+        # under free-threading.\n+        NTHREADS = 4\n+        PER_THREAD = 5000\n+        c = Counter()\n+        data = ['x'] * PER_THREAD\n+        threads = [threading.Thread(target=c.update, args=(data,))\n+                   for _ in range(NTHREADS)]\n+        for t in threads:",
+        "comment_created_at": "2026-07-07T14:04:11+00:00",
+        "comment_author": "eendebakpt",
+        "comment_body": "Can we use the `threading_helper.run_concurrently` or a similar helper here? Or add a `Barrier` so all threads start at the same time.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "3552279315",
+        "repo_full_name": "python/cpython",
+        "pr_number": 151634,
+        "pr_file": "Lib/test/test_free_threading/test_collections.py",
+        "discussion_id": "3537083640",
+        "commented_code": "@@ -49,5 +50,21 @@ def mutate():\n         )\n \n \n+class TestCounter(unittest.TestCase):\n+    def test_update_concurrent(self):\n+        # gh-151633: concurrent Counter.update calls must not cause use-after-free\n+        # under free-threading.\n+        NTHREADS = 4\n+        PER_THREAD = 5000\n+        c = Counter()\n+        data = ['x'] * PER_THREAD\n+        threads = [threading.Thread(target=c.update, args=(data,))\n+                   for _ in range(NTHREADS)]\n+        for t in threads:",
+        "comment_created_at": "2026-07-09T14:13:01+00:00",
+        "comment_author": "KowalskiThomas",
+        "comment_body": "Updated, thanks for suggesting. ",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3355811648",
+    "pr_number": 149918,
+    "pr_file": "Lib/test/test_xml_etree_c.py",
+    "created_at": "2026-06-04T12:01:44+00:00",
+    "commented_code": "self.check_sizeof(e, self.elementsize + self.extra +\n                              struct.calcsize('8P'))\n \n+@unittest.skipUnless(cET, 'requires _elementtree')\n+@threading_helper.requires_working_threading()\n+class TestElementTreeFreeThreading(unittest.TestCase):\n+    def test_element_concurrent_clear_and_access(self):\n+        #Race len(), .attrib, and .clear() to verify fix for gh-149861.\n+        root = cET.Element('root')\n+        children = [cET.Element(f'child-{i}') for i in range(5)]\n+\n+        stop_event = threading.Event()\n+\n+        def reader_task():\n+            while not stop_event.is_set():\n+                len(root)\n+                try:\n+                    _ = root.attrib\n+                except AttributeError:\n+                    # In a race where clear() just ran, this is expected\n+                    # because of the PyErr_SetString is added in C.\n+                    pass\n+\n+        def writer_task():\n+            while not stop_event.is_set():\n+                # Test element_add_subelement / extend\n+                root.extend(children)\n+                # Test clear_extra\n+                root.clear()\n+\n+        threads = []\n+        for _ in range(4):\n+            threads.append(threading.Thread(target=reader_task))\n+        for _ in range(2):\n+            threads.append(threading.Thread(target=writer_task))\n+\n+        with threading_helper.start_threads(threads):\n+            import time\n+            time.sleep(1.0)\n+            stop_event.set()",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "3355811648",
+        "repo_full_name": "python/cpython",
+        "pr_number": 149918,
+        "pr_file": "Lib/test/test_xml_etree_c.py",
+        "discussion_id": "3355811648",
+        "commented_code": "@@ -256,6 +258,45 @@ def test_element_with_children(self):\n         self.check_sizeof(e, self.elementsize + self.extra +\n                              struct.calcsize('8P'))\n \n+@unittest.skipUnless(cET, 'requires _elementtree')\n+@threading_helper.requires_working_threading()\n+class TestElementTreeFreeThreading(unittest.TestCase):\n+    def test_element_concurrent_clear_and_access(self):\n+        #Race len(), .attrib, and .clear() to verify fix for gh-149861.\n+        root = cET.Element('root')\n+        children = [cET.Element(f'child-{i}') for i in range(5)]\n+\n+        stop_event = threading.Event()\n+\n+        def reader_task():\n+            while not stop_event.is_set():\n+                len(root)\n+                try:\n+                    _ = root.attrib\n+                except AttributeError:\n+                    # In a race where clear() just ran, this is expected\n+                    # because of the PyErr_SetString is added in C.\n+                    pass\n+\n+        def writer_task():\n+            while not stop_event.is_set():\n+                # Test element_add_subelement / extend\n+                root.extend(children)\n+                # Test clear_extra\n+                root.clear()\n+\n+        threads = []\n+        for _ in range(4):\n+            threads.append(threading.Thread(target=reader_task))\n+        for _ in range(2):\n+            threads.append(threading.Thread(target=writer_task))\n+\n+        with threading_helper.start_threads(threads):\n+            import time\n+            time.sleep(1.0)\n+            stop_event.set()",
+        "comment_created_at": "2026-06-04T12:01:44+00:00",
+        "comment_author": "dpdani",
+        "comment_body": "Can you replace this with `threading_helper.run_concurrently`?\n\nAlso, please move the import to the top level.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "2084484490",
+    "pr_number": 133908,
+    "pr_file": "Lib/test/test_free_threading/test_threading_iter_locked.py",
+    "created_at": "2025-05-12T11:37:45+00:00",
+    "commented_code": "+import unittest\n+from threading import Thread, Barrier, iter_locked\n+from test.support import threading_helper\n+\n+\n+threading_helper.requires_working_threading(module=True)\n+\n+class non_atomic_iterator:\n+\n+    def __init__(self, it):\n+        self.it = iter(it)\n+\n+    def __iter__(self):\n+        return self\n+\n+    def __next__(self):\n+        a = next(self.it)\n+        b = next(self.it)",
+    "repo_full_name": "python/cpython",
+    "discussion_comments": [
+      {
+        "comment_id": "2084484490",
+        "repo_full_name": "python/cpython",
+        "pr_number": 133908,
+        "pr_file": "Lib/test/test_free_threading/test_threading_iter_locked.py",
+        "discussion_id": "2084484490",
+        "commented_code": "@@ -0,0 +1,81 @@\n+import unittest\n+from threading import Thread, Barrier, iter_locked\n+from test.support import threading_helper\n+\n+\n+threading_helper.requires_working_threading(module=True)\n+\n+class non_atomic_iterator:\n+\n+    def __init__(self, it):\n+        self.it = iter(it)\n+\n+    def __iter__(self):\n+        return self\n+\n+    def __next__(self):\n+        a = next(self.it)\n+        b = next(self.it)",
+        "comment_created_at": "2025-05-12T11:37:45+00:00",
+        "comment_author": "serhiy-storchaka",
+        "comment_body": "Add `time.sleep(0)` (or with small non-zero argument) or `Event.wait()` with a timeout to force or significantly increase the chance of concurrent access.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

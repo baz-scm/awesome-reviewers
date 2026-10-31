@@ -1,0 +1,102 @@
+[
+  {
+    "discussion_id": "4429970668",
+    "pr_number": 5350,
+    "pr_file": "open-sse/handlers/imageProviders/cloudflareAi.js",
+    "created_at": "2026-10-31T02:24:43+00:00",
+    "commented_code": "target.append(key, String(value));\n   });\n \n+  let image = typeof body.image === \"string\" ? body.image.trim() : body.image;\n+  if (image != null && image !== \"\") {\n+    // FLUX.2 requires a binary file part; use the guarded fetcher for remote inputs.\n+    if (typeof image === \"string\" && /^https?:\\/\\//i.test(image)) {\n+      const fetched = await fetchImageAsBase64(image);\n+      if (!fetched) throw new Error(\"Unable to fetch reference image safely\");\n+      image = fetched.url;\n+    }\n+    const imageData = await resolveImageInput(image);\n+    if (!imageData?.bytes?.length) throw new Error(\"Invalid reference image\");",
+    "repo_full_name": "decolua/9router",
+    "discussion_comments": [
+      {
+        "comment_id": "4429970668",
+        "repo_full_name": "decolua/9router",
+        "pr_number": 5350,
+        "pr_file": "open-sse/handlers/imageProviders/cloudflareAi.js",
+        "discussion_id": "4429970668",
+        "commented_code": "@@ -103,6 +104,21 @@ function buildMultipartBody(body) {\n     target.append(key, String(value));\n   });\n \n+  let image = typeof body.image === \"string\" ? body.image.trim() : body.image;\n+  if (image != null && image !== \"\") {\n+    // FLUX.2 requires a binary file part; use the guarded fetcher for remote inputs.\n+    if (typeof image === \"string\" && /^https?:\\/\\//i.test(image)) {\n+      const fetched = await fetchImageAsBase64(image);\n+      if (!fetched) throw new Error(\"Unable to fetch reference image safely\");\n+      image = fetched.url;\n+    }\n+    const imageData = await resolveImageInput(image);\n+    if (!imageData?.bytes?.length) throw new Error(\"Invalid reference image\");",
+        "comment_created_at": "2026-10-31T02:24:43+00:00",
+        "comment_author": "Alexi5000",
+        "comment_body": "`resolveImageInput` treats any array as raw bytes, so `image: [\"data:image/png;base64,...\"]` (the shape the codex/nanobanana adapters accept for multi-reference) becomes `Uint8Array.from([\"data:...\"])` which is `Uint8Array [0]`. That has length 1, passes this check, and Cloudflare gets a 1-byte `input_image_0`, so the caller gets an unconditioned or failed generation instead of the 400 the tests promise for unsupported input.\n\nI'd only take the byte-array branch when every element is an integer 0-255, and otherwise either map string entries to `input_image_0..3` (FLUX.2 accepts up to 4 per the linked changelog) or throw `Invalid reference image`. `body.images` is also ignored here, which is the same silent drop this PR is fixing. A test with `image: [DATA_URL]` would cover it.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4430130074",
+        "repo_full_name": "decolua/9router",
+        "pr_number": 5350,
+        "pr_file": "open-sse/handlers/imageProviders/cloudflareAi.js",
+        "discussion_id": "4429970668",
+        "commented_code": "@@ -103,6 +104,21 @@ function buildMultipartBody(body) {\n     target.append(key, String(value));\n   });\n \n+  let image = typeof body.image === \"string\" ? body.image.trim() : body.image;\n+  if (image != null && image !== \"\") {\n+    // FLUX.2 requires a binary file part; use the guarded fetcher for remote inputs.\n+    if (typeof image === \"string\" && /^https?:\\/\\//i.test(image)) {\n+      const fetched = await fetchImageAsBase64(image);\n+      if (!fetched) throw new Error(\"Unable to fetch reference image safely\");\n+      image = fetched.url;\n+    }\n+    const imageData = await resolveImageInput(image);\n+    if (!imageData?.bytes?.length) throw new Error(\"Invalid reference image\");",
+        "comment_created_at": "2026-10-31T03:06:52+00:00",
+        "comment_author": "Jordannst",
+        "comment_body": "@Alexi5000 good catch, i missed the string-array case, fixed in [c9f6db7e](https://github.com/decolua/9router/commit/c9f6db7e02367da74cb360506dc50b2fbcb983ac)\n\nkept this scoped to the FLUX.2 multipart path: string/mixed arrays and invalid bytes now return 400, as does nonempty or malformed `images`, before any fetch. `images: []` and `null` remain no-ops, and legacy JSON handling is unchanged\n\nadded regression coverage for both cases and byte validation: 16 failures on the previous commit, now 36/36 in this suite and 65/65 across the three focused suites, all offline with mocked DNS/fetch",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3997796942",
+    "pr_number": 4010,
+    "pr_file": "open-sse/handlers/chatCore.js",
+    "created_at": "2026-09-13T00:33:35+00:00",
+    "commented_code": "const clientTool = detectClientTool(clientRawRequest?.headers || {}, body);\n   const passthrough = isNativePassthrough(clientTool, provider);\n \n+  // Native web_search redirect (layer 1): rewrite the client's built-in search tool into\n+  // the 9router_web_search function tool and force non-streaming, so the intercept in\n+  // webSearchIntercept.js can run the search and rewrite the response in place.\n+  const { body: bodyWithFallback, fallback: webSearchFallbackPlan } = prepareWebSearchFallbackBody(body, {\n+    provider,\n+    sourceFormat,\n+    targetFormat,\n+    nativePassthrough: passthrough,\n+  });\n+  if (webSearchFallbackPlan.enabled) {\n+    body = bodyWithFallback;\n+    stream = false;",
+    "repo_full_name": "decolua/9router",
+    "discussion_comments": [
+      {
+        "comment_id": "3998135940",
+        "repo_full_name": "decolua/9router",
+        "pr_number": 4010,
+        "pr_file": "open-sse/handlers/chatCore.js",
+        "discussion_id": "3997796942",
+        "commented_code": "@@ -151,6 +152,21 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred\n   const clientTool = detectClientTool(clientRawRequest?.headers || {}, body);\n   const passthrough = isNativePassthrough(clientTool, provider);\n \n+  // Native web_search redirect (layer 1): rewrite the client's built-in search tool into\n+  // the 9router_web_search function tool and force non-streaming, so the intercept in\n+  // webSearchIntercept.js can run the search and rewrite the response in place.\n+  const { body: bodyWithFallback, fallback: webSearchFallbackPlan } = prepareWebSearchFallbackBody(body, {\n+    provider,\n+    sourceFormat,\n+    targetFormat,\n+    nativePassthrough: passthrough,\n+  });\n+  if (webSearchFallbackPlan.enabled) {\n+    body = bodyWithFallback;\n+    stream = false;",
+        "comment_created_at": "2026-09-13T00:33:35+00:00",
+        "comment_author": "TejasLamba2006",
+        "comment_body": "Real gap, good catch. The intercept lived only in nonStreamingHandler, so a forced-streaming provider would hide the search call inside the SSE and hand the client back an unanswered tool call. Fixed in a4e8066: handleForcedSSEToJson now receives the fallback plan via sharedCtx and applies applyWebSearchFallback at all three client-format return sites (Responses-native passthrough, chat/gemini-built body, and the chat-SSE converted body). The call is internally guarded, so requests with no plan pass straight through. One nuance: a Claude-format client never reaches this path with a claude-shape body (the translator converts before dispatch), so extractHandledCalls seeing only openai/claude shapes is fine here. Regression test added at tests/unit/forced-sse-websearch-intercept.test.js covering chat and Responses clients on both SSE sources.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4138762578",
+    "pr_number": 4472,
+    "pr_file": "open-sse/translator/response/openai-responses.js",
+    "created_at": "2026-09-29T23:31:05+00:00",
+    "commented_code": "}\n     \n     if (!state.finishReasonSent) {\n-      const finishReason = computeFinishReason(state);\n+      const incomplete = eventType === \"response.incomplete\" || data.response?.status === \"incomplete\";\n+      const finishReason = incomplete\n+        ? responsesIncompleteToOpenAIFinish(data.response?.incomplete_details?.reason)\n+        : computeFinishReason(state);",
+    "repo_full_name": "decolua/9router",
+    "discussion_comments": [
+      {
+        "comment_id": "4139364924",
+        "repo_full_name": "decolua/9router",
+        "pr_number": 4472,
+        "pr_file": "open-sse/translator/response/openai-responses.js",
+        "discussion_id": "4138762578",
+        "commented_code": "@@ -641,7 +781,10 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {\n     }\n     \n     if (!state.finishReasonSent) {\n-      const finishReason = computeFinishReason(state);\n+      const incomplete = eventType === \"response.incomplete\" || data.response?.status === \"incomplete\";\n+      const finishReason = incomplete\n+        ? responsesIncompleteToOpenAIFinish(data.response?.incomplete_details?.reason)\n+        : computeFinishReason(state);",
+        "comment_created_at": "2026-09-29T23:31:05+00:00",
+        "comment_author": "amirsalaar",
+        "comment_body": "Fixed in b0851058: a failed `response.done` enters the error path before computing a Chat finish reason. The emitted chunk carries a top-level error, with a fallback error when upstream omits one. Added a regression for this terminal event.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3776006161",
+    "pr_number": 3272,
+    "pr_file": "src/app/(dashboard)/dashboard/cli-tools/components/OmpToolCard.js",
+    "created_at": "2026-08-13T13:59:46+00:00",
+    "commented_code": "+\"use client\";\n+\n+import { useState, useEffect, useRef } from \"react\";\n+import { Card, Button, ModelSelectModal, ManualConfigModal } from \"@/shared/components\";\n+import Image from \"next/image\";\n+import BaseUrlSelect from \"./BaseUrlSelect\";\n+import ApiKeySelect from \"./ApiKeySelect\";\n+import { matchKnownEndpoint } from \"./cliEndpointMatch\";\n+import { OMP_MODEL_ROLES, emptyOmpRoleAssignments } from \"@/shared/constants/ompRoles\";\n+\n+\n+export default function OmpToolCard({ tool, isExpanded, onToggle, baseUrl, apiKeys, activeProviders, cloudEnabled, initialStatus, tunnelEnabled, tunnelPublicUrl, tailscaleEnabled, tailscaleUrl }) {\n+  const [status, setStatus] = useState(initialStatus || null);\n+  const [checking, setChecking] = useState(false);\n+  const [applying, setApplying] = useState(false);\n+  const [restoring, setRestoring] = useState(false);\n+  const [message, setMessage] = useState(null);\n+  const [showInstallGuide, setShowInstallGuide] = useState(false);\n+  const [selectedApiKey, setSelectedApiKey] = useState(\"\");\n+  const [selectedModel, setSelectedModel] = useState(\"\");\n+  const [modalOpen, setModalOpen] = useState(false);\n+  const [modelAliases, setModelAliases] = useState({});\n+  const [showManualConfigModal, setShowManualConfigModal] = useState(false);\n+  const [customBaseUrl, setCustomBaseUrl] = useState(\"\");\n+  const [selectedModels, setSelectedModels] = useState([]);\n+  const [catalogModels, setCatalogModels] = useState([]);\n+  const [roleAssignments, setRoleAssignments] = useState(emptyOmpRoleAssignments);\n+  const selectedModelsRef = useRef([]);\n+  const effectiveSelectedApiKey = selectedApiKey || apiKeys?.[0]?.key || \"\";\n+\n+\n+  useEffect(() => {\n+    selectedModelsRef.current = selectedModels;\n+  }, [selectedModels]);\n+\n+\n+  useEffect(() => {\n+    if (isExpanded) {\n+      checkStatus();\n+      fetchModelAliases();\n+    }\n+  }, [isExpanded]);\n+\n+\n+  async function fetchModelAliases() {\n+    try {\n+      const [aliasRes, modelsRes] = await Promise.all([\n+        fetch(\"/api/models/alias\"),\n+        fetch(\"/api/models\"),\n+      ]);\n+      const aliasData = await aliasRes.json();\n+      if (aliasRes.ok) setModelAliases(aliasData.aliases || {});\n+      const modelsData = await modelsRes.json();\n+      if (modelsRes.ok && Array.isArray(modelsData.models)) setCatalogModels(modelsData.models);\n+    } catch (error) {\n+      console.log(\"Error fetching model aliases:\", error);\n+    }\n+  };\n+  const pruneRoleAssignments = (assignments, models) => {\n+    const allowed = new Set(models || []);\n+    const next = emptyOmpRoleAssignments();\n+    for (const role of Object.keys(next)) {\n+      next[role] = allowed.has(assignments?.[role]) ? assignments[role] : \"\";\n+    }\n+    return next;\n+  };\n+\n+  const saveModels = async (models) => {\n+    try {\n+      const keyToUse = (effectiveSelectedApiKey && effectiveSelectedApiKey.trim())\n+        ? effectiveSelectedApiKey\n+        : (!cloudEnabled ? \"sk_9router\" : effectiveSelectedApiKey);\n+      const capabilities = {};\n+      for (const id of models || []) {\n+        const m = catalogModels.find((x) => x.fullModel === id);\n+        if (!m?.caps) continue;\n+        capabilities[id] = { vision: !!m.caps.vision, search: !!m.caps.search, reasoning: !!m.caps.reasoning };\n+      }\n+      const roles = pruneRoleAssignments(roleAssignments, models);\n+      await fetch(\"/api/cli-tools/omp-settings\", {",
+    "repo_full_name": "decolua/9router",
+    "discussion_comments": [
+      {
+        "comment_id": "3776006161",
+        "repo_full_name": "decolua/9router",
+        "pr_number": 3272,
+        "pr_file": "src/app/(dashboard)/dashboard/cli-tools/components/OmpToolCard.js",
+        "discussion_id": "3776006161",
+        "commented_code": "@@ -0,0 +1,482 @@\n+\"use client\";\n+\n+import { useState, useEffect, useRef } from \"react\";\n+import { Card, Button, ModelSelectModal, ManualConfigModal } from \"@/shared/components\";\n+import Image from \"next/image\";\n+import BaseUrlSelect from \"./BaseUrlSelect\";\n+import ApiKeySelect from \"./ApiKeySelect\";\n+import { matchKnownEndpoint } from \"./cliEndpointMatch\";\n+import { OMP_MODEL_ROLES, emptyOmpRoleAssignments } from \"@/shared/constants/ompRoles\";\n+\n+\n+export default function OmpToolCard({ tool, isExpanded, onToggle, baseUrl, apiKeys, activeProviders, cloudEnabled, initialStatus, tunnelEnabled, tunnelPublicUrl, tailscaleEnabled, tailscaleUrl }) {\n+  const [status, setStatus] = useState(initialStatus || null);\n+  const [checking, setChecking] = useState(false);\n+  const [applying, setApplying] = useState(false);\n+  const [restoring, setRestoring] = useState(false);\n+  const [message, setMessage] = useState(null);\n+  const [showInstallGuide, setShowInstallGuide] = useState(false);\n+  const [selectedApiKey, setSelectedApiKey] = useState(\"\");\n+  const [selectedModel, setSelectedModel] = useState(\"\");\n+  const [modalOpen, setModalOpen] = useState(false);\n+  const [modelAliases, setModelAliases] = useState({});\n+  const [showManualConfigModal, setShowManualConfigModal] = useState(false);\n+  const [customBaseUrl, setCustomBaseUrl] = useState(\"\");\n+  const [selectedModels, setSelectedModels] = useState([]);\n+  const [catalogModels, setCatalogModels] = useState([]);\n+  const [roleAssignments, setRoleAssignments] = useState(emptyOmpRoleAssignments);\n+  const selectedModelsRef = useRef([]);\n+  const effectiveSelectedApiKey = selectedApiKey || apiKeys?.[0]?.key || \"\";\n+\n+\n+  useEffect(() => {\n+    selectedModelsRef.current = selectedModels;\n+  }, [selectedModels]);\n+\n+\n+  useEffect(() => {\n+    if (isExpanded) {\n+      checkStatus();\n+      fetchModelAliases();\n+    }\n+  }, [isExpanded]);\n+\n+\n+  async function fetchModelAliases() {\n+    try {\n+      const [aliasRes, modelsRes] = await Promise.all([\n+        fetch(\"/api/models/alias\"),\n+        fetch(\"/api/models\"),\n+      ]);\n+      const aliasData = await aliasRes.json();\n+      if (aliasRes.ok) setModelAliases(aliasData.aliases || {});\n+      const modelsData = await modelsRes.json();\n+      if (modelsRes.ok && Array.isArray(modelsData.models)) setCatalogModels(modelsData.models);\n+    } catch (error) {\n+      console.log(\"Error fetching model aliases:\", error);\n+    }\n+  };\n+  const pruneRoleAssignments = (assignments, models) => {\n+    const allowed = new Set(models || []);\n+    const next = emptyOmpRoleAssignments();\n+    for (const role of Object.keys(next)) {\n+      next[role] = allowed.has(assignments?.[role]) ? assignments[role] : \"\";\n+    }\n+    return next;\n+  };\n+\n+  const saveModels = async (models) => {\n+    try {\n+      const keyToUse = (effectiveSelectedApiKey && effectiveSelectedApiKey.trim())\n+        ? effectiveSelectedApiKey\n+        : (!cloudEnabled ? \"sk_9router\" : effectiveSelectedApiKey);\n+      const capabilities = {};\n+      for (const id of models || []) {\n+        const m = catalogModels.find((x) => x.fullModel === id);\n+        if (!m?.caps) continue;\n+        capabilities[id] = { vision: !!m.caps.vision, search: !!m.caps.search, reasoning: !!m.caps.reasoning };\n+      }\n+      const roles = pruneRoleAssignments(roleAssignments, models);\n+      await fetch(\"/api/cli-tools/omp-settings\", {",
+        "comment_created_at": "2026-08-13T13:59:46+00:00",
+        "comment_author": "krzemienski",
+        "comment_body": "`saveModels` ignores the POST response. If the user deselects the last model and closes the modal, this endpoint returns 400 because `models` is empty, but local state still shows no models while the previous `models.yml` contents remain persisted. Check `res.ok`; on failure, surface the error and rehydrate via `checkStatus()` (or make deselect-all a supported persistence path).",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

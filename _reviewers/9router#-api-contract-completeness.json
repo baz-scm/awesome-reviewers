@@ -1,0 +1,68 @@
+[
+  {
+    "discussion_id": "4430073374",
+    "pr_number": 5341,
+    "pr_file": "open-sse/executors/base.js",
+    "created_at": "2026-10-31T02:55:11+00:00",
+    "commented_code": "// Abort if upstream doesn't return response headers within connection timeout\n       const connectCtrl = new AbortController();\n-      const timeoutMs = this.config?.timeoutMs || FETCH_CONNECT_TIMEOUT_MS;\n-      const connectTimer = setTimeout(() => connectCtrl.abort(new Error(\"fetch connect timeout\")), timeoutMs);\n+      // Priority: providerOverrides.timeoutMs (valid finite positive) > config.timeoutMs > FETCH_CONNECT_TIMEOUT_MS\n+      const overrideTimeout = providerOverrides?.timeoutMs;",
+    "repo_full_name": "decolua/9router",
+    "discussion_comments": [
+      {
+        "comment_id": "4430073374",
+        "repo_full_name": "decolua/9router",
+        "pr_number": 5341,
+        "pr_file": "open-sse/executors/base.js",
+        "discussion_id": "4430073374",
+        "commented_code": "@@ -135,8 +150,17 @@ export class BaseExecutor {\n \n       // Abort if upstream doesn't return response headers within connection timeout\n       const connectCtrl = new AbortController();\n-      const timeoutMs = this.config?.timeoutMs || FETCH_CONNECT_TIMEOUT_MS;\n-      const connectTimer = setTimeout(() => connectCtrl.abort(new Error(\"fetch connect timeout\")), timeoutMs);\n+      // Priority: providerOverrides.timeoutMs (valid finite positive) > config.timeoutMs > FETCH_CONNECT_TIMEOUT_MS\n+      const overrideTimeout = providerOverrides?.timeoutMs;",
+        "comment_created_at": "2026-10-31T02:55:11+00:00",
+        "comment_author": "Alexi5000",
+        "comment_body": "`providerOverrides` comes from `settings.providerOverrides[provider]`, which is only written by `PUT /api/providers/[id]/overrides`. That route's `normalizeOverride` keeps `headers` and drops every other key, and nothing under `src/app` sends `timeoutMs`/`seatBudgetMs`. As things stand, `providerOverrides.timeoutMs` here and `providerOverrides.seatBudgetMs` on line 108 can only be set by hand-editing the DB, so the env var is the only working knob. I'd either extend `normalizeOverride` to accept and validate both numbers (finite, >= 0, with an upper bound), or drop the override reads from this PR so it doesn't advertise a setting that can't be saved.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4138993638",
+    "pr_number": 4475,
+    "pr_file": "open-sse/handlers/chatCore/nonStreamingHandler.js",
+    "created_at": "2026-09-29T23:35:06+00:00",
+    "commented_code": "};\n }\n \n+/**\n+ * Inverse of openAICompletionToResponses: fold a Responses API body's `output[]`\n+ * into Chat Completions `choices[]`. Needed when the upstream answered on the\n+ * Responses wire (azure apiType:\"responses\", openai-compatible nodes, muse-spark)\n+ * but the client speaks chat. The streaming equivalent lives in sseToJsonHandler.js;\n+ * without this the client gets a body with no `choices` and reads empty content.\n+ */\n+function responsesBodyToOpenAICompletion(responseBody) {\n+  const output = Array.isArray(responseBody?.output) ? responseBody.output : [];\n+\n+  // Responses can emit alternating reasoning + message items, and early message\n+  // items are often empty \u2014 the answer is the last message that carries text.\n+  let text = \"\";\n+  for (const item of output) {\n+    if (item?.type !== RESPONSES_ITEM.MESSAGE || !Array.isArray(item.content)) continue;\n+    const itemText = item.content\n+      .filter(c => c?.type === RESPONSES_ITEM.OUTPUT_TEXT && typeof c.text === \"string\")\n+      .map(c => c.text)\n+      .join(\"\");\n+    if (itemText) text = itemText;\n+  }\n+\n+  const reasoning = output\n+    .filter(i => i?.type === RESPONSES_ITEM.REASONING && Array.isArray(i.summary))\n+    .flatMap(i => i.summary.filter(s => typeof s?.text === \"string\").map(s => s.text))\n+    .join(\"\");\n+\n+  const toolCalls = output\n+    .filter(i => i?.type === RESPONSES_ITEM.FUNCTION_CALL || i?.type === RESPONSES_ITEM.CUSTOM_TOOL_CALL)\n+    .map((item, idx) => ({\n+      id: item.call_id || `call_${item.name || \"tool\"}_${Date.now()}_${idx}`,\n+      type: \"function\",\n+      function: {\n+        name: item.name || \"\",\n+        // custom_tool_call carries freeform `input` instead of JSON `arguments`.\n+        arguments: typeof item.arguments === \"string\" ? item.arguments\n+          : typeof item.input === \"string\" ? item.input\n+          : JSON.stringify(item.arguments || {}),\n+      },\n+    }));\n+\n+  const message = { role: ROLE.ASSISTANT, content: text || (toolCalls.length ? null : \"\") };\n+  if (reasoning) message.reasoning_content = reasoning;\n+  if (toolCalls.length) message.tool_calls = toolCalls;\n+\n+  const usage = responseBody?.usage || {};\n+  const cached = usage.input_tokens_details?.cached_tokens || usage.cached_tokens || 0;\n+  const truncated = responseBody?.incomplete_details?.reason === \"max_output_tokens\";\n+\n+  return {\n+    id: responseBody?.id || `chatcmpl-${Date.now()}`,\n+    object: \"chat.completion\",\n+    created: responseBody?.created_at || Math.floor(Date.now() / 1000),\n+    model: responseBody?.model || \"unknown\",\n+    choices: [{\n+      index: 0,\n+      message,\n+      finish_reason: toolCalls.length ? \"tool_calls\" : (truncated ? \"length\" : \"stop\"),\n+    }],",
+    "repo_full_name": "decolua/9router",
+    "discussion_comments": [
+      {
+        "comment_id": "4139386996",
+        "repo_full_name": "decolua/9router",
+        "pr_number": 4475,
+        "pr_file": "open-sse/handlers/chatCore/nonStreamingHandler.js",
+        "discussion_id": "4138993638",
+        "commented_code": "@@ -141,6 +141,74 @@ function openAICompletionToResponses(responseBody, customToolNames = null) {\n   };\n }\n \n+/**\n+ * Inverse of openAICompletionToResponses: fold a Responses API body's `output[]`\n+ * into Chat Completions `choices[]`. Needed when the upstream answered on the\n+ * Responses wire (azure apiType:\"responses\", openai-compatible nodes, muse-spark)\n+ * but the client speaks chat. The streaming equivalent lives in sseToJsonHandler.js;\n+ * without this the client gets a body with no `choices` and reads empty content.\n+ */\n+function responsesBodyToOpenAICompletion(responseBody) {\n+  const output = Array.isArray(responseBody?.output) ? responseBody.output : [];\n+\n+  // Responses can emit alternating reasoning + message items, and early message\n+  // items are often empty \u2014 the answer is the last message that carries text.\n+  let text = \"\";\n+  for (const item of output) {\n+    if (item?.type !== RESPONSES_ITEM.MESSAGE || !Array.isArray(item.content)) continue;\n+    const itemText = item.content\n+      .filter(c => c?.type === RESPONSES_ITEM.OUTPUT_TEXT && typeof c.text === \"string\")\n+      .map(c => c.text)\n+      .join(\"\");\n+    if (itemText) text = itemText;\n+  }\n+\n+  const reasoning = output\n+    .filter(i => i?.type === RESPONSES_ITEM.REASONING && Array.isArray(i.summary))\n+    .flatMap(i => i.summary.filter(s => typeof s?.text === \"string\").map(s => s.text))\n+    .join(\"\");\n+\n+  const toolCalls = output\n+    .filter(i => i?.type === RESPONSES_ITEM.FUNCTION_CALL || i?.type === RESPONSES_ITEM.CUSTOM_TOOL_CALL)\n+    .map((item, idx) => ({\n+      id: item.call_id || `call_${item.name || \"tool\"}_${Date.now()}_${idx}`,\n+      type: \"function\",\n+      function: {\n+        name: item.name || \"\",\n+        // custom_tool_call carries freeform `input` instead of JSON `arguments`.\n+        arguments: typeof item.arguments === \"string\" ? item.arguments\n+          : typeof item.input === \"string\" ? item.input\n+          : JSON.stringify(item.arguments || {}),\n+      },\n+    }));\n+\n+  const message = { role: ROLE.ASSISTANT, content: text || (toolCalls.length ? null : \"\") };\n+  if (reasoning) message.reasoning_content = reasoning;\n+  if (toolCalls.length) message.tool_calls = toolCalls;\n+\n+  const usage = responseBody?.usage || {};\n+  const cached = usage.input_tokens_details?.cached_tokens || usage.cached_tokens || 0;\n+  const truncated = responseBody?.incomplete_details?.reason === \"max_output_tokens\";\n+\n+  return {\n+    id: responseBody?.id || `chatcmpl-${Date.now()}`,\n+    object: \"chat.completion\",\n+    created: responseBody?.created_at || Math.floor(Date.now() / 1000),\n+    model: responseBody?.model || \"unknown\",\n+    choices: [{\n+      index: 0,\n+      message,\n+      finish_reason: toolCalls.length ? \"tool_calls\" : (truncated ? \"length\" : \"stop\"),\n+    }],",
+        "comment_created_at": "2026-09-29T23:35:06+00:00",
+        "comment_author": "amirsalaar",
+        "comment_body": "Fixed in 46ebf215: incomplete Responses output now suppresses partial tool calls and reports `length` or `content_filter` before considering completed tool calls. Tests cover both truncation reasons with partial tool output.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4138985918",
+    "pr_number": 4474,
+    "pr_file": "open-sse/services/model.js",
+    "created_at": "2026-09-29T23:27:32+00:00",
+    "commented_code": "[/^codex-auto-review$/, \"codex\"],\n   [/^claude-/, \"anthropic\"],\n   [/^gemini-/, \"gemini\"],\n+  // Codex CLI's automatic approval review sends a bare Copilot-only id (gpt-5.6-luna), which\n+  // fell through to the openai default and 404'd on a setup with no openai connection.\n+  // Uncatalogued 5.5+ and gpt-6+ names go to Copilot. The OpenAI catalog takes\n+  // precedence below, so new OpenAI releases cannot be stolen by this pattern.\n+  [/^gpt-(5\\.[5-9]|[6-9])/, \"github\"],",
+    "repo_full_name": "decolua/9router",
+    "discussion_comments": [
+      {
+        "comment_id": "4139346129",
+        "repo_full_name": "decolua/9router",
+        "pr_number": 4474,
+        "pr_file": "open-sse/services/model.js",
+        "discussion_id": "4138985918",
+        "commented_code": "@@ -128,6 +133,11 @@ const MODEL_PREFIX_PROVIDERS = [\n   [/^codex-auto-review$/, \"codex\"],\n   [/^claude-/, \"anthropic\"],\n   [/^gemini-/, \"gemini\"],\n+  // Codex CLI's automatic approval review sends a bare Copilot-only id (gpt-5.6-luna), which\n+  // fell through to the openai default and 404'd on a setup with no openai connection.\n+  // Uncatalogued 5.5+ and gpt-6+ names go to Copilot. The OpenAI catalog takes\n+  // precedence below, so new OpenAI releases cannot be stolen by this pattern.\n+  [/^gpt-(5\\.[5-9]|[6-9])/, \"github\"],",
+        "comment_created_at": "2026-09-29T23:27:32+00:00",
+        "comment_author": "amirsalaar",
+        "comment_body": "Fixed in c5f6afbb: removed the broad version-based Copilot rule. Only the observed bare `gpt-5.6-luna` ID takes the GitHub route; `gpt-5.5-pro` and other unknown GPT IDs keep the OpenAI fallback unless explicitly prefixed or aliased. Added routing regressions.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

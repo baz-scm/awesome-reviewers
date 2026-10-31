@@ -1,0 +1,156 @@
+[
+  {
+    "discussion_id": "4228580751",
+    "pr_number": 14609,
+    "pr_file": "sdk/packages/core/src/runtime/host/local-runtime-host.ts",
+    "created_at": "2026-10-09T09:56:31+00:00",
+    "commented_code": "}\n \t}\n \n+\t/**\n+\t * Teardown aborts any in-flight turn, and the abort settling resets\n+\t * `aborting` and schedules a queue drain while teardown is still awaiting\n+\t * I/O. Without this, a queued prompt would start a new run in a session\n+\t * that is being torn down and whose events nobody receives any more.\n+\t */\n+\tprivate beginTeardown(session: ActiveSession): void {\n+\t\tsession.shuttingDown = true;\n+\t\tthis.discardPendingPrompts(session, \"session_teardown\");\n+\t}\n+\n+\tprivate discardPendingPrompts(\n+\t\tsession: ActiveSession,\n+\t\treason: \"queue_abort\" | \"session_teardown\",\n+\t): void {\n+\t\tconst discarded = this.pendingPromptsController.discardQueue(session);\n+\t\tif (discarded.length === 0) return;\n+\t\tsession.config.telemetry?.capture({\n+\t\t\tevent: \"session.pending_prompts_discarded\",",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4228885051",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14609,
+        "pr_file": "sdk/packages/core/src/runtime/host/local-runtime-host.ts",
+        "discussion_id": "4228580751",
+        "commented_code": "@@ -2414,10 +2464,38 @@ export class LocalRuntimeHost implements RuntimeHost {\n \t\t}\n \t}\n \n+\t/**\n+\t * Teardown aborts any in-flight turn, and the abort settling resets\n+\t * `aborting` and schedules a queue drain while teardown is still awaiting\n+\t * I/O. Without this, a queued prompt would start a new run in a session\n+\t * that is being torn down and whose events nobody receives any more.\n+\t */\n+\tprivate beginTeardown(session: ActiveSession): void {\n+\t\tsession.shuttingDown = true;\n+\t\tthis.discardPendingPrompts(session, \"session_teardown\");\n+\t}\n+\n+\tprivate discardPendingPrompts(\n+\t\tsession: ActiveSession,\n+\t\treason: \"queue_abort\" | \"session_teardown\",\n+\t): void {\n+\t\tconst discarded = this.pendingPromptsController.discardQueue(session);\n+\t\tif (discarded.length === 0) return;\n+\t\tsession.config.telemetry?.capture({\n+\t\t\tevent: \"session.pending_prompts_discarded\",",
+        "comment_created_at": "2026-10-09T09:56:31+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Right, that broke the repo's telemetry rule. Folded into \"report discarded pending prompts\": the event is now `CORE_TELEMETRY_EVENTS.SESSION.PENDING_PROMPTS_DISCARDED` with a typed `capturePendingPromptsDiscarded` helper in `core-events.ts` (session id, count, reason; never the prompt text), and the host calls the helper. The test asserts the catalog constant. The three pre-existing literal captures in the same file (`session.input_sent`, `session.aborted`, `session.stopped`) predate this PR and are left alone here.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4380628500",
+    "pr_number": 15364,
+    "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+    "created_at": "2026-10-26T18:41:27+00:00",
+    "commented_code": "onLanguageModelCallStart: () => {\n \t\t\t\t\t\t\t\tcapturedError.current = undefined;\n \t\t\t\t\t\t\t},\n-\t\t\t\t\t\t\tonError: ({ error: streamError }) => {\n+\t\t\t\t\t\t\tonStepStart: () => {\n+\t\t\t\t\t\t\t\tstreamRetryBackoff?.startStep();\n+\t\t\t\t\t\t\t},\n+\t\t\t\t\t\t\tonError: async ({ error: streamError }) => {\n \t\t\t\t\t\t\t\tconst captured = captureStreamError(streamError);\n \t\t\t\t\t\t\t\tcapturedError.current = captured;\n \t\t\t\t\t\t\t\tstreamTelemetry.captureError(streamError);\n+\t\t\t\t\t\t\t\tconst wait = streamRetryBackoff?.onError(streamError);\n+\t\t\t\t\t\t\t\tif (!wait) return;\n+\t\t\t\t\t\t\t\trequest.emitStatusNotice?.(\n+\t\t\t\t\t\t\t\t\t`provider error \u2014 retrying in ${Math.round(wait.delayMs / 1000)}s (attempt ${wait.attempt}/${MODEL_STREAM_MAX_RETRIES})`,\n+\t\t\t\t\t\t\t\t\t{\n+\t\t\t\t\t\t\t\t\t\tkind: \"stream_retry\",\n+\t\t\t\t\t\t\t\t\t\tattempt: wait.attempt,\n+\t\t\t\t\t\t\t\t\t\tmaxAttempts: MODEL_STREAM_MAX_RETRIES,\n+\t\t\t\t\t\t\t\t\t\tdelayMs: wait.delayMs,\n+\t\t\t\t\t\t\t\t\t\tproviderId: request.providerId,\n+\t\t\t\t\t\t\t\t\t\tmodelId: request.modelId,\n+\t\t\t\t\t\t\t\t\t},\n+\t\t\t\t\t\t\t\t);\n+\t\t\t\t\t\t\t\tcontext.telemetry?.capture({\n+\t\t\t\t\t\t\t\t\tevent: \"sdk.stream_retry\",",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4381105948",
+        "repo_full_name": "cline/cline",
+        "pr_number": 15364,
+        "pr_file": "sdk/packages/llms/src/providers/ai-sdk.ts",
+        "discussion_id": "4380628500",
+        "commented_code": "@@ -2477,10 +2495,39 @@ function createAiSdkProvider(\n \t\t\t\t\t\t\tonLanguageModelCallStart: () => {\n \t\t\t\t\t\t\t\tcapturedError.current = undefined;\n \t\t\t\t\t\t\t},\n-\t\t\t\t\t\t\tonError: ({ error: streamError }) => {\n+\t\t\t\t\t\t\tonStepStart: () => {\n+\t\t\t\t\t\t\t\tstreamRetryBackoff?.startStep();\n+\t\t\t\t\t\t\t},\n+\t\t\t\t\t\t\tonError: async ({ error: streamError }) => {\n \t\t\t\t\t\t\t\tconst captured = captureStreamError(streamError);\n \t\t\t\t\t\t\t\tcapturedError.current = captured;\n \t\t\t\t\t\t\t\tstreamTelemetry.captureError(streamError);\n+\t\t\t\t\t\t\t\tconst wait = streamRetryBackoff?.onError(streamError);\n+\t\t\t\t\t\t\t\tif (!wait) return;\n+\t\t\t\t\t\t\t\trequest.emitStatusNotice?.(\n+\t\t\t\t\t\t\t\t\t`provider error \u2014 retrying in ${Math.round(wait.delayMs / 1000)}s (attempt ${wait.attempt}/${MODEL_STREAM_MAX_RETRIES})`,\n+\t\t\t\t\t\t\t\t\t{\n+\t\t\t\t\t\t\t\t\t\tkind: \"stream_retry\",\n+\t\t\t\t\t\t\t\t\t\tattempt: wait.attempt,\n+\t\t\t\t\t\t\t\t\t\tmaxAttempts: MODEL_STREAM_MAX_RETRIES,\n+\t\t\t\t\t\t\t\t\t\tdelayMs: wait.delayMs,\n+\t\t\t\t\t\t\t\t\t\tproviderId: request.providerId,\n+\t\t\t\t\t\t\t\t\t\tmodelId: request.modelId,\n+\t\t\t\t\t\t\t\t\t},\n+\t\t\t\t\t\t\t\t);\n+\t\t\t\t\t\t\t\tcontext.telemetry?.capture({\n+\t\t\t\t\t\t\t\t\tevent: \"sdk.stream_retry\",",
+        "comment_created_at": "2026-10-26T18:41:27+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Done. `sdk.stream_retry` now comes from `SDK_STREAM_RETRY_TELEMETRY_EVENT` in `@cline/shared` with a typed `captureSdkStreamRetry` helper (same shape as `captureSdkError`, tested in `shared`), and it is listed under `CORE_TELEMETRY_EVENTS.SDK.STREAM_RETRY` with the helper re-exported from `core-events.ts`. `@cline/llms` keeps importing from `shared` only.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4294190595",
+    "pr_number": 14610,
+    "pr_file": "apps/examples/desktop-app/sidecar/marketplace-telemetry.ts",
+    "created_at": "2026-10-16T11:38:00+00:00",
+    "commented_code": "+import type { ITelemetryService, TelemetryProperties } from \"@cline/shared\";\n+import type { JsonRecord } from \"./types\";\n+\n+export type MarketplaceInstallOutcome =\n+\t| \"installed\"\n+\t| \"already_installed\"\n+\t| \"failed\";\n+\n+export interface MarketplaceInstallEvent {\n+\ttype: string;\n+\toutcome: MarketplaceInstallOutcome;\n+\t/** Which path produced the outcome: skills-cli, github-download, already-installed. */\n+\tmethod?: string;\n+\t/** Coarse class of the skills CLI failure, when one happened. */\n+\tcli_failure?: string;\n+\tfallback_failed?: boolean;\n+}\n+\n+/** The marketplace entry type a desktop install request asked for. */\n+export function requestedMarketplaceType(\n+\targs: Record<string, unknown> | undefined,\n+): string {\n+\tconst entry =\n+\t\targs?.entry && typeof args.entry === \"object\"\n+\t\t\t? (args.entry as Record<string, unknown>)\n+\t\t\t: args;\n+\treturn typeof entry?.type === \"string\" ? entry.type : \"unknown\";\n+}\n+\n+export function marketplaceInstallEventFromResult(result: {\n+\ttype: string;\n+\tdetails?: JsonRecord;\n+}): MarketplaceInstallEvent {\n+\tconst details = result.details ?? {};\n+\tconst method =\n+\t\ttypeof details.method === \"string\" ? details.method : undefined;\n+\treturn {\n+\t\ttype: result.type,\n+\t\toutcome: method === \"already-installed\" ? \"already_installed\" : \"installed\",\n+\t\tmethod,\n+\t\tcli_failure:\n+\t\t\ttypeof details.cli_failure === \"string\" ? details.cli_failure : undefined,\n+\t};\n+}\n+\n+export function marketplaceInstallEventFromFailure(\n+\ttype: string,\n+\ttelemetry: JsonRecord | undefined,\n+): MarketplaceInstallEvent {\n+\treturn {\n+\t\ttype,\n+\t\toutcome: \"failed\",\n+\t\tmethod:\n+\t\t\ttypeof telemetry?.method === \"string\" ? telemetry.method : undefined,\n+\t\tcli_failure:\n+\t\t\ttypeof telemetry?.cli_failure === \"string\"\n+\t\t\t\t? telemetry.cli_failure\n+\t\t\t\t: undefined,\n+\t\tfallback_failed: telemetry?.fallback_failed === true ? true : undefined,\n+\t};\n+}\n+\n+export function captureMarketplaceInstallEvent(\n+\ttelemetry: ITelemetryService | undefined,\n+\tevent: MarketplaceInstallEvent,\n+): void {\n+\ttry {\n+\t\tif (!telemetry?.isEnabled()) return;\n+\t\tconst properties: TelemetryProperties = {};\n+\t\tfor (const [key, value] of Object.entries(event)) {\n+\t\t\tif (value !== undefined) properties[key] = value;\n+\t\t}\n+\t\ttelemetry.capture({ event: \"desktop.marketplace.install\", properties });",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4294240762",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14610,
+        "pr_file": "apps/examples/desktop-app/sidecar/marketplace-telemetry.ts",
+        "discussion_id": "4294190595",
+        "commented_code": "@@ -0,0 +1,77 @@\n+import type { ITelemetryService, TelemetryProperties } from \"@cline/shared\";\n+import type { JsonRecord } from \"./types\";\n+\n+export type MarketplaceInstallOutcome =\n+\t| \"installed\"\n+\t| \"already_installed\"\n+\t| \"failed\";\n+\n+export interface MarketplaceInstallEvent {\n+\ttype: string;\n+\toutcome: MarketplaceInstallOutcome;\n+\t/** Which path produced the outcome: skills-cli, github-download, already-installed. */\n+\tmethod?: string;\n+\t/** Coarse class of the skills CLI failure, when one happened. */\n+\tcli_failure?: string;\n+\tfallback_failed?: boolean;\n+}\n+\n+/** The marketplace entry type a desktop install request asked for. */\n+export function requestedMarketplaceType(\n+\targs: Record<string, unknown> | undefined,\n+): string {\n+\tconst entry =\n+\t\targs?.entry && typeof args.entry === \"object\"\n+\t\t\t? (args.entry as Record<string, unknown>)\n+\t\t\t: args;\n+\treturn typeof entry?.type === \"string\" ? entry.type : \"unknown\";\n+}\n+\n+export function marketplaceInstallEventFromResult(result: {\n+\ttype: string;\n+\tdetails?: JsonRecord;\n+}): MarketplaceInstallEvent {\n+\tconst details = result.details ?? {};\n+\tconst method =\n+\t\ttypeof details.method === \"string\" ? details.method : undefined;\n+\treturn {\n+\t\ttype: result.type,\n+\t\toutcome: method === \"already-installed\" ? \"already_installed\" : \"installed\",\n+\t\tmethod,\n+\t\tcli_failure:\n+\t\t\ttypeof details.cli_failure === \"string\" ? details.cli_failure : undefined,\n+\t};\n+}\n+\n+export function marketplaceInstallEventFromFailure(\n+\ttype: string,\n+\ttelemetry: JsonRecord | undefined,\n+): MarketplaceInstallEvent {\n+\treturn {\n+\t\ttype,\n+\t\toutcome: \"failed\",\n+\t\tmethod:\n+\t\t\ttypeof telemetry?.method === \"string\" ? telemetry.method : undefined,\n+\t\tcli_failure:\n+\t\t\ttypeof telemetry?.cli_failure === \"string\"\n+\t\t\t\t? telemetry.cli_failure\n+\t\t\t\t: undefined,\n+\t\tfallback_failed: telemetry?.fallback_failed === true ? true : undefined,\n+\t};\n+}\n+\n+export function captureMarketplaceInstallEvent(\n+\ttelemetry: ITelemetryService | undefined,\n+\tevent: MarketplaceInstallEvent,\n+): void {\n+\ttry {\n+\t\tif (!telemetry?.isEnabled()) return;\n+\t\tconst properties: TelemetryProperties = {};\n+\t\tfor (const [key, value] of Object.entries(event)) {\n+\t\t\tif (value !== undefined) properties[key] = value;\n+\t\t}\n+\t\ttelemetry.capture({ event: \"desktop.marketplace.install\", properties });",
+        "comment_created_at": "2026-10-16T11:38:00+00:00",
+        "comment_author": "mkondratek",
+        "comment_body": "Done: `CORE_TELEMETRY_EVENTS.DESKTOP.MARKETPLACE_INSTALL` plus a typed `captureMarketplaceInstall` helper in `core-events.ts` (with a test), and the sidecar now calls that helper. For the record, the rule's scope doesn't list the desktop sidecar, and its existing `desktop.pull_request.*` event is a raw string too; I left that one alone here since it's unrelated to this PR.\n",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4279377939",
+    "pr_number": 5955,
+    "pr_file": "src/integrations/terminal/TerminalProcess.ts",
+    "created_at": "2026-10-15T05:27:43+00:00",
+    "commented_code": "// the command process is finished, let's check the output to see if we need to use the terminal capture fallback\n \t\t\tif (!this.fullOutput.trim()) {\n+\t\t\t\t// No output captured via shell integration, trying fallback",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4279377939",
+        "repo_full_name": "cline/cline",
+        "pr_number": 5955,
+        "pr_file": "src/integrations/terminal/TerminalProcess.ts",
+        "discussion_id": "4279377939",
+        "commented_code": "@@ -189,7 +191,19 @@ export class TerminalProcess extends EventEmitter<TerminalProcessEvents> {\n \n \t\t\t// the command process is finished, let's check the output to see if we need to use the terminal capture fallback\n \t\t\tif (!this.fullOutput.trim()) {\n+\t\t\t\t// No output captured via shell integration, trying fallback",
+        "comment_created_at": "2026-10-15T05:27:43+00:00",
+        "comment_author": "BranchSun",
+        "comment_body": "\ud83d\udfe2 **maintainability** (low)\n\nThis event fires when shell integration returned no output (`!this.fullOutput.trim()`), i.e. an \"empty output\" condition, but it is reported with the reason `TIMEOUT`. Real timeouts and empty-output failures therefore cannot be distinguished in the `TERMINAL_OUTPUT_FAILURE` metric, which undermines the purpose of adding specific failure reasons.\n\n**\u5efa\u8bae**: Report a reason that matches the condition, e.g. add a `NO_OUTPUT` (or `EMPTY_OUTPUT`) value to `TerminalOutputFailureReason` and use it here.\n\n**\u8bc1\u636e**: `telemetryService.captureTerminalOutputFailure(TerminalOutputFailureReason.TIMEOUT)`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4279377943",
+    "pr_number": 5955,
+    "pr_file": "src/core/task/index.ts",
+    "created_at": "2026-10-15T05:27:43+00:00",
+    "commented_code": "process.continue()\n \t\t\t} catch {\n \t\t\t\tLogger.error(\"Error while asking for command output\")\n+\t\t\t\ttelemetryService.captureTerminalHang(TerminalHangStage.STREAM_TIMEOUT)",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4279377943",
+        "repo_full_name": "cline/cline",
+        "pr_number": 5955,
+        "pr_file": "src/core/task/index.ts",
+        "discussion_id": "4279377943",
+        "commented_code": "@@ -1517,7 +1530,13 @@ export class Task {\n \t\t\t\tprocess.continue()\n \t\t\t} catch {\n \t\t\t\tLogger.error(\"Error while asking for command output\")\n+\t\t\t\ttelemetryService.captureTerminalHang(TerminalHangStage.STREAM_TIMEOUT)",
+        "comment_created_at": "2026-10-15T05:27:43+00:00",
+        "comment_author": "BranchSun",
+        "comment_body": "\ud83d\udfe2 **maintainability** (low)\n\nThe surrounding `catch` wraps `await this.ask(\"command_output\", chunk)` and logs \"Error while asking for command output\", so it triggers for any rejection/abort of that ask call, not specifically a stream timeout. Classifying all of these as a `TERMINAL_HANG` with stage `STREAM_TIMEOUT` will inflate the hang metric with events that are not hangs.\n\n**\u5efa\u8bae**: Emit this with a dedicated reason that reflects an ask failure (e.g. add an `ASK_FAILED`/`ASK_ERROR` stage), or only emit a hang event when the failure is actually a timeout.\n\n**\u8bc1\u636e**: `telemetryService.captureTerminalHang(TerminalHangStage.STREAM_TIMEOUT)`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4248816924",
+    "pr_number": 5524,
+    "pr_file": "src/services/posthog/telemetry/TelemetryService.ts",
+    "created_at": "2026-10-12T13:55:17+00:00",
+    "commented_code": "this.capture({\n \t\t\tevent: TelemetryService.EVENTS.TASK.CHECKPOINT_USED,\n \t\t\tproperties: {\n-\t\t\t\ttaskId,\n+\t\t\t\tulid,",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4248816924",
+        "repo_full_name": "cline/cline",
+        "pr_number": 5524,
+        "pr_file": "src/services/posthog/telemetry/TelemetryService.ts",
+        "discussion_id": "4248816924",
+        "commented_code": "@@ -347,7 +345,7 @@ export class TelemetryService {\n \t\tthis.capture({\n \t\t\tevent: TelemetryService.EVENTS.TASK.CHECKPOINT_USED,\n \t\t\tproperties: {\n-\t\t\t\ttaskId,\n+\t\t\t\tulid,",
+        "comment_created_at": "2026-10-12T13:55:17+00:00",
+        "comment_author": "BranchSun",
+        "comment_body": "\ud83d\udfe1 **bug** (medium)\n\nThis PR renames the `taskId` parameter/property of `captureCheckpointUsage` (patch: `- taskId: string` \u2192 `+ ulid: string`, and `properties: { ulid, action, durationMs }`) but its call sites were not updated and still pass the task ID. In `src/integrations/checkpoints/CheckpointTracker.ts` both call sites pass the task ID: `telemetryService.captureCheckpointUsage(taskId, \"shadow_git_initialized\", durationMs)` and `telemetryService.captureCheckpointUsage(this.taskId, \"commit_created\", durationMs)`. Because the rename is positional, TypeScript compiles fine and cannot catch this, so the `task.checkpoint_used` event now reports a taskId value under the `ulid` key \u2014 two different identifier formats in the same property across events, which breaks anything joining task events on `ulid`. Note this event is gated behind the `checkpoints` telemetry category (disabled by default), so it only surfaces when that category is enabled.\n\n**\u5efa\u8bae**: Either keep the property named `taskId` for this event (the value really is the task ID, which is also what the shadow-git layout is keyed on), or thread the task's `ulid` through `CheckpointTracker`/`Task` so the call sites pass the ulid. It is also worth auditing the other renamed `captureX` helpers for unchanged call sites that still pass `taskId` positionally (e.g. `captureModelSelected`, `captureTokenUsage`).\n\n**\u8bc1\u636e**: `public captureCheckpointUsage(`",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4161519394",
+    "pr_number": 14755,
+    "pr_file": "sdk/packages/core/src/extensions/composio/composio-tools-extension.ts",
+    "created_at": "2026-10-01T23:41:01+00:00",
+    "commented_code": "}\n \t\t\t\t}\n \t\t\t}\n+\t\t\tfor (const tool of metaSession?.tools ?? []) {\n+\t\t\t\tconst toolName = tool.slug.toLowerCase().replace(/[^a-z0-9_]/g, \"_\");\n+\t\t\t\tif (registered.has(toolName)) {\n+\t\t\t\t\tcontinue;\n+\t\t\t\t}\n+\t\t\t\tregistered.add(toolName);\n+\t\t\t\ttry {\n+\t\t\t\t\tapi.registerTool(\n+\t\t\t\t\t\tcreateTool({\n+\t\t\t\t\t\t\tname: toolName,\n+\t\t\t\t\t\t\tdescription: `${tool.description || tool.name || tool.slug} Connecting an app here makes its tools available in new sessions.`,\n+\t\t\t\t\t\t\tinputSchema: (tool.input_parameters ?? {\n+\t\t\t\t\t\t\t\ttype: \"object\",\n+\t\t\t\t\t\t\t\tproperties: {},\n+\t\t\t\t\t\t\t}) as never,\n+\t\t\t\t\t\t\ttimeoutMs: COMPOSIO_TOOL_TIMEOUT_MS,\n+\t\t\t\t\t\t\tretryable: false,\n+\t\t\t\t\t\t\texecute: async (input: unknown) => {\n+\t\t\t\t\t\t\t\tconst authorized = await authorizeExecution(accountId);\n+\t\t\t\t\t\t\t\tif (\"error\" in authorized) return authorized.error;\n+\t\t\t\t\t\t\t\treturn executeComposioMetaTool(\n+\t\t\t\t\t\t\t\t\tauthorized.auth,\n+\t\t\t\t\t\t\t\t\tmetaSession?.sessionId ?? \"\",\n+\t\t\t\t\t\t\t\t\ttool.slug,\n+\t\t\t\t\t\t\t\t\tinput,\n+\t\t\t\t\t\t\t\t);",
+    "repo_full_name": "cline/cline",
+    "discussion_comments": [
+      {
+        "comment_id": "4161573001",
+        "repo_full_name": "cline/cline",
+        "pr_number": 14755,
+        "pr_file": "sdk/packages/core/src/extensions/composio/composio-tools-extension.ts",
+        "discussion_id": "4161519394",
+        "commented_code": "@@ -265,6 +300,42 @@ export async function createComposioToolsExtension(options?: {\n \t\t\t\t\t}\n \t\t\t\t}\n \t\t\t}\n+\t\t\tfor (const tool of metaSession?.tools ?? []) {\n+\t\t\t\tconst toolName = tool.slug.toLowerCase().replace(/[^a-z0-9_]/g, \"_\");\n+\t\t\t\tif (registered.has(toolName)) {\n+\t\t\t\t\tcontinue;\n+\t\t\t\t}\n+\t\t\t\tregistered.add(toolName);\n+\t\t\t\ttry {\n+\t\t\t\t\tapi.registerTool(\n+\t\t\t\t\t\tcreateTool({\n+\t\t\t\t\t\t\tname: toolName,\n+\t\t\t\t\t\t\tdescription: `${tool.description || tool.name || tool.slug} Connecting an app here makes its tools available in new sessions.`,\n+\t\t\t\t\t\t\tinputSchema: (tool.input_parameters ?? {\n+\t\t\t\t\t\t\t\ttype: \"object\",\n+\t\t\t\t\t\t\t\tproperties: {},\n+\t\t\t\t\t\t\t}) as never,\n+\t\t\t\t\t\t\ttimeoutMs: COMPOSIO_TOOL_TIMEOUT_MS,\n+\t\t\t\t\t\t\tretryable: false,\n+\t\t\t\t\t\t\texecute: async (input: unknown) => {\n+\t\t\t\t\t\t\t\tconst authorized = await authorizeExecution(accountId);\n+\t\t\t\t\t\t\t\tif (\"error\" in authorized) return authorized.error;\n+\t\t\t\t\t\t\t\treturn executeComposioMetaTool(\n+\t\t\t\t\t\t\t\t\tauthorized.auth,\n+\t\t\t\t\t\t\t\t\tmetaSession?.sessionId ?? \"\",\n+\t\t\t\t\t\t\t\t\ttool.slug,\n+\t\t\t\t\t\t\t\t\tinput,\n+\t\t\t\t\t\t\t\t);",
+        "comment_created_at": "2026-10-01T23:41:01+00:00",
+        "comment_author": "abeatrix",
+        "comment_body": "Addressed in f033487ccd. Usage is already instrumented centrally: AgentRuntime emits tool-finished, RuntimeEventAdapter translates it to content_end(tool), and handleAgentEvent in services/agent-events.ts calls captureToolUsage(). Adding another call in this handler would double-count usage. Added regression coverage that executes both registered Composio meta tools through the real agent runtime and event adapter, verifies the proxy API is called, and asserts exactly one task.tool_used event with session, agent, provider, and model identity. Also clarified the Greptile rule to recognize this central pipeline. Validation: SDK build, 67 focused tests, core typecheck, and Biome pass.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

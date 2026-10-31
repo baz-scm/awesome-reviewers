@@ -1,0 +1,256 @@
+[
+  {
+    "discussion_id": "3732418447",
+    "pr_number": 1785,
+    "pr_file": "swarms/structs/conversation.py",
+    "created_at": "2026-08-19T17:06:19+00:00",
+    "commented_code": "self.conversation_history.pop(int(index))\n         self._str_cache = None\n \n+    def checkpoint(self) -> Tuple[int, int]:\n+        \"\"\"Capture the current state so a failed block can be undone.\n+\n+        Returns:\n+            Tuple[int, int]: An opaque token for :meth:`rollback`.\n+        \"\"\"\n+        memory_md_size = 0\n+        if self.memory_md_path and os.path.exists(\n+            self.memory_md_path\n+        ):\n+            memory_md_size = os.path.getsize(self.memory_md_path)\n+\n+        return (len(self.conversation_history), memory_md_size)\n+\n+    def rollback(self, checkpoint: Tuple[int, int]):\n+        \"\"\"Restore the state captured by :meth:`checkpoint`.\n+\n+        Drops the messages added since, from the in-memory history and from\n+        MEMORY.md alike \u2014 the log is append-only, so rewinding it to the\n+        recorded size removes exactly the blocks written since the snapshot.\n+        Without that, a rolled-back message still reaches the next process\n+        through ``_preload_memory_md``.\n+\n+        Args:\n+            checkpoint (Tuple[int, int]): A token from :meth:`checkpoint`.\n+        \"\"\"\n+        length, memory_md_size = checkpoint\n+\n+        del self.conversation_history[length:]\n+        self._str_cache = None\n+\n+        if not self.memory_md_path:\n+            return\n+\n+        try:\n+            with self._memory_md_lock:\n+                if (\n+                    os.path.exists(self.memory_md_path)",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "3815112887",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 1785,
+        "pr_file": "swarms/structs/conversation.py",
+        "discussion_id": "3732418447",
+        "commented_code": "@@ -632,6 +633,53 @@\n         self.conversation_history.pop(int(index))\n         self._str_cache = None\n \n+    def checkpoint(self) -> Tuple[int, int]:\n+        \"\"\"Capture the current state so a failed block can be undone.\n+\n+        Returns:\n+            Tuple[int, int]: An opaque token for :meth:`rollback`.\n+        \"\"\"\n+        memory_md_size = 0\n+        if self.memory_md_path and os.path.exists(\n+            self.memory_md_path\n+        ):\n+            memory_md_size = os.path.getsize(self.memory_md_path)\n+\n+        return (len(self.conversation_history), memory_md_size)\n+\n+    def rollback(self, checkpoint: Tuple[int, int]):\n+        \"\"\"Restore the state captured by :meth:`checkpoint`.\n+\n+        Drops the messages added since, from the in-memory history and from\n+        MEMORY.md alike \u2014 the log is append-only, so rewinding it to the\n+        recorded size removes exactly the blocks written since the snapshot.\n+        Without that, a rolled-back message still reaches the next process\n+        through ``_preload_memory_md``.\n+\n+        Args:\n+            checkpoint (Tuple[int, int]): A token from :meth:`checkpoint`.\n+        \"\"\"\n+        length, memory_md_size = checkpoint\n+\n+        del self.conversation_history[length:]\n+        self._str_cache = None\n+\n+        if not self.memory_md_path:\n+            return\n+\n+        try:\n+            with self._memory_md_lock:\n+                if (\n+                    os.path.exists(self.memory_md_path)",
+        "comment_created_at": "2026-08-19T17:06:19+00:00",
+        "comment_author": "ayaangazali",
+        "comment_body": "Fixed. Pyre is right that `self.memory_md_path` is `Optional[str]`, and attribute narrowing does not survive across the call \u2014 so `os.path.exists`, `os.path.getsize` and `os.truncate` were all being handed a possible `None`.\n\nBoth methods now bind to a local first, which narrows properly:\n\n```python\n# checkpoint()\npath = self.memory_md_path\nmemory_md_size = 0\nif path and os.path.exists(path):\n    memory_md_size = os.path.getsize(path)\n\n# rollback()\npath = self.memory_md_path\nif not path:\n    return\n...\nif os.path.exists(path) and os.path.getsize(path) > memory_md_size:\n    os.truncate(path, memory_md_size)\n```\n\nSame runtime behaviour, and the three alerts on this file have nothing left to point at.\n\nWhile rebasing this onto today's master I also had to resolve a real conflict with #1923, which appended to `tests/structs/test_agent.py`. Kept both sets of tests; the first resolution attempt duplicated master's `TestContextLength` and `TestToolsListIsolation`, which I caught and removed \u2014 the diff against master is now 145 insertions across 3 files with no duplicated classes. `pytest -k \"RetryMemoryRollback or ContextLength or ToolsListIsolation\"`: 7 passed.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4179996678",
+    "pr_number": 2462,
+    "pr_file": "swarms/tools/pydantic_to_json.py",
+    "created_at": "2026-10-05T00:49:44+00:00",
+    "commented_code": "for key in list(d.keys()):\n             if key == remove_key and \"type\" in d.keys():\n                 del d[key]\n+            elif key == \"properties\" and isinstance(d[key], dict):",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "4179996678",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2462,
+        "pr_file": "swarms/tools/pydantic_to_json.py",
+        "discussion_id": "4179996678",
+        "commented_code": "@@ -19,6 +19,9 @@ def _remove_a_key(d: dict, remove_key: str) -> None:\n         for key in list(d.keys()):\n             if key == remove_key and \"type\" in d.keys():\n                 del d[key]\n+            elif key == \"properties\" and isinstance(d[key], dict):",
+        "comment_created_at": "2026-10-05T00:49:44+00:00",
+        "comment_author": "kyegomez",
+        "comment_body": "**minor: Non-dict `properties` value is now skipped instead of recursed**\n\nThe new branch is `elif key == \"properties\" and isinstance(d[key], dict)`. If a schema has `properties` bound to something that is not a dict (malformed or hand-written schema, or a list), the condition is False and control falls to the `else`, which is the old recursive call, so that case is still handled. But the reverse case matters more: when `properties` is a dict whose values are not dicts (JSON Schema allows boolean subschemas, and `$ref`-only maps can be odd), `_remove_a_key(prop, remove_key)` is invoked with a non-dict. Unless `_remove_a_key` guards with `isinstance(d, dict)` at the top (not shown in the diff), this raises AttributeError on `.keys()`. Worth confirming the guard exists or adding an `isinstance(prop, dict)` check in the loop.\n\n```suggestion\n            elif key == \"properties\" and isinstance(d[key], dict):\n                for prop in d[key].values():\n                    if isinstance(prop, dict):\n                        _remove_a_key(prop, remove_key)\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4067997971",
+    "pr_number": 2322,
+    "pr_file": "swarms/structs/heavy_swarm.py",
+    "created_at": "2026-09-22T02:28:31+00:00",
+    "commented_code": "if not tool_calls:\n             return {}\n \n-        # Get the first tool call (should be the question generation)\n         tool_call = tool_calls[0]\n+        function = getattr(tool_call, \"function\", None)\n+        identity = {\n+            \"tool_call_id\": getattr(tool_call, \"id\", None),\n+            \"function_name\": getattr(function, \"name\", None),",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "4067997971",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2322,
+        "pr_file": "swarms/structs/heavy_swarm.py",
+        "discussion_id": "4067997971",
+        "commented_code": "@@ -1275,26 +1275,23 @@ def _parse_tool_calls(self, tool_calls: List) -> Dict[str, any]:\n         if not tool_calls:\n             return {}\n \n-        # Get the first tool call (should be the question generation)\n         tool_call = tool_calls[0]\n+        function = getattr(tool_call, \"function\", None)\n+        identity = {\n+            \"tool_call_id\": getattr(tool_call, \"id\", None),\n+            \"function_name\": getattr(function, \"name\", None),",
+        "comment_created_at": "2026-09-22T02:28:31+00:00",
+        "comment_author": "kyegomez",
+        "comment_body": "Dict-shaped calls come back with both identity fields `None`.\n\n`getattr(tool_call, \"function\", None)` returns `None` for a dict, so `function_name` is `None`, and `getattr(tool_call, \"id\", None)` is `None` for the same reason. For `{\"id\": \"call_1\", \"function\": {\"name\": \"gen\", ...}}` the values are sitting right there at `tool_call[\"id\"]` and `tool_call[\"function\"][\"name\"]`, but the result is:\n\n```python\n{\"research_question\": \"...\", \"tool_call_id\": None, \"function_name\": None}\n```\n\nThis is still strictly better than master, which raised `AttributeError` here, and nothing downstream reads these fields today, so it is not a merge blocker. But it is a silent gap in exactly the shape this PR exists to add support for, and the docstring at lines 1261-1262 still promises `tool_call_id (str)`.\n\nSomething like:\n\n```python\nif isinstance(tool_call, dict):\n    fn = tool_call.get(\"function\") or {}\n    identity = {\n        \"tool_call_id\": tool_call.get(\"id\"),\n        \"function_name\": fn.get(\"name\") if isinstance(fn, dict) else getattr(fn, \"name\", None),\n    }\nelse:\n    identity = {\n        \"tool_call_id\": getattr(tool_call, \"id\", None),\n        \"function_name\": getattr(function, \"name\", None),\n    }\n```\n\nEither fix it or soften the docstring to say these are best-effort, but the two should agree.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4125832130",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2322,
+        "pr_file": "swarms/structs/heavy_swarm.py",
+        "discussion_id": "4067997971",
+        "commented_code": "@@ -1275,26 +1275,23 @@ def _parse_tool_calls(self, tool_calls: List) -> Dict[str, any]:\n         if not tool_calls:\n             return {}\n \n-        # Get the first tool call (should be the question generation)\n         tool_call = tool_calls[0]\n+        function = getattr(tool_call, \"function\", None)\n+        identity = {\n+            \"tool_call_id\": getattr(tool_call, \"id\", None),\n+            \"function_name\": getattr(function, \"name\", None),",
+        "comment_created_at": "2026-09-28T18:46:51+00:00",
+        "comment_author": "ayaangazali",
+        "comment_body": "Fixed in 2823000f. `_parse_tool_calls` now reads `id` and `function.name` through a dict-or-attribute accessor, so `{\"id\": \"call_1\", \"function\": {\"name\": \"gen\", ...}}` returns `tool_call_id=\"call_1\"` and `function_name=\"gen\"`, and the error path returns `raw_arguments` for dict calls too. The docstring promise now holds, so I left it as is. `test_dict_shaped_tool_call_parses_with_its_identity` asserts both fields; against the pre-fix `heavy_swarm.py` it fails with `assert None == 'call_1'`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4189211154",
+    "pr_number": 2474,
+    "pr_file": "swarms/structs/hiearchical_swarm.py",
+    "created_at": "2026-10-05T21:50:43+00:00",
+    "commented_code": "if self.director is None:\n             self.director = self.setup_director()\n+        elif (\n+            isinstance(self.director, Agent)",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "4189211154",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2474,
+        "pr_file": "swarms/structs/hiearchical_swarm.py",
+        "discussion_id": "4189211154",
+        "commented_code": "@@ -367,6 +368,19 @@ def reliability_checks(self):\n \n         if self.director is None:\n             self.director = self.setup_director()\n+        elif (\n+            isinstance(self.director, Agent)",
+        "comment_created_at": "2026-10-05T21:50:43+00:00",
+        "comment_author": "kyegomez",
+        "comment_body": "**minor: director.llm accessed without existence guard**\n\nisinstance(self.director.llm, LiteLLM) assumes the attribute exists. Agent presumably always sets it, but an Agent subclass or an Agent constructed through a path that defers llm creation would raise AttributeError inside reliability_checks, which runs at swarm construction. getattr(self.director, \"llm\", None) is cheap insurance and keeps the same semantics.\n\n```suggestion\n            isinstance(self.director, Agent)\n            and isinstance(getattr(self.director, \"llm\", None), LiteLLM)\n            and not getattr(self.director, \"mcp_enabled\", False)\n            and not self.director.tools_list_dictionary\n            and not self.director.llm.tools_list_dictionary\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4178622215",
+    "pr_number": 2367,
+    "pr_file": "swarms/agents/gkp_agent.py",
+    "created_at": "2026-10-04T17:31:19+00:00",
+    "commented_code": "f\"Initialized {self.agent_name} with model {self.model_name}\"\n         )\n \n+    @property\n+    def usage(self) -> dict:\n+        \"\"\"Provider token usage summed over the knowledge generator, reasoner and coordinator agents.\n+\n+        Keys match :attr:`Agent.usage`: ``input_tokens``, ``output_tokens``,\n+        ``cached_tokens``, ``reasoning_tokens``, ``total_tokens``. Totals are\n+        lifetime totals, so they grow across ``run()`` calls.\n+\n+        Returns:\n+            dict: A new usage dict.",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "4178622215",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2367,
+        "pr_file": "swarms/agents/gkp_agent.py",
+        "discussion_id": "4178622215",
+        "commented_code": "@@ -372,6 +373,25 @@ def __init__(\n             f\"Initialized {self.agent_name} with model {self.model_name}\"\n         )\n \n+    @property\n+    def usage(self) -> dict:\n+        \"\"\"Provider token usage summed over the knowledge generator, reasoner and coordinator agents.\n+\n+        Keys match :attr:`Agent.usage`: ``input_tokens``, ``output_tokens``,\n+        ``cached_tokens``, ``reasoning_tokens``, ``total_tokens``. Totals are\n+        lifetime totals, so they grow across ``run()`` calls.\n+\n+        Returns:\n+            dict: A new usage dict.",
+        "comment_created_at": "2026-10-04T17:31:19+00:00",
+        "comment_author": "kyegomez",
+        "comment_body": "**\u26a0\ufe0f major: `GKPAgent.usage` assumes nested attributes always exist**\n\nThe property dereferences `self.knowledge_generator.agent` and `self.reasoner.agent` unconditionally. `sum_agent_usage` tolerates an element without a `usage` dict, but it cannot tolerate the attribute lookup itself failing. If `GKPAgent` is constructed in a configuration where `knowledge_generator` or `reasoner` is `None` (or those sub-objects name their agent differently), reading `usage` raises `AttributeError` instead of returning zeros \u2014 and the router reads this property in a `finally` on every run. Use `getattr` chains so the property degrades to the agents it can see.\n\n```suggestion\n        return sum_agent_usage(\n            [\n                getattr(self.knowledge_generator, \"agent\", None),\n                getattr(self.reasoner, \"agent\", None),\n                self.coordinator,\n            ]\n        )\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4178622230",
+    "pr_number": 2367,
+    "pr_file": "swarms/utils/litellm_wrapper.py",
+    "created_at": "2026-10-04T17:31:19+00:00",
+    "commented_code": "}\n \n \n+def sum_agent_usage(agents: Iterable[Any]) -> dict:\n+    \"\"\"Sum ``usage`` over distinct agents, the shape ``Agent.usage`` returns.\n+\n+    Args:\n+        agents (Iterable[Any]): Agents to add up. The same object listed\n+            twice is counted once, and anything without a ``usage`` dict is\n+            skipped.\n+\n+    Returns:\n+        dict: A new usage dict built from :func:`empty_usage`.\n+    \"\"\"\n+    total = empty_usage()\n+    seen = set()\n+    for agent in agents:\n+        usage = getattr(agent, \"usage\", None)\n+        if id(agent) in seen or not isinstance(usage, dict):\n+            continue",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "4178622230",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2367,
+        "pr_file": "swarms/utils/litellm_wrapper.py",
+        "discussion_id": "4178622230",
+        "commented_code": "@@ -117,6 +117,29 @@ def empty_usage() -> dict:\n     }\n \n \n+def sum_agent_usage(agents: Iterable[Any]) -> dict:\n+    \"\"\"Sum ``usage`` over distinct agents, the shape ``Agent.usage`` returns.\n+\n+    Args:\n+        agents (Iterable[Any]): Agents to add up. The same object listed\n+            twice is counted once, and anything without a ``usage`` dict is\n+            skipped.\n+\n+    Returns:\n+        dict: A new usage dict built from :func:`empty_usage`.\n+    \"\"\"\n+    total = empty_usage()\n+    seen = set()\n+    for agent in agents:\n+        usage = getattr(agent, \"usage\", None)\n+        if id(agent) in seen or not isinstance(usage, dict):\n+            continue",
+        "comment_created_at": "2026-10-04T17:31:19+00:00",
+        "comment_author": "kyegomez",
+        "comment_body": "**\ud83d\udd38 minor: `sum_agent_usage` adds non-numeric usage values without guarding**\n\n`total[key] += usage.get(key, 0)` assumes every present key holds a number. If a provider or a mocked agent surfaces `None` or a string for, say, `cached_tokens` (some providers omit/null these fields), this raises `TypeError` from inside a property that the router calls in a `finally`. A small coercion keeps the helper total-safe.\n\n```suggestion\n        for key in total:\n            value = usage.get(key, 0)\n            if isinstance(value, (int, float)):\n                total[key] += value\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4175973601",
+    "pr_number": 2279,
+    "pr_file": "swarms/structs/agent.py",
+    "created_at": "2026-10-04T03:23:00+00:00",
+    "commented_code": "def skills_metadata(self, metadata: List[Dict[str, str]]) -> None:\n         self.skills.metadata = metadata\n \n+    @property\n+    def cancel_event(self) -> Optional[threading.Event]:",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "4175973601",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2279,
+        "pr_file": "swarms/structs/agent.py",
+        "discussion_id": "4175973601",
+        "commented_code": "@@ -709,6 +727,37 @@ def skills_metadata(self) -> List[Dict[str, str]]:\n     def skills_metadata(self, metadata: List[Dict[str, str]]) -> None:\n         self.skills.metadata = metadata\n \n+    @property\n+    def cancel_event(self) -> Optional[threading.Event]:",
+        "comment_created_at": "2026-10-04T03:23:00+00:00",
+        "comment_author": "kyegomez",
+        "comment_body": "**\u26a0\ufe0f major: cancel_event/steering_queue properties break before autonomous_loop is assigned**\n\nBoth properties delegate to `self.autonomous_loop`, which is only created partway through `Agent.__init__` (`self.autonomous_loop = AutonomousAgentLoop(...)`). Any read or write of `agent.cancel_event` / `agent.steering_queue` before that line \u2014 e.g. `setup_config`/`**kwargs` handling that does `setattr(self, k, v)` for a `cancel_event` kwarg, a subclass that touches it early, or `__setstate__`/state-load paths that replay attributes \u2014 raises `AttributeError: 'Agent' object has no attribute 'autonomous_loop'` instead of a clear error. Also, because these are now class-level properties with no `__dict__` entry, any code path that does `getattr(agent, 'cancel_event', None)` on a partially constructed Agent (e.g. during error handling in `__init__`) will raise rather than return the default. Consider guarding the getter/setter with `getattr(self, 'autonomous_loop', None)` or stashing the values on the instance until the loop is built.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4175973615",
+    "pr_number": 2279,
+    "pr_file": "swarms/agents/autonomous_loop.py",
+    "created_at": "2026-10-04T03:23:01+00:00",
+    "commented_code": ")\n         return True\n \n+    def _cancel_requested(self) -> bool:\n+        \"\"\"Whether the operator has asked for this run to stop.\n+\n+        Read through a local name rather than twice off ``self`` so a\n+        thread swapping the event out between the two accesses cannot\n+        produce an ``AttributeError`` on ``None``. When no event was\n+        supplied this is a single ``is None`` comparison, which is why\n+        the checks can sit on every iteration boundary unconditionally.\n+\n+        Returns:\n+            bool: True when a cancel event was supplied and is set.\n+        \"\"\"\n+        cancel_event = self.cancel_event\n+        return cancel_event is not None and cancel_event.is_set()\n+\n+    def _drain_steering_queue(self) -> int:\n+        \"\"\"Inject every pending operator message as a user turn.\n+\n+        Drained rather than read one-at-a-time so a burst of corrections\n+        all reach the model in the same request, and drained with\n+        ``get_nowait`` rather than a timeout so the loop never sleeps\n+        waiting for a message that may never come.\n+\n+        Returns:\n+            int: How many messages were injected.\n+        \"\"\"\n+        steering_queue = self.steering_queue\n+        if steering_queue is None:\n+            return 0\n+\n+        injected = 0\n+        while True:\n+            try:\n+                message = steering_queue.get_nowait()\n+            except queue.Empty:\n+                break\n+\n+            self._say_user(f\"{STEERING_TURN_HEADER}\n{message}\")\n+            injected += 1\n+\n+        if injected and self.agent.print_on:\n+            formatter.print_panel(\n+                f\"Injected {injected} operator message(s) before the \"\n+                \"next model call.\",\n+                title=\"Autonomous Loop: Steering\",\n+            )\n+\n+        return injected\n+\n+    def _mark_subtask_cancelled(self, subtask_id: str) -> None:\n+        \"\"\"Record an in-flight subtask as cancelled rather than failed.\n+\n+        The iteration-budget path marks an unfinished subtask ``failed``\n+        with an \"exhausted its budget\" reason, which would misreport a\n+        subtask the operator stopped on purpose. A distinct status keeps\n+        the final summary honest; nothing is dispatched afterwards, so it\n+        never has to satisfy a dependency check.\n+        \"\"\"\n+        reason = \"Cancelled by the operator before completion.\"\n+        self.agent.subtask_status[subtask_id] = \"cancelled\"\n+        for subtask in self.agent.autonomous_subtasks:\n+            if subtask[\"step_id\"] == subtask_id:\n+                subtask[\"status\"] = \"cancelled\"\n+                subtask.setdefault(\"summary\", reason)\n+                break\n+\n+    def _finish_cancelled(\n+        self,",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "4175973615",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2279,
+        "pr_file": "swarms/agents/autonomous_loop.py",
+        "discussion_id": "4175973615",
+        "commented_code": "@@ -177,6 +203,111 @@ def _maybe_compress_context(self) -> bool:\n         )\n         return True\n \n+    def _cancel_requested(self) -> bool:\n+        \"\"\"Whether the operator has asked for this run to stop.\n+\n+        Read through a local name rather than twice off ``self`` so a\n+        thread swapping the event out between the two accesses cannot\n+        produce an ``AttributeError`` on ``None``. When no event was\n+        supplied this is a single ``is None`` comparison, which is why\n+        the checks can sit on every iteration boundary unconditionally.\n+\n+        Returns:\n+            bool: True when a cancel event was supplied and is set.\n+        \"\"\"\n+        cancel_event = self.cancel_event\n+        return cancel_event is not None and cancel_event.is_set()\n+\n+    def _drain_steering_queue(self) -> int:\n+        \"\"\"Inject every pending operator message as a user turn.\n+\n+        Drained rather than read one-at-a-time so a burst of corrections\n+        all reach the model in the same request, and drained with\n+        ``get_nowait`` rather than a timeout so the loop never sleeps\n+        waiting for a message that may never come.\n+\n+        Returns:\n+            int: How many messages were injected.\n+        \"\"\"\n+        steering_queue = self.steering_queue\n+        if steering_queue is None:\n+            return 0\n+\n+        injected = 0\n+        while True:\n+            try:\n+                message = steering_queue.get_nowait()\n+            except queue.Empty:\n+                break\n+\n+            self._say_user(f\"{STEERING_TURN_HEADER}\\n{message}\")\n+            injected += 1\n+\n+        if injected and self.agent.print_on:\n+            formatter.print_panel(\n+                f\"Injected {injected} operator message(s) before the \"\n+                \"next model call.\",\n+                title=\"Autonomous Loop: Steering\",\n+            )\n+\n+        return injected\n+\n+    def _mark_subtask_cancelled(self, subtask_id: str) -> None:\n+        \"\"\"Record an in-flight subtask as cancelled rather than failed.\n+\n+        The iteration-budget path marks an unfinished subtask ``failed``\n+        with an \"exhausted its budget\" reason, which would misreport a\n+        subtask the operator stopped on purpose. A distinct status keeps\n+        the final summary honest; nothing is dispatched afterwards, so it\n+        never has to satisfy a dependency check.\n+        \"\"\"\n+        reason = \"Cancelled by the operator before completion.\"\n+        self.agent.subtask_status[subtask_id] = \"cancelled\"\n+        for subtask in self.agent.autonomous_subtasks:\n+            if subtask[\"step_id\"] == subtask_id:\n+                subtask[\"status\"] = \"cancelled\"\n+                subtask.setdefault(\"summary\", reason)\n+                break\n+\n+    def _finish_cancelled(\n+        self,",
+        "comment_created_at": "2026-10-04T03:23:01+00:00",
+        "comment_author": "kyegomez",
+        "comment_body": "**\ud83d\udd38 minor: _mark_subtask_cancelled uses setdefault on summary**\n\n`subtask.setdefault(\"summary\", reason)` only records the cancellation reason when no `summary` key exists. If the subtask dict is initialised with `summary: \"\"` or `summary: None` (common for plan-parsed subtasks), the key exists and the cancellation reason is silently dropped, leaving an empty summary next to a `cancelled` status. If the intent is \"do not clobber a real summary\", test for truthiness instead.\n\n```suggestion\n                if not subtask.get(\"summary\"):\n                    subtask[\"summary\"] = reason\n```",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3944681499",
+    "pr_number": 2182,
+    "pr_file": "swarms/structs/ma_blocks.py",
+    "created_at": "2026-09-06T19:46:13+00:00",
+    "commented_code": "results = run_agents_concurrently(agents=workers, task=task)\n \n-    # Zip the results with the agents\n+    # Record each worker's answer, not whatever its output_type made run()\n+    # return: the default is the agent's whole conversation, which would put\n+    # every worker's full transcript into the shared one.\n     for result, agent in zip(results, workers):\n-        conversation.add(content=result, role=agent.agent_name)\n+        conversation.add(\n+            content=agent_answer(agent, result), role=agent.agent_name",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "3945066957",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2182,
+        "pr_file": "swarms/structs/ma_blocks.py",
+        "discussion_id": "3944681499",
+        "commented_code": "@@ -68,12 +68,19 @@\n \n     results = run_agents_concurrently(agents=workers, task=task)\n \n-    # Zip the results with the agents\n+    # Record each worker's answer, not whatever its output_type made run()\n+    # return: the default is the agent's whole conversation, which would put\n+    # every worker's full transcript into the shared one.\n     for result, agent in zip(results, workers):\n-        conversation.add(content=result, role=agent.agent_name)\n+        conversation.add(\n+            content=agent_answer(agent, result), role=agent.agent_name",
+        "comment_created_at": "2026-09-06T19:46:13+00:00",
+        "comment_author": "ayaangazali",
+        "comment_body": "Fixed in c888ef0c. `Agent.agent_name` is `Optional[str]`, so an unnamed worker would have written a `None` role into the conversation and the aggregator would then read a turn with no speaker attached. The call now passes `agent.agent_name or \"Worker\"`, so every recorded turn has a real role.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3741944239",
+    "pr_number": 1828,
+    "pr_file": "swarms/structs/graph_workflow.py",
+    "created_at": "2026-08-17T05:32:23+00:00",
+    "commented_code": "source (str, optional): The ID of the source node.\n             target (str, optional): The ID of the target node.\n             metadata (Dict[str, Any], optional): Additional metadata for the edge.\n+            condition (Callable, optional): Predicate gating this edge. Called\n+                with the source node's output, and optionally a second\n+                argument holding every output produced so far::\n+\n+                    Edge(source=\"classifier\", target=\"escalate\",\n+                         condition=lambda out: \"urgent\" in out.lower())\n+\n+                    Edge(source=\"classifier\", target=\"escalate\",\n+                         condition=lambda out, ctx: ctx[\"triage\"] == \"p0\")\n+\n+                A target runs when at least one inbound edge fires. An edge\n+                with no condition always fires, so graphs that don't use this\n+                behave exactly as before.\n         \"\"\"\n         self.source = source\n         self.target = target\n         self.metadata = metadata or {}\n+        self.condition = condition\n+        # Resolved once, so fires() never has to probe by catching TypeError \u2014\n+        # a predicate that raises TypeError internally would otherwise be\n+        # called a second time with a different signature.\n+        self._condition_wants_context = _accepts_two_args(condition)\n+\n+    def fires(self, output: Any, outputs: Dict[str, Any]) -> bool:\n+        \"\"\"\n+        Whether this edge passes control to its target.\n+\n+        A predicate that raises is treated as not firing: a broken condition\n+        must not take the whole run down, and refusing to route is the safe\n+        reading of \"we could not establish that this edge should fire\".\n+",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "3794015235",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 1828,
+        "pr_file": "swarms/structs/graph_workflow.py",
+        "discussion_id": "3741944239",
+        "commented_code": "@@ -783,10 +899,56 @@\n             source (str, optional): The ID of the source node.\n             target (str, optional): The ID of the target node.\n             metadata (Dict[str, Any], optional): Additional metadata for the edge.\n+            condition (Callable, optional): Predicate gating this edge. Called\n+                with the source node's output, and optionally a second\n+                argument holding every output produced so far::\n+\n+                    Edge(source=\"classifier\", target=\"escalate\",\n+                         condition=lambda out: \"urgent\" in out.lower())\n+\n+                    Edge(source=\"classifier\", target=\"escalate\",\n+                         condition=lambda out, ctx: ctx[\"triage\"] == \"p0\")\n+\n+                A target runs when at least one inbound edge fires. An edge\n+                with no condition always fires, so graphs that don't use this\n+                behave exactly as before.\n         \"\"\"\n         self.source = source\n         self.target = target\n         self.metadata = metadata or {}\n+        self.condition = condition\n+        # Resolved once, so fires() never has to probe by catching TypeError \u2014\n+        # a predicate that raises TypeError internally would otherwise be\n+        # called a second time with a different signature.\n+        self._condition_wants_context = _accepts_two_args(condition)\n+\n+    def fires(self, output: Any, outputs: Dict[str, Any]) -> bool:\n+        \"\"\"\n+        Whether this edge passes control to its target.\n+\n+        A predicate that raises is treated as not firing: a broken condition\n+        must not take the whole run down, and refusing to route is the safe\n+        reading of \"we could not establish that this edge should fire\".\n+",
+        "comment_created_at": "2026-08-17T05:32:23+00:00",
+        "comment_author": "ayaangazali",
+        "comment_body": "Fixed \u2014 this one is real, not checker noise. `Edge.__init__` was annotated `metadata: Dict[str, Any] = None`, which is simply wrong: the default is `None`, so the annotation excludes the value the parameter actually takes. This PR is what surfaced it, because `Edge.from_any` now passes `metadata=None` explicitly when there are no extra kwargs.\n\nChanged the annotation rather than the call site \u2014 `Optional[Dict[str, Any]] = None` for `metadata`, and the same for `source` and `target`, which had the identical `str = None` mismatch. No behaviour change: `self.metadata = metadata or {}` already handled `None`, and `Edge(source=\"a\", target=\"b\").metadata` is still `{}`.\n\nThis is a latent issue in the pre-existing signature, so the fix helps every caller, not just the new one.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3906404716",
+    "pr_number": 2125,
+    "pr_file": "swarms/structs/round_robin.py",
+    "created_at": "2026-09-01T17:04:37+00:00",
+    "commented_code": ")\n                     )\n \n-                    conversation_context = (\n-                        self.conversation.return_history_as_string()\n+                    prior_turns, _ = split_last_turn(\n+                        messages_for(\n+                            current_agent.agent_name,",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "3906492310",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2125,
+        "pr_file": "swarms/structs/round_robin.py",
+        "discussion_id": "3906404716",
+        "commented_code": "@@ -249,8 +256,11 @@\n                         )\n                     )\n \n-                    conversation_context = (\n-                        self.conversation.return_history_as_string()\n+                    prior_turns, _ = split_last_turn(\n+                        messages_for(\n+                            current_agent.agent_name,",
+        "comment_created_at": "2026-09-01T17:04:37+00:00",
+        "comment_author": "ayaangazali",
+        "comment_body": "Fixed. `agent_name` on the agent protocol is `Optional[str]` and `messages_for` takes `str`, so the call is now `messages_for(current_agent.agent_name or \"\", ...)`.\n\nThis one is genuinely mine \u2014 the line is new in this PR, not a pre-existing annotation the diff merely re-exposed.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

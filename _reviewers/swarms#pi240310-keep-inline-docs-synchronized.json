@@ -1,0 +1,150 @@
+[
+  {
+    "discussion_id": "4179115463",
+    "pr_number": 2451,
+    "pr_file": "swarms/structs/serialization.py",
+    "created_at": "2026-10-04T20:04:04+00:00",
+    "commented_code": "try:\n             if callable(attr_value):\n                 return self._serialize_callable(attr_value)\n+            if isinstance(attr_value, SerializableMixin):\n+                return attr_value.to_dict(strict)",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "4179115463",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2451,
+        "pr_file": "swarms/structs/serialization.py",
+        "discussion_id": "4179115463",
+        "commented_code": "@@ -96,15 +102,30 @@ def _serialize_attr(self, attr_name: str, attr_value: Any) -> Any:\n         try:\n             if callable(attr_value):\n                 return self._serialize_callable(attr_value)\n+            if isinstance(attr_value, SerializableMixin):\n+                return attr_value.to_dict(strict)",
+        "comment_created_at": "2026-10-04T20:04:04+00:00",
+        "comment_author": "kyegomez",
+        "comment_body": "**minor: strict is not propagated to non-mixin nested to_dict objects**\n\n`isinstance(attr_value, SerializableMixin)` forwards `strict`, but the following `hasattr(attr_value, \"to_dict\")` branch calls `attr_value.to_dict()` without it. Any nested object that implements its own `to_dict` and internally substitutes placeholders (or that is itself a Pydantic/third-party model with lossy serialization) will still return a lossy value under `strict=True`, so `to_dict(strict=True)` does not guarantee a faithful dump as the docstring/PR claims. At minimum document this limitation on `to_dict`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4179229513",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2451,
+        "pr_file": "swarms/structs/serialization.py",
+        "discussion_id": "4179115463",
+        "commented_code": "@@ -96,15 +102,30 @@ def _serialize_attr(self, attr_name: str, attr_value: Any) -> Any:\n         try:\n             if callable(attr_value):\n                 return self._serialize_callable(attr_value)\n+            if isinstance(attr_value, SerializableMixin):\n+                return attr_value.to_dict(strict)",
+        "comment_created_at": "2026-10-04T20:38:58+00:00",
+        "comment_author": "ayaangazali",
+        "comment_body": "Not forwarding it there, because none of those methods accepts it. `Conversation.to_dict`, `MCPManager.to_dict` and the ones in `tree_of_thoughts.py` and `planner_generator_evaluator.py` take no arguments, and `GraphWorkflow.to_dict` has its own. Passing `strict` would raise `unexpected keyword argument` for each, and since `short_memory` is a `Conversation`, `to_dict(strict=True)` would then fail on every Agent.\n\nThe `<Non-serializable: ...>` string is only produced in `serialization.py` (no other source under `swarms/`), so a foreign `to_dict` cannot return one, and `strict` already covers every placeholder this mixin emits. I put that scope in the body rather than a docstring.\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4402362389",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2451,
+        "pr_file": "swarms/structs/serialization.py",
+        "discussion_id": "4179115463",
+        "commented_code": "@@ -96,15 +102,30 @@ def _serialize_attr(self, attr_name: str, attr_value: Any) -> Any:\n         try:\n             if callable(attr_value):\n                 return self._serialize_callable(attr_value)\n+            if isinstance(attr_value, SerializableMixin):\n+                return attr_value.to_dict(strict)",
+        "comment_created_at": "2026-10-28T15:12:55+00:00",
+        "comment_author": "ayaangazali",
+        "comment_body": "Documented in e2a98665. `to_dict` now has an `Args` entry for `strict`: it raises instead of returning a placeholder, for the object's own attributes and nested `SerializableMixin` values only, not for what another object's own `to_dict()` returns. The forwarding itself is unchanged, for the reason in my earlier reply here.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4179463239",
+    "pr_number": 2451,
+    "pr_file": "swarms/structs/serialization.py",
+    "created_at": "2026-10-04T21:49:13+00:00",
+    "commented_code": "try:\n             if callable(attr_value):\n                 return self._serialize_callable(attr_value)\n+            if isinstance(attr_value, SerializableMixin):",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "4179463239",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2451,
+        "pr_file": "swarms/structs/serialization.py",
+        "discussion_id": "4179463239",
+        "commented_code": "@@ -96,15 +102,31 @@ def _serialize_attr(self, attr_name: str, attr_value: Any) -> Any:\n         try:\n             if callable(attr_value):\n                 return self._serialize_callable(attr_value)\n+            if isinstance(attr_value, SerializableMixin):",
+        "comment_created_at": "2026-10-04T21:49:13+00:00",
+        "comment_author": "kyegomez",
+        "comment_body": "**major: strict does not propagate through non-mixin to_dict() holders**\n\n`_serialize_attr` only forwards `strict` when the value is a `SerializableMixin`. Any attribute whose class defines its own `to_dict()` (for example `Conversation`, `GraphWorkflow`, `MCPManager`) is called without `strict`, so if that nested object internally embeds a mixin or produces its own non-serializable content, `to_dict(strict=True)` returns a dict containing placeholder-like data instead of raising. The PR description argues the placeholder string is produced only in this file, but `GraphWorkflow.to_dict()` is not visible in this diff, so a caller relying on `strict=True` as a guarantee of a faithful dump can still silently get lossy output. At minimum the docstring for `to_dict` should state that `strict` only covers this mixin's own placeholders.\n\n```suggestion\n            if hasattr(attr_value, \"to_dict\"):\n                # NOTE: strict is only propagated to SerializableMixin\n                # values; other to_dict() implementations do not accept it,\n                # so their output is not covered by strict mode.\n                return attr_value.to_dict()\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4179590231",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2451,
+        "pr_file": "swarms/structs/serialization.py",
+        "discussion_id": "4179463239",
+        "commented_code": "@@ -96,15 +102,31 @@ def _serialize_attr(self, attr_name: str, attr_value: Any) -> Any:\n         try:\n             if callable(attr_value):\n                 return self._serialize_callable(attr_value)\n+            if isinstance(attr_value, SerializableMixin):",
+        "comment_created_at": "2026-10-04T22:22:46+00:00",
+        "comment_author": "ayaangazali",
+        "comment_body": "No change, same as the threads on line 107. The body states the scope under What changed: `strict` covers every placeholder this mixin can emit, and `<Non-serializable: ...>` is produced only in `serialization.py`.\n\nOn `GraphWorkflow`: its `to_dict(shallow=True, include_conversation=False, include_runtime_state=False)` builds an explicit payload (name, nodes, edges, entry and end points) and never emits a placeholder. None of the `SerializableMixin` subclasses (`Agent`, `AgentRearrange`, `AuctionSwarm`, `GroupChat`, `HeavySwarm`, `RoundRobinSwarm`, `SelfMoASeq`, `SwarmRouter`) references `GraphWorkflow`, so it is not reachable through this path today. I left the docstring alone because I keep added comments and docs out of my diffs and put scope notes in the PR body, where this one already is.\n",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4238478369",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2451,
+        "pr_file": "swarms/structs/serialization.py",
+        "discussion_id": "4179463239",
+        "commented_code": "@@ -96,15 +102,31 @@ def _serialize_attr(self, attr_name: str, attr_value: Any) -> Any:\n         try:\n             if callable(attr_value):\n                 return self._serialize_callable(attr_value)\n+            if isinstance(attr_value, SerializableMixin):",
+        "comment_created_at": "2026-10-10T17:08:27+00:00",
+        "comment_author": "ayaangazali",
+        "comment_body": "No docstring change, but the scope is now written down. The PR body's \"Not done\" section says that `strict=True` covers the placeholders `SerializableMixin` emits, both on the object's own attributes and inside nested `SerializableMixin` values. It also says that an attribute whose class has its own non-mixin `to_dict()` (`Conversation`, `MCPManager`, `GraphWorkflow`) is called without `strict`, so `strict` does not vouch for that object's output. My rule for PRs is to put reasoning and scope notes in the description and to add no comments or docstrings, which is why the note is there and not in `to_dict`.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4178607526",
+    "pr_number": 2208,
+    "pr_file": "swarms/structs/planner_generator_evaluator.py",
+    "created_at": "2026-10-04T17:26:12+00:00",
+    "commented_code": "Returns:",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "4178607526",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2208,
+        "pr_file": "swarms/structs/planner_generator_evaluator.py",
+        "discussion_id": "4178607526",
+        "commented_code": "@@ -603,16 +606,16 @@ def _evaluate_step(\n         Returns:",
+        "comment_created_at": "2026-10-04T17:26:12+00:00",
+        "comment_author": "kyegomez",
+        "comment_body": "**\ud83d\udd38 minor: _read_shared_state is now unreferenced; audit log can silently drift**\n\nAfter this change no production code path calls `_read_shared_state`, so the shared-state file is write-only. Nothing in the runtime will notice if `_append_to_shared_state` starts failing or writing malformed content; the only protection is the new `test_the_shared_state_file_is_still_written` test. The PR deliberately keeps the method, which is defensible, but some linters flag unreferenced private methods and future readers will be tempted to delete it. Consider a brief docstring note that it is a public-ish accessor for the audit log retained intentionally.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4176278288",
+    "pr_number": 2205,
+    "pr_file": "swarms/structs/autonomous_loop_utils.py",
+    "created_at": "2026-10-04T05:31:22+00:00",
+    "commented_code": "(\"| php\",),\n     # Raw disk writes\n     (\"dd\", \"if=\"),\n-    (\"mkfs\",),\n     (\"> /dev/sd\",),\n     (\"> /dev/nvme\",),\n     (\"> /dev/mem\",),\n-    (\"> /dev/null\",),\n     # Fork bomb pattern\n     (\":(){\",),\n     # System shutdown / reboot",
+    "repo_full_name": "kyegomez/swarms",
+    "discussion_comments": [
+      {
+        "comment_id": "4176278288",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2205,
+        "pr_file": "swarms/structs/autonomous_loop_utils.py",
+        "discussion_id": "4176278288",
+        "commented_code": "@@ -1005,25 +1005,16 @@ def delete_file_tool(agent: Any, file_path: str, **kwargs) -> str:\n     (\"| php\",),\n     # Raw disk writes\n     (\"dd\", \"if=\"),\n-    (\"mkfs\",),\n     (\"> /dev/sd\",),\n     (\"> /dev/nvme\",),\n     (\"> /dev/mem\",),\n-    (\"> /dev/null\",),\n     # Fork bomb pattern\n     (\":(){\",),\n     # System shutdown / reboot",
+        "comment_created_at": "2026-10-04T05:31:22+00:00",
+        "comment_author": "kyegomez",
+        "comment_body": "**\ud83d\udd38 minor: Orphaned \"System shutdown / reboot\" comment with no entries under it**\n\nAll four entries under the `# System shutdown / reboot` comment (`shutdown`, `reboot`, `halt`, `poweroff`) were removed, leaving the comment immediately followed by `# Privilege escalation`. Harmless at runtime but misleading for the next reader scanning the blocklist for what is covered; the coverage now lives in `_BASH_COMMAND_WORDS` far below.\n\n```suggestion\n    # Fork bomb pattern\n    (\":(){\",),\n    # Privilege escalation\n```",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4176602799",
+        "repo_full_name": "kyegomez/swarms",
+        "pr_number": 2205,
+        "pr_file": "swarms/structs/autonomous_loop_utils.py",
+        "discussion_id": "4176278288",
+        "commented_code": "@@ -1005,25 +1005,16 @@ def delete_file_tool(agent: Any, file_path: str, **kwargs) -> str:\n     (\"| php\",),\n     # Raw disk writes\n     (\"dd\", \"if=\"),\n-    (\"mkfs\",),\n     (\"> /dev/sd\",),\n     (\"> /dev/nvme\",),\n     (\"> /dev/mem\",),\n-    (\"> /dev/null\",),\n     # Fork bomb pattern\n     (\":(){\",),\n     # System shutdown / reboot",
+        "comment_created_at": "2026-10-04T07:38:40+00:00",
+        "comment_author": "ayaangazali",
+        "comment_body": "Removed in b50fa932. All four entries under that header moved into `_BASH_COMMAND_WORDS`, so the header no longer described anything.\n",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

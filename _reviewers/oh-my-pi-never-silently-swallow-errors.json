@@ -1,0 +1,308 @@
+[
+  {
+    "discussion_id": "4322225374",
+    "pr_number": 16460,
+    "pr_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+    "created_at": "2026-10-20T06:51:00+00:00",
+    "commented_code": "getContextUsage(): ContextUsage | undefined;\n \t/** Get a read-only snapshot of async jobs owned by this session. */\n \tgetAsyncJobSnapshot(): AsyncJobSnapshot | null;\n-\t/** Compact the session context (interactive mode shows UI). */\n+\t/**\n+\t * Compact the session context (interactive mode shows UI).\n+\t *\n+\t * Failures are reported through {@link CompactOptions.onError}; the returned\n+\t * promise never rejects, so an unawaited `ctx.compact()` cannot become an\n+\t * unhandled rejection (issue #12041).\n+\t */",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "4322225374",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16460,
+        "pr_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+        "discussion_id": "4322225374",
+        "commented_code": "@@ -677,7 +681,13 @@ export interface ExtensionContext {\n \tgetContextUsage(): ContextUsage | undefined;\n \t/** Get a read-only snapshot of async jobs owned by this session. */\n \tgetAsyncJobSnapshot(): AsyncJobSnapshot | null;\n-\t/** Compact the session context (interactive mode shows UI). */\n+\t/**\n+\t * Compact the session context (interactive mode shows UI).\n+\t *\n+\t * Failures are reported through {@link CompactOptions.onError}; the returned\n+\t * promise never rejects, so an unawaited `ctx.compact()` cannot become an\n+\t * unhandled rejection (issue #12041).\n+\t */",
+        "comment_created_at": "2026-10-20T06:51:00+00:00",
+        "comment_author": "roboomp",
+        "comment_body": "**blocking** \u2014 this contract is now stated on `ExtensionContext.compact` for every mode, but only the paths routed through `runExtensionCompact` (`modes/runtime-init.ts:150/205`, `modes/acp/acp-agent.ts:2632/2659`) honor it.\n\nInteractive mode still builds `ExtensionContext.compact` from `ExtensionUiController.#compactSession` (`modes/controllers/extension-ui-controller.ts:255`, `:486`, `:605` \u2192 `:1405-1410`), which does a bare `await this.ctx.session.compact(instructions, options)`. The runner-less `AgentSession.#createCommandContext` does the same at `session/agent-session.ts:8592-8597`. Both are line-for-line copies of the old `runExtensionCompact` body, so a fire-and-forget `ctx.compact({ onError })` from an event handler in the TUI still leaves a rejected promise behind. Per the comments at `tools/browser/tab-supervisor.ts:942-945`, the CLI's top-level `unhandledRejection` handler tears the session down there too, so #12041 still reproduces outside RPC/print/ACP.\n\nSuggested fix: have `#compactSession` and the `agent-session.ts` adapter call `runExtensionCompact(session, instructionsOrOptions)`. The module doc says the helper was meant to be the shared adapter, and this also removes the two duplicated union-splitting copies. `#handleInteractiveCompact` \u2192 `CommandController.executeCompaction` already catches, so it is fine as is.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4324539541",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16460,
+        "pr_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+        "discussion_id": "4322225374",
+        "commented_code": "@@ -677,7 +681,13 @@ export interface ExtensionContext {\n \tgetContextUsage(): ContextUsage | undefined;\n \t/** Get a read-only snapshot of async jobs owned by this session. */\n \tgetAsyncJobSnapshot(): AsyncJobSnapshot | null;\n-\t/** Compact the session context (interactive mode shows UI). */\n+\t/**\n+\t * Compact the session context (interactive mode shows UI).\n+\t *\n+\t * Failures are reported through {@link CompactOptions.onError}; the returned\n+\t * promise never rejects, so an unawaited `ctx.compact()` cannot become an\n+\t * unhandled rejection (issue #12041).\n+\t */",
+        "comment_created_at": "2026-10-20T11:43:12+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Addressed in `ad7c09b14` \u2014 *fix(coding-agent): report extension compaction failures without rejecting*. Please take another look.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4334532832",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16460,
+        "pr_file": "packages/coding-agent/src/extensibility/extensions/types.ts",
+        "discussion_id": "4322225374",
+        "commented_code": "@@ -677,7 +681,13 @@ export interface ExtensionContext {\n \tgetContextUsage(): ContextUsage | undefined;\n \t/** Get a read-only snapshot of async jobs owned by this session. */\n \tgetAsyncJobSnapshot(): AsyncJobSnapshot | null;\n-\t/** Compact the session context (interactive mode shows UI). */\n+\t/**\n+\t * Compact the session context (interactive mode shows UI).\n+\t *\n+\t * Failures are reported through {@link CompactOptions.onError}; the returned\n+\t * promise never rejects, so an unawaited `ctx.compact()` cannot become an\n+\t * unhandled rejection (issue #12041).\n+\t */",
+        "comment_created_at": "2026-10-21T08:17:57+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Fixed: every mode that routes through the adapter honours the contract, and the TUI command path is included - the interactive command contexts now go through the same once-only reporter.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4322225382",
+    "pr_number": 16460,
+    "pr_file": "packages/coding-agent/src/extensibility/extensions/compact-handler.ts",
+    "created_at": "2026-10-20T06:51:00+00:00",
+    "commented_code": "* union so the same adapter can be reused by print-mode, rpc-mode, and the executor.\n  */\n import type { Model } from \"@oh-my-pi/pi-ai\";\n+import { logger } from \"@oh-my-pi/pi-utils\";\n import type { CompactOptions } from \"./types\";\n \n interface CompactableSession {\n \tcompact(instructions?: string, options?: CompactOptions): Promise<unknown>;\n }\n \n+/**\n+ * Run `ctx.compact()` for an extension.\n+ *\n+ * The session reports a failed compaction through `CompactOptions.onError` and\n+ * then rethrows, so awaiting `session.compact()` directly rejects even when\n+ * the extension only wants the callback. Extensions commonly fire `ctx.compact()`\n+ * without awaiting it, and a rejection with no handler is an unhandled\n+ * rejection that tears down RPC hosts (issue #12041). Catch here, report the\n+ * failure exactly once through the extension's own error path, and resolve.\n+ */\n export async function runExtensionCompact(\n \tsession: CompactableSession,\n \tinstructionsOrOptions: string | CompactOptions | undefined,\n ): Promise<void> {\n \tconst instructions = typeof instructionsOrOptions === \"string\" ? instructionsOrOptions : undefined;\n \tconst options =\n \t\tinstructionsOrOptions && typeof instructionsOrOptions === \"object\" ? instructionsOrOptions : undefined;\n-\tawait session.compact(instructions, options);\n+\tlet reported = false;\n+\tconst onError = options?.onError;\n+\tconst reportError = (error: Error): void => {\n+\t\tif (reported) return;\n+\t\treported = true;\n+\t\tif (onError) onError(error);\n+\t\telse logger.warn(\"Extension compaction failed\", { error: error.message });\n+\t};\n+\t// The session calls `onError` itself before rethrowing; wrap it so the\n+\t// extension sees exactly one report even when the session reports twice.\n+\tconst compactOptions = options ? { ...options, onError: (error: Error): void => reportError(error) } : undefined;\n+\ttry {\n+\t\tawait session.compact(instructions, compactOptions);\n+\t} catch (error) {\n+\t\treportError(error instanceof Error ? error : new Error(String(error)));\n+\t}",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "4322225382",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16460,
+        "pr_file": "packages/coding-agent/src/extensibility/extensions/compact-handler.ts",
+        "discussion_id": "4322225382",
+        "commented_code": "@@ -6,20 +6,46 @@\n  * union so the same adapter can be reused by print-mode, rpc-mode, and the executor.\n  */\n import type { Model } from \"@oh-my-pi/pi-ai\";\n+import { logger } from \"@oh-my-pi/pi-utils\";\n import type { CompactOptions } from \"./types\";\n \n interface CompactableSession {\n \tcompact(instructions?: string, options?: CompactOptions): Promise<unknown>;\n }\n \n+/**\n+ * Run `ctx.compact()` for an extension.\n+ *\n+ * The session reports a failed compaction through `CompactOptions.onError` and\n+ * then rethrows, so awaiting `session.compact()` directly rejects even when\n+ * the extension only wants the callback. Extensions commonly fire `ctx.compact()`\n+ * without awaiting it, and a rejection with no handler is an unhandled\n+ * rejection that tears down RPC hosts (issue #12041). Catch here, report the\n+ * failure exactly once through the extension's own error path, and resolve.\n+ */\n export async function runExtensionCompact(\n \tsession: CompactableSession,\n \tinstructionsOrOptions: string | CompactOptions | undefined,\n ): Promise<void> {\n \tconst instructions = typeof instructionsOrOptions === \"string\" ? instructionsOrOptions : undefined;\n \tconst options =\n \t\tinstructionsOrOptions && typeof instructionsOrOptions === \"object\" ? instructionsOrOptions : undefined;\n-\tawait session.compact(instructions, options);\n+\tlet reported = false;\n+\tconst onError = options?.onError;\n+\tconst reportError = (error: Error): void => {\n+\t\tif (reported) return;\n+\t\treported = true;\n+\t\tif (onError) onError(error);\n+\t\telse logger.warn(\"Extension compaction failed\", { error: error.message });\n+\t};\n+\t// The session calls `onError` itself before rethrowing; wrap it so the\n+\t// extension sees exactly one report even when the session reports twice.\n+\tconst compactOptions = options ? { ...options, onError: (error: Error): void => reportError(error) } : undefined;\n+\ttry {\n+\t\tawait session.compact(instructions, compactOptions);\n+\t} catch (error) {\n+\t\treportError(error instanceof Error ? error : new Error(String(error)));\n+\t}",
+        "comment_created_at": "2026-10-20T06:51:00+00:00",
+        "comment_author": "roboomp",
+        "comment_body": "**should-fix** \u2014 if the extension's own `onError` throws, the error is now dropped without a trace. In `session-maintenance.ts:1600`, `options?.onError?.(err)` runs `reportError` \u2192 `onError`, which throws. That exception replaces the original error out of the session's `catch`, reaches this `catch`, and `reportError` returns early because `reported` is already `true`. Before this change the throw at least surfaced as a rejection. Since the promise must not reject, please log it instead, e.g. call `onError` inside a `try`/`catch` in `reportError` and `logger.warn(\"Extension compaction onError threw\", \u2026)`.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4324540224",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16460,
+        "pr_file": "packages/coding-agent/src/extensibility/extensions/compact-handler.ts",
+        "discussion_id": "4322225382",
+        "commented_code": "@@ -6,20 +6,46 @@\n  * union so the same adapter can be reused by print-mode, rpc-mode, and the executor.\n  */\n import type { Model } from \"@oh-my-pi/pi-ai\";\n+import { logger } from \"@oh-my-pi/pi-utils\";\n import type { CompactOptions } from \"./types\";\n \n interface CompactableSession {\n \tcompact(instructions?: string, options?: CompactOptions): Promise<unknown>;\n }\n \n+/**\n+ * Run `ctx.compact()` for an extension.\n+ *\n+ * The session reports a failed compaction through `CompactOptions.onError` and\n+ * then rethrows, so awaiting `session.compact()` directly rejects even when\n+ * the extension only wants the callback. Extensions commonly fire `ctx.compact()`\n+ * without awaiting it, and a rejection with no handler is an unhandled\n+ * rejection that tears down RPC hosts (issue #12041). Catch here, report the\n+ * failure exactly once through the extension's own error path, and resolve.\n+ */\n export async function runExtensionCompact(\n \tsession: CompactableSession,\n \tinstructionsOrOptions: string | CompactOptions | undefined,\n ): Promise<void> {\n \tconst instructions = typeof instructionsOrOptions === \"string\" ? instructionsOrOptions : undefined;\n \tconst options =\n \t\tinstructionsOrOptions && typeof instructionsOrOptions === \"object\" ? instructionsOrOptions : undefined;\n-\tawait session.compact(instructions, options);\n+\tlet reported = false;\n+\tconst onError = options?.onError;\n+\tconst reportError = (error: Error): void => {\n+\t\tif (reported) return;\n+\t\treported = true;\n+\t\tif (onError) onError(error);\n+\t\telse logger.warn(\"Extension compaction failed\", { error: error.message });\n+\t};\n+\t// The session calls `onError` itself before rethrowing; wrap it so the\n+\t// extension sees exactly one report even when the session reports twice.\n+\tconst compactOptions = options ? { ...options, onError: (error: Error): void => reportError(error) } : undefined;\n+\ttry {\n+\t\tawait session.compact(instructions, compactOptions);\n+\t} catch (error) {\n+\t\treportError(error instanceof Error ? error : new Error(String(error)));\n+\t}",
+        "comment_created_at": "2026-10-20T11:43:18+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Addressed in `ad7c09b14` \u2014 *fix(coding-agent): report extension compaction failures without rejecting*. Please take another look.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4334534095",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16460,
+        "pr_file": "packages/coding-agent/src/extensibility/extensions/compact-handler.ts",
+        "discussion_id": "4322225382",
+        "commented_code": "@@ -6,20 +6,46 @@\n  * union so the same adapter can be reused by print-mode, rpc-mode, and the executor.\n  */\n import type { Model } from \"@oh-my-pi/pi-ai\";\n+import { logger } from \"@oh-my-pi/pi-utils\";\n import type { CompactOptions } from \"./types\";\n \n interface CompactableSession {\n \tcompact(instructions?: string, options?: CompactOptions): Promise<unknown>;\n }\n \n+/**\n+ * Run `ctx.compact()` for an extension.\n+ *\n+ * The session reports a failed compaction through `CompactOptions.onError` and\n+ * then rethrows, so awaiting `session.compact()` directly rejects even when\n+ * the extension only wants the callback. Extensions commonly fire `ctx.compact()`\n+ * without awaiting it, and a rejection with no handler is an unhandled\n+ * rejection that tears down RPC hosts (issue #12041). Catch here, report the\n+ * failure exactly once through the extension's own error path, and resolve.\n+ */\n export async function runExtensionCompact(\n \tsession: CompactableSession,\n \tinstructionsOrOptions: string | CompactOptions | undefined,\n ): Promise<void> {\n \tconst instructions = typeof instructionsOrOptions === \"string\" ? instructionsOrOptions : undefined;\n \tconst options =\n \t\tinstructionsOrOptions && typeof instructionsOrOptions === \"object\" ? instructionsOrOptions : undefined;\n-\tawait session.compact(instructions, options);\n+\tlet reported = false;\n+\tconst onError = options?.onError;\n+\tconst reportError = (error: Error): void => {\n+\t\tif (reported) return;\n+\t\treported = true;\n+\t\tif (onError) onError(error);\n+\t\telse logger.warn(\"Extension compaction failed\", { error: error.message });\n+\t};\n+\t// The session calls `onError` itself before rethrowing; wrap it so the\n+\t// extension sees exactly one report even when the session reports twice.\n+\tconst compactOptions = options ? { ...options, onError: (error: Error): void => reportError(error) } : undefined;\n+\ttry {\n+\t\tawait session.compact(instructions, compactOptions);\n+\t} catch (error) {\n+\t\treportError(error instanceof Error ? error : new Error(String(error)));\n+\t}",
+        "comment_created_at": "2026-10-21T08:18:06+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Fixed: the error is reported with a trace rather than dropped - the reporter catches what the extension's own `onError` throws and logs it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4305784458",
+    "pr_number": 16132,
+    "pr_file": "packages/coding-agent/src/blob-broker/store.ts",
+    "created_at": "2026-10-20T11:53:41+00:00",
+    "commented_code": "#now: () => number;\n \n \tconstructor(options?: { maxBytes?: number; persist?: BlobPersistence | undefined; now?: () => number }) {\n-\t\tthis.#maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;\n+\t\tthis.#maxBytes = options?.maxBytes ?? DEFAULT_MAXBytes;\n \t\tthis.#persist = options?.persist;\n \t\tthis.#now = options?.now ?? Date.now;\n \t\tif (this.#persist) {\n \t\t\tthis.#sessionStore = new SessionBlobStore(this.#persist.blobsDir);\n-\t\t\tthis.#loadIndex(this.#persist.indexPath);\n-\t\t\tthis.#sweep();\n+\t\t\tvoid this.#ensureLoaded();",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "4324624236",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16132,
+        "pr_file": "packages/coding-agent/src/blob-broker/store.ts",
+        "discussion_id": "4305784458",
+        "commented_code": "@@ -150,20 +152,25 @@ export class BlobRegistry {\n \t#now: () => number;\n \n \tconstructor(options?: { maxBytes?: number; persist?: BlobPersistence | undefined; now?: () => number }) {\n-\t\tthis.#maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;\n+\t\tthis.#maxBytes = options?.maxBytes ?? DEFAULT_MAXBytes;\n \t\tthis.#persist = options?.persist;\n \t\tthis.#now = options?.now ?? Date.now;\n \t\tif (this.#persist) {\n \t\t\tthis.#sessionStore = new SessionBlobStore(this.#persist.blobsDir);\n-\t\t\tthis.#loadIndex(this.#persist.indexPath);\n-\t\t\tthis.#sweep();\n+\t\t\tvoid this.#ensureLoaded();",
+        "comment_created_at": "2026-10-20T11:53:41+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Addressed in `50d048cb1` \u2014 *fix(coding-agent): make blob store index loading async and lazy*. Please take another look.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4333981455",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16132,
+        "pr_file": "packages/coding-agent/src/blob-broker/store.ts",
+        "discussion_id": "4305784458",
+        "commented_code": "@@ -150,20 +152,25 @@ export class BlobRegistry {\n \t#now: () => number;\n \n \tconstructor(options?: { maxBytes?: number; persist?: BlobPersistence | undefined; now?: () => number }) {\n-\t\tthis.#maxBytes = options?.maxBytes ?? DEFAULT_MAX_BYTES;\n+\t\tthis.#maxBytes = options?.maxBytes ?? DEFAULT_MAXBytes;\n \t\tthis.#persist = options?.persist;\n \t\tthis.#now = options?.now ?? Date.now;\n \t\tif (this.#persist) {\n \t\t\tthis.#sessionStore = new SessionBlobStore(this.#persist.blobsDir);\n-\t\t\tthis.#loadIndex(this.#persist.indexPath);\n-\t\t\tthis.#sweep();\n+\t\t\tvoid this.#ensureLoaded();",
+        "comment_created_at": "2026-10-21T07:09:17+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Fixed in `56567ef938`: the whole parse now sits inside the loader's recovery boundary (`#loadIndex` catches and logs, `packages/coding-agent/src/blob-broker/store.ts:218-226`), and a structurally corrupt index is rejected before any field access, so the fire-and-forget promise can no longer reject and take the process down. New test: *starts fresh instead of rejecting when the persisted index is corrupt* (RED on revert: it threw `TypeError: null is not an object`). `bun test packages/coding-agent/test/blob-broker.test.ts` -> 20 pass / 0 fail.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4305399036",
+    "pr_number": 16131,
+    "pr_file": "packages/ai/src/stream.ts",
+    "created_at": "2026-10-18T02:19:52+00:00",
+    "commented_code": "const current = await readProviderInFlightLockIdentity(lockDir);\n \t\tif (!isSameProviderInFlightLock(current, identity)) return;\n \t\tawait fs.rm(lockDir, { recursive: true, force: true });\n-\t} catch {}\n+\t} catch (error) {\n+\t\tlogger.warn(\"ai: failed to release provider in-flight lock dir\", {\n+\t\t\tlockDir,\n+\t\t\terror: error instanceof Error ? error.message : String(error),\n+\t\t});\n+\t}",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "4305399036",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16131,
+        "pr_file": "packages/ai/src/stream.ts",
+        "discussion_id": "4305399036",
+        "commented_code": "@@ -290,7 +300,12 @@ async function releaseProviderInFlightLockDirIfSame(\n \t\tconst current = await readProviderInFlightLockIdentity(lockDir);\n \t\tif (!isSameProviderInFlightLock(current, identity)) return;\n \t\tawait fs.rm(lockDir, { recursive: true, force: true });\n-\t} catch {}\n+\t} catch (error) {\n+\t\tlogger.warn(\"ai: failed to release provider in-flight lock dir\", {\n+\t\t\tlockDir,\n+\t\t\terror: error instanceof Error ? error.message : String(error),\n+\t\t});\n+\t}",
+        "comment_created_at": "2026-10-18T02:19:52+00:00",
+        "comment_author": "roboomp",
+        "comment_body": "**should-fix** \u2014 this warn fires on a path the caller already treats as normal contention. `acquireProviderInFlightLock` (line 367-369) calls `releaseProviderInFlightLockDirIfSame` when `writeProviderInFlightInfo` fails because another process removed the lock dir, then `continue`s on ENOENT. Here `readProviderInFlightLockIdentity` \u2192 `fs.stat(lockDir)` throws ENOENT for the same reason, so every such retry now logs `ai: failed to release provider in-flight lock dir`.\n\nReproduced with the scenario from `provider-inflight.test.ts` (\"retries when another process removes an identified lock before its info write\") plus `spyOn(logger, \"warn\")`: request succeeds, one warn with `ENOENT: no such file or directory, stat '\u2026/.lock'`.\n\nSuggest `if (isEnoent(error)) return;` before logging (`isEnoent` is already imported). Same applies to the `fs.stat` in `releaseProviderInFlightStaleLock` (line 268), where a concurrent reclaimer removing the stale dir first is expected.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4324551699",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16131,
+        "pr_file": "packages/ai/src/stream.ts",
+        "discussion_id": "4305399036",
+        "commented_code": "@@ -290,7 +300,12 @@ async function releaseProviderInFlightLockDirIfSame(\n \t\tconst current = await readProviderInFlightLockIdentity(lockDir);\n \t\tif (!isSameProviderInFlightLock(current, identity)) return;\n \t\tawait fs.rm(lockDir, { recursive: true, force: true });\n-\t} catch {}\n+\t} catch (error) {\n+\t\tlogger.warn(\"ai: failed to release provider in-flight lock dir\", {\n+\t\t\tlockDir,\n+\t\t\terror: error instanceof Error ? error.message : String(error),\n+\t\t});\n+\t}",
+        "comment_created_at": "2026-10-20T11:44:42+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Addressed in `fd0a09483` \u2014 *fix(ai,agent): add logger.warn to empty catch blocks*. Please take another look.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4334439134",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16131,
+        "pr_file": "packages/ai/src/stream.ts",
+        "discussion_id": "4305399036",
+        "commented_code": "@@ -290,7 +300,12 @@ async function releaseProviderInFlightLockDirIfSame(\n \t\tconst current = await readProviderInFlightLockIdentity(lockDir);\n \t\tif (!isSameProviderInFlightLock(current, identity)) return;\n \t\tawait fs.rm(lockDir, { recursive: true, force: true });\n-\t} catch {}\n+\t} catch (error) {\n+\t\tlogger.warn(\"ai: failed to release provider in-flight lock dir\", {\n+\t\t\tlockDir,\n+\t\t\terror: error instanceof Error ? error.message : String(error),\n+\t\t});\n+\t}",
+        "comment_created_at": "2026-10-21T08:06:46+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Fixed: the stale-lock removal is not logged as a warning - removing a lock nobody holds is ordinary contention, and the warn is reserved for a failure that actually needs attention.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4305783422",
+    "pr_number": 16131,
+    "pr_file": "packages/ai/src/stream.ts",
+    "created_at": "2026-10-20T11:54:08+00:00",
+    "commented_code": "const current = await readProviderInFlightLockIdentity(lockDir);\n \t\tif (!isSameProviderInFlightLock(current, identity)) return;\n \t\tawait fs.rm(lockDir, { recursive: true, force: true });\n-\t} catch {}\n+\t} catch (error) {\n+\t\tlogger.warn(\"ai: failed to release provider in-flight lock dir\", {",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "4324627959",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16131,
+        "pr_file": "packages/ai/src/stream.ts",
+        "discussion_id": "4305783422",
+        "commented_code": "@@ -290,7 +300,12 @@ async function releaseProviderInFlightLockDirIfSame(\n \t\tconst current = await readProviderInFlightLockIdentity(lockDir);\n \t\tif (!isSameProviderInFlightLock(current, identity)) return;\n \t\tawait fs.rm(lockDir, { recursive: true, force: true });\n-\t} catch {}\n+\t} catch (error) {\n+\t\tlogger.warn(\"ai: failed to release provider in-flight lock dir\", {",
+        "comment_created_at": "2026-10-20T11:54:08+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Addressed in `fd0a09483` \u2014 *fix(ai,agent): add logger.warn to empty catch blocks*. Please take another look.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4334444826",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16131,
+        "pr_file": "packages/ai/src/stream.ts",
+        "discussion_id": "4305783422",
+        "commented_code": "@@ -290,7 +300,12 @@ async function releaseProviderInFlightLockDirIfSame(\n \t\tconst current = await readProviderInFlightLockIdentity(lockDir);\n \t\tif (!isSameProviderInFlightLock(current, identity)) return;\n \t\tawait fs.rm(lockDir, { recursive: true, force: true });\n-\t} catch {}\n+\t} catch (error) {\n+\t\tlogger.warn(\"ai: failed to release provider in-flight lock dir\", {",
+        "comment_created_at": "2026-10-21T08:07:27+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Fixed: an `ENOENT` after another holder already removed the lock is ignored, and the warn is not raised for it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4305874059",
+    "pr_number": 16131,
+    "pr_file": "packages/agent/src/agent.ts",
+    "created_at": "2026-10-20T11:54:13+00:00",
+    "commented_code": "try {\n \t\t\t\t\t\tconst updated = await transform(message);\n \t\t\t\t\t\tif (updated) entry.toolResult = updated;\n-\t\t\t\t\t} catch {}\n+\t\t\t\t\t} catch (error) {\n+\t\t\t\t\t\tlogger.warn(\"agent: cursor tool result transform failed\", {\n+\t\t\t\t\t\t\terror: error instanceof Error ? error.message : String(error),",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "4324628617",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16131,
+        "pr_file": "packages/agent/src/agent.ts",
+        "discussion_id": "4305874059",
+        "commented_code": "@@ -1841,7 +1841,11 @@ export class Agent {\n \t\t\t\t\ttry {\n \t\t\t\t\t\tconst updated = await transform(message);\n \t\t\t\t\t\tif (updated) entry.toolResult = updated;\n-\t\t\t\t\t} catch {}\n+\t\t\t\t\t} catch (error) {\n+\t\t\t\t\t\tlogger.warn(\"agent: cursor tool result transform failed\", {\n+\t\t\t\t\t\t\terror: error instanceof Error ? error.message : String(error),",
+        "comment_created_at": "2026-10-20T11:54:13+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Addressed in `fd0a09483` \u2014 *fix(ai,agent): add logger.warn to empty catch blocks*. Please take another look.",
+        "pr_file_module": null
+      },
+      {
+        "comment_id": "4334445957",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16131,
+        "pr_file": "packages/agent/src/agent.ts",
+        "discussion_id": "4305874059",
+        "commented_code": "@@ -1841,7 +1841,11 @@ export class Agent {\n \t\t\t\t\ttry {\n \t\t\t\t\t\tconst updated = await transform(message);\n \t\t\t\t\t\tif (updated) entry.toolResult = updated;\n-\t\t\t\t\t} catch {}\n+\t\t\t\t\t} catch (error) {\n+\t\t\t\t\t\tlogger.warn(\"agent: cursor tool result transform failed\", {\n+\t\t\t\t\t\t\terror: error instanceof Error ? error.message : String(error),",
+        "comment_created_at": "2026-10-21T08:07:36+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Fixed: the swallowed cursor tool result transform failure is now logged as a warning (`packages/agent/src/agent.ts:1845`) instead of being lost.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4425964276",
+    "pr_number": 17485,
+    "pr_file": "packages/coding-agent/src/session/artifacts.ts",
+    "created_at": "2026-10-30T16:30:00+00:00",
+    "commented_code": "await file.slice(0, Math.min(expectedBytes, 1)).arrayBuffer();\n \t\tawait replaceFileAtomically(tempPath, path);\n \t} catch (error) {\n-\t\tawait fs.rm(tempPath, { force: true });\n+\t\ttry {\n+\t\t\tawait fs.rm(tempPath, { force: true });\n+\t\t} catch {\n+\t\t\t// Best-effort cleanup; preserve the original write or publication error.\n+\t\t}",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "4425964276",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 17485,
+        "pr_file": "packages/coding-agent/src/session/artifacts.ts",
+        "discussion_id": "4425964276",
+        "commented_code": "@@ -56,7 +56,11 @@ export async function writeArtifact(path: string, content: string): Promise<numb\n \t\tawait file.slice(0, Math.min(expectedBytes, 1)).arrayBuffer();\n \t\tawait replaceFileAtomically(tempPath, path);\n \t} catch (error) {\n-\t\tawait fs.rm(tempPath, { force: true });\n+\t\ttry {\n+\t\t\tawait fs.rm(tempPath, { force: true });\n+\t\t} catch {\n+\t\t\t// Best-effort cleanup; preserve the original write or publication error.\n+\t\t}",
+        "comment_created_at": "2026-10-30T16:30:00+00:00",
+        "comment_author": "roboomp",
+        "comment_body": "**should-fix (small):** Two notes on this block.\n\n1. The bare `catch {}` now hides a leftover `${path}.tmp-<uuid>` without leaving any trace. I ran a probe with your spy setup, and `Worker.md.tmp-<uuid>` stays in the artifacts dir after the throw. `agent://` discovery skips it because it only matches `*.md` (`agent-protocol.ts:397`), so it's harmless there, but nothing records that it exists. Sibling code in `utils/atomic-file.ts:155` logs this case with `logger.warn(...)`. A one-liner would match that:\n```ts\nawait fs.rm(tempPath, { force: true }).catch(cleanupError => {\n\tlogger.warn(\"Failed to remove staged artifact\", { tempPath, error: toError(cleanupError).message });\n});\n```\n2. The PR's motivating case is Windows `EBUSY`. `removeWithRetries` from `@oh-my-pi/pi-utils` (`packages/utils/src/temp.ts:96`) already retries `EBUSY`/`EPERM` on win32. Using it here, wrapped the same way, would usually remove the temp file as well as keep the original error. Optional, your call.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3649838918",
+    "pr_number": 6565,
+    "pr_file": "packages/coding-agent/src/session/session-manager.ts",
+    "created_at": "2026-07-25T08:03:03+00:00",
+    "commented_code": "if (writer) void writer.close().catch(() => undefined);\n \t}\n \n+\t#acquireSessionLock(sessionFile: string = this.#sessionFile ?? \"\"): void {\n+\t\tif (\n+\t\t\t!this.#persist ||\n+\t\t\t!(this.#storage instanceof FileSessionStorage) ||\n+\t\t\t!sessionFile ||\n+\t\t\tthis.#sessionLock?.handle.lockPath === lockPathForSession(sessionFile)\n+\t\t) {\n+\t\t\treturn;\n+\t\t}\n+\t\tconst errorHandlers = new Set<(error: Error) => void>([this.#sessionLockErrorHandler]);\n+\t\tconst next: SharedSessionLock = {\n+\t\t\thandle: acquireSessionLock(sessionFile, {\n+\t\t\t\tonHeartbeatError: error => {\n+\t\t\t\t\tfor (const handler of errorHandlers) handler(error);\n+\t\t\t\t},\n+\t\t\t}),\n+\t\t\treferences: 1,\n+\t\t\terrorHandlers,\n+\t\t};\n+\t\tthis.#releaseSessionLock();\n+\t\tthis.#sessionLock = next;",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "3649853281",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 6565,
+        "pr_file": "packages/coding-agent/src/session/session-manager.ts",
+        "discussion_id": "3649838918",
+        "commented_code": "@@ -588,6 +602,62 @@ export class SessionManager {\n \t\tif (writer) void writer.close().catch(() => undefined);\n \t}\n \n+\t#acquireSessionLock(sessionFile: string = this.#sessionFile ?? \"\"): void {\n+\t\tif (\n+\t\t\t!this.#persist ||\n+\t\t\t!(this.#storage instanceof FileSessionStorage) ||\n+\t\t\t!sessionFile ||\n+\t\t\tthis.#sessionLock?.handle.lockPath === lockPathForSession(sessionFile)\n+\t\t) {\n+\t\t\treturn;\n+\t\t}\n+\t\tconst errorHandlers = new Set<(error: Error) => void>([this.#sessionLockErrorHandler]);\n+\t\tconst next: SharedSessionLock = {\n+\t\t\thandle: acquireSessionLock(sessionFile, {\n+\t\t\t\tonHeartbeatError: error => {\n+\t\t\t\t\tfor (const handler of errorHandlers) handler(error);\n+\t\t\t\t},\n+\t\t\t}),\n+\t\t\treferences: 1,\n+\t\t\terrorHandlers,\n+\t\t};\n+\t\tthis.#releaseSessionLock();\n+\t\tthis.#sessionLock = next;",
+        "comment_created_at": "2026-07-25T08:03:03+00:00",
+        "comment_author": "wolfiesch",
+        "comment_body": "Lock replacement now catches source-release failure, releases the newly published target handle, and then propagates the original source error. Regression coverage injects a transient source-sidecar unlink failure and verifies the target sidecar is removed.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "3654467471",
+    "pr_number": 6565,
+    "pr_file": "packages/coding-agent/src/session/session-manager.ts",
+    "created_at": "2026-07-27T07:22:55+00:00",
+    "commented_code": "*/\n \tasync #rewriteAtomically(): Promise<void> {\n \t\tif (!this.#persist || !this.#sessionFile) return;\n+\t\tthis.#acquireSessionLock();",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "3655145187",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 6565,
+        "pr_file": "packages/coding-agent/src/session/session-manager.ts",
+        "discussion_id": "3654467471",
+        "commented_code": "@@ -780,6 +912,7 @@ export class SessionManager {\n \t */\n \tasync #rewriteAtomically(): Promise<void> {\n \t\tif (!this.#persist || !this.#sessionFile) return;\n+\t\tthis.#acquireSessionLock();",
+        "comment_created_at": "2026-07-27T07:22:55+00:00",
+        "comment_author": "wolfiesch",
+        "comment_body": "forkFrom now closes its factory-owned manager on every construction failure, releasing the target lock before rethrowing the original error. The regression forces initial publication failure and verifies the lock is gone.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

@@ -1,0 +1,90 @@
+[
+  {
+    "discussion_id": "4303743104",
+    "pr_number": 16097,
+    "pr_file": "crates/pi-vcs/src/git/mutate.rs",
+    "created_at": "2026-10-21T02:50:15+00:00",
+    "commented_code": "let source_index = self.info().git_dir.join(\"index\");\n \t\tif !source_index.is_file() {\n \t\t\treturn Err(Error::backend(\"git worktree add\", \"source index is missing\"));\n+\t\t// Refuse to clone when the destination is inside the source tree.\n+\t\t// The clone would recurse into itself (copying the destination into\n+\t\t// itself until the path is too long) or copy nested worktrees'\n+\t\t// .git files, which still point at the original worktree's metadata.\n+\t\tlet source_root = fs::canonicalize(self.root())\n+\t\t\t.map_err(|e| Error::backend(\"git worktree add\", format!(\"canonicalize source: {e}\")))?;\n+\t\tlet dest = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());\n+\t\tif dest != source_root && dest.starts_with(&source_root) {",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "4332532505",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16097,
+        "pr_file": "crates/pi-vcs/src/git/mutate.rs",
+        "discussion_id": "4303743104",
+        "commented_code": "@@ -764,12 +764,26 @@ impl GitRepo {\n \t\tlet source_index = self.info().git_dir.join(\"index\");\n \t\tif !source_index.is_file() {\n \t\t\treturn Err(Error::backend(\"git worktree add\", \"source index is missing\"));\n+\t\t// Refuse to clone when the destination is inside the source tree.\n+\t\t// The clone would recurse into itself (copying the destination into\n+\t\t// itself until the path is too long) or copy nested worktrees'\n+\t\t// .git files, which still point at the original worktree's metadata.\n+\t\tlet source_root = fs::canonicalize(self.root())\n+\t\t\t.map_err(|e| Error::backend(\"git worktree add\", format!(\"canonicalize source: {e}\")))?;\n+\t\tlet dest = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());\n+\t\tif dest != source_root && dest.starts_with(&source_root) {",
+        "comment_created_at": "2026-10-21T02:50:15+00:00",
+        "comment_author": "yuzu-octopus",
+        "comment_body": "Fixed in a5422b406b and 6f917322e1: `resolve_destination()` canonicalizes every existing ancestor, so a symlinked parent that points at the source is resolved before the comparison. `clone_first_worktree_rejects_destination_behind_a_symlinked_parent` covers it.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4312248617",
+    "pr_number": 16123,
+    "pr_file": "crates/pi-vcs/src/git/mod.rs",
+    "created_at": "2026-10-19T11:32:01+00:00",
+    "commented_code": "std::fs::read_to_string(path).ok()\n }\n \n+/// File in a linked worktree's administration directory naming the owner of a\n+/// setup that is not finished yet.\n+pub(crate) const SETUP_MARK: &str = \"omp-setup\";\n+\n+/// Owner in the setup mark of the administration directory `admin`, if any.\n+pub(crate) fn read_setup_mark(admin: &Path) -> Option<String> {\n+\tread_optional(&admin.join(SETUP_MARK)).map(|owner| owner.trim_end().to_owned())",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "4313297705",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16123,
+        "pr_file": "crates/pi-vcs/src/git/mod.rs",
+        "discussion_id": "4312248617",
+        "commented_code": "@@ -279,6 +279,15 @@ fn read_optional(path: &Path) -> Option<String> {\n \tstd::fs::read_to_string(path).ok()\n }\n \n+/// File in a linked worktree's administration directory naming the owner of a\n+/// setup that is not finished yet.\n+pub(crate) const SETUP_MARK: &str = \"omp-setup\";\n+\n+/// Owner in the setup mark of the administration directory `admin`, if any.\n+pub(crate) fn read_setup_mark(admin: &Path) -> Option<String> {\n+\tread_optional(&admin.join(SETUP_MARK)).map(|owner| owner.trim_end().to_owned())",
+        "comment_created_at": "2026-10-19T11:32:01+00:00",
+        "comment_author": "Dangerboi",
+        "comment_body": "Fixed in 57b5e5bd4a: only a missing `omp-setup` counts as no mark; any other read error now fails `worktrees()` instead of reporting the setup as finished, so `pr_checkout` stops rather than reusing the worktree. Rust test: with the mark replaced by something unreadable (a directory), the listing fails; with errors swallowed as on the previous commit, it reports no owner.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4314170799",
+    "pr_number": 16123,
+    "pr_file": "crates/pi-vcs/src/git/mutate.rs",
+    "created_at": "2026-10-19T14:50:34+00:00",
+    "commented_code": "}\n }\n \n-fn register_worktree(path: &Path, common: &Path, head: &str) -> Result<PathBuf> {\n+fn register_worktree(\n+\tpath: &Path,\n+\tcommon: &Path,\n+\thead: &str,\n+\tsetup_owner: Option<&str>,\n+) -> Result<PathBuf> {\n \tfs::create_dir_all(path)?;\n \tlet name = worktree_admin_name(common, path);\n \tlet admin = common.join(\"worktrees\").join(name);\n \tfs::create_dir_all(&admin)?;\n-\tfs::write(path.join(\".git\"), format!(\"gitdir: {}\n\", git_metadata_path(&admin)))?;\n-\tfs::write(admin.join(\"gitdir\"), format!(\"{}\n\", git_metadata_path(&path.join(\".git\"))))?;\n-\tfs::write(admin.join(\"commondir\"), \"../..\n\")?;\n-\tfs::write(admin.join(\"HEAD\"), format!(\"{head}\n\"))?;\n+\tlet written: Result<()> = (|| {\n+\t\t// Both before the worktree is listed: git's lock while it is created, and\n+\t\t// the setup mark.\n+\t\tfs::write(admin.join(\"locked\"), \"initializing\n\")?;\n+\t\tif let Some(owner) = setup_owner {\n+\t\t\tfs::write(admin.join(SETUP_MARK), format!(\"{owner}\n\"))?;\n+\t\t}\n+\t\tfs::write(path.join(\".git\"), format!(\"gitdir: {}\n\", git_metadata_path(&admin)))?;\n+\t\tfs::write(admin.join(\"gitdir\"), format!(\"{}\n\", git_metadata_path(&path.join(\".git\"))))?;\n+\t\tfs::write(admin.join(\"commondir\"), \"../..\n\")?;\n+\t\tfs::write(admin.join(\"HEAD\"), format!(\"{head}\n\"))?;\n+\t\tOk(())\n+\t})();\n+\tif let Err(err) = written {\n+\t\t// A locked entry without its back-reference would never be pruned: remove\n+\t\t// it, as git does.\n+\t\tlet _ = fs::remove_dir_all(&admin);\n+\t\treturn Err(err);\n+\t}\n \tOk(admin)\n }\n \n+/// Lift git's creation lock as git does, before any hook runs. If that fails,\n+/// roll the add back: a live setup mark on a worktree reported as failed would\n+/// make other processes refuse it for as long as this one lives.\n+fn finish_worktree_add(path: &Path, common: &Path, admin: &Path) -> Result<()> {\n+\tunlock_admin(admin).inspect_err(|_| {\n+\t\t// Removed first: with the mark gone and the entry still listed, another\n+\t\t// process could take over a checkout being deleted.\n+\t\tcleanup_worktree_add(path, common);\n+\t\tlet _ = end_setup_admin(admin);",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "4315261924",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16123,
+        "pr_file": "crates/pi-vcs/src/git/mutate.rs",
+        "discussion_id": "4314170799",
+        "commented_code": "@@ -1815,18 +1901,67 @@ fn git_metadata_path(path: &Path) -> Cow<'_, str> {\n \t}\n }\n \n-fn register_worktree(path: &Path, common: &Path, head: &str) -> Result<PathBuf> {\n+fn register_worktree(\n+\tpath: &Path,\n+\tcommon: &Path,\n+\thead: &str,\n+\tsetup_owner: Option<&str>,\n+) -> Result<PathBuf> {\n \tfs::create_dir_all(path)?;\n \tlet name = worktree_admin_name(common, path);\n \tlet admin = common.join(\"worktrees\").join(name);\n \tfs::create_dir_all(&admin)?;\n-\tfs::write(path.join(\".git\"), format!(\"gitdir: {}\\n\", git_metadata_path(&admin)))?;\n-\tfs::write(admin.join(\"gitdir\"), format!(\"{}\\n\", git_metadata_path(&path.join(\".git\"))))?;\n-\tfs::write(admin.join(\"commondir\"), \"../..\\n\")?;\n-\tfs::write(admin.join(\"HEAD\"), format!(\"{head}\\n\"))?;\n+\tlet written: Result<()> = (|| {\n+\t\t// Both before the worktree is listed: git's lock while it is created, and\n+\t\t// the setup mark.\n+\t\tfs::write(admin.join(\"locked\"), \"initializing\\n\")?;\n+\t\tif let Some(owner) = setup_owner {\n+\t\t\tfs::write(admin.join(SETUP_MARK), format!(\"{owner}\\n\"))?;\n+\t\t}\n+\t\tfs::write(path.join(\".git\"), format!(\"gitdir: {}\\n\", git_metadata_path(&admin)))?;\n+\t\tfs::write(admin.join(\"gitdir\"), format!(\"{}\\n\", git_metadata_path(&path.join(\".git\"))))?;\n+\t\tfs::write(admin.join(\"commondir\"), \"../..\\n\")?;\n+\t\tfs::write(admin.join(\"HEAD\"), format!(\"{head}\\n\"))?;\n+\t\tOk(())\n+\t})();\n+\tif let Err(err) = written {\n+\t\t// A locked entry without its back-reference would never be pruned: remove\n+\t\t// it, as git does.\n+\t\tlet _ = fs::remove_dir_all(&admin);\n+\t\treturn Err(err);\n+\t}\n \tOk(admin)\n }\n \n+/// Lift git's creation lock as git does, before any hook runs. If that fails,\n+/// roll the add back: a live setup mark on a worktree reported as failed would\n+/// make other processes refuse it for as long as this one lives.\n+fn finish_worktree_add(path: &Path, common: &Path, admin: &Path) -> Result<()> {\n+\tunlock_admin(admin).inspect_err(|_| {\n+\t\t// Removed first: with the mark gone and the entry still listed, another\n+\t\t// process could take over a checkout being deleted.\n+\t\tcleanup_worktree_add(path, common);\n+\t\tlet _ = end_setup_admin(admin);",
+        "comment_created_at": "2026-10-19T14:50:34+00:00",
+        "comment_author": "Dangerboi",
+        "comment_body": "Fixed in e3e670de4e: the rollback now removes the registration's `gitdir` first. If that fails, it touches nothing else, so the worktree stays listed with its live setup owner and other omp processes refuse it. Once `gitdir` is gone, neither git nor omp lists the worktree, so nothing can take it over, and the rest goes (`HEAD` next, then the directory, mark included). This also avoids an entry without `HEAD` that would make every listing fail. Rust tests (Unix): with `locked` impossible to remove, the rollback fails and the worktree is no longer listed while the listing still works; with the whole registration read-only, it stays listed with its owner.",
+        "pr_file_module": null
+      }
+    ]
+  },
+  {
+    "discussion_id": "4315409745",
+    "pr_number": 16123,
+    "pr_file": "crates/pi-vcs/src/git/mutate.rs",
+    "created_at": "2026-10-19T15:35:53+00:00",
+    "commented_code": "}\n }\n \n-fn register_worktree(path: &Path, common: &Path, head: &str) -> Result<PathBuf> {\n+fn register_worktree(\n+\tpath: &Path,\n+\tcommon: &Path,\n+\thead: &str,\n+\tsetup_owner: Option<&str>,\n+) -> Result<PathBuf> {\n \tfs::create_dir_all(path)?;\n \tlet name = worktree_admin_name(common, path);\n \tlet admin = common.join(\"worktrees\").join(name);\n \tfs::create_dir_all(&admin)?;\n-\tfs::write(path.join(\".git\"), format!(\"gitdir: {}\n\", git_metadata_path(&admin)))?;\n-\tfs::write(admin.join(\"gitdir\"), format!(\"{}\n\", git_metadata_path(&path.join(\".git\"))))?;\n-\tfs::write(admin.join(\"commondir\"), \"../..\n\")?;\n-\tfs::write(admin.join(\"HEAD\"), format!(\"{head}\n\"))?;\n+\tlet written: Result<()> = (|| {\n+\t\t// Both before the worktree is listed: git's lock while it is created, and\n+\t\t// the setup mark.\n+\t\tfs::write(admin.join(\"locked\"), \"initializing\n\")?;\n+\t\tif let Some(owner) = setup_owner {\n+\t\t\tfs::write(admin.join(SETUP_MARK), format!(\"{owner}\n\"))?;\n+\t\t}\n+\t\tfs::write(path.join(\".git\"), format!(\"gitdir: {}\n\", git_metadata_path(&admin)))?;\n+\t\tfs::write(admin.join(\"gitdir\"), format!(\"{}\n\", git_metadata_path(&path.join(\".git\"))))?;\n+\t\tfs::write(admin.join(\"commondir\"), \"../..\n\")?;\n+\t\tfs::write(admin.join(\"HEAD\"), format!(\"{head}\n\"))?;\n+\t\tOk(())\n+\t})();\n+\tif let Err(err) = written {\n+\t\t// A locked entry without its back-reference would never be pruned: remove\n+\t\t// it, as git does.\n+\t\tlet _ = fs::remove_dir_all(&admin);\n+\t\treturn Err(err);\n+\t}\n \tOk(admin)\n }\n \n+/// Lift git's creation lock as git does, before any hook runs. If that fails,\n+/// roll the add back: a live setup mark on a worktree reported as failed would\n+/// make other processes refuse it for as long as this one lives.\n+fn finish_worktree_add(path: &Path, admin: &Path) -> Result<()> {\n+\tunlock_admin(admin).inspect_err(|_| {\n+\t\tlet _ = fs::remove_dir_all(path);",
+    "repo_full_name": "can1357/oh-my-pi",
+    "discussion_comments": [
+      {
+        "comment_id": "4315762439",
+        "repo_full_name": "can1357/oh-my-pi",
+        "pr_number": 16123,
+        "pr_file": "crates/pi-vcs/src/git/mutate.rs",
+        "discussion_id": "4315409745",
+        "commented_code": "@@ -1815,18 +1901,160 @@ fn git_metadata_path(path: &Path) -> Cow<'_, str> {\n \t}\n }\n \n-fn register_worktree(path: &Path, common: &Path, head: &str) -> Result<PathBuf> {\n+fn register_worktree(\n+\tpath: &Path,\n+\tcommon: &Path,\n+\thead: &str,\n+\tsetup_owner: Option<&str>,\n+) -> Result<PathBuf> {\n \tfs::create_dir_all(path)?;\n \tlet name = worktree_admin_name(common, path);\n \tlet admin = common.join(\"worktrees\").join(name);\n \tfs::create_dir_all(&admin)?;\n-\tfs::write(path.join(\".git\"), format!(\"gitdir: {}\\n\", git_metadata_path(&admin)))?;\n-\tfs::write(admin.join(\"gitdir\"), format!(\"{}\\n\", git_metadata_path(&path.join(\".git\"))))?;\n-\tfs::write(admin.join(\"commondir\"), \"../..\\n\")?;\n-\tfs::write(admin.join(\"HEAD\"), format!(\"{head}\\n\"))?;\n+\tlet written: Result<()> = (|| {\n+\t\t// Both before the worktree is listed: git's lock while it is created, and\n+\t\t// the setup mark.\n+\t\tfs::write(admin.join(\"locked\"), \"initializing\\n\")?;\n+\t\tif let Some(owner) = setup_owner {\n+\t\t\tfs::write(admin.join(SETUP_MARK), format!(\"{owner}\\n\"))?;\n+\t\t}\n+\t\tfs::write(path.join(\".git\"), format!(\"gitdir: {}\\n\", git_metadata_path(&admin)))?;\n+\t\tfs::write(admin.join(\"gitdir\"), format!(\"{}\\n\", git_metadata_path(&path.join(\".git\"))))?;\n+\t\tfs::write(admin.join(\"commondir\"), \"../..\\n\")?;\n+\t\tfs::write(admin.join(\"HEAD\"), format!(\"{head}\\n\"))?;\n+\t\tOk(())\n+\t})();\n+\tif let Err(err) = written {\n+\t\t// A locked entry without its back-reference would never be pruned: remove\n+\t\t// it, as git does.\n+\t\tlet _ = fs::remove_dir_all(&admin);\n+\t\treturn Err(err);\n+\t}\n \tOk(admin)\n }\n \n+/// Lift git's creation lock as git does, before any hook runs. If that fails,\n+/// roll the add back: a live setup mark on a worktree reported as failed would\n+/// make other processes refuse it for as long as this one lives.\n+fn finish_worktree_add(path: &Path, admin: &Path) -> Result<()> {\n+\tunlock_admin(admin).inspect_err(|_| {\n+\t\tlet _ = fs::remove_dir_all(path);",
+        "comment_created_at": "2026-10-19T15:35:53+00:00",
+        "comment_author": "Dangerboi",
+        "comment_body": "Fixed in f43934c6d5: the rollback now only unlists the worktree once its checkout is gone (deleted, or already missing). If deleting the checkout fails, it leaves the registration and its setup mark untouched: the worktree stays listed and owned by this live process, so other omp processes refuse it, and `git worktree remove` can recover it, instead of leaving a directory whose `.git` points at deleted admin data. Rust test (Unix): with a read-only directory inside the checkout so it can't be deleted, the rollback fails and the worktree is still listed with its owner; on the previous commit it was no longer listed.",
+        "pr_file_module": null
+      }
+    ]
+  }
+]

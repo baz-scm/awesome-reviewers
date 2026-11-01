@@ -347,5 +347,61 @@ class BuildHygiene(unittest.TestCase):
                 self.assertFalse(path.read_text(encoding="utf-8").startswith("---"))
 
 
+class CorpusNames(unittest.TestCase):
+    """Slugs end up in file names, URLs and markup, so only a safe shape is accepted."""
+
+    VALID = ["flask-explicit-config", "llama.cpp-cache-keys", "cal.com-avoid-nested-ternaries", "30-seconds-of-code-x"]
+    INVALID = [
+        "cline#v1-guard-state",
+        "cline?x=1-guard-state",
+        'cline#"><b>x-guard-state',
+        '9router#" ><img src=x onerror=alert(1)>-x',
+        "cline#$(sleep 4)-x",
+        "cline\n-x",
+        "cline\r\n-x",
+        "cline\t-x",
+        "clinе-x",
+        "cline#中-x",
+        "Cline-x",
+        "-x",
+        "x-",
+        "x..y",
+        "a" * 101,
+    ]
+
+    def test_accepts_ordinary_slugs(self):
+        for slug in self.VALID:
+            with self.subTest(slug=slug):
+                self.assertIsNone(build_data.slug_problem(slug))
+
+    def test_rejects_injected_slugs(self):
+        for slug in self.INVALID:
+            with self.subTest(slug=slug):
+                self.assertIsNotNone(build_data.slug_problem(slug))
+
+    def test_every_committed_slug_is_valid(self):
+        build_data.validate_corpus_names(build_data.REVIEWERS_DIR)
+
+    def test_build_refuses_a_corpus_with_an_invalid_name(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "ok-slug.md").write_text("---\ntitle: Ok\nrepository: a/b\n---\nbody\n")
+            (directory / "cline#v1-x.md").write_text("---\ntitle: Bad\n---\nbody\n")
+            with self.assertRaises(SystemExit) as raised:
+                build_data.validate_corpus_names(directory)
+            self.assertIn("cline#v1-x.md", str(raised.exception))
+
+    def test_build_refuses_an_invalid_repository(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "ok-slug.md").write_text("---\ntitle: Ok\nrepository: cline/cline?x\n---\nbody\n")
+            with self.assertRaises(SystemExit):
+                build_data.validate_corpus_names(directory)
+
+
 if __name__ == "__main__":
     unittest.main()

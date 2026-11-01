@@ -11,7 +11,7 @@ language: Other
 comments_count: 3
 repository_stars: 6248
 ---
-
+{% raw %}
 When writing integration guides or other docs that repeat common text (titles, step names, instructions like "Create an account + Generate an API Key"), pull that content from a shared snippets file (e.g. `/snippets/strings.mdx`) instead of hardcoding it in every page. This keeps wording consistent across dozens of similar guides and lets you update copy in one place instead of editing every file individually.
 
 Example:
@@ -40,3 +40,4 @@ import { strings } from "/snippets/strings.mdx";
 
 When adopting this pattern, double-check that no steps are dropped in the process — copy the full set of steps (account creation, setting keys, modifying the base path, etc.) so the guide remains complete and usable end-to-end, not just a partial template.</description>
 </invoke>
+{% endraw %}

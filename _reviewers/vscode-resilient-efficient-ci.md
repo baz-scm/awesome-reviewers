@@ -13,7 +13,7 @@ language: Yaml
 comments_count: 7
 repository_stars: 194303
 ---
-
+{% raw %}
 CI/CD workflows should be resilient, deterministic, and efficient:
 
 1) Required checks should be resilient and scope-correct
@@ -80,3 +80,4 @@ Example (pattern):
 ```
 
 Adopt this checklist in PR reviews for CI/CD changes to prevent merge-blocking outages, avoid accidental test-scope changes, reduce duplicated CI cost, and improve robustness against transient network failures.
+{% endraw %}

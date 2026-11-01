@@ -12,7 +12,7 @@ language: Markdown
 comments_count: 8
 repository_stars: 21111
 ---
-
+{% raw %}
 When writing CI/CD workflows (and the documentation snippets that users copy/paste), always:
 
 - **Pin every third-party GitHub Action to an immutable commit SHA** (optionally with a comment showing the intended version), instead of using only tags like `@v4`.
@@ -47,3 +47,4 @@ on:
     workflows: ["Build C\+\+"]
     types: [completed]
 ```
+{% endraw %}

@@ -110,6 +110,28 @@
   }
 
   document.addEventListener('click', function (event) {
+    var methodToggle = event.target.closest('[data-method-toggle]');
+    if (methodToggle) {
+      var methodBody = methodToggle.closest('[data-verification-row]').querySelector('[data-method-body]');
+      var methodOpen = methodToggle.getAttribute('aria-expanded') === 'true';
+      methodToggle.setAttribute('aria-expanded', methodOpen ? 'false' : 'true');
+      methodBody.hidden = methodOpen;
+      return;
+    }
+
+    var recordCopy = event.target.closest('[data-copy-record]');
+    if (recordCopy) {
+      fetch(recordCopy.dataset.copyRecord)
+        .then(function (res) {
+          if (!res.ok) throw new Error('unavailable');
+          return res.text();
+        })
+        .then(copyText)
+        .then(function () { flash(recordCopy, 'copied'); })
+        .catch(function () { flash(recordCopy, 'failed'); });
+      return;
+    }
+
     var toggle = event.target.closest('[data-toggle]');
     if (toggle) {
       toggleRow(toggle);
@@ -377,35 +399,58 @@
     if (input.value) run();
   }
 
-  /* ---------------------------------------------------------- add a repo -- */
+  /* ------------------------------------------------ verification filters -- */
 
-  function initRepoForm() {
-    var form = document.querySelector('[data-repo-form]');
-    if (!form) return;
-    var feedback = form.parentNode.querySelector('[data-repo-feedback]');
-    var input = form.querySelector('input');
-    var button = form.querySelector('button');
+  function initVerificationFilters(scope) {
+    var rows = Array.prototype.slice.call(scope.querySelectorAll('[data-verification-row]'));
+    var input = scope.querySelector('[data-verification-search]');
+    var selects = Array.prototype.slice.call(scope.querySelectorAll('[data-verification-filter]'));
+    var count = scope.querySelector('[data-verification-count]');
+    var empty = scope.querySelector('[data-verification-empty]');
+    var reset = scope.querySelector('[data-verification-reset]');
 
-    form.addEventListener('submit', function (event) {
-      event.preventDefault();
-      var match = input.value.trim().match(/github\.com\/([^/\s]+\/[^/\s]+?)(?:\.git|\/|$)/);
-      if (!match) {
-        feedback.textContent = 'Enter a full GitHub repository URL.';
-        return;
-      }
-
-      button.disabled = true;
-      feedback.textContent = 'Submitting…';
-      fetch('https://awesome.baz.co/request?repo_name=' + encodeURIComponent(match[1]))
-        .then(function (res) {
-          return res.json().catch(function () { return {}; }).then(function (body) {
-            feedback.textContent = body.message ||
-              (res.status === 202 ? 'Request accepted — the repository is queued.' : 'Request submitted.');
-          });
-        })
-        .catch(function () { feedback.textContent = 'Request failed. Try again later.'; })
-        .finally(function () { button.disabled = false; });
+    rows.forEach(function (row) {
+      row._verificationHaystack = row.textContent.toLowerCase();
+      try { row._verificationTools = JSON.parse(row.dataset.tools); }
+      catch (error) { row._verificationTools = []; }
     });
+
+    function apply() {
+      var query = input.value.toLowerCase().trim();
+      var terms = query ? query.split(/\s+/) : [];
+      var visible = 0;
+      rows.forEach(function (row) {
+        var match = terms.every(function (term) {
+          return row._verificationHaystack.indexOf(term) !== -1;
+        }) && selects.every(function (select) {
+          if (!select.value) return true;
+          var key = select.dataset.verificationFilter;
+          return key === 'tool'
+            ? row._verificationTools.indexOf(select.value) !== -1
+            : row.dataset[key] === select.value;
+        });
+        row.classList.toggle('row--hidden', !match);
+        if (match) visible++;
+      });
+      count.textContent = visible + ' of ' + rows.length + ' records';
+      empty.hidden = visible !== 0;
+    }
+
+    var params = new URLSearchParams(location.search);
+    input.value = params.get('q') || '';
+    selects.forEach(function (select) {
+      var wanted = params.get(select.dataset.verificationFilter);
+      if (wanted) select.value = wanted;
+      select.addEventListener('change', apply);
+    });
+    input.addEventListener('input', apply);
+    reset.addEventListener('click', function () {
+      input.value = '';
+      selects.forEach(function (select) { select.value = ''; });
+      apply();
+      input.focus();
+    });
+    apply();
   }
 
   /* ---------------------------------------------------------------- init -- */
@@ -415,7 +460,7 @@
     document.querySelectorAll('[data-filters]').forEach(initFilters);
     initSearch();
     initThreads();
-    initRepoForm();
+    document.querySelectorAll('[data-verification-filters]').forEach(initVerificationFilters);
   }
 
   if (document.readyState === 'loading') {
@@ -424,3 +469,4 @@
     ready();
   }
 }());
+

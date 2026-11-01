@@ -1350,8 +1350,12 @@ def main() -> None:
     version = max(e["updated"] for e in entries)
     write_openapi(entries, domains, version)
     write_api_data(version)
+    # Build the independent verification corpus after legacy raw/ is regenerated.
+    from build_verification import build as build_verification
+    build_verification(Path('.'), SITE_URL)
 
 
 if __name__ == "__main__":
     os.chdir(Path(__file__).resolve().parent)
     main()
+

@@ -1,131 +1,103 @@
-# Awesome Reviewers
+# Awesome Verification
 
-Expert engineering instructions for AI and infrastructure domains, distilled from code review
-discussions in production open-source repositories.
+A catalog of verification methods found in public repository source and configuration.
+Each record includes named tools, recorded commands, evidence state and source links pinned
+to the inspected commit.
 
-**[awesomereviewers.com](https://awesomereviewers.com)**
+The project reuses the Awesome Reviewers website and its Jekyll publication pipeline.
+The existing domain remains [awesomereviewers.com](https://awesomereviewers.com).
+The legacy review-discussion instruction collection is preserved at its existing URLs.
 
-Each entry is a self-contained instruction — a rule, why it exists, and usually an example — written
-from recurring reviewer feedback in one repository. They are plain markdown, so they drop into an
-agent, a review harness, a context broker, or a prompt you are assembling by hand.
+## What a record establishes
 
-## Awesome Reviewers API
-
-Everything is a static file. No key, no rate limit, GET only.
-Reference: **[awesomereviewers.com/api/](https://awesomereviewers.com/api/)** ·
-description: **[/openapi.json](https://awesomereviewers.com/openapi.json)** (OpenAPI 3.1).
-
-```bash
-# one instruction
-curl https://awesomereviewers.com/raw/<slug>.md
-
-# every instruction in a domain, concatenated
-curl https://awesomereviewers.com/raw/bundles/llm-infra.md
-
-# machine index: slug, title, description, domain, topic, language, source, updated, raw URL
-curl https://awesomereviewers.com/raw/index.json
-
-# domain-grouped listing of the whole corpus
-curl https://awesomereviewers.com/llms.txt
-
-# the API surface itself
-curl https://awesomereviewers.com/openapi.json
-```
-
-| Resource | Path | Type |
-| --- | --- | --- |
-| OpenAPI description | `/openapi.json` | `application/vnd.oai.openapi+json;version=3.1` |
-| API documentation | `/api/` | `text/html` |
-| Corpus index | `/raw/index.json` | `application/json` |
-| Single instruction | `/raw/<slug>.md` | `text/markdown` |
-| Domain bundle | `/raw/bundles/<domain>.md` | `text/markdown` |
-| Source discussions | `/<slug>.json` | `application/json` |
-| Search index | `/assets/data/search.json` | `application/json` |
-| LLM index | `/llms.txt` | `text/plain` |
-| Sitemap | `/sitemap.xml` | `application/xml` |
-
-Every instruction carries the date of the most recent review comment behind it, so a scheduled job
-can diff `/raw/index.json` against its last run instead of refetching everything.
-
-An instruction page at `/reviewers/<slug>/` is the same content as `/raw/<slug>.md`, and a domain
-page at `/domains/<domain>/` as `/raw/bundles/<domain>.md`; each page links its markdown with
-`<link rel="alternate" type="text/markdown">`, and every page links `/openapi.json` as
-`rel="service-desc"`. Errors follow [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem
-details — see [/api/#errors](https://awesomereviewers.com/api/#errors).
-
-## Domains
-
-| Domain | What it covers |
+| Evidence state | Meaning |
 | --- | --- |
-| `ai-agents` | Agent loops, tool calling, prompt and context assembly, agent SDKs, coding assistants |
-| `llm-infra` | Inference servers, model gateways and routers, KV caching, retrieval and ingestion |
-| `ml-systems` | Training and inference frameworks, tensor and kernel code, ML platforms |
-| `orchestration` | Kubernetes, schedulers, service meshes, container tooling, workflow engines |
-| `cloud-infra` | Infrastructure as code, cloud SDKs, edge runtimes, proxies, gateways, tunnels |
-| `data-systems` | Query engines, storage, replication, streaming, ORMs, analytics backends |
-| `observability` | Metrics, tracing, logging, error tracking, instrumentation |
-| `security` | Static analysis, cloud posture scanning, auth, authorization, secrets |
-| `runtimes` | Interpreters, compilers, async runtimes, parsers, low-level systems code |
-| `devtools` | Editors, terminals, build systems, package managers, linters, test runners |
-| `app-frameworks` | Web and mobile frameworks, component libraries, API layers, product code |
-| `docs` | Reference material and learning resources — mostly writing and structure guidance |
+| Configured in CI | A workflow invokes the check, subject to its recorded conditions. |
+| Configured locally | A command or configuration enables the check; CI invocation was not established. |
+| Implementation present | Source code implements the check; invocation was not established. |
 
-Domain is assigned from the source repository, because that determines what kind of system the
-expertise applies to. Topic (`Security`, `Concurrency`, `API`, …) and language cut across domains and
-are filterable on every domain page.
+A source record does not establish a successful run, unconditional execution, or a required
+merge check. Coverage is bounded and published for every repository. A missing detection
+does not establish that a method is absent.
 
-## Repository layout
+## Data and publication
 
-```
-_reviewers/            source of truth — <slug>.md instruction + <slug>.json source discussions
-build_data.py          derives everything else from _reviewers/
-_layouts/, _includes/  base, domain and instruction layouts
-assets/css/site.scss   the site's only stylesheet
-assets/js/site.js      the site's only script
-index.html             search, domains, recently updated
-domains.html           domain overview          -> /domains/
-sources.html           source repositories      -> /sources/
-api.html               API reference            -> /api/
-methodology.html       how entries are derived  -> /methodology/
-404.html               recovery page, with markdown and problem+json bodies
-tests/                 machine-interface tests
-edge/                  optional CDN worker for Accept negotiation (not part of the site)
-```
+`_verification/<owner>--<repo>.json` is the source for repository scan manifests.
+The [manifest contract](_verification/README.md) describes the fields and evidence rules.
 
-Nothing outside `_reviewers/` is a source of truth. Domain stats, dates, indexes, raw endpoints,
-bundles, domain pages, `llms.txt` and `openapi.json` are all generated and are not committed — see
-`.gitignore`.
+`build_verification.py` validates all manifests before generating:
 
-## Local development
+| Output | Contents |
+| --- | --- |
+| `_data/verification.json` | Catalog and source coverage for the site. |
+| `methods/<id>/index.html` | Method detail page. |
+| `raw/verification/index.json` | Full catalog with method records and source coverage. |
+| `raw/verification/<id>.json` | One method record with source evidence. |
+| `raw/verification/<id>.md` | One method record as plain Markdown. |
+| `raw/verification/repositories/<owner>--<repo>.json` | One complete source scan manifest. |
+| `raw/verification/site.md` | Catalog overview. |
+| `raw/verification/llms.txt` | Text index of method records. |
+| `raw/verification/openapi.json` | OpenAPI 3.1 description. |
+
+`build_data.py` builds the legacy corpus first, then calls the verification generator.
+The new generator never reads `_reviewers/`, and the build never executes commands
+from inspected repositories. Source collection is separate from publication.
+
+The main page filters methods by technique, tool, repository, category and evidence state.
+The Sources page exposes commit identifiers and scan limits.
+The [Verification API](https://awesomereviewers.com/verification-api/) documents raw access.
+
+## Development
 
 ```bash
-python build_data.py                 # generate derived data (required before the first build)
+python build_data.py
 bundle install
 bundle exec jekyll serve
 ```
 
-`build_data.py` needs only the standard library. Re-run it after changing anything in `_reviewers/`.
+For only the verification data and generated pages:
 
 ```bash
-python -m unittest discover -s tests -t .   # OpenAPI, error format, llms.txt, 404, discovery links
-node --test tests/worker.test.mjs           # the optional edge worker
+python build_verification.py
 ```
 
-Both suites use only their standard libraries. `pip install openapi-spec-validator` adds a
-validation of `openapi.json` against the OpenAPI 3.1 schema to the first suite; without it that one
-test skips, so the deploy pipeline never depends on a package index.
+Both Python builders use only the standard library. The existing GitHub Actions workflow
+runs the build and tests before Jekyll publishes GitHub Pages.
+
+```bash
+python -m unittest discover -s tests -t .
+node --test tests/worker.test.mjs
+```
+
+The catalog tests check rejection of unpinned and mismatched evidence, scan-state claims,
+legacy-data separation and removal of stale generated records.
+
+## Legacy collection
+
+The original instruction records remain in `_reviewers/` as Markdown and sibling
+review-discussion JSON files. They retain the original public paths:
+
+| Resource | Path |
+| --- | --- |
+| Instruction pages | `/reviewers/<slug>/` |
+| Domain pages | `/domains/<domain>/` |
+| Instruction Markdown | `/raw/<slug>.md` |
+| Domain bundles | `/raw/bundles/<domain>.md` |
+| Instruction index | `/raw/index.json` |
+| Source discussions | `/<slug>.json` |
+| Original API reference | `/api/` |
+| Original API description | `/openapi.json` |
+| Original text index | `/llms.txt` |
+
+Legacy instructions are derived from review conversations. They are not reclassified
+as evidence that a repository uses a verification technique.
 
 ## Contributing
 
-- **Add a repository:** submit it from the [homepage](https://awesomereviewers.com/) and
-  it is queued for extraction. Private repositories go through [Baz](https://baz.co/agents).
-- **Fix an instruction:** open a pull request against its file in `_reviewers/`.
-- **Fix a domain assignment:** repositories are mapped explicitly in `build_data.py`.
+Submit corrected scan manifests with exact commit-pinned evidence, or open an issue with
+the record and source lines that need checking. Existing instructions can still be corrected
+through their files in `_reviewers/`.
 
-## Disclaimer
+Maintained by [Baz](https://baz.ai). Apache-2.0. The catalog describes public source snapshots;
+it is not official guidance or an execution attestation from the represented projects.
 
-Community-contributed material distilled from public review discussions. It is not official guidance
-from the projects it was derived from, and it is not guaranteed to be correct for your codebase.
-Report anything harmful or wrong as an issue.
-
-Maintained by the team at [Baz](https://baz.co). Apache-2.0.

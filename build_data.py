@@ -42,6 +42,44 @@ API_DOCS_URL = f"{SITE_URL}/api/"
 # Name of the site overview under raw/. No instruction may use it as a slug.
 SITE_OVERVIEW_SLUG = "site"
 
+# Slugs become file names, URLs and HTML/JSON/markdown text. Anything outside this
+# shape (`#`, `?`, quotes, control characters, non-ASCII, over-long names) is
+# rejected rather than escaped, so a malformed source can never reach the site.
+SLUG_PATTERN = re.compile(r"[a-z0-9]+(?:[.-][a-z0-9]+)*")
+SLUG_MAX_LENGTH = 100
+REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+
+def slug_problem(slug: str) -> str | None:
+    """Return why `slug` is not a valid instruction slug, or None if it is."""
+    if len(slug) > SLUG_MAX_LENGTH:
+        return f"longer than {SLUG_MAX_LENGTH} characters"
+    if not SLUG_PATTERN.fullmatch(slug):
+        return "must be lowercase ASCII letters and digits separated by '-' or '.'"
+    return None
+
+
+def validate_corpus_names(directory: Path) -> None:
+    """Fail the build if any corpus file has a name or repository the site cannot carry."""
+    problems: list[str] = []
+    for path in sorted(directory.iterdir()):
+        if path.suffix not in (".md", ".json"):
+            problems.append(f"{path.name!r}: not a .md or .json file")
+            continue
+        reason = slug_problem(path.stem)
+        if reason:
+            problems.append(f"{path.name!r}: {reason}")
+            continue
+        if path.suffix == ".md":
+            meta, _ = parse_front_matter(path.read_text(encoding="utf-8", errors="replace"))
+            repo = meta.get("repository", "")
+            if repo and not REPOSITORY_PATTERN.fullmatch(repo):
+                problems.append(f"{path.name!r}: repository {repo!r} is not 'owner/name'")
+    if problems:
+        shown = "\n  ".join(problems[:50])
+        more = f"\n  ... and {len(problems) - 50} more" if len(problems) > 50 else ""
+        raise SystemExit(f"{len(problems)} invalid files in {directory}/:\n  {shown}{more}")
+
 # --------------------------------------------------------------------------- #
 # Domains
 # --------------------------------------------------------------------------- #
@@ -340,6 +378,7 @@ def day(stamp: str | None) -> str:
 def read_corpus() -> list[dict]:
     entries: list[dict] = []
     unmapped: Counter[str] = Counter()
+    validate_corpus_names(REVIEWERS_DIR)
 
     for md_path in sorted(REVIEWERS_DIR.glob("*.md")):
         slug = md_path.stem

@@ -11,7 +11,7 @@ language: Markdown
 comments_count: 3
 repository_stars: 21111
 ---
-
+{% raw %}
 When using branch-scoped caches (e.g., for dependency caching), make the cache scope key match the ref GitHub uses for that event. Don’t use `github.ref_name` blindly—its value differs by event (and can cause cache misses). Also, for repos with many PRs, mitigate cache thrashing by proactively deleting branch-scoped caches on a faster cadence.
 
 Example (scope key derived from event):
@@ -28,3 +28,4 @@ Example (scope key derived from event):
 
 And for cache cleanup (high churn):
 - Periodically delete obsolete branch-scoped caches (e.g., PR-related) more frequently than default eviction, using the `gh` CLI.
+{% endraw %}

@@ -11,7 +11,7 @@ language: Yaml
 comments_count: 3
 repository_stars: 194303
 ---
-
+{% raw %}
 Use deterministic, content-derived cache keys and ensure every producer/consumer of that cache computes the key *identically*.
 
 Apply these rules when adding or modifying CI caching (especially GitHub Actions):
@@ -43,3 +43,4 @@ Checklist for PRs
 - [ ] Does the cache key include every input that changes cached contents?
 - [ ] Do warm and restore workflows compute the key the same way (including shell vs GitHub expression evaluation)?
 - [ ] Are cache action versions consistent with the repo, or is this part of a coordinated pin upgrade?
+{% endraw %}

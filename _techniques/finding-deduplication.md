@@ -1,0 +1,21 @@
+---
+title: "Finding deduplication"
+code: "V1045"
+slug: "finding-deduplication"
+tactic: "Finding validation"
+tactic_id: "VA07"
+description: "Merges findings that describe the same problem from different reviewers, files or runs into one."
+subtechniques:
+  - id: "V1045.001"
+    name: "Semantic dedup"
+    slug: "semantic-dedup"
+    description: "Cluster findings by embedding similarity and location."
+  - id: "V1045.002"
+    name: "Consolidation"
+    slug: "consolidation"
+    description: "Merge a cluster into one finding that keeps all evidence."
+  - id: "V1045.003"
+    name: "Fingerprinting across runs"
+    slug: "fingerprinting-across-runs"
+    description: "Stable fingerprints so a finding is recognised on the next commit."
+---

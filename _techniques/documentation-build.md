@@ -1,0 +1,21 @@
+---
+title: "Documentation build"
+code: "V1010"
+slug: "documentation-build"
+tactic: "Static analysis"
+tactic_id: "VA02"
+description: "Builds documentation as a check so broken cross-references, links and markup fail like code."
+subtechniques:
+  - id: "V1010.001"
+    name: "Strict docs build"
+    slug: "strict-docs-build"
+    description: "Treat warnings as errors (sphinx -W, mkdocs --strict)."
+  - id: "V1010.002"
+    name: "Link checking"
+    slug: "link-checking"
+    description: "Check internal and external links on a schedule."
+  - id: "V1010.003"
+    name: "Doctests"
+    slug: "doctests"
+    description: "Run code examples in documentation as tests."
+---

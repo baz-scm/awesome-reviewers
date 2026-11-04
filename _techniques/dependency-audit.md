@@ -1,0 +1,21 @@
+---
+title: "Dependency audit"
+code: "V1015"
+slug: "dependency-audit"
+tactic: "Supply chain"
+tactic_id: "VA03"
+description: "Matches dependencies against advisory databases and license policy, and fails on known-vulnerable or disallowed packages."
+subtechniques:
+  - id: "V1015.001"
+    name: "Advisory matching"
+    slug: "advisory-matching"
+    description: "Compare resolved versions with OSV, GitHub and ecosystem advisories."
+  - id: "V1015.002"
+    name: "Reachability-aware audit"
+    slug: "reachability-aware-audit"
+    description: "Report a vulnerable dependency only when the vulnerable function is called."
+  - id: "V1015.003"
+    name: "License policy"
+    slug: "license-policy"
+    description: "Allow or deny dependencies by license."
+---

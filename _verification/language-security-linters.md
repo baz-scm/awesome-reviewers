@@ -1,0 +1,52 @@
+---
+title: "Language security linters"
+code: "V1007.003"
+slug: "language-security-linters"
+technique: "Static application security testing"
+technique_id: "V1007"
+technique_slug: "static-application-security-testing"
+tactic: "Static analysis"
+tactic_id: "VA02"
+description: "Per-language security rule sets maintained by each ecosystem."
+repos: 6
+craft:
+  - "Enable the security rule set that each ecosystem maintains for every language in use."
+  - "Set the severity threshold and record each accepted exception next to the code."
+  - "Run the same linter config in CI and in the pre-commit hook."
+reverse:
+  - "A bandit configuration in pyproject.toml or .bandit with a skips list."
+  - "An eslint config that extends the security rules from eslint-plugin-security."
+  - "gosec or security-code-scan referenced in a CI workflow or build file."
+packages:
+  - id: "bandit"
+    name: "Bandit"
+    url: "https://github.com/PyCQA/bandit"
+  - id: "gosec"
+    name: "gosec"
+    url: "https://github.com/securego/gosec"
+  - id: "security-code-scan"
+    name: "Security Code Scan"
+    url: "https://github.com/security-code-scan/security-code-scan"
+  - id: "find-sec-bugs"
+    name: "Find Security Bugs"
+    url: "https://github.com/find-sec-bugs/find-sec-bugs"
+  - id: "eslint-plugin-security"
+    name: "eslint-plugin-security"
+    url: "https://github.com/eslint-community/eslint-plugin-security"
+tools:
+  - name: "bandit"
+    repos: 6
+examples:
+  - repo: "apache/airflow"
+    tool: "bandit"
+    command: "bandit"
+  - repo: "celery/celery"
+    tool: "bandit"
+    command: "bandit -b bandit.json -r celery/"
+  - repo: "prowler-cloud/prowler"
+    tool: "bandit"
+    command: "bandit -q -lll -x *_test.py,./contrib/,./.venv/ -r ."
+  - repo: "awslabs/mcp"
+    tool: "bandit"
+    command: "bandit -r --severity-level medium --confidence-level medium -f html -o bandit-report-$EXPR.html -c pyproject.toml ."
+---

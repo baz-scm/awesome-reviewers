@@ -46,28 +46,40 @@ class ReviewerTests(unittest.TestCase):
             self.assertRegex(data["repository"], r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", slug)
 
 
-class TechniqueTests(unittest.TestCase):
+class VerificationTests(unittest.TestCase):
+    """Each sub-technique is one verification entry, under one technique and tactic."""
+
     @classmethod
     def setUpClass(cls):
         cls.entries = {p.stem: load(p) for p in sorted((ROOT / "_verification").glob("*.md"))}
+        cls.techniques = {p.stem: load(p) for p in sorted((ROOT / "_techniques").glob("*.md"))}
 
     def test_ids_are_unique_and_well_formed(self):
-        ids = [data["id"] for data in self.entries.values()]
-        self.assertEqual(len(ids), len(set(ids)), "technique ids must be unique")
-        for data in self.entries.values():
-            self.assertRegex(data["id"], TECHNIQUE_ID)
-
-    def test_subtechniques_extend_their_parent_id(self):
+        ids = [data["code"] for data in self.entries.values()]
+        self.assertEqual(len(ids), len(set(ids)), "sub-technique ids must be unique")
         for slug, data in self.entries.items():
-            for sub in data.get("subtechniques") or []:
-                self.assertRegex(sub["id"], SUBTECHNIQUE_ID, slug)
-                self.assertTrue(sub["id"].startswith(data["id"] + "."), f"{slug}: {sub['id']} under {data['id']}")
+            self.assertRegex(data["code"], SUBTECHNIQUE_ID, slug)
 
-    def test_every_technique_has_craft_and_signals(self):
+    def test_each_sub_sits_under_its_technique(self):
+        technique_ids = {data["code"] for data in self.techniques.values()}
+        for slug, data in self.entries.items():
+            self.assertIn(data["technique_id"], technique_ids, slug)
+            self.assertTrue(data["code"].startswith(data["technique_id"] + "."), f"{slug}: {data['code']}")
+
+    def test_every_technique_lists_its_subs(self):
+        listed = {s["id"] for data in self.techniques.values() for s in data["subtechniques"]}
+        self.assertEqual(listed, {data["code"] for data in self.entries.values()})
+
+    def test_every_sub_has_craft_and_signals(self):
         for slug, data in self.entries.items():
             self.assertTrue(data.get("craft"), f"{slug}: no craft steps")
             self.assertTrue(data.get("reverse"), f"{slug}: no signals")
             self.assertTrue(data.get("tactic"), f"{slug}: no tactic")
+
+    def test_evidence_counts_match_examples(self):
+        for slug, data in self.entries.items():
+            self.assertEqual(data["repos"] >= len(data.get("examples") or []), True, slug)
+            self.assertLessEqual(len(data.get("examples") or []), 5, slug)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,21 @@
+---
+title: "Security-focused review"
+code: "V1038"
+slug: "security-focused-review"
+tactic: "Code review"
+tactic_id: "VA06"
+description: "A reviewer that reads for exploitable behaviour across files: authorization gaps, injection through helpers, unsafe trust between services."
+subtechniques:
+  - id: "V1038.001"
+    name: "Should-review gate"
+    slug: "should-review-gate"
+    description: "Decide from the diff whether a deeper security pass is warranted."
+  - id: "V1038.002"
+    name: "Call-chain investigation"
+    slug: "call-chain-investigation"
+    description: "Follow user input from entry point to sink with a model, file by file."
+  - id: "V1038.003"
+    name: "OWASP classification"
+    slug: "owasp-classification"
+    description: "Tag each finding with an OWASP Top 10 category for routing and reporting."
+---

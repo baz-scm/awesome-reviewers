@@ -1,0 +1,21 @@
+---
+title: "Type checking"
+code: "V1006"
+slug: "type-checking"
+tactic: "Static analysis"
+tactic_id: "VA02"
+description: "Proves call sites and data shapes agree across modules: wrong types, unhandled null or None, signatures broken by a change."
+subtechniques:
+  - id: "V1006.001"
+    name: "Gradual typing"
+    slug: "gradual-typing"
+    description: "Type-check annotated code first and tighten strictness per module."
+  - id: "V1006.002"
+    name: "Strict mode"
+    slug: "strict-mode"
+    description: "Disallow implicit any, untyped definitions and unchecked optional access."
+  - id: "V1006.003"
+    name: "Compiler as checker"
+    slug: "compiler-as-checker"
+    description: "In compiled languages the build is the type check; a failing build is this check failing."
+---

@@ -11,16 +11,28 @@ beyond Jekyll and one Python script.
 
 ## Source of truth
 
-`_reviewers/` only:
+`_reviewers/` and `_verifications/` only.
+
+`_reviewers/`:
 
 - `<slug>.md` — front matter (`title`, `description`, `repository`, `label`, `language`,
   `comments_count`, `repository_stars`) plus the instruction body in markdown.
 - `<slug>.json` — the review discussions the instruction was derived from.
 
+`_verifications/` holds one file per source repository:
+
+- `<owner>-<name>.json` (lowercase, other characters replaced by `-`; see `repository_slug`) — the
+  checks that repository runs, as written by bazai's verification scanner
+  (`modes/awesome_reviewers/verifications`): `repo_full_name`, `ref` (commit sha) and a
+  `verifications` list. `build_data.py` validates every file and fails the build on a malformed one;
+  the method and trigger enums in `VERIFICATION_METHODS` / `VERIFICATION_TRIGGERS` mirror the
+  scanner's `VerificationMethod` and `Trigger`, so change both together.
+
 Everything else is derived by `build_data.py` and is **not committed**: `_data/api.json`,
 `_data/domains.json`, `_data/entries.json`, `_data/meta.json`, `_data/sources.json`,
-`assets/data/search.json`, `domains/*.html`, `raw/**`, `llms.txt`, `openapi.json`. Re-run
-`python build_data.py` after touching `_reviewers/`, and before the first local Jekyll build.
+`assets/data/search.json`, `domains/*.html`, `raw/**` (including `raw/verifications/`), `llms.txt`,
+`openapi.json`. Re-run `python build_data.py` after touching `_reviewers/` or `_verifications/`, and
+before the first local Jekyll build.
 
 Dates are derived from discussion timestamps, never declared in front matter. Domain is derived from
 the source repository via the explicit map in `build_data.py`.

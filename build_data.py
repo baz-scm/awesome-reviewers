@@ -13,10 +13,15 @@ writes:
   raw/<slug>.md             plain-text endpoint for a single instruction
   raw/bundles/<domain>.md   every instruction in a domain, concatenated
   raw/index.json            machine-readable index of the whole corpus
+  raw/verifications/        one scan per source repository, plus an index
+  raw/verify/               per-language verification playbooks (.md, .json) and an index
+  _data/verify.json         playbooks, methods and check kinds for the site layer
+  _data/source_pages.json   one entry per source repository page
+  verify/ methods/ sources/ thin page stubs the layouts render
   llms.txt                  domain-grouped index for LLM consumers
   openapi.json              OpenAPI 3.1 description of the endpoints above
 
-Everything here is derived. Nothing outside `_reviewers/` is a source of truth,
+Everything here is derived. Nothing outside `_reviewers/` and `_verifications/` is a source of truth,
 so the script is safe to re-run at any time and is expected to run in CI before
 `jekyll build`.
 """
@@ -570,6 +575,671 @@ def verification_summary(scan: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Verification guide: which checks to run for the code being written
+#
+# Two sources of truth meet here. `_verifications/` says which checks the
+# source repositories actually run; `_reviewers/` holds the review prompts for
+# what those checks miss. The tables below are the editorial layer that joins
+# them: what each tool is for, which languages it applies to, and which checks
+# a kind of change calls for. Everything else is counted from the data.
+# --------------------------------------------------------------------------- #
+
+# What each method is for, keyed by the scanner's method slugs.
+METHOD_GUIDE: dict[str, dict] = {
+    "static_analysis": {
+        "slug": "static-analysis",
+        "summary": "Reads the code without running it: linters, type checkers, security and workflow scanners.",
+        "when": "On every change. Cheapest signal, runs in seconds, and most findings point at an exact line.",
+    },
+    "testing": {
+        "slug": "testing",
+        "summary": "Runs the code: unit and integration tests, browser tests, property-based tests, fuzzing, mutation testing.",
+        "when": (
+            "On every change that alters behaviour. Add generated inputs (property tests, fuzzing) when the "
+            "code parses, transforms or computes, and mutation testing when the tests themselves change."
+        ),
+    },
+    "formatting": {
+        "slug": "formatting",
+        "summary": "Normalises layout, spelling and file hygiene so the diff only shows what changed.",
+        "when": "On every change, before anything else. Almost always autofixable: run the fix, then commit.",
+    },
+    "supply_chain": {
+        "slug": "supply-chain",
+        "summary": "Checks dependencies: known vulnerabilities, disallowed licenses, lockfiles that disagree with manifests.",
+        "when": "When a manifest or lockfile changes, and on a schedule, since advisories arrive after the code ships.",
+    },
+    "formal": {
+        "slug": "formal",
+        "summary": "Proves or exhaustively explores properties: model checking, proofs, undefined-behaviour interpreters.",
+        "when": (
+            "When a bug would be a memory-safety violation or an interleaving that tests are unlikely to hit: "
+            "unsafe code, lock-free structures, consensus and protocol logic."
+        ),
+    },
+}
+GUIDE_METHODS = [slug for slug in VERIFICATION_METHOD_SLUGS if slug in METHOD_GUIDE]
+
+# A kind of check: narrower than a method, and what a recommendation is made of.
+CHECK_KINDS: list[dict] = [
+    {"slug": "formatting", "title": "Formatting", "method": "formatting",
+     "catches": "Layout drift that buries the real change in the diff."},
+    {"slug": "file-hygiene", "title": "File hygiene", "method": "formatting",
+     "catches": "Invalid JSON, YAML or TOML, merge markers, trailing whitespace, oversized files."},
+    {"slug": "spelling", "title": "Spelling", "method": "formatting",
+     "catches": "Typos in identifiers, comments and docs."},
+    {"slug": "linting", "title": "Linting", "method": "static_analysis",
+     "catches": "Bug-prone patterns, unused code and conventions the formatter does not cover."},
+    {"slug": "type-checking", "title": "Type checking", "method": "static_analysis",
+     "catches": "Wrong types, unhandled null or None, call signatures broken across modules."},
+    {"slug": "security-scanning", "title": "Security scanning", "method": "static_analysis",
+     "catches": "Injection, unsafe APIs and tainted data reaching a sink."},
+    {"slug": "secret-scanning", "title": "Secret scanning", "method": "static_analysis",
+     "catches": "Credentials and tokens committed to the repository."},
+    {"slug": "workflow-linting", "title": "CI workflow linting", "method": "static_analysis",
+     "catches": "Broken GitHub Actions syntax, script injection, over-broad token permissions."},
+    {"slug": "docs-build", "title": "Docs build", "method": "static_analysis",
+     "catches": "Broken cross-references, links and markup in documentation."},
+    {"slug": "unit-tests", "title": "Unit and integration tests", "method": "testing",
+     "catches": "Behaviour regressions on the paths the tests exercise."},
+    {"slug": "browser-tests", "title": "End-to-end browser tests", "method": "testing",
+     "catches": "User flows broken across components, routing and the network."},
+    {"slug": "property-tests", "title": "Property-based tests", "method": "testing",
+     "catches": "Edge-case inputs nobody wrote a test for; invariants over generated data."},
+    {"slug": "fuzzing", "title": "Fuzzing", "method": "testing",
+     "catches": "Crashes, panics and hangs on malformed input, especially in parsers and decoders."},
+    {"slug": "mutation-testing", "title": "Mutation testing", "method": "testing",
+     "catches": "Tests that keep passing whatever the code does."},
+    {"slug": "version-matrix", "title": "Version and platform matrix", "method": "testing",
+     "catches": "Breakage on a runtime version, OS or feature combination you did not run locally."},
+    {"slug": "dependency-audit", "title": "Dependency audit", "method": "supply_chain",
+     "catches": "Known-vulnerable or disallowed dependencies and licenses."},
+    {"slug": "lockfile-check", "title": "Lockfile consistency", "method": "supply_chain",
+     "catches": "A lockfile that no longer matches its manifest."},
+    {"slug": "ub-detection", "title": "Undefined-behaviour detection", "method": "formal",
+     "catches": "Memory-safety and aliasing violations in unsafe code."},
+    {"slug": "concurrency-model-checking", "title": "Concurrency model checking", "method": "formal",
+     "catches": "Races and orderings that fail only under specific interleavings."},
+    {"slug": "proofs", "title": "Proofs and specifications", "method": "formal",
+     "catches": "Design-level bugs in protocols and algorithms, checked against a specification."},
+]
+CHECK_KIND_SLUGS = [k["slug"] for k in CHECK_KINDS]
+ANY_LANGUAGE = "*"
+
+# Languages a playbook is published for. `entry_languages` are the `language`
+# values in `_reviewers/` front matter that count as this language.
+LANGUAGES: list[dict] = [
+    {"slug": "python", "title": "Python", "entry_languages": ["Python"], "extensions": [".py", ".pyi"]},
+    {"slug": "typescript", "title": "TypeScript", "entry_languages": ["TypeScript", "TSX"],
+     "extensions": [".ts", ".tsx", ".mts", ".cts"]},
+    {"slug": "javascript", "title": "JavaScript", "entry_languages": ["JavaScript"],
+     "extensions": [".js", ".jsx", ".mjs", ".cjs"]},
+    {"slug": "rust", "title": "Rust", "entry_languages": ["Rust"], "extensions": [".rs"]},
+    {"slug": "go", "compiled": True, "title": "Go", "entry_languages": ["Go"], "extensions": [".go"]},
+    {"slug": "java", "compiled": True, "title": "Java", "entry_languages": ["Java"], "extensions": [".java"]},
+    {"slug": "kotlin", "compiled": True, "title": "Kotlin", "entry_languages": ["Kotlin"], "extensions": [".kt", ".kts"]},
+    {"slug": "swift", "compiled": True, "title": "Swift", "entry_languages": ["Swift"], "extensions": [".swift"]},
+    {"slug": "cpp", "compiled": True, "title": "C++", "entry_languages": ["C++"],
+     "extensions": [".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"]},
+    {"slug": "c", "compiled": True, "title": "C", "entry_languages": ["C"], "extensions": [".c", ".h"]},
+    {"slug": "csharp", "compiled": True, "title": "C#", "entry_languages": ["C#"], "extensions": [".cs"]},
+    {"slug": "ruby", "title": "Ruby", "entry_languages": ["Ruby"], "extensions": [".rb"]},
+    {"slug": "php", "title": "PHP", "entry_languages": ["PHP"], "extensions": [".php"]},
+    {"slug": "shell", "title": "Shell", "entry_languages": ["Shell"], "extensions": [".sh", ".bash", ".zsh"]},
+    {"slug": "sql", "title": "SQL", "entry_languages": ["Sql"], "extensions": [".sql"]},
+    {"slug": "yaml", "title": "YAML and CI workflows", "entry_languages": ["Yaml"], "extensions": [".yml", ".yaml"]},
+    {"slug": "config", "title": "JSON and TOML", "entry_languages": ["Json", "Toml"], "extensions": [".json", ".toml"]},
+    {"slug": "dockerfile", "title": "Dockerfile", "entry_languages": ["Dockerfile"],
+     "extensions": ["Dockerfile", ".dockerfile"]},
+    {"slug": "docs", "title": "Markdown and docs", "entry_languages": ["Markdown", "Txt"],
+     "extensions": [".md", ".mdx", ".rst", ".txt"]},
+]
+LANGUAGE_SLUGS = [language["slug"] for language in LANGUAGES]
+JS_TS = ["javascript", "typescript"]
+
+# What each tool the scanner recognises is for. Its method, docs, upstream and
+# exit codes come from the scans themselves.
+TOOL_PROFILES: dict[str, dict] = {
+    "ruff-check": {"kind": "linting", "languages": ["python"]},
+    "ruff-format": {"kind": "formatting", "languages": ["python"]},
+    "black": {"kind": "formatting", "languages": ["python"]},
+    "isort": {"kind": "formatting", "languages": ["python"]},
+    "flake8": {"kind": "linting", "languages": ["python"]},
+    "pylint": {"kind": "linting", "languages": ["python"]},
+    "mypy": {"kind": "type-checking", "languages": ["python"]},
+    "pyright": {"kind": "type-checking", "languages": ["python"]},
+    "pytest": {"kind": "unit-tests", "languages": ["python"]},
+    "unittest": {"kind": "unit-tests", "languages": ["python"]},
+    "hypothesis": {"kind": "property-tests", "languages": ["python"]},
+    "mutmut": {"kind": "mutation-testing", "languages": ["python"]},
+    "bandit": {"kind": "security-scanning", "languages": ["python"]},
+    "pip-audit": {"kind": "dependency-audit", "languages": ["python"]},
+    "uv-lock": {"kind": "lockfile-check", "languages": ["python"]},
+    "sphinx": {"kind": "docs-build", "languages": ["python", "docs"]},
+    "mkdocs": {"kind": "docs-build", "languages": ["python", "docs"]},
+    "eslint": {"kind": "linting", "languages": JS_TS},
+    "biome": {"kind": "linting", "languages": [*JS_TS, "config"]},
+    "prettier": {"kind": "formatting", "languages": [*JS_TS, "yaml", "config", "docs"]},
+    "tsc": {"kind": "type-checking", "languages": ["typescript"]},
+    "jest": {"kind": "unit-tests", "languages": JS_TS},
+    "vitest": {"kind": "unit-tests", "languages": JS_TS},
+    "mocha": {"kind": "unit-tests", "languages": JS_TS},
+    "node-test": {"kind": "unit-tests", "languages": JS_TS},
+    "playwright": {"kind": "browser-tests", "languages": JS_TS},
+    "fast-check": {"kind": "property-tests", "languages": JS_TS},
+    "stryker": {"kind": "mutation-testing", "languages": JS_TS},
+    "npm-audit": {"kind": "dependency-audit", "languages": JS_TS},
+    "go-test": {"kind": "unit-tests", "languages": ["go"]},
+    "go-vet": {"kind": "linting", "languages": ["go"]},
+    "gofmt": {"kind": "formatting", "languages": ["go"]},
+    "golangci-lint": {"kind": "linting", "languages": ["go"]},
+    "staticcheck": {"kind": "linting", "languages": ["go"]},
+    "govulncheck": {"kind": "dependency-audit", "languages": ["go"]},
+    "cargo-test": {"kind": "unit-tests", "languages": ["rust"]},
+    "cargo-check": {"kind": "type-checking", "languages": ["rust"]},
+    "cargo-hack": {"kind": "version-matrix", "languages": ["rust"]},
+    "clippy": {"kind": "linting", "languages": ["rust"]},
+    "rustfmt": {"kind": "formatting", "languages": ["rust"]},
+    "miri": {"kind": "ub-detection", "languages": ["rust"]},
+    "loom": {"kind": "concurrency-model-checking", "languages": ["rust"]},
+    "kani": {"kind": "proofs", "languages": ["rust"]},
+    "proptest": {"kind": "property-tests", "languages": ["rust"]},
+    "cargo-fuzz": {"kind": "fuzzing", "languages": ["rust"]},
+    "cargo-mutants": {"kind": "mutation-testing", "languages": ["rust"]},
+    "cargo-deny": {"kind": "dependency-audit", "languages": ["rust"]},
+    "cargo-audit": {"kind": "dependency-audit", "languages": ["rust"]},
+    "shellcheck": {"kind": "linting", "languages": ["shell"]},
+    "actionlint": {"kind": "workflow-linting", "languages": ["yaml"]},
+    "zizmor": {"kind": "workflow-linting", "languages": ["yaml"]},
+    "tla-plus": {"kind": "proofs", "languages": [ANY_LANGUAGE]},
+    "coq": {"kind": "proofs", "languages": [ANY_LANGUAGE]},
+    "lean": {"kind": "proofs", "languages": [ANY_LANGUAGE]},
+    "dafny": {"kind": "proofs", "languages": [ANY_LANGUAGE]},
+    "codeql": {"kind": "security-scanning", "languages": [ANY_LANGUAGE]},
+    "semgrep": {"kind": "security-scanning", "languages": [ANY_LANGUAGE]},
+    "gitleaks": {"kind": "secret-scanning", "languages": [ANY_LANGUAGE]},
+    "codespell": {"kind": "spelling", "languages": [ANY_LANGUAGE]},
+    "pre-commit-hooks": {"kind": "file-hygiene", "languages": [ANY_LANGUAGE]},
+    "dependency-review": {"kind": "dependency-audit", "languages": [ANY_LANGUAGE]},
+    "ci-matrix": {"kind": "version-matrix", "languages": [ANY_LANGUAGE]},
+}
+
+# What the change touches -> the checks it calls for and the prompt topics that
+# cover what those checks miss. The first entry is the baseline for every change.
+# Every topic in the corpus must appear in exactly one entry (a test enforces it).
+CHANGES: list[dict] = [
+    {"slug": "every-change", "title": "Any change",
+     "kinds": ["formatting", "linting", "type-checking", "unit-tests"],
+     "topics": ["Code Style", "Naming Conventions"]},
+    {"slug": "security", "title": "Authentication, input handling, secrets, permissions",
+     "kinds": ["security-scanning", "secret-scanning", "dependency-audit"],
+     "topics": ["Security"]},
+    {"slug": "interfaces", "title": "Public APIs, signatures, error paths, nullability",
+     "kinds": ["type-checking", "unit-tests", "property-tests"],
+     "topics": ["API", "Error Handling", "Null Handling"]},
+    {"slug": "services", "title": "Service and framework code",
+     "kinds": ["unit-tests", "version-matrix"],
+     "topics": ["Fastify", "NestJS", "Spring", "Axum", "Celery", "Temporal"]},
+    {"slug": "algorithms", "title": "Algorithms, parsers, data transforms",
+     "kinds": ["property-tests", "fuzzing", "mutation-testing", "proofs"],
+     "topics": ["Algorithms"]},
+    {"slug": "concurrency", "title": "Threads, async code, locks, shared state",
+     "kinds": ["concurrency-model-checking", "ub-detection", "property-tests"],
+     "topics": ["Concurrency"]},
+    {"slug": "networking", "title": "Network calls, retries, timeouts, protocols",
+     "kinds": ["unit-tests", "fuzzing"],
+     "topics": ["Networking", "Axios"]},
+    {"slug": "ui", "title": "UI components and pages",
+     "kinds": ["browser-tests", "linting"],
+     "topics": ["React", "Next", "Next.js", "Vue", "Angular"]},
+    {"slug": "data", "title": "Databases, migrations, caching",
+     "kinds": ["unit-tests", "version-matrix"],
+     "topics": ["Database", "Migrations", "Caching"]},
+    {"slug": "performance", "title": "Hot paths and performance",
+     "kinds": [],
+     "topics": ["Performance Optimization"]},
+    {"slug": "ai", "title": "Model, prompt and LLM code",
+     "kinds": ["unit-tests"],
+     "topics": ["AI", "Pytorch"]},
+    {"slug": "observability", "title": "Logging, metrics, tracing",
+     "kinds": [],
+     "topics": ["Logging", "Observability"]},
+    {"slug": "ci-config", "title": "CI workflows and configuration files",
+     "kinds": ["workflow-linting", "file-hygiene"],
+     "topics": ["CI/CD", "Configurations"]},
+    {"slug": "dependencies", "title": "Dependencies and lockfiles",
+     "kinds": ["dependency-audit", "lockfile-check", "version-matrix"],
+     "topics": []},
+    {"slug": "tests", "title": "The tests themselves",
+     "kinds": ["mutation-testing", "version-matrix"],
+     "topics": ["Testing"]},
+    {"slug": "docs", "title": "Documentation and comments",
+     "kinds": ["docs-build", "spelling"],
+     "topics": ["Documentation"]},
+]
+CHANGE_SLUGS = [change["slug"] for change in CHANGES]
+PROMPTS_PER_CHANGE_PAGE = 5
+PROMPTS_PER_CHANGE_RAW = 12
+COMMANDS_PER_TOOL = 3
+EXAMPLE_REPOS = 6
+LANGUAGE_SHARE = 0.2
+
+
+def method_page_slug(method: str) -> str:
+    return METHOD_GUIDE[method]["slug"]
+
+
+def _scan_index(scans: dict[str, dict]) -> dict[str, dict]:
+    """Scans keyed by lowercase repository, the key every guide join uses."""
+    return {repo.lower(): scan for repo, scan in scans.items()}
+
+
+def repository_languages(entries: list[dict]) -> dict[str, set[str]]:
+    """Lowercase repository -> playbook languages it counts towards.
+
+    A repository counts towards a language when at least a fifth of its
+    instructions are written in it, or when it is the repository's most common
+    instruction language.
+    """
+    by_entry_language = {name: lang["slug"] for lang in LANGUAGES for name in lang["entry_languages"]}
+    counts: dict[str, Counter[str]] = defaultdict(Counter)
+    for entry in entries:
+        if entry["repository"] and entry["language"] in by_entry_language:
+            counts[entry["repository"].lower()][by_entry_language[entry["language"]]] += 1
+    totals = Counter(entry["repository"].lower() for entry in entries if entry["repository"])
+    result: dict[str, set[str]] = {}
+    for repo, counter in counts.items():
+        top = counter.most_common(1)[0][0]
+        result[repo] = {lang for lang, n in counter.items() if n >= LANGUAGE_SHARE * totals[repo]} | {top}
+    return result
+
+
+def tool_catalog(scans: dict[str, dict]) -> dict[str, dict]:
+    """Tool id -> profile merged with what the scans report about it."""
+    catalog: dict[str, dict] = {}
+    for scan in scans.values():
+        for check in scan["verifications"]:
+            tool = check["tool"]
+            if not tool or tool in catalog:
+                continue
+            profile = TOOL_PROFILES.get(tool)
+            if profile is None:
+                print(f"note: tool {tool!r} has no TOOL_PROFILES entry and is left out of the guide")
+                continue
+            catalog[tool] = {
+                "id": tool,
+                "method": check["method"],
+                "kind": profile["kind"],
+                "languages": profile["languages"],
+                "upstream": check["upstream"],
+                "docs": check["docs"],
+                "autofix": check["autofix"],
+                "exit_codes": check["exit_codes"],
+            }
+    return catalog
+
+
+def _indirect(command: str) -> bool:
+    """A command recorded as the hook or action that runs a tool, not something to type."""
+    return command.startswith(("pre-commit hook ", "uses ")) or command.endswith(" via environment")
+
+
+def _via(command: str) -> str:
+    """How an indirect command runs the tool, in words."""
+    if command.startswith("uses "):
+        return f"GitHub Action {command.removeprefix('uses ')}"
+    if command.startswith("pre-commit hook "):
+        return f"pre-commit hook {command.removeprefix('pre-commit hook ')}"
+    return command
+
+
+def _applies(tool: dict, language: str) -> bool:
+    return ANY_LANGUAGE in tool["languages"] or language in tool["languages"]
+
+
+def _tool_usage(tool_id: str, repos: list[str], index: dict[str, dict]) -> tuple[list[str], Counter[str], Counter[str]]:
+    """Repositories that run the tool, the commands they run and where."""
+    users: list[str] = []
+    commands: Counter[str] = Counter()
+    triggers: Counter[str] = Counter()
+    for repo in repos:
+        checks = [c for c in index[repo]["verifications"] if c["tool"] == tool_id]
+        if not checks:
+            continue
+        users.append(repo)
+        for check in checks:
+            commands.update({" ".join(command.split()) for command in check["commands"]})
+            triggers.update(check["triggers"])
+    return users, commands, triggers
+
+
+def _repo_name(repo: str, index: dict[str, dict]) -> dict:
+    scan = index[repo]
+    return {"repository": scan["repository"], "slug": scan["slug"]}
+
+
+def build_tool_rows(catalog: dict[str, dict], repos: list[str], index: dict[str, dict], stars: dict[str, int],
+                    language: str | None) -> list[dict]:
+    rows = []
+    for tool in catalog.values():
+        if language and not _applies(tool, language):
+            continue
+        users, commands, triggers = _tool_usage(tool["id"], repos, index)
+        if not users:
+            continue
+        users.sort(key=lambda repo: stars.get(repo, 0), reverse=True)
+        runnable = [command for command, _ in commands.most_common() if not _indirect(command)]
+        indirect = [command for command, _ in commands.most_common() if _indirect(command)]
+        rows.append(
+            {
+                **tool,
+                "repos": len(users),
+                "share": round(100 * len(users) / len(repos)) if repos else 0,
+                "commands": [
+                    command
+                    for command, _ in sorted(commands.items(), key=lambda item: (_indirect(item[0]), -item[1], item[0]))
+                ][:COMMANDS_PER_TOOL],
+                "run": runnable[0] if runnable else None,
+                "via": _via(indirect[0]) if indirect else None,
+                "triggers": [trigger for trigger in VERIFICATION_TRIGGERS if triggers[trigger]],
+                "examples": [_repo_name(repo, index) for repo in users[:EXAMPLE_REPOS]],
+            }
+        )
+    rows.sort(key=lambda row: (-row["repos"], row["id"]))
+    return rows
+
+
+COMPILER_NOTE = "The compiler type-checks on every build and test run; a failing build is this check failing."
+
+
+def _kind_rows(tools: list[dict], kinds: list[str], compiled: bool = False) -> list[dict]:
+    titles = {k["slug"]: k for k in CHECK_KINDS}
+    rows = []
+    for kind in kinds:
+        options = [tool for tool in tools if tool["kind"] == kind]
+        rows.append(
+            {
+                "kind": kind,
+                "title": titles[kind]["title"],
+                "method": titles[kind]["method"],
+                "method_slug": method_page_slug(titles[kind]["method"]),
+                "catches": titles[kind]["catches"],
+                "tool": options[0] if options else None,
+                "alternatives": [{"id": t["id"], "repos": t["repos"], "share": t["share"]} for t in options[1:4]],
+                "note": COMPILER_NOTE if compiled and kind == "type-checking" and not options else None,
+            }
+        )
+    return rows
+
+
+def _prompt_rows(entries: list[dict], topics: list[str], limit: int) -> tuple[list[dict], int]:
+    matching = [e for e in entries if e["topic"] in topics]
+    matching.sort(key=lambda e: (e["comments"], e["updated"]), reverse=True)
+    return [entry_row(e) for e in matching[:limit]], len(matching)
+
+
+def build_playbooks(entries: list[dict], scans: dict[str, dict]) -> list[dict]:
+    index = _scan_index(scans)
+    catalog = tool_catalog(scans)
+    languages_of = repository_languages(entries)
+    stars: dict[str, int] = {}
+    for entry in entries:
+        repo = entry["repository"].lower()
+        stars[repo] = max(stars.get(repo, 0), entry["stars"])
+
+    playbooks = []
+    for language in LANGUAGES:
+        slug = language["slug"]
+        lang_entries = [e for e in entries if e["language"] in language["entry_languages"]]
+        if not lang_entries:
+            continue
+        repos = sorted(repo for repo, langs in languages_of.items() if slug in langs and repo in index)
+        tools = build_tool_rows(catalog, repos, index, stars, slug)
+        changes = []
+        for change in CHANGES:
+            prompts, total = _prompt_rows(lang_entries, change["topics"], PROMPTS_PER_CHANGE_RAW)
+            changes.append(
+                {
+                    "slug": change["slug"],
+                    "title": change["title"],
+                    "topics": change["topics"],
+                    "checks": _kind_rows(tools, change["kinds"], language.get("compiled", False)),
+                    "prompts": prompts,
+                    "prompts_shown": prompts[:PROMPTS_PER_CHANGE_PAGE],
+                    "prompt_count": total,
+                }
+            )
+        repos.sort(key=lambda repo: stars.get(repo, 0), reverse=True)
+        playbooks.append(
+            {
+                "slug": slug,
+                "title": language["title"],
+                "extensions": language["extensions"],
+                "entry_languages": language["entry_languages"],
+                "prompts": len(lang_entries),
+                "repos": len(repos),
+                "sample": [
+                    {**_repo_name(repo, index), "checks": sum(1 for c in index[repo]["verifications"] if c["tool"])}
+                    for repo in repos
+                ],
+                "tools": tools,
+                "baseline": changes[0],
+                "changes": changes[1:],
+                "headline": [row["tool"]["id"] for row in changes[0]["checks"] if row["tool"]],
+                "raw_md": f"{SITE_URL}/raw/verify/{slug}.md",
+                "raw_json": f"{SITE_URL}/raw/verify/{slug}.json",
+                "url": f"{SITE_URL}/verify/{slug}/",
+            }
+        )
+    return playbooks
+
+
+def build_methods(entries: list[dict], scans: dict[str, dict]) -> list[dict]:
+    index = _scan_index(scans)
+    catalog = tool_catalog(scans)
+    stars: dict[str, int] = {}
+    for entry in entries:
+        repo = entry["repository"].lower()
+        stars[repo] = max(stars.get(repo, 0), entry["stars"])
+    repos = sorted(index)
+    tools = build_tool_rows(catalog, repos, index, stars, None)
+    using = {
+        method: {repo for repo in repos if any(c["method"] == method and c["tool"] for c in index[repo]["verifications"])}
+        for method in GUIDE_METHODS
+    }
+    titles = {m["slug"]: m["title"] for m in VERIFICATION_METHODS}
+    methods = []
+    for method in GUIDE_METHODS:
+        kinds = []
+        for kind in (k for k in CHECK_KINDS if k["method"] == method):
+            kind_tools = [tool for tool in tools if tool["kind"] == kind["slug"]]
+            kinds.append(
+                {
+                    **kind,
+                    "tools": kind_tools,
+                    "changes": [{"slug": c["slug"], "title": c["title"]} for c in CHANGES if kind["slug"] in c["kinds"]],
+                }
+            )
+        methods.append(
+            {
+                "method": method,
+                "slug": method_page_slug(method),
+                "title": titles[method],
+                **{key: METHOD_GUIDE[method][key] for key in ("summary", "when")},
+                "repos": len(using[method]),
+                "share": round(100 * len(using[method]) / len(repos)) if repos else 0,
+                "kinds": kinds,
+                "tools": len([tool for tool in tools if tool["method"] == method]),
+            }
+        )
+    return methods
+
+
+def build_source_pages(entries: list[dict], scans: dict[str, dict]) -> dict[str, dict]:
+    """One page per source repository, keyed by its slug: checks and prompts."""
+    index = _scan_index(scans)
+    catalog = tool_catalog(scans)
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for entry in entries:
+        if entry["repository"]:
+            grouped[repository_slug(entry["repository"])].append(entry)
+    titles = {m["slug"]: m["title"] for m in VERIFICATION_METHODS}
+    kind_titles = {k["slug"]: k["title"] for k in CHECK_KINDS}
+    pages = {}
+    for slug, group in grouped.items():
+        names = Counter(e["repository"] for e in group)
+        scan = index.get(group[0]["repository"].lower())
+        repository = scan["repository"] if scan else names.most_common(1)[0][0]
+        methods = []
+        other: list[str] = []
+        if scan:
+            for method in GUIDE_METHODS:
+                checks = [
+                    {
+                        "tool": c["tool"],
+                        "kind": kind_titles.get(catalog.get(c["tool"], {}).get("kind", ""), ""),
+                        "commands": c["commands"][:COMMANDS_PER_TOOL],
+                        "triggers": c["triggers"],
+                        "evidence": list(dict.fromkeys(e["path"] for e in c["evidence"]))[:4],
+                        "docs": c["docs"] or c["upstream"],
+                        "declared_only": c["declared_only"],
+                    }
+                    for c in scan["verifications"]
+                    if c["method"] == method and c["tool"]
+                ]
+                if checks:
+                    methods.append({"method": method, "slug": method_page_slug(method), "title": titles[method], "checks": checks})
+            other = [c["commands"][0] for c in scan["verifications"] if not c["tool"] and c["commands"]][:40]
+        group.sort(key=lambda e: (e["comments"], e["updated"]), reverse=True)
+        pages[slug] = {
+            "slug": slug,
+            "repository": repository,
+            "ref": scan["ref"] if scan else None,
+            "stars": max(e["stars"] for e in group),
+            "domain": Counter(e["domain"] for e in group).most_common(1)[0][0],
+            "updated": max((e["updated"] for e in group), default=""),
+            "tools": sorted({c["tool"] for m in methods for c in m["checks"]}),
+            "methods": methods,
+            "other": other,
+            "other_count": sum(1 for c in scan["verifications"] if not c["tool"]) if scan else 0,
+            "entries": [entry_row(e) for e in group],
+        }
+    return pages
+
+
+def build_domain_checks(entries: list[dict], scans: dict[str, dict], limit: int = 8) -> dict[str, list[dict]]:
+    """Domain slug -> the tools most of its scanned repositories run."""
+    index = _scan_index(scans)
+    repos_by_domain: dict[str, set[str]] = defaultdict(set)
+    for entry in entries:
+        if entry["repository"].lower() in index:
+            repos_by_domain[entry["domain"]].add(entry["repository"].lower())
+    result = {}
+    for domain, repos in repos_by_domain.items():
+        counts = Counter(tool for repo in repos for tool in {c["tool"] for c in index[repo]["verifications"] if c["tool"]})
+        result[domain] = [
+            {"tool": tool, "repos": n, "share": round(100 * n / len(repos))} for tool, n in counts.most_common(limit)
+        ]
+    return result
+
+
+def language_for_entry(entry: dict) -> str | None:
+    for language in LANGUAGES:
+        if entry["language"] in language["entry_languages"]:
+            return language["slug"]
+    return None
+
+
+def _md_exit_codes(codes: dict[str, str]) -> str:
+    return "; ".join(f"`{code}` {meaning}" for code, meaning in codes.items())
+
+
+def build_playbook_markdown(playbook: dict) -> str:
+    """The playbook an agent loads before it verifies a change in this language."""
+    lines = [
+        f"# Verifying {playbook['title']} changes",
+        "",
+        f"Files: {', '.join(f'`{ext}`' for ext in playbook['extensions'])}. "
+        f"Derived from {playbook['repos']} scanned source repositories and {playbook['prompts']} review prompts "
+        f"on {SITE_URL}. Page: {playbook['url']}",
+        "",
+        "How to use this: run every check under *Run on every change*. Then, for each section under *Add when "
+        "the change touches* that describes your diff, run its checks too. Checks catch what a tool can find; "
+        "then apply the listed review prompts for what tools miss (fetch each prompt's raw URL).",
+        "",
+        "Usage is the share of scanned repositories in this language that run the tool. A missing tool means no "
+        "scanned repository runs one the scanner recognises: fall back to the prompts.",
+        "",
+    ]
+
+    def check_lines(rows: list[dict]) -> list[str]:
+        out = []
+        for row in rows:
+            tool = row["tool"]
+            if not tool:
+                detail = row["note"] or f"no tool detected in the sample. Catches: {row['catches']}"
+                out.append(f"- **{row['title']}** — {detail}")
+                continue
+            if tool["run"]:
+                command = f" Command seen: `{tool['run']}`."
+            elif tool["via"]:
+                command = f" Runs via {tool['via']}."
+            else:
+                command = ""
+            fix = " Autofixes." if tool["autofix"] else ""
+            codes = f" Exit codes: {_md_exit_codes(tool['exit_codes'])}." if tool["exit_codes"] else ""
+            docs = f" Docs: {tool['docs'] or tool['upstream']}" if (tool["docs"] or tool["upstream"]) else ""
+            alternatives = ", ".join(f"{a['id']} ({a['share']}%)" for a in row["alternatives"])
+            alt = f" Alternatives: {alternatives}." if alternatives else ""
+            out.append(
+                f"- **{row['title']}**: `{tool['id']}` ({tool['share']}% of repos).{command}{fix}{codes}{alt}{docs}"
+            )
+        return out
+
+    def prompt_lines(change: dict) -> list[str]:
+        if not change["prompts"]:
+            return []
+        out = ["", f"Review prompts ({change['prompt_count']} in total, most discussed first):", ""]
+        out += [
+            f"- [{p['title']}]({SITE_URL}/raw/{p['slug']}.md) — {p['repository']}, {p['topic']}"
+            for p in change["prompts"]
+        ]
+        return out
+
+    baseline = playbook["baseline"]
+    lines += ["## Run on every change", "", *check_lines(baseline["checks"]), *prompt_lines(baseline), ""]
+    lines += ["## Add when the change touches", ""]
+    for change in playbook["changes"]:
+        if not change["checks"] and not change["prompts"]:
+            continue
+        lines += [f"### {change['title']}", ""]
+        lines += check_lines(change["checks"]) or ["- No tool-based check applies; rely on the prompts."]
+        lines += [*prompt_lines(change), ""]
+    if playbook["sample"]:
+        lines += [
+            "## Source repositories",
+            "",
+            ", ".join(f"[{r['repository']}]({SITE_URL}/sources/{r['slug']}/)" for r in playbook["sample"]),
+            "",
+        ]
+    return "\n".join(lines)
+
+
+def strip_playbook(playbook: dict) -> dict:
+    """The JSON form of a playbook: no page-only fields."""
+    def change(c: dict) -> dict:
+        return {key: value for key, value in c.items() if key != "prompts_shown"} | {
+            "prompts": [{**p, "raw": f"{SITE_URL}/raw/{p['slug']}.md"} for p in c["prompts"]]
+        }
+
+    return {
+        **{key: value for key, value in playbook.items() if key not in ("baseline", "changes")},
+        "baseline": change(playbook["baseline"]),
+        "changes": [change(c) for c in playbook["changes"]],
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Writers
 # --------------------------------------------------------------------------- #
 
@@ -632,6 +1302,7 @@ def build_sources(entries: list[dict], verifications: dict[str, dict] | None = N
             "reviewers": len({author for e in group for author in e["authors"]}),
             "checks": len(verifications[repo]["verifications"]) if repo in verifications else None,
             "checks_url": f"/raw/verifications/{verifications[repo]['slug']}.json" if repo in verifications else None,
+            "page": repository_slug(repo),
         }
         for repo, group in grouped.items()
     ]
@@ -677,7 +1348,7 @@ def entry_row(entry: dict) -> dict:
     }
 
 
-def build_site_overview(entries: list[dict], domains: list[dict]) -> str:
+def build_site_overview(entries: list[dict], domains: list[dict], playbooks: list[dict] | None = None) -> str:
     """The homepage as markdown: what this is, where everything is, one screen.
 
     `llms.txt` lists all 5k instructions, which is the wrong thing to hand an
@@ -687,9 +1358,11 @@ def build_site_overview(entries: list[dict], domains: list[dict]) -> str:
     lines = [
         "# Awesome Reviewers",
         "",
-        "Expert engineering instructions for AI and infrastructure domains, distilled from code",
-        "review discussions in production open-source repositories. Each instruction is a",
-        "self-contained set of rules you can drop into an agent, harness or context broker as-is.",
+        "Which checks to run on the code you are writing, and the review prompts for what those",
+        "checks miss. Checks come from the CI workflows, pre-commit hooks and task runners of",
+        "production open-source repositories; prompts are distilled from their code review",
+        "discussions. Map a changed file to a language, load that language's playbook, run its",
+        f"checks, then apply its prompts. Start at {SITE_URL}/raw/verify/index.json.",
         "",
         f"{len(entries)} instructions from "
         f"{len({e['repository'] for e in entries if e['repository']})} repositories, "
@@ -704,6 +1377,14 @@ def build_site_overview(entries: list[dict], domains: list[dict]) -> str:
             f"- [{resource['name']}]({SITE_URL}{resource['path']}) "
             f"({resource['media_type']}) — {resource['description']}"
         )
+
+    if playbooks:
+        lines += ["", "## Verification playbooks", "", "| Language | Baseline checks | Playbook |", "| --- | --- | --- |"]
+        for playbook in playbooks:
+            lines.append(
+                f"| {playbook['title']} | {', '.join(playbook['headline']) or '-'} | "
+                f"[{playbook['slug']}.md]({playbook['raw_md']}) |"
+            )
 
     lines += [
         "",
@@ -732,7 +1413,7 @@ def build_site_overview(entries: list[dict], domains: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def write_raw(entries: list[dict], domains: list[dict]) -> None:
+def write_raw(entries: list[dict], domains: list[dict], playbooks: list[dict] | None = None) -> None:
     if RAW_DIR.exists():
         shutil.rmtree(RAW_DIR)
     (RAW_DIR / "bundles").mkdir(parents=True)
@@ -743,7 +1424,7 @@ def write_raw(entries: list[dict], domains: list[dict]) -> None:
             f"{RAW_DIR}/{SITE_OVERVIEW_SLUG}.md; rename the instruction"
         )
     (RAW_DIR / f"{SITE_OVERVIEW_SLUG}.md").write_text(
-        build_site_overview(entries, domains), encoding="utf-8"
+        build_site_overview(entries, domains, playbooks), encoding="utf-8"
     )
 
     titles = {d["slug"]: d["title"] for d in DOMAINS}
@@ -846,6 +1527,92 @@ def write_verifications(scans: dict[str, dict]) -> None:
     print(f"  wrote {len(scans)} verification scans")
 
 
+def write_guide(playbooks: list[dict], methods: list[dict], source_pages: dict[str, dict]) -> None:
+    """Data and stub pages for /verify/, /methods/ and /sources/<repository>/, plus /raw/verify/."""
+    extensions = {ext: p["slug"] for p in playbooks for ext in p["extensions"]}
+    write_json(
+        DATA_DIR / "verify.json",
+        {
+            "languages": playbooks,
+            "methods": methods,
+            "kinds": CHECK_KINDS,
+            "changes": [{"slug": c["slug"], "title": c["title"], "kinds": c["kinds"], "topics": c["topics"]} for c in CHANGES],
+            "extensions": extensions,
+            "scanned": len({page["repository"].lower() for page in source_pages.values() if page["ref"]}),
+        },
+    )
+    write_json(DATA_DIR / "source_pages.json", source_pages)
+
+    directory = RAW_DIR / "verify"
+    directory.mkdir(parents=True, exist_ok=True)
+    for playbook in playbooks:
+        (directory / f"{playbook['slug']}.md").write_text(build_playbook_markdown(playbook), encoding="utf-8")
+        write_json(directory / f"{playbook['slug']}.json", strip_playbook(playbook))
+    write_json(
+        directory / "index.json",
+        {
+            "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "how_to_use": (
+                "Map each changed file to a language with `extensions`, fetch that language's playbook, run "
+                "the baseline checks, add the checks for every change kind the diff touches, then apply the "
+                "listed review prompts."
+            ),
+            "extensions": extensions,
+            "languages": [
+                {
+                    "slug": p["slug"],
+                    "title": p["title"],
+                    "extensions": p["extensions"],
+                    "repos": p["repos"],
+                    "prompts": p["prompts"],
+                    "baseline": p["headline"],
+                    "markdown": p["raw_md"],
+                    "json": p["raw_json"],
+                }
+                for p in playbooks
+            ],
+            "changes": [{"slug": c["slug"], "title": c["title"], "kinds": c["kinds"], "topics": c["topics"]} for c in CHANGES],
+            "kinds": CHECK_KINDS,
+            "methods": [
+                {key: m[key] for key in ("method", "slug", "title", "summary", "when", "repos", "share")} for m in methods
+            ],
+        },
+    )
+
+    stubs = {
+        Path("verify"): [
+            ("language", "verify", p["slug"], f"Verifying {p['title']} changes",
+             f"Which checks to run on {p['title']} code, from the source repositories that run them, "
+             "and the review prompts for what those checks miss.")
+            for p in playbooks
+        ],
+        Path("methods"): [
+            ("method", "method", m["slug"], m["title"], m["summary"]) for m in methods
+        ],
+        Path("sources"): [
+            ("source", "source", page["slug"], page["repository"],
+             f"The checks {page['repository']} runs and the review prompts derived from it.")
+            for page in source_pages.values()
+        ],
+    }
+    for directory_path, pages in stubs.items():
+        directory_path.mkdir(exist_ok=True)
+        for stale in directory_path.glob("*.html"):
+            stale.unlink()
+        for layout, key, slug, title, description in pages:
+            (directory_path / f"{slug}.html").write_text(
+                "---\n"
+                f"layout: {layout}\n"
+                f"{key}: {slug}\n"
+                f"title: {json.dumps(title)}\n"
+                f"permalink: /{directory_path.name}/{slug}/\n"
+                f"description: {json.dumps(description)}\n"
+                "---\n",
+                encoding="utf-8",
+            )
+    print(f"  wrote {len(playbooks)} playbooks, {len(methods)} method pages, {len(source_pages)} source pages")
+
+
 def write_search(entries: list[dict]) -> None:
     """Compact column-oriented index, fetched on the first keystroke.
 
@@ -930,6 +1697,30 @@ DEV_RESOURCES: list[dict] = [
         "path": "/raw/site.md",
         "media_type": "text/markdown",
         "description": "The homepage as markdown: what this is, the endpoints, the domains.",
+    },
+    {
+        "name": "Verification playbooks index",
+        "path": "/raw/verify/index.json",
+        "media_type": "application/json",
+        "description": (
+            "Start here to verify a change: file extension -> language, the playbook URL per language, "
+            "the change kinds, check kinds and verification methods."
+        ),
+    },
+    {
+        "name": "Verification playbook",
+        "path": "/raw/verify/<language>.md",
+        "media_type": "text/markdown",
+        "description": (
+            "Which checks to run on code in one language: the tool most source repositories run per check kind, "
+            "the command, exit codes, autofix, then the review prompts per kind of change."
+        ),
+    },
+    {
+        "name": "Verification playbook (JSON)",
+        "path": "/raw/verify/<language>.json",
+        "media_type": "application/json",
+        "description": "The same playbook as structured data, with every candidate tool and its usage share.",
     },
     {
         "name": "Corpus index",
@@ -1035,6 +1826,16 @@ def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dic
     """
     example_slug = entries[0]["slug"] if entries else "example-instruction"
     domain_slugs = [d["slug"] for d in domains]
+    present = {language_for_entry(e) for e in entries}
+    language_slugs = [slug for slug in LANGUAGE_SLUGS if slug in present]
+    language_parameter = {
+        "name": "language",
+        "in": "path",
+        "required": True,
+        "description": "Playbook language slug. `/raw/verify/index.json` maps file extensions to it.",
+        "schema": {"type": "string", "enum": language_slugs},
+        "example": language_slugs[0] if language_slugs else "python",
+    }
     problems = build_problems()
 
     def error_response(status: int) -> dict:
@@ -1111,6 +1912,10 @@ def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dic
             {
                 "name": "verifications",
                 "description": "The checks each source repository runs: linters, type checkers, tests, proofs.",
+            },
+            {
+                "name": "playbooks",
+                "description": "Which checks to run on code in a given language, and the prompts for what they miss.",
             },
         ],
         "paths": {
@@ -1192,6 +1997,67 @@ def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dic
                         "200": markdown_response("The domain bundle"),
                         "404": error_response(404),
                         "406": error_response(406),
+                    },
+                }
+            },
+            "/raw/verify/index.json": {
+                "get": {
+                    "operationId": "getPlaybooksIndex",
+                    "summary": "Entry point for verifying a change",
+                    "description": (
+                        "File extension -> language, one row per language with its playbook URLs and "
+                        "baseline tools, the change kinds with the check kinds each one calls for, the "
+                        "check kinds and the verification methods."
+                    ),
+                    "tags": ["playbooks", "indexes"],
+                    "responses": {
+                        "200": {
+                            "description": "The playbooks index",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/PlaybooksIndex"}
+                                }
+                            },
+                        },
+                        "404": error_response(404),
+                    },
+                }
+            },
+            "/raw/verify/{language}.md": {
+                "get": {
+                    "operationId": "getPlaybook",
+                    "summary": "The verification playbook for one language, as markdown",
+                    "description": (
+                        "Checks to run on every change, then checks and review prompts per kind of change. "
+                        "Each check names the tool most scanned repositories in this language run, its "
+                        "share, a command seen in those repositories, its exit codes and whether it autofixes."
+                    ),
+                    "tags": ["playbooks"],
+                    "parameters": [language_parameter],
+                    "responses": {
+                        "200": markdown_response("The playbook"),
+                        "404": error_response(404),
+                        "406": error_response(406),
+                    },
+                }
+            },
+            "/raw/verify/{language}.json": {
+                "get": {
+                    "operationId": "getPlaybookData",
+                    "summary": "The verification playbook for one language, as JSON",
+                    "description": "The playbook with every candidate tool, its share and example repositories.",
+                    "tags": ["playbooks"],
+                    "parameters": [language_parameter],
+                    "responses": {
+                        "200": {
+                            "description": "The playbook",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/Playbook"}
+                                }
+                            },
+                        },
+                        "404": error_response(404),
                     },
                 }
             },
@@ -1517,6 +2383,128 @@ def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dic
                         },
                     },
                 },
+                "PlaybooksIndex": {
+                    "type": "object",
+                    "required": ["generated", "extensions", "languages", "changes", "kinds", "methods"],
+                    "properties": {
+                        "generated": {"type": "string", "format": "date-time"},
+                        "how_to_use": {"type": "string"},
+                        "extensions": {
+                            "type": "object",
+                            "description": "File extension (or file name, e.g. Dockerfile) -> language slug.",
+                            "additionalProperties": {"type": "string", "enum": language_slugs},
+                        },
+                        "languages": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["slug", "title", "extensions", "markdown", "json"],
+                                "properties": {
+                                    "slug": {"type": "string", "enum": language_slugs},
+                                    "title": {"type": "string"},
+                                    "extensions": {"type": "array", "items": {"type": "string"}},
+                                    "repos": {"type": "integer", "minimum": 0},
+                                    "prompts": {"type": "integer", "minimum": 0},
+                                    "baseline": {
+                                        "type": "array",
+                                        "description": "Tools recommended for every change.",
+                                        "items": {"type": "string"},
+                                    },
+                                    "markdown": {"type": "string", "format": "uri"},
+                                    "json": {"type": "string", "format": "uri"},
+                                },
+                            },
+                        },
+                        "changes": {"type": "array", "items": {"$ref": "#/components/schemas/ChangeKind"}},
+                        "kinds": {"type": "array", "items": {"$ref": "#/components/schemas/CheckKind"}},
+                        "methods": {"type": "array", "items": {"type": "object"}},
+                    },
+                },
+                "ChangeKind": {
+                    "type": "object",
+                    "description": "What a change touches, the check kinds it calls for and the prompt topics that cover it.",
+                    "required": ["slug", "title", "kinds", "topics"],
+                    "properties": {
+                        "slug": {"type": "string", "enum": CHANGE_SLUGS},
+                        "title": {"type": "string"},
+                        "kinds": {"type": "array", "items": {"type": "string", "enum": CHECK_KIND_SLUGS}},
+                        "topics": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+                "CheckKind": {
+                    "type": "object",
+                    "required": ["slug", "title", "method", "catches"],
+                    "properties": {
+                        "slug": {"type": "string", "enum": CHECK_KIND_SLUGS},
+                        "title": {"type": "string"},
+                        "method": {"type": "string", "enum": VERIFICATION_METHOD_SLUGS},
+                        "catches": {"type": "string"},
+                    },
+                },
+                "Tool": {
+                    "type": "object",
+                    "required": ["id", "method", "kind", "repos", "share"],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "method": {"type": "string", "enum": VERIFICATION_METHOD_SLUGS},
+                        "kind": {"type": "string", "enum": CHECK_KIND_SLUGS},
+                        "languages": {"type": "array", "items": {"type": "string"}},
+                        "repos": {"type": "integer", "minimum": 0, "description": "Scanned repositories that run it."},
+                        "share": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 100,
+                            "description": "Percent of the scanned repositories in scope that run it.",
+                        },
+                        "commands": {"type": "array", "items": {"type": "string"}},
+                        "triggers": {"type": "array", "items": {"type": "string", "enum": VERIFICATION_TRIGGERS}},
+                        "autofix": {"type": "boolean"},
+                        "exit_codes": {"type": "object", "additionalProperties": {"type": "string"}},
+                        "docs": {"type": ["string", "null"], "format": "uri"},
+                        "upstream": {"type": ["string", "null"], "format": "uri"},
+                    },
+                },
+                "Playbook": {
+                    "type": "object",
+                    "required": ["slug", "title", "extensions", "tools", "baseline", "changes"],
+                    "properties": {
+                        "slug": {"type": "string", "enum": language_slugs},
+                        "title": {"type": "string"},
+                        "extensions": {"type": "array", "items": {"type": "string"}},
+                        "repos": {"type": "integer", "minimum": 0},
+                        "prompts": {"type": "integer", "minimum": 0},
+                        "tools": {"type": "array", "items": {"$ref": "#/components/schemas/Tool"}},
+                        "baseline": {"$ref": "#/components/schemas/PlaybookSection"},
+                        "changes": {"type": "array", "items": {"$ref": "#/components/schemas/PlaybookSection"}},
+                    },
+                },
+                "PlaybookSection": {
+                    "type": "object",
+                    "required": ["slug", "title", "checks", "prompts"],
+                    "properties": {
+                        "slug": {"type": "string", "enum": CHANGE_SLUGS},
+                        "title": {"type": "string"},
+                        "topics": {"type": "array", "items": {"type": "string"}},
+                        "checks": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["kind", "title", "tool"],
+                                "properties": {
+                                    "kind": {"type": "string", "enum": CHECK_KIND_SLUGS},
+                                    "title": {"type": "string"},
+                                    "catches": {"type": "string"},
+                                    "tool": {
+                                        "description": "The most-run tool for this check, or null when none was detected.",
+                                        "oneOf": [{"$ref": "#/components/schemas/Tool"}, {"type": "null"}],
+                                    },
+                                },
+                            },
+                        },
+                        "prompts": {"type": "array", "items": {"$ref": "#/components/schemas/Entry"}},
+                        "prompt_count": {"type": "integer", "minimum": 0},
+                    },
+                },
                 "VerificationsIndex": {
                     "type": "object",
                     "required": ["generated", "count", "methods", "repositories"],
@@ -1623,7 +2611,7 @@ def write_api_data(version: str) -> None:
     )
 
 
-def build_llms(entries: list[dict], domains: list[dict]) -> list[str]:
+def build_llms(entries: list[dict], domains: list[dict], playbooks: list[dict] | None = None) -> list[str]:
     grouped: dict[str, list[dict]] = defaultdict(list)
     for entry in entries:
         grouped[entry["domain"]].append(entry)
@@ -1631,10 +2619,12 @@ def build_llms(entries: list[dict], domains: list[dict]) -> list[str]:
     lines = [
         "# Awesome Reviewers",
         "",
-        "Expert engineering instructions for AI and infrastructure domains, derived from",
-        "code review discussions in production open-source repositories. Each instruction",
-        "is a self-contained set of rules you can drop into an agent, harness or context",
-        "broker as-is.",
+        "Which checks to run on the code you are writing, and the review prompts for what those",
+        "checks miss. Checks come from the CI workflows, pre-commit hooks and task runners of",
+        "production open-source repositories; prompts are derived from their code review",
+        "discussions. To verify a change: map each changed file to a language with",
+        f"{SITE_URL}/raw/verify/index.json, load that language's playbook, run its checks,",
+        "then apply its prompts.",
         "",
         f"Corpus: {len(entries)} instructions across {len(domains)} domains.",
         f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
@@ -1665,11 +2655,21 @@ def build_llms(entries: list[dict], domains: list[dict]) -> list[str]:
     lines += [
         "",
         "Markdown variants: an instruction page at /reviewers/<slug>/ is also published as",
-        f"{SITE_URL}/raw/<slug>.md, and a domain page at /domains/<domain>/ as",
-        f"{SITE_URL}/raw/bundles/<domain>.md. Each HTML page links its markdown variant with",
+        f"{SITE_URL}/raw/<slug>.md, a domain page at /domains/<domain>/ as",
+        f"{SITE_URL}/raw/bundles/<domain>.md, and a playbook page at /verify/<language>/ as",
+        f"{SITE_URL}/raw/verify/<language>.md. Each HTML page links its markdown variant with",
         "<link rel=\"alternate\" type=\"text/markdown\">.",
         "",
     ]
+
+    if playbooks:
+        lines += ["## Verification playbooks", ""]
+        for playbook in playbooks:
+            lines.append(
+                f"- [{playbook['title']}]({playbook['raw_md']}) — files {', '.join(playbook['extensions'])}; "
+                f"baseline: {', '.join(playbook['headline']) or 'no tool detected'}"
+            )
+        lines.append("")
 
     for domain in domains:
         lines += [
@@ -1690,8 +2690,8 @@ def build_llms(entries: list[dict], domains: list[dict]) -> list[str]:
     return lines
 
 
-def write_llms(entries: list[dict], domains: list[dict]) -> None:
-    LLMS_PATH.write_text("\n".join(build_llms(entries, domains)) + "\n", encoding="utf-8")
+def write_llms(entries: list[dict], domains: list[dict], playbooks: list[dict] | None = None) -> None:
+    LLMS_PATH.write_text("\n".join(build_llms(entries, domains, playbooks)) + "\n", encoding="utf-8")
     print(f"  wrote {LLMS_PATH} ({LLMS_PATH.stat().st_size / 1024:.0f} KB)")
 
 
@@ -1706,6 +2706,26 @@ def main() -> None:
     verifications = read_verifications()
     entries.sort(key=lambda e: (e["updated"], e["comments"]), reverse=True)
     domains = build_domains(entries)
+    domain_checks = build_domain_checks(entries, verifications)
+    for domain in domains:
+        domain["checks"] = domain_checks.get(domain["slug"], [])
+    playbooks = build_playbooks(entries, verifications)
+    methods = build_methods(entries, verifications)
+    source_pages = build_source_pages(entries, verifications)
+    playbook_by_slug = {p["slug"]: p for p in playbooks}
+
+    def verify_meta(entry: dict) -> dict:
+        # Precomputed so the instruction layout, rendered once per entry, does no lookups.
+        playbook = playbook_by_slug.get(language_for_entry(entry) or "")
+        page = source_pages.get(repository_slug(entry["repository"])) if entry["repository"] else None
+        return {
+            "verify": playbook["slug"] if playbook else None,
+            "verify_title": playbook["title"] if playbook else None,
+            "verify_tools": playbook["headline"] if playbook else [],
+            "source": page["slug"] if page else None,
+            "source_tools": page["tools"] if page and page["ref"] else None,
+        }
+
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     print(f"corpus: {len(entries)} instructions, {len(domains)} domains")
@@ -1730,6 +2750,7 @@ def main() -> None:
                 "first_seen": e["first_seen"],
                 "discussions": e["discussions"],
                 "reviewers": e["authors"][:12],
+                **verify_meta(e),
             }
             for e in entries
         },
@@ -1744,9 +2765,10 @@ def main() -> None:
     )
     write_search(entries)
     write_domain_pages(domains)
-    write_raw(entries, domains)
+    write_raw(entries, domains, playbooks)
     write_verifications(verifications)
-    write_llms(entries, domains)
+    write_guide(playbooks, methods, source_pages)
+    write_llms(entries, domains, playbooks)
     # The corpus date, not the build date: the description only changes when the
     # thing it describes does.
     version = max(e["updated"] for e in entries)

@@ -132,6 +132,8 @@ class OpenAPIDocument(unittest.TestCase):
             "/raw/bundles/<domain>.md": "/raw/bundles/{domain}.md",
             "/<slug>.json": "/{slug}.json",
             "/raw/verifications/<repository>.json": "/raw/verifications/{repository}.json",
+            "/raw/verify/<language>.md": "/raw/verify/{language}.md",
+            "/raw/verify/<language>.json": "/raw/verify/{language}.json",
         }
         self.assertIn("/raw/site.md", described)
         for resource in build_data.DEV_RESOURCES:
@@ -284,7 +286,7 @@ class NotFoundPage(unittest.TestCase):
         self.assertIn("permalink: /404.html", self.source)
 
     def test_points_at_every_index(self):
-        for target in ("/raw/index.json", "/llms.txt", "/openapi.json", "/sitemap.xml", "/api/"):
+        for target in ("/raw/verify/index.json", "/raw/index.json", "/llms.txt", "/openapi.json", "/sitemap.xml", "/api/"):
             with self.subTest(target=target):
                 self.assertIn(target, self.source)
 
@@ -311,11 +313,20 @@ class DiscoveryLinks(unittest.TestCase):
         self.assertIn('rel="alternate" type="text/markdown"', self.base)
         self.assertIn("'/raw/' | append: page.slug | append: '.md'", self.base)
         self.assertIn("'/raw/bundles/' | append: page.domain | append: '.md'", self.base)
+        self.assertIn("'/raw/verify/' | append: page.verify | append: '.md'", self.base)
 
     def test_robots_lists_the_developer_resources(self):
         robots = (ROOT / "robots.txt").read_text(encoding="utf-8")
         self.assertIn("Sitemap: https://awesomereviewers.com/sitemap.xml", robots)
-        for path in ("/openapi.json", "/api/", "/llms.txt", "/raw/index.json", "/raw/verifications/index.json"):
+        for path in (
+            "/openapi.json",
+            "/api/",
+            "/llms.txt",
+            "/raw/index.json",
+            "/raw/verifications/index.json",
+            "/raw/verify/index.json",
+            "/raw/verify/<language>.md",
+        ):
             with self.subTest(path=path):
                 self.assertIn(path, robots)
 
@@ -329,7 +340,16 @@ class DiscoveryLinks(unittest.TestCase):
 class BuildHygiene(unittest.TestCase):
     def test_derived_artifacts_are_not_committed(self):
         ignored = (ROOT / ".gitignore").read_text(encoding="utf-8").split()
-        for path in ("openapi.json", "_data/api.json", "llms.txt"):
+        for path in (
+            "openapi.json",
+            "_data/api.json",
+            "_data/verify.json",
+            "_data/source_pages.json",
+            "llms.txt",
+            "verify/*.html",
+            "methods/*.html",
+            "sources/*.html",
+        ):
             with self.subTest(path=path):
                 self.assertIn(path, ignored)
 
@@ -481,6 +501,108 @@ class VerificationScans(unittest.TestCase):
 
     def test_every_committed_scan_is_valid(self):
         build_data.read_verifications()
+
+
+class VerificationGuide(unittest.TestCase):
+    """The layer that turns scans and prompts into per-language playbooks."""
+
+    FIXTURE = ROOT / "tests" / "data" / "pallets-flask.json"
+
+    def scans(self) -> dict:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "pallets-flask.json").write_text(self.FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+            return build_data.read_verifications(Path(tmp))
+
+    def entries(self) -> list[dict]:
+        base = {"description": "", "domain": "app-frameworks", "updated": "2026-08-01", "stars": 70000,
+                "authors": [], "discussions": 1, "first_seen": "2026-01-01", "body": "x"}
+        return [
+            {**base, "slug": "flask-a", "title": "A", "repository": "pallets/flask", "topic": "Security",
+             "language": "Python", "comments": 9},
+            {**base, "slug": "flask-b", "title": "B", "repository": "pallets/flask", "topic": "Code Style",
+             "language": "Python", "comments": 3},
+            {**base, "slug": "other-c", "title": "C", "repository": "example/unscanned", "topic": "Testing",
+             "language": "Go", "comments": 1},
+        ]
+
+    def playbook(self, slug: str) -> dict:
+        playbooks = build_data.build_playbooks(self.entries(), self.scans())
+        return next(p for p in playbooks if p["slug"] == slug)
+
+    def test_every_corpus_topic_maps_to_exactly_one_change(self):
+        index = json.loads((build_data.RAW_DIR / "index.json").read_text(encoding="utf-8"))
+        topics = {e["topic"] for e in index["entries"] if e["topic"]}
+        mapped = [topic for change in build_data.CHANGES for topic in change["topics"]]
+        self.assertEqual(len(mapped), len(set(mapped)), "a topic is mapped to two changes")
+        self.assertEqual(topics - set(mapped), set(), "corpus topics missing from CHANGES")
+
+    def test_tables_reference_known_slugs(self):
+        kinds = set(build_data.CHECK_KIND_SLUGS)
+        languages = set(build_data.LANGUAGE_SLUGS) | {build_data.ANY_LANGUAGE}
+        for tool, profile in build_data.TOOL_PROFILES.items():
+            with self.subTest(tool=tool):
+                self.assertIn(profile["kind"], kinds)
+                self.assertLessEqual(set(profile["languages"]), languages)
+        for change in build_data.CHANGES:
+            self.assertLessEqual(set(change["kinds"]), kinds)
+        self.assertEqual(build_data.CHANGES[0]["slug"], "every-change")
+        self.assertEqual(set(build_data.METHOD_GUIDE), set(build_data.VERIFICATION_METHOD_SLUGS) - {"unclassified"})
+
+    def test_every_committed_tool_has_a_profile(self):
+        tools = {c["tool"] for scan in build_data.read_verifications().values() for c in scan["verifications"] if c["tool"]}
+        self.assertEqual(tools - set(build_data.TOOL_PROFILES), set())
+
+    def test_extensions_map_to_one_language(self):
+        seen = [ext for language in build_data.LANGUAGES for ext in language["extensions"]]
+        self.assertEqual(len(seen), len(set(seen)))
+
+    def test_playbook_recommends_what_the_repositories_run(self):
+        python = self.playbook("python")
+        self.assertEqual(python["repos"], 1)
+        baseline = {row["kind"]: row["tool"]["id"] if row["tool"] else None for row in python["baseline"]["checks"]}
+        self.assertEqual(baseline["unit-tests"], "pytest")
+        self.assertEqual(baseline["type-checking"], "mypy")
+        pytest = next(t for t in python["tools"] if t["id"] == "pytest")
+        self.assertEqual(pytest["share"], 100)
+        self.assertEqual(pytest["exit_codes"]["5"], "no tests were collected")
+        self.assertEqual(pytest["examples"][0]["slug"], "pallets-flask")
+
+    def test_playbook_joins_prompts_by_topic(self):
+        python = self.playbook("python")
+        self.assertEqual([p["slug"] for p in python["baseline"]["prompts"]], ["flask-b"])
+        security = next(c for c in python["changes"] if c["slug"] == "security")
+        self.assertEqual([p["slug"] for p in security["prompts"]], ["flask-a"])
+
+    def test_unscanned_language_falls_back(self):
+        go = self.playbook("go")
+        self.assertEqual(go["repos"], 0)
+        rows = {row["kind"]: row for row in go["baseline"]["checks"]}
+        self.assertIsNone(rows["unit-tests"]["tool"])
+        self.assertEqual(rows["type-checking"]["note"], build_data.COMPILER_NOTE)
+
+    def test_playbook_markdown_is_served_verbatim(self):
+        text = build_data.build_playbook_markdown(self.playbook("python"))
+        self.assertTrue(text.startswith("# Verifying Python changes\n"))
+        self.assertIn("`pytest`", text)
+        self.assertIn(f"{build_data.SITE_URL}/raw/flask-a.md", text)
+
+    def test_runnable_commands_come_first(self):
+        self.assertTrue(build_data._indirect("pre-commit hook mypy"))
+        self.assertTrue(build_data._indirect("uses github/codeql-action/analyze"))
+        self.assertFalse(build_data._indirect("mypy src"))
+
+    def test_published_playbooks_agree(self):
+        index = json.loads((build_data.RAW_DIR / "verify" / "index.json").read_text(encoding="utf-8"))
+        self.assertTrue(index["languages"])
+        for language in index["languages"]:
+            with self.subTest(language=language["slug"]):
+                path = build_data.RAW_DIR / "verify" / f"{language['slug']}.md"
+                text = path.read_text(encoding="utf-8")
+                self.assertFalse(text.startswith("---"))
+                self.assertTrue(text.startswith("# Verifying "))
+                self.assertEqual(index["extensions"][language["extensions"][0]], language["slug"])
 
 
 if __name__ == "__main__":

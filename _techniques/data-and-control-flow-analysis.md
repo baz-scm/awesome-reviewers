@@ -1,0 +1,21 @@
+---
+title: "Data and control flow analysis"
+code: "V1014"
+slug: "data-and-control-flow-analysis"
+tactic: "Static analysis"
+tactic_id: "VA02"
+description: "Builds a code property graph or interprocedural model to answer reachability questions: can this null reach that dereference, which callers reach this function."
+subtechniques:
+  - id: "V1014.001"
+    name: "Interprocedural null and resource analysis"
+    slug: "interprocedural-null-and-resource-analysis"
+    description: "Report null dereferences and leaks along concrete paths."
+  - id: "V1014.002"
+    name: "Code property graph queries"
+    slug: "code-property-graph-queries"
+    description: "Query syntax, control flow and data flow together to find custom bug patterns."
+  - id: "V1014.003"
+    name: "Call graph impact"
+    slug: "call-graph-impact"
+    description: "List every caller and downstream consumer of a changed symbol."
+---

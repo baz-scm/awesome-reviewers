@@ -1,0 +1,51 @@
+---
+title: "Design-to-render comparison"
+code: "V1055.001"
+slug: "design-to-render-comparison"
+technique: "Design conformance"
+technique_id: "V1055"
+technique_slug: "design-conformance"
+tactic: "Intent and spec conformance"
+tactic_id: "VA08"
+description: "Diff a screenshot against the exported design frame."
+repos: 55
+craft:
+  - "Export the design frame at the same width and scale the test renders."
+  - "Take a screenshot of the same view in the test run."
+  - "Compare the two images with a pixel tolerance and mask dynamic regions such as dates."
+reverse:
+  - "Exported design frames stored in the repository, such as PNG files under a designs directory."
+  - "Visual comparison assertions in the test suite, such as toHaveScreenshot, or a pixelmatch step."
+packages:
+  - id: "pixelmatch"
+    name: "pixelmatch"
+    url: "https://github.com/mapbox/pixelmatch"
+  - id: "opencv"
+    name: "OpenCV"
+    url: "https://github.com/opencv/opencv"
+  - id: "pillow"
+    name: "Pillow"
+    url: "https://github.com/python-pillow/Pillow"
+  - id: "playwright"
+    name: "Playwright"
+    url: "https://github.com/microsoft/playwright"
+tools:
+  - name: "playwright"
+    repos: 55
+examples:
+  - repo: "freeCodeCamp/freeCodeCamp"
+    tool: "playwright"
+    command: "playwright test --ui-port=0"
+  - repo: "nousresearch/hermes-agent"
+    tool: "playwright"
+    command: "playwright test -c e2e/core/playwright.config.ts local-gateway-attach.spec.ts"
+  - repo: "microsoft/vscode"
+    tool: "playwright"
+    command: "playwright test"
+  - repo: "n8n-io/n8n"
+    tool: "playwright"
+    command: "playwright test --project=e2e tests/e2e/building-blocks/ --workers=1 --retries=2 --reporter=list"
+  - repo: "langflow-ai/langflow"
+    tool: "playwright"
+    command: "playwright test $SCAN_SPECS --project=chromium --shard=$EXPR/$EXPR --workers=2 --retries=1"
+---

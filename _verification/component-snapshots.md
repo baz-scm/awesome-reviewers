@@ -1,0 +1,51 @@
+---
+title: "Component snapshots"
+code: "V1025.001"
+slug: "component-snapshots"
+technique: "Visual regression testing"
+technique_id: "V1025"
+technique_slug: "visual-regression-testing"
+tactic: "Testing"
+tactic_id: "VA04"
+description: "Screenshot each component state in isolation."
+repos: 55
+craft:
+  - "Render each component state in isolation, such as one story per variant."
+  - "Take a screenshot of each state in a pinned browser and font environment."
+  - "Store baselines per component and review diffs in the pull request."
+reverse:
+  - "Storybook stories or BackstopJS scenarios that list component states."
+  - "toHaveScreenshot assertions in component test files, or a lost-pixel.config.ts file."
+packages:
+  - id: "playwright"
+    name: "Playwright"
+    url: "https://github.com/microsoft/playwright"
+  - id: "backstopjs"
+    name: "BackstopJS"
+    url: "https://github.com/garris/BackstopJS"
+  - id: "lost-pixel"
+    name: "Lost Pixel"
+    url: "https://github.com/lost-pixel/lost-pixel"
+  - id: "reg-suit"
+    name: "reg-suit"
+    url: "https://github.com/reg-viz/reg-suit"
+tools:
+  - name: "playwright"
+    repos: 55
+examples:
+  - repo: "freeCodeCamp/freeCodeCamp"
+    tool: "playwright"
+    command: "playwright test --ui-port=0"
+  - repo: "nousresearch/hermes-agent"
+    tool: "playwright"
+    command: "playwright test -c e2e/core/playwright.config.ts local-gateway-attach.spec.ts"
+  - repo: "microsoft/vscode"
+    tool: "playwright"
+    command: "playwright test"
+  - repo: "n8n-io/n8n"
+    tool: "playwright"
+    command: "playwright test --project=e2e tests/e2e/building-blocks/ --workers=1 --retries=2 --reporter=list"
+  - repo: "langflow-ai/langflow"
+    tool: "playwright"
+    command: "playwright test $SCAN_SPECS --project=chromium --shard=$EXPR/$EXPR --workers=2 --retries=1"
+---

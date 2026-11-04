@@ -1,0 +1,51 @@
+---
+title: "Page snapshots"
+code: "V1025.002"
+slug: "page-snapshots"
+technique: "Visual regression testing"
+technique_id: "V1025"
+technique_slug: "visual-regression-testing"
+tactic: "Testing"
+tactic_id: "VA04"
+description: "Screenshot full pages at fixed viewports."
+repos: 55
+craft:
+  - "Set a fixed list of viewport sizes and URLs for each page under test."
+  - "Mask dynamic regions such as dates, ads and avatars before the comparison."
+  - "Run the page snapshot job in CI and keep the diff images as run artifacts."
+reverse:
+  - "toHaveScreenshot calls with viewports set in playwright.config, or a mask option in the test."
+  - "A backstop_data directory or __screenshots__ folders uploaded as CI artifacts."
+packages:
+  - id: "playwright"
+    name: "Playwright"
+    url: "https://github.com/microsoft/playwright"
+  - id: "backstopjs"
+    name: "BackstopJS"
+    url: "https://github.com/garris/BackstopJS"
+  - id: "lost-pixel"
+    name: "Lost Pixel"
+    url: "https://github.com/lost-pixel/lost-pixel"
+  - id: "reg-suit"
+    name: "reg-suit"
+    url: "https://github.com/reg-viz/reg-suit"
+tools:
+  - name: "playwright"
+    repos: 55
+examples:
+  - repo: "freeCodeCamp/freeCodeCamp"
+    tool: "playwright"
+    command: "playwright test --ui-port=0"
+  - repo: "nousresearch/hermes-agent"
+    tool: "playwright"
+    command: "playwright test -c e2e/core/playwright.config.ts local-gateway-attach.spec.ts"
+  - repo: "microsoft/vscode"
+    tool: "playwright"
+    command: "playwright test"
+  - repo: "n8n-io/n8n"
+    tool: "playwright"
+    command: "playwright test --project=e2e tests/e2e/building-blocks/ --workers=1 --retries=2 --reporter=list"
+  - repo: "langflow-ai/langflow"
+    tool: "playwright"
+    command: "playwright test $SCAN_SPECS --project=chromium --shard=$EXPR/$EXPR --workers=2 --retries=1"
+---

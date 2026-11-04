@@ -1,0 +1,21 @@
+---
+title: "Convention and guideline review"
+code: "V1036"
+slug: "convention-and-guideline-review"
+tactic: "Code review"
+tactic_id: "VA06"
+description: "Checks a change against the repository's written rules: style guides, AGENTS.md, architecture decisions, naming conventions."
+subtechniques:
+  - id: "V1036.001"
+    name: "Rule file review"
+    slug: "rule-file-review"
+    description: "Apply the rules in AGENTS.md, CLAUDE.md or CONTRIBUTING.md to the diff."
+  - id: "V1036.002"
+    name: "Naming and conciseness"
+    slug: "naming-and-conciseness"
+    description: "Flag unclear names, typos and needless code."
+  - id: "V1036.003"
+    name: "Rule-to-lint promotion"
+    slug: "rule-to-lint-promotion"
+    description: "Turn rules that can be matched syntactically into lint or Semgrep rules."
+---

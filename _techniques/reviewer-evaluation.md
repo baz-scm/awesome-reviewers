@@ -1,0 +1,21 @@
+---
+title: "Reviewer evaluation"
+code: "V1067"
+slug: "reviewer-evaluation"
+tactic: "Feedback and evaluation"
+tactic_id: "VA10"
+description: "Benchmarks reviewers on labelled changes: did they find the known bugs, and how many findings were wrong."
+subtechniques:
+  - id: "V1067.001"
+    name: "Labelled benchmark"
+    slug: "labelled-benchmark"
+    description: "PRs with known bugs and known clean changes."
+  - id: "V1067.002"
+    name: "Model as judge"
+    slug: "model-as-judge"
+    description: "A judge model matches reviewer findings to the labelled bugs."
+  - id: "V1067.003"
+    name: "Side-by-side comparison"
+    slug: "side-by-side-comparison"
+    description: "Run two reviewer versions on the same set and compare."
+---

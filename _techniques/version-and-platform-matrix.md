@@ -1,0 +1,21 @@
+---
+title: "Version and platform matrix"
+code: "V1024"
+slug: "version-and-platform-matrix"
+tactic: "Testing"
+tactic_id: "VA04"
+description: "Runs the suite across runtime versions, operating systems and feature combinations you do not run locally."
+subtechniques:
+  - id: "V1024.001"
+    name: "Runtime matrix"
+    slug: "runtime-matrix"
+    description: "Every supported language runtime version."
+  - id: "V1024.002"
+    name: "Feature powerset"
+    slug: "feature-powerset"
+    description: "Build and test each combination of optional features or extras."
+  - id: "V1024.003"
+    name: "Minimum versions"
+    slug: "minimum-versions"
+    description: "Test with the lowest declared dependency versions."
+---

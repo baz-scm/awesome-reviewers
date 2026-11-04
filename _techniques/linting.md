@@ -1,0 +1,21 @@
+---
+title: "Linting"
+code: "V1005"
+slug: "linting"
+tactic: "Static analysis"
+tactic_id: "VA02"
+description: "Rule-based detection of bug-prone patterns, unused code and conventions the formatter does not cover."
+subtechniques:
+  - id: "V1005.001"
+    name: "Correctness rules"
+    slug: "correctness-rules"
+    description: "Rules for likely bugs: unused results, shadowing, unreachable code, wrong comparisons."
+  - id: "V1005.002"
+    name: "Convention rules"
+    slug: "convention-rules"
+    description: "Project conventions encoded as lint rules instead of review comments."
+  - id: "V1005.003"
+    name: "Custom lint rules"
+    slug: "custom-lint-rules"
+    description: "Repository-specific rules written as plugins or pattern rules for mistakes that recur in review."
+---

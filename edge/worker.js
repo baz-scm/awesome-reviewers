@@ -20,7 +20,7 @@
  */
 
 const SITE_URL = 'https://awesomereviewers.com';
-const API_DOCS_URL = `${SITE_URL}/api/`;
+const ERRORS_DOCS_URL = `${SITE_URL}/404.html`;
 
 /** Mirrors PROBLEM_TYPES in build_data.py; the tests assert they agree. */
 export const PROBLEMS = {
@@ -45,7 +45,7 @@ export const PROBLEMS = {
 };
 
 export function problemTypeUrl(code) {
-  return `${API_DOCS_URL}#error-${code.replace(/_/g, '-')}`;
+  return `${ERRORS_DOCS_URL}#error-${code.replace(/_/g, '-')}`;
 }
 
 /**

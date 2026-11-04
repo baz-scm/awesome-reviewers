@@ -96,16 +96,16 @@ class ProblemTypes(unittest.TestCase):
         self.assertCountEqual(codes, set(codes))
 
     def test_type_uri_resolves_to_its_documentation_anchor(self):
-        # The API page renders one <h3 id="error-<code>"> per problem type, so a
+        # The 404 page renders one <h3 id="error-<code>"> per problem type, so a
         # client that dereferences `type` lands on the description of that error.
-        api_page = (ROOT / "api.html").read_text(encoding="utf-8")
-        self.assertIn("""id="error-{{ error.code | replace: '_', '-' }}\"""", api_page)
+        page = (ROOT / "404.html").read_text(encoding="utf-8")
+        self.assertIn("""id="error-{{ error.code | replace: '_', '-' }}\"""", page)
         for problem in build_data.build_problems():
             with self.subTest(code=problem["code"]):
                 anchor = problem["code"].replace("_", "-")
                 self.assertEqual(
                     problem["type"],
-                    f"{build_data.SITE_URL}/api/#error-{anchor}",
+                    f"{build_data.SITE_URL}/404.html#error-{anchor}",
                 )
 
     def test_404_and_406_are_described(self):
@@ -138,8 +138,6 @@ class OpenAPIDocument(unittest.TestCase):
         self.assertIn("/raw/site.md", described)
         for resource in build_data.DEV_RESOURCES:
             path = resource["path"]
-            if path == "/api/":  # documentation, not an endpoint
-                continue
             with self.subTest(path=path):
                 self.assertIn(templated.get(path, path), described)
 
@@ -286,7 +284,7 @@ class NotFoundPage(unittest.TestCase):
         self.assertIn("permalink: /404.html", self.source)
 
     def test_points_at_every_index(self):
-        for target in ("/raw/verify/index.json", "/raw/index.json", "/llms.txt", "/openapi.json", "/sitemap.xml", "/api/"):
+        for target in ("/raw/verify/index.json", "/raw/index.json", "/llms.txt", "/openapi.json", "/sitemap.xml"):
             with self.subTest(target=target):
                 self.assertIn(target, self.source)
 
@@ -307,7 +305,6 @@ class DiscoveryLinks(unittest.TestCase):
     def test_every_page_advertises_the_openapi_description(self):
         self.assertIn('rel="service-desc"', self.base)
         self.assertIn("/openapi.json", self.base)
-        self.assertIn('rel="service-doc"', self.base)
 
     def test_pages_with_a_markdown_twin_advertise_it(self):
         self.assertIn('rel="alternate" type="text/markdown"', self.base)
@@ -320,7 +317,6 @@ class DiscoveryLinks(unittest.TestCase):
         self.assertIn("Sitemap: https://awesomereviewers.com/sitemap.xml", robots)
         for path in (
             "/openapi.json",
-            "/api/",
             "/llms.txt",
             "/raw/index.json",
             "/raw/verifications/index.json",
@@ -329,12 +325,6 @@ class DiscoveryLinks(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertIn(path, robots)
-
-    def test_api_page_is_discoverable_by_name(self):
-        api_page = (ROOT / "api.html").read_text(encoding="utf-8")
-        self.assertIn("<h1>Awesome Reviewers API</h1>", api_page)
-        self.assertIn('"@type": "WebAPI"', api_page)
-        self.assertIn('"name": "Awesome Reviewers API"', api_page)
 
 
 class BuildHygiene(unittest.TestCase):

@@ -59,7 +59,7 @@ const SITE = {
     type: 'text/html; charset=utf-8',
   },
   '/raw/bundles/ai-agents.md': { body: '# AI Agents\n', type: 'text/markdown' },
-  '/methodology/': {
+  '/sources/': {
     body: '<!DOCTYPE html><title>Method</title>',
     type: 'text/html; charset=utf-8',
   },
@@ -161,7 +161,7 @@ describe('markdown mapping', () => {
   });
 
   test('leaves pages without a twin alone', () => {
-    assert.equal(markdownTwin('/methodology/'), null);
+    assert.equal(markdownTwin('/sources/'), null);
     assert.equal(markdownTwin('/reviewers/'), null);
     assert.equal(markdownTwin('/domains/ai-agents/extra/'), null);
     assert.equal(markdownTwin('/verify/'), null);
@@ -236,17 +236,17 @@ describe('negotiation end to end', () => {
 
   test('varies on Accept even where there is no markdown to serve', async () => {
     const origin = stubOrigin(SITE);
-    const response = await handle(get('/methodology/', 'text/markdown, */*;q=0.1'), origin);
+    const response = await handle(get('/sources/', 'text/markdown, */*;q=0.1'), origin);
 
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type'), /text\/html/);
     assert.equal(response.headers.get('vary'), 'Accept');
     assert.equal(response.headers.get('link'), null);
-    assert.deepEqual(origin.seen, ['/methodology/'], 'no markdown twin to probe');
+    assert.deepEqual(origin.seen, ['/sources/'], 'no markdown twin to probe');
   });
 
   test('falls back to HTML when the markdown twin is missing but HTML is welcome', async () => {
-    const origin = stubOrigin({ '/reviewers/gone/': SITE['/methodology/'] });
+    const origin = stubOrigin({ '/reviewers/gone/': SITE['/sources/'] });
     const response = await handle(get('/reviewers/gone/', 'text/markdown, */*'), origin);
 
     assert.equal(response.status, 200);
@@ -255,7 +255,7 @@ describe('negotiation end to end', () => {
   });
 
   test('does not fall back to HTML the client did not ask for', async () => {
-    const origin = stubOrigin({ '/reviewers/gone/': SITE['/methodology/'] });
+    const origin = stubOrigin({ '/reviewers/gone/': SITE['/sources/'] });
     for (const accept of ['text/markdown', 'text/markdown, text/html;q=0']) {
       const response = await handle(get('/reviewers/gone/', accept), origin);
       assert.equal(response.status, 406, accept);
@@ -265,7 +265,7 @@ describe('negotiation end to end', () => {
 
   test('a page with no markdown 406s a markdown-only client', async () => {
     const origin = stubOrigin(SITE);
-    const response = await handle(get('/methodology/', 'text/markdown'), origin);
+    const response = await handle(get('/sources/', 'text/markdown'), origin);
     assert.equal(response.status, 406);
   });
 

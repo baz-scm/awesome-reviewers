@@ -13,21 +13,6 @@ Two sources of truth, both taken from 256 production open-source repositories:
   example) distilled from recurring reviewer feedback in each repository. They cover what a tool
   cannot decide: design, naming, error semantics, trust boundaries.
 
-## How it works
-
-1. **Changed file → language.** `src/auth/session.py` is Python, `web/app/page.tsx` is TypeScript,
-   `.github/workflows/ci.yml` is YAML. The homepage has a box for this; agents use the `extensions`
-   map in [`/raw/verify/index.json`](https://awesomereviewers.com/raw/verify/index.json).
-2. **Language → playbook.** [`/verify/<language>/`](https://awesomereviewers.com/verify/), also
-   published as `/raw/verify/<language>.md`. It has two parts:
-   - **Run on every change**: formatting, linting, type checking and tests. Each names the tool most
-     scanned repositories in that language run, the share that run it, a command seen in those
-     repositories, what its exit codes mean, whether it autofixes, and the alternatives.
-   - **Add when the change touches**: one section per kind of change (security, concurrency,
-     algorithms, CI config, …), each with the extra checks it calls for and the review prompts for its
-     topics, most discussed first.
-3. **Run the checks, then apply the prompts.** Checks catch what a tool can find; prompts cover the rest.
-
 ## For agents
 
 ```bash
@@ -113,66 +98,6 @@ scanned repositories run them and a command seen in those repositories. Each sou
 page, [`/sources/<owner>-<name>/`](https://awesomereviewers.com/sources/), listing what it runs, linked
 to the files each check was found in, and the prompts derived from it.
 
-## Awesome Reviewers API
-
-Everything is a static file. No key, no rate limit, GET only.
-Reference: **[awesomereviewers.com/api/](https://awesomereviewers.com/api/)** ·
-description: **[/openapi.json](https://awesomereviewers.com/openapi.json)** (OpenAPI 3.1).
-
-```bash
-# start here: file extension -> language -> playbook URL
-curl https://awesomereviewers.com/raw/verify/index.json
-
-# the checks and prompts for one language
-curl https://awesomereviewers.com/raw/verify/python.md
-
-# one prompt
-curl https://awesomereviewers.com/raw/<slug>.md
-
-# every prompt in a domain, concatenated
-curl https://awesomereviewers.com/raw/bundles/llm-infra.md
-
-# machine index: slug, title, description, domain, topic, language, source, updated, raw URL
-curl https://awesomereviewers.com/raw/index.json
-
-# the checks one source repository runs
-curl https://awesomereviewers.com/raw/verifications/pallets-flask.json
-
-# domain-grouped listing of the whole corpus
-curl https://awesomereviewers.com/llms.txt
-
-# the API surface itself
-curl https://awesomereviewers.com/openapi.json
-```
-
-| Resource | Path | Type |
-| --- | --- | --- |
-| OpenAPI description | `/openapi.json` | `application/vnd.oai.openapi+json;version=3.1` |
-| API documentation | `/api/` | `text/html` |
-| Verification playbooks index | `/raw/verify/index.json` | `application/json` |
-| Verification playbook | `/raw/verify/<language>.md` | `text/markdown` |
-| Verification playbook (JSON) | `/raw/verify/<language>.json` | `application/json` |
-| Corpus index | `/raw/index.json` | `application/json` |
-| Single instruction | `/raw/<slug>.md` | `text/markdown` |
-| Domain bundle | `/raw/bundles/<domain>.md` | `text/markdown` |
-| Verifications index | `/raw/verifications/index.json` | `application/json` |
-| Repository verifications | `/raw/verifications/<repository>.json` | `application/json` |
-| Source discussions | `/<slug>.json` | `application/json` |
-| Search index | `/assets/data/search.json` | `application/json` |
-| LLM index | `/llms.txt` | `text/plain` |
-| Sitemap | `/sitemap.xml` | `application/xml` |
-
-Every prompt carries the date of the most recent review comment behind it, so a scheduled job can
-diff `/raw/index.json` against its last run instead of refetching everything. Each repository scan
-carries the commit it was taken at.
-
-An instruction page at `/reviewers/<slug>/` is the same content as `/raw/<slug>.md`, a domain
-page at `/domains/<domain>/` as `/raw/bundles/<domain>.md`, and a playbook page at
-`/verify/<language>/` as `/raw/verify/<language>.md`; each page links its markdown with
-`<link rel="alternate" type="text/markdown">`, and every page links `/openapi.json` as
-`rel="service-desc"`. Errors follow [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem
-details — see [/api/#errors](https://awesomereviewers.com/api/#errors).
-
 ## Prompts by domain
 
 Prompts are also grouped by the kind of system they came from. Each [domain page](https://awesomereviewers.com/domains/)
@@ -216,8 +141,6 @@ topics are what the playbooks join prompts on.
 - **Prompts.** Review threads that repeat the same point across a repository are grouped and written
   up as one instruction, with the source threads kept beside it so any prompt can be traced back.
 
-The [How it works](https://awesomereviewers.com/methodology/) page has the details and the known limits.
-
 ## Repository layout
 
 ```
@@ -232,8 +155,6 @@ verify.html            playbooks by language    -> /verify/   (one page per lang
 methods.html           verification methods     -> /methods/  (one page per method under it)
 domains.html           prompts by domain        -> /domains/
 sources.html           source repositories      -> /sources/  (one page per repository under it)
-api.html               API reference            -> /api/
-methodology.html       how it works, limits     -> /methodology/
 404.html               recovery page, with markdown and problem+json bodies
 tests/                 machine-interface tests
 edge/                  optional CDN worker for Accept negotiation (not part of the site)

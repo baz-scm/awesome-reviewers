@@ -44,7 +44,9 @@ SEARCH_PATH = Path("assets/data/search.json")
 LLMS_PATH = Path("llms.txt")
 OPENAPI_PATH = Path("openapi.json")
 SITE_URL = "https://awesomereviewers.com"
-API_DOCS_URL = f"{SITE_URL}/api/"
+# Problem types are documented on the 404 page, one #error-<code> section each.
+ERRORS_DOCS_URL = f"{SITE_URL}/404.html"
+REPOSITORY_URL = "https://github.com/baz-scm/awesome-reviewers"
 # Name of the site overview under raw/. No instruction may use it as a slug.
 SITE_OVERVIEW_SLUG = "site"
 
@@ -1403,7 +1405,7 @@ def build_site_overview(entries: list[dict], domains: list[dict], playbooks: lis
         "",
         "## Errors",
         "",
-        f"RFC 9457 problem details, documented at {API_DOCS_URL}#errors.",
+        f"RFC 9457 problem details, documented at {ERRORS_DOCS_URL}#errors.",
         "",
     ]
     for problem in build_problems():
@@ -1677,7 +1679,7 @@ def write_domain_pages(domains: list[dict]) -> None:
 # --------------------------------------------------------------------------- #
 
 # One entry per machine-readable file the site publishes. This list is the
-# single source of truth for the API page, llms.txt and robots.txt, so an
+# single source of truth for openapi.json, llms.txt, the site overview and robots.txt, so an
 # endpoint cannot be added in one place and forgotten in the others.
 DEV_RESOURCES: list[dict] = [
     {
@@ -1685,12 +1687,6 @@ DEV_RESOURCES: list[dict] = [
         "path": "/openapi.json",
         "media_type": "application/vnd.oai.openapi+json;version=3.1",
         "description": "OpenAPI 3.1 description of every endpoint listed here.",
-    },
-    {
-        "name": "API documentation",
-        "path": "/api/",
-        "media_type": "text/html",
-        "description": "Human-readable reference for the endpoints, error format and markdown variants.",
     },
     {
         "name": "Site overview",
@@ -1810,7 +1806,7 @@ PROBLEM_TYPES: list[dict] = [
 
 def problem_type_url(code: str) -> str:
     """The URI an RFC 9457 `type` member points at, resolvable to its docs."""
-    return f"{API_DOCS_URL}#error-{code.replace('_', '-')}"
+    return f"{ERRORS_DOCS_URL}#error-{code.replace('_', '-')}"
 
 
 def build_problems() -> list[dict]:
@@ -1890,7 +1886,6 @@ def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dic
                 "refetching the corpus.\n\n"
                 "Errors follow RFC 9457 problem details."
             ),
-            "termsOfService": f"{API_DOCS_URL}#terms",
             "contact": {
                 "name": "Awesome Reviewers",
                 "url": "https://github.com/baz-scm/awesome-reviewers",
@@ -1901,8 +1896,8 @@ def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dic
             },
         },
         "externalDocs": {
-            "description": "Awesome Reviewers API documentation",
-            "url": API_DOCS_URL,
+            "description": "Awesome Reviewers README",
+            "url": f"{REPOSITORY_URL}#readme",
         },
         "servers": [{"url": SITE_URL, "description": "Production"}],
         "tags": [
@@ -2599,7 +2594,7 @@ def write_openapi(entries: list[dict], domains: list[dict], version: str) -> Non
 
 
 def write_api_data(version: str) -> None:
-    """Machine interface description the API page renders from."""
+    """Error descriptions the 404 page renders from."""
     write_json(
         DATA_DIR / "api.json",
         {

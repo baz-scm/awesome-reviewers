@@ -62,11 +62,11 @@ tests enforce both. Usage shares are counted from the scans, never declared.
 
 ## Machine interface
 
-- `openapi.json` (OpenAPI 3.1), the `/api/` page, `llms.txt`, `robots.txt` and `README.md` all
-  describe the same endpoints. `DEV_RESOURCES` in `build_data.py` is the single source of truth;
+- `openapi.json` (OpenAPI 3.1), `llms.txt`, `/raw/site.md` and `robots.txt` all describe the same
+  endpoints. There is no human API page. `DEV_RESOURCES` in `build_data.py` is the single source of truth;
   add an endpoint there rather than in five places.
 - Errors follow RFC 9457 problem details. `PROBLEM_TYPES` in `build_data.py` defines them; every
-  `type` URI must resolve to an `#error-<code>` anchor on the `/api/` page.
+  `type` URI must resolve to an `#error-<code>` anchor on the 404 page (`/404.html`).
 - `404.html` is what GitHub Pages serves for every missing path. It carries the recovery links, a
   markdown recovery block and the same problem details in a `<script type="application/problem+json">`,
   because a static host cannot return a JSON body with a 404 status.

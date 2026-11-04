@@ -1077,6 +1077,321 @@ def build_methods(entries: list[dict], scans: dict[str, dict]) -> list[dict]:
     return methods
 
 
+# --------------------------------------------------------------------------- #
+# Verification catalog: a matrix of tactics (columns) and techniques (cells),
+# modelled on MITRE ATT&CK. `_catalog/techniques.json` is the editorial layer;
+# techniques that name check kinds get their procedure examples, tools and
+# configuration signals counted from the scans.
+# --------------------------------------------------------------------------- #
+
+CATALOG_DIR = Path("_catalog")
+TECHNIQUE_ID = re.compile(r"V\d{4}")
+TACTIC_ID = re.compile(r"VA\d{2}")
+PROCEDURE_EXAMPLES = 40
+SIGNALS_PER_TECHNIQUE = 6
+
+
+def read_catalog(directory: Path = CATALOG_DIR) -> dict:
+    """Tactics, techniques and packages, validated against the tables above. Fails the build when inconsistent."""
+    packages = json.loads((directory / "packages.json").read_text(encoding="utf-8"))
+    raw = json.loads((directory / "techniques.json").read_text(encoding="utf-8"))
+    tactics, techniques = raw["tactics"], raw["techniques"]
+    problems: list[str] = []
+    tactic_ids = [t["id"] for t in tactics]
+    for tactic in tactics:
+        if not TACTIC_ID.fullmatch(tactic["id"]):
+            problems.append(f"tactic {tactic['id']!r}: id must look like VA01")
+        if tactic.get("method"):
+            if tactic["method"] not in METHOD_GUIDE or tactic["slug"] != method_page_slug(tactic["method"]):
+                problems.append(f"tactic {tactic['id']}: method and slug must match METHOD_GUIDE")
+        elif not all(tactic.get(key) for key in ("title", "summary", "when")):
+            problems.append(f"tactic {tactic['id']}: needs title, summary and when")
+    covered = [method for t in tactics if (method := t.get("method"))]
+    if sorted(covered) != sorted(GUIDE_METHODS):
+        problems.append("every verification method needs exactly one tactic")
+    seen: set[str] = set()
+    kinds: list[str] = []
+    for technique in techniques:
+        where = f"technique {technique.get('id')!r}"
+        ids = [technique["id"], *(sub["id"] for sub in technique["subtechniques"])]
+        if not TECHNIQUE_ID.fullmatch(technique["id"]):
+            problems.append(f"{where}: id must look like V1001")
+        if any(not sub["id"].startswith(technique["id"] + ".") for sub in technique["subtechniques"]):
+            problems.append(f"{where}: sub-technique ids must extend the technique id")
+        if seen & set(ids):
+            problems.append(f"{where}: duplicate id")
+        seen.update(ids)
+        if technique["tactic"] not in tactic_ids:
+            problems.append(f"{where}: unknown tactic {technique['tactic']!r}")
+        if missing := [p for p in technique["packages"] if p not in packages]:
+            problems.append(f"{where}: unknown packages {missing}")
+        if not technique["craft"] or not technique["reverse"] or not technique["packages"]:
+            problems.append(f"{where}: needs craft steps, reverse-engineering signals and packages")
+        for kind in technique["kinds"]:
+            if kind not in CHECK_KIND_SLUGS:
+                problems.append(f"{where}: unknown check kind {kind!r}")
+            elif (tactic := next(t for t in tactics if t["id"] == technique["tactic"])).get("method") != next(
+                k["method"] for k in CHECK_KINDS if k["slug"] == kind
+            ):
+                problems.append(f"{where}: check kind {kind!r} belongs to another method than tactic {tactic['id']}")
+        kinds.extend(technique["kinds"])
+    if sorted(kinds) != sorted(CHECK_KIND_SLUGS):
+        problems.append("every check kind must belong to exactly one technique")
+    if problems:
+        raise SystemExit("invalid catalog in _catalog/:\n  " + "\n  ".join(problems))
+    return {"tactics": tactics, "techniques": techniques, "packages": packages}
+
+
+def evidence_signal(path: str) -> str:
+    """Where a check is configured, generalised so it can be looked for in any repository."""
+    if path.startswith(".github/workflows/"):
+        return ".github/workflows/*.yml"
+    if "/.husky/" in f"/{path}":
+        return ".husky/" + path.rsplit("/", 1)[-1]
+    return path.rsplit("/", 1)[-1]
+
+
+def _runs(check: dict) -> bool:
+    return bool(check["tool"]) and not check["declared_only"] and check["tool"] in TOOL_PROFILES
+
+
+def kinds_run(scan: dict) -> set[str]:
+    """Check kinds a scanned repository runs: recognised tools only, declared-only entries excluded."""
+    return {TOOL_PROFILES[c["tool"]]["kind"] for c in scan["verifications"] if _runs(c)}
+
+
+def build_catalog(entries: list[dict], scans: dict[str, dict], catalog_source: dict) -> dict:
+    index = _scan_index(scans)
+    catalog = tool_catalog(scans)
+    stars: dict[str, int] = {}
+    for entry in entries:
+        repo = entry["repository"].lower()
+        stars[repo] = max(stars.get(repo, 0), entry["stars"])
+    repos = sorted(index, key=lambda repo: (-stars.get(repo, 0), repo))
+    tools = build_tool_rows(catalog, repos, index, stars, None)
+    packages = catalog_source["packages"]
+    kind_titles = {k["slug"]: k for k in CHECK_KINDS}
+    method_titles = {m["slug"]: m["title"] for m in VERIFICATION_METHODS}
+
+    techniques = []
+    for source in catalog_source["techniques"]:
+        kinds = set(source["kinds"])
+        procedures = []
+        signals: dict[str, set[str]] = defaultdict(set)
+        for repo in repos:
+            checks = [c for c in index[repo]["verifications"] if _runs(c) and TOOL_PROFILES[c["tool"]]["kind"] in kinds]
+            if not checks:
+                continue
+            for check in checks:
+                for evidence in check["evidence"]:
+                    signals[evidence_signal(evidence["path"])].add(repo)
+            first = checks[0]["evidence"][0] if checks[0]["evidence"] else None
+            procedures.append(
+                {
+                    **_repo_name(repo, index),
+                    "tools": sorted({c["tool"] for c in checks}),
+                    "triggers": [t for t in VERIFICATION_TRIGGERS if any(t in c["triggers"] for c in checks)],
+                    "evidence": f"{first['path']} {first['locator']}".strip() if first else None,
+                }
+            )
+        techniques.append(
+            {
+                "id": source["id"],
+                "name": source["name"],
+                "tactic": source["tactic"],
+                "description": source["description"],
+                "subtechniques": source["subtechniques"],
+                "kinds": [
+                    {"slug": kind, "title": kind_titles[kind]["title"], "catches": kind_titles[kind]["catches"]}
+                    for kind in source["kinds"]
+                ],
+                "detected": bool(source["kinds"]),
+                "packages": [{"id": p, **packages[p]} for p in source["packages"]],
+                "tools": [
+                    {key: tool[key] for key in ("id", "repos", "share", "run", "via", "triggers", "docs", "upstream", "autofix")}
+                    for tool in tools
+                    if tool["kind"] in kinds
+                ],
+                "craft": source["craft"],
+                "reverse": source["reverse"],
+                "signals": [
+                    {"signal": signal, "repos": len(users)}
+                    for signal, users in sorted(signals.items(), key=lambda item: (-len(item[1]), item[0]))[:SIGNALS_PER_TECHNIQUE]
+                ],
+                "repos": len(procedures),
+                "share": round(100 * len(procedures) / len(repos)) if repos and source["kinds"] else None,
+                "procedures": procedures[:PROCEDURE_EXAMPLES],
+                "url": f"{SITE_URL}/techniques/{source['id']}/",
+            }
+        )
+
+    tactics = []
+    for source in catalog_source["tactics"]:
+        method = source.get("method")
+        guide = METHOD_GUIDE[method] if method else source
+        members = [t for t in techniques if t["tactic"] == source["id"]]
+        for technique in members:
+            technique["tactic_slug"] = source["slug"]
+            technique["tactic_title"] = method_titles[method] if method else source["title"]
+        tactics.append(
+            {
+                "id": source["id"],
+                "slug": source["slug"],
+                "method": method,
+                "short": source["short"],
+                "title": method_titles[method] if method else source["title"],
+                "summary": guide["summary"],
+                "when": guide["when"],
+                "detected": bool(method),
+                "techniques": members,
+                "subtechniques": sum(len(t["subtechniques"]) for t in members),
+                "url": f"{SITE_URL}/methods/{source['slug']}/",
+            }
+        )
+    return {
+        "tactics": tactics,
+        "techniques": len(techniques),
+        "subtechniques": sum(t["subtechniques"] for t in tactics),
+        "packages": len({p["id"] for t in techniques for p in t["packages"]}),
+        "scanned": len(repos),
+        "kind_technique": {kind["slug"]: t["id"] for t in techniques for kind in t["kinds"]},
+    }
+
+
+def build_catalog_markdown(catalog: dict) -> str:
+    """The whole catalog as one markdown file for agents."""
+    lines = [
+        "# Verification catalog",
+        "",
+        f"{len(catalog['tactics'])} tactics, {catalog['techniques']} techniques, {catalog['subtechniques']} "
+        f"sub-techniques. Usage counts are from {catalog['scanned']} scanned source repositories. "
+        f"Leaderboard: {SITE_URL}/raw/leaderboard.json",
+        "",
+    ]
+    for tactic in catalog["tactics"]:
+        lines += [f"## {tactic['id']} {tactic['title']}", "", tactic["summary"], "", f"When: {tactic['when']}", ""]
+        for t in tactic["techniques"]:
+            usage = f" Run by {t['repos']} of {catalog['scanned']} scanned repositories." if t["detected"] else ""
+            lines += [f"### {t['id']} {t['name']}", "", t["description"] + usage, ""]
+            if t["subtechniques"]:
+                lines += ["Sub-techniques:", ""]
+                lines += [f"- {s['id']} {s['name']}: {s['description']}" for s in t["subtechniques"]]
+                lines.append("")
+            lines += ["Craft it:", ""]
+            lines += [f"{n}. {step}" for n, step in enumerate(t["craft"], 1)]
+            lines += ["", "Reverse engineer it (look for):", ""]
+            lines += [f"- {signal}" for signal in t["reverse"]]
+            lines += [f"- `{s['signal']}` (configures it in {s['repos']} scanned repositories)" for s in t["signals"]]
+            lines += ["", "Open-source packages: " + ", ".join(f"[{p['name']}]({p['url']})" for p in t["packages"])]
+            if t["tools"]:
+                lines.append("Tools seen in scans: " + ", ".join(f"`{tool['id']}` ({tool['repos']})" for tool in t["tools"]))
+            lines.append("")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# Leaderboard, adapted from VerifyBench (Yan et al., arXiv:2505.15801).
+#
+# VerifyBench scores a verifier by accuracy on labelled items, reported per
+# answer type with an unweighted average across the types, plus a Hard split
+# of items strong models disagree on. Here an item is a (repository, check
+# kind) pair where the kind applies to the repository's languages; it counts
+# as correct when the repository runs a recognised tool of that kind. The
+# answer types become the five verification methods, and the Hard split is
+# the kinds fewer than HARD_ADOPTION of the repositories they apply to run.
+# --------------------------------------------------------------------------- #
+
+PAPER_URL = "https://arxiv.org/abs/2505.15801"
+HARD_ADOPTION = 0.25
+
+
+def applicable_kinds(languages: set[str], scan: dict) -> set[str]:
+    """Check kinds that apply to a repository: a recognised tool exists for one of its languages, or for any language.
+
+    Workflow linting applies wherever the scan found a GitHub Actions workflow, whatever the language.
+    """
+    kinds = {
+        profile["kind"]
+        for profile in TOOL_PROFILES.values()
+        if ANY_LANGUAGE in profile["languages"] or languages & set(profile["languages"])
+    }
+    if any(e["path"].startswith(".github/workflows/") for c in scan["verifications"] for e in c["evidence"]):
+        kinds.add("workflow-linting")
+    return kinds
+
+
+def build_leaderboard(entries: list[dict], scans: dict[str, dict], tactics: list[dict] | None = None) -> dict:
+    """`tactics` orders the method columns and names them; defaults to the scanner's method order."""
+    order = [t["method"] for t in tactics or [] if t.get("method")] or GUIDE_METHODS
+    shorts = {t["method"]: t["short"] for t in tactics or [] if t.get("method")}
+    index = _scan_index(scans)
+    languages_of = repository_languages(entries)
+    stars: dict[str, int] = {}
+    for entry in entries:
+        repo = entry["repository"].lower()
+        stars[repo] = max(stars.get(repo, 0), entry["stars"])
+    method_of = {k["slug"]: k["method"] for k in CHECK_KINDS}
+
+    items: dict[str, tuple[set[str], set[str]]] = {}
+    for repo, scan in index.items():
+        run = kinds_run(scan)
+        items[repo] = (applicable_kinds(languages_of.get(repo, set()), scan) | run, run)
+
+    adoption = {}
+    for kind in CHECK_KIND_SLUGS:
+        # Share among repositories the kind applies to by language or workflow, so running it elsewhere does not inflate it.
+        applies = [
+            repo for repo in items if kind in applicable_kinds(languages_of.get(repo, set()), index[repo])
+        ]
+        adoption[kind] = sum(kind in items[repo][1] for repo in applies) / len(applies) if applies else 0.0
+    hard = {kind for kind, share in adoption.items() if share < HARD_ADOPTION}
+
+    def accuracy(applicable: set[str], run: set[str]) -> float | None:
+        return round(100 * len(applicable & run) / len(applicable), 1) if applicable else None
+
+    rows = []
+    for repo, (applicable, run) in items.items():
+        by_method = {
+            method: accuracy({k for k in applicable if method_of[k] == method}, run) for method in order
+        }
+        scored = [score for score in by_method.values() if score is not None]
+        rows.append(
+            {
+                **_repo_name(repo, index),
+                "stars": stars.get(repo, 0),
+                "methods": by_method,
+                "avg": round(sum(scored) / len(scored), 1) if scored else 0.0,
+                "hard": accuracy(applicable & hard, run),
+                "items": len(applicable),
+                "correct": len(applicable & run),
+                "kinds": sorted(run),
+                "languages": sorted(languages_of.get(repo, set())),
+            }
+        )
+    rows.sort(key=lambda r: (-r["avg"], -(r["hard"] or 0), -r["correct"], r["repository"].lower()))
+    previous = None
+    for position, row in enumerate(rows, 1):
+        key = (row["avg"], row["hard"], row["correct"])
+        row["rank"] = previous[1] if previous and previous[0] == key else position
+        previous = (key, row["rank"])
+    titles = {m["slug"]: m["title"] for m in VERIFICATION_METHODS}
+    return {
+        "paper": {"title": "VerifyBench: Benchmarking Reference-based Reward Systems for Large Language Models", "url": PAPER_URL},
+        "methods": [
+            {"method": m, "slug": method_page_slug(m), "title": titles[m], "short": shorts.get(m, titles[m])} for m in order
+        ],
+        "hard_threshold": round(100 * HARD_ADOPTION),
+        "hard_kinds": [
+            {"slug": k["slug"], "title": k["title"], "adoption": round(100 * adoption[k["slug"]])}
+            for k in CHECK_KINDS
+            if k["slug"] in hard
+        ],
+        "kinds": [{"slug": k, "adoption": round(100 * adoption[k])} for k in CHECK_KIND_SLUGS],
+        "count": len(rows),
+        "rows": rows,
+    }
+
+
 def build_source_pages(entries: list[dict], scans: dict[str, dict]) -> dict[str, dict]:
     """One page per source repository, keyed by its slug: checks and prompts."""
     index = _scan_index(scans)
@@ -1529,7 +1844,36 @@ def write_verifications(scans: dict[str, dict]) -> None:
     print(f"  wrote {len(scans)} verification scans")
 
 
-def write_guide(playbooks: list[dict], methods: list[dict], source_pages: dict[str, dict]) -> None:
+def write_catalog(catalog: dict, leaderboard: dict) -> None:
+    """Data for /methods/, /techniques/<id>/ and /leaderboard/, plus /raw/catalog.* and /raw/leaderboard.json."""
+    write_json(DATA_DIR / "catalog.json", catalog)
+    write_json(DATA_DIR / "leaderboard.json", leaderboard)
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    write_json(RAW_DIR / "catalog.json", {"generated": generated, **catalog})
+    (RAW_DIR / "catalog.md").write_text(build_catalog_markdown(catalog), encoding="utf-8")
+    write_json(RAW_DIR / "leaderboard.json", {"generated": generated, **leaderboard})
+    directory = Path("techniques")
+    directory.mkdir(exist_ok=True)
+    for stale in directory.glob("*.html"):
+        stale.unlink()
+    for tactic in catalog["tactics"]:
+        for t in tactic["techniques"]:
+            (directory / f"{t['id']}.html").write_text(
+                "---\n"
+                "layout: technique\n"
+                f"technique: {t['id']}\n"
+                f"title: {json.dumps(t['id'] + ' ' + t['name'])}\n"
+                f"permalink: /techniques/{t['id']}/\n"
+                f"description: {json.dumps(t['description'])}\n"
+                "---\n",
+                encoding="utf-8",
+            )
+    print(f"  wrote catalog: {len(catalog['tactics'])} tactics, {catalog['techniques']} techniques; "
+          f"leaderboard: {leaderboard['count']} repositories")
+
+
+def write_guide(playbooks: list[dict], methods: list[dict], source_pages: dict[str, dict],
+                tactics: list[dict] | None = None) -> None:
     """Data and stub pages for /verify/, /methods/ and /sources/<repository>/, plus /raw/verify/."""
     extensions = {ext: p["slug"] for p in playbooks for ext in p["extensions"]}
     write_json(
@@ -1589,7 +1933,7 @@ def write_guide(playbooks: list[dict], methods: list[dict], source_pages: dict[s
             for p in playbooks
         ],
         Path("methods"): [
-            ("method", "method", m["slug"], m["title"], m["summary"]) for m in methods
+            ("method", "method", t["slug"], f"{t['id']} {t['title']}", t["summary"]) for t in tactics or []
         ],
         Path("sources"): [
             ("source", "source", page["slug"], page["repository"],
@@ -1612,7 +1956,7 @@ def write_guide(playbooks: list[dict], methods: list[dict], source_pages: dict[s
                 "---\n",
                 encoding="utf-8",
             )
-    print(f"  wrote {len(playbooks)} playbooks, {len(methods)} method pages, {len(source_pages)} source pages")
+    print(f"  wrote {len(playbooks)} playbooks, {len(tactics or [])} method pages, {len(source_pages)} source pages")
 
 
 def write_search(entries: list[dict]) -> None:
@@ -1717,6 +2061,30 @@ DEV_RESOURCES: list[dict] = [
         "path": "/raw/verify/<language>.json",
         "media_type": "application/json",
         "description": "The same playbook as structured data, with every candidate tool and its usage share.",
+    },
+    {
+        "name": "Verification catalog",
+        "path": "/raw/catalog.md",
+        "media_type": "text/markdown",
+        "description": (
+            "Every verification tactic and technique with sub-techniques, open-source packages, steps to build it "
+            "and signals that a codebase already runs it."
+        ),
+    },
+    {
+        "name": "Verification catalog (JSON)",
+        "path": "/raw/catalog.json",
+        "media_type": "application/json",
+        "description": "The same catalog as structured data, with procedure examples and tool usage counted from the scans.",
+    },
+    {
+        "name": "Verification leaderboard",
+        "path": "/raw/leaderboard.json",
+        "media_type": "application/json",
+        "description": (
+            "Every scanned source repository ranked by catalog coverage: accuracy per verification method, "
+            "their average and a hard split, adapted from VerifyBench."
+        ),
     },
     {
         "name": "Corpus index",
@@ -1911,6 +2279,10 @@ def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dic
             {
                 "name": "playbooks",
                 "description": "Which checks to run on code in a given language, and the prompts for what they miss.",
+            },
+            {
+                "name": "catalog",
+                "description": "Verification tactics and techniques, and the leaderboard of source repositories.",
             },
         ],
         "paths": {
@@ -2175,6 +2547,60 @@ def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dic
                         "200": {
                             "description": "The llms.txt index",
                             "content": {"text/plain": {"schema": {"type": "string"}}},
+                        },
+                        "404": error_response(404),
+                    },
+                }
+            },
+            "/raw/catalog.md": {
+                "get": {
+                    "operationId": "getCatalogMarkdown",
+                    "summary": "The verification catalog as markdown",
+                    "description": (
+                        "Tactics in order, each technique with its sub-techniques, the steps to build it, the "
+                        "signals that show a codebase runs it, and open-source packages that implement it."
+                    ),
+                    "tags": ["catalog"],
+                    "responses": {
+                        "200": {
+                            "description": "The catalog",
+                            "content": {"text/markdown": {"schema": {"type": "string"}}},
+                        },
+                        "404": error_response(404),
+                    },
+                }
+            },
+            "/raw/catalog.json": {
+                "get": {
+                    "operationId": "getCatalog",
+                    "summary": "The verification catalog as structured data",
+                    "description": (
+                        "Tactics with their techniques. Techniques the scanner can detect carry usage counts, "
+                        "the tools seen, configuration signals and procedure examples from the scans."
+                    ),
+                    "tags": ["catalog"],
+                    "responses": {
+                        "200": {
+                            "description": "The catalog",
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Catalog"}}},
+                        },
+                        "404": error_response(404),
+                    },
+                }
+            },
+            "/raw/leaderboard.json": {
+                "get": {
+                    "operationId": "getLeaderboard",
+                    "summary": "Source repositories ranked by verification coverage",
+                    "description": (
+                        "One row per scanned repository: accuracy per verification method over the check kinds "
+                        "that apply to it, the unweighted average, the hard split and the rank."
+                    ),
+                    "tags": ["catalog"],
+                    "responses": {
+                        "200": {
+                            "description": "The leaderboard",
+                            "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Leaderboard"}}},
                         },
                         "404": error_response(404),
                     },
@@ -2500,6 +2926,85 @@ def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dic
                         "prompt_count": {"type": "integer", "minimum": 0},
                     },
                 },
+                "Catalog": {
+                    "type": "object",
+                    "required": ["generated", "tactics", "techniques", "subtechniques", "scanned"],
+                    "properties": {
+                        "generated": {"type": "string", "format": "date-time"},
+                        "techniques": {"type": "integer", "minimum": 0},
+                        "subtechniques": {"type": "integer", "minimum": 0},
+                        "packages": {"type": "integer", "minimum": 0},
+                        "scanned": {"type": "integer", "minimum": 0},
+                        "tactics": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["id", "slug", "title", "summary", "when", "techniques"],
+                                "properties": {
+                                    "id": {"type": "string", "pattern": "^VA[0-9]{2}$"},
+                                    "slug": {"type": "string"},
+                                    "title": {"type": "string"},
+                                    "summary": {"type": "string"},
+                                    "when": {"type": "string"},
+                                    "method": {"type": ["string", "null"]},
+                                    "detected": {"type": "boolean"},
+                                    "techniques": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "required": ["id", "name", "description", "subtechniques", "packages", "craft", "reverse"],
+                                            "properties": {
+                                                "id": {"type": "string", "pattern": "^V[0-9]{4}$"},
+                                                "name": {"type": "string"},
+                                                "description": {"type": "string"},
+                                                "subtechniques": {"type": "array", "items": {"type": "object"}},
+                                                "packages": {"type": "array", "items": {"type": "object"}},
+                                                "craft": {"type": "array", "items": {"type": "string"}},
+                                                "reverse": {"type": "array", "items": {"type": "string"}},
+                                                "repos": {"type": "integer", "minimum": 0},
+                                                "share": {"type": ["integer", "null"]},
+                                                "procedures": {"type": "array", "items": {"type": "object"}},
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+                "Leaderboard": {
+                    "type": "object",
+                    "required": ["generated", "paper", "methods", "count", "rows"],
+                    "properties": {
+                        "generated": {"type": "string", "format": "date-time"},
+                        "paper": {"type": "object"},
+                        "methods": {"type": "array", "items": {"type": "object"}},
+                        "hard_threshold": {"type": "integer"},
+                        "hard_kinds": {"type": "array", "items": {"type": "object"}},
+                        "count": {"type": "integer", "minimum": 0},
+                        "rows": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["rank", "repository", "slug", "methods", "avg", "hard", "items", "correct"],
+                                "properties": {
+                                    "rank": {"type": "integer", "minimum": 1},
+                                    "repository": {"type": "string"},
+                                    "slug": {"type": "string"},
+                                    "methods": {
+                                        "type": "object",
+                                        "description": "Accuracy (0-100) per method slug; null when no check kind of it applies.",
+                                        "additionalProperties": {"type": ["number", "null"]},
+                                    },
+                                    "avg": {"type": "number"},
+                                    "hard": {"type": ["number", "null"]},
+                                    "items": {"type": "integer", "minimum": 0},
+                                    "correct": {"type": "integer", "minimum": 0},
+                                },
+                            },
+                        },
+                    },
+                },
                 "VerificationsIndex": {
                     "type": "object",
                     "required": ["generated", "count", "methods", "repositories"],
@@ -2706,6 +3211,8 @@ def main() -> None:
         domain["checks"] = domain_checks.get(domain["slug"], [])
     playbooks = build_playbooks(entries, verifications)
     methods = build_methods(entries, verifications)
+    catalog = build_catalog(entries, verifications, read_catalog())
+    leaderboard = build_leaderboard(entries, verifications, catalog["tactics"])
     source_pages = build_source_pages(entries, verifications)
     playbook_by_slug = {p["slug"]: p for p in playbooks}
 
@@ -2762,7 +3269,8 @@ def main() -> None:
     write_domain_pages(domains)
     write_raw(entries, domains, playbooks)
     write_verifications(verifications)
-    write_guide(playbooks, methods, source_pages)
+    write_guide(playbooks, methods, source_pages, catalog["tactics"])
+    write_catalog(catalog, leaderboard)
     write_llms(entries, domains, playbooks)
     # The corpus date, not the build date: the description only changes when the
     # thing it describes does.

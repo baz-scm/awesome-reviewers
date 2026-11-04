@@ -62,7 +62,7 @@ curl -sI https://awesomereviewers.com/reviewers/<slug>/
 # link: </raw/<slug>.md>; rel="alternate"; type="text/markdown"
 
 curl -s -H "Accept: application/json" https://awesomereviewers.com/nope
-# {"type": "https://awesomereviewers.com/api/#error-not-found", "status": 404, ...}
+# {"type": "https://awesomereviewers.com/404.html#error-not-found", "status": 404, ...}
 
 curl -sI -H "Accept: application/pdf" https://awesomereviewers.com/reviewers/<slug>/
 # HTTP/2 406

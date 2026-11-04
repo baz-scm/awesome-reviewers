@@ -2,112 +2,50 @@
 
 ## What this project is
 
-Tells people and agents which checks to run on the code they are writing, and which review prompts
-cover what those checks miss. Checks come from the CI workflows, hooks and task runners of production
-open-source repositories; prompts are distilled from their code review discussions. The primary flow
-is: changed file -> language -> playbook (`/verify/<language>/`, `/raw/verify/<language>.md`) ->
-checks per kind, then prompts per kind of change. Domains remain the way to browse prompts.
+A directory of review and verification techniques, browsable in one place. Two kinds of first-party
+entry: **reviewers** (instructions distilled from real code review discussions) and **verification**
+techniques (how to build a check and how to recognise it in a repository). Modelled on skills.sh:
+one list, search, a few filters, one page per entry.
 
-It is a Jekyll site on GitHub Pages. Keep it that way — static, dependency-light, no build step
-beyond Jekyll and one Python script.
+It is a Jekyll site on GitHub Pages. Static, no build step beyond Jekyll, no runtime dependencies.
 
 ## Source of truth
 
-`_reviewers/`, `_verifications/` and `_catalog/` only.
+- `_reviewers/<slug>.md` — front matter (`title`, `description`, `repository`, `label`, `language`,
+  `comments_count`, `repository_stars`) plus the instruction body. Every value is rendered as written.
+- `_reviewers/<slug>.json` — the discussions the instruction was derived from. Provenance only; excluded
+  from the site output.
+- `_verification/<slug>.md` — front matter (`title`, `id`, `tactic`, `description`, `subtechniques`,
+  `packages`, `craft`, `reverse`). `id` is `V####`, sub-technique ids are `V####.###`.
 
-`_reviewers/`:
-
-- `<slug>.md` — front matter (`title`, `description`, `repository`, `label`, `language`,
-  `comments_count`, `repository_stars`) plus the instruction body in markdown.
-- `<slug>.json` — the review discussions the instruction was derived from.
-
-`_verifications/` holds one file per source repository:
-
-- `<owner>-<name>.json` (lowercase, other characters replaced by `-`; see `repository_slug`) — the
-  checks that repository runs, as written by bazai's verification scanner
-  (`modes/awesome_reviewers/verifications`): `repo_full_name`, `ref` (commit sha) and a
-  `verifications` list. `build_data.py` validates every file and fails the build on a malformed one;
-  the method and trigger enums in `VERIFICATION_METHODS` / `VERIFICATION_TRIGGERS` mirror the
-  scanner's `VerificationMethod` and `Trigger`, so change both together.
-
-`_catalog/` is the verification catalog, an ATT&CK-style matrix:
-
-- `techniques.json` — `tactics` (columns, `VA01`...; the five with a `method` mirror `METHOD_GUIDE`
-  and keep its slugs) and `techniques` (`V1001`..., sub-techniques `V1001.001`...), each with
-  description, `kinds` (the `CHECK_KINDS` it is detected as), package ids, `craft` steps and `reverse`
-  signals. Every check kind belongs to exactly one technique; `read_catalog` fails the build otherwise.
-- `packages.json` — package id -> name and upstream URL.
-- Usage, tools, configuration signals and procedure examples are counted from the scans, never declared.
-- The leaderboard (`build_leaderboard`) adapts VerifyBench (arXiv:2505.15801): accuracy per method over
-  applicable check kinds, unweighted average, and a hard split of kinds under `HARD_ADOPTION`.
-  Declared-only tools never score.
-
-Everything else is derived by `build_data.py` and is **not committed**: `_data/api.json`,
-`_data/domains.json`, `_data/entries.json`, `_data/meta.json`, `_data/sources.json`,
-`_data/verify.json`, `_data/source_pages.json`, `_data/catalog.json`, `_data/leaderboard.json`, `assets/data/search.json`, `domains/*.html`,
-`verify/*.html`, `methods/*.html`, `techniques/*.html`, `sources/*.html`, `raw/**` (including `raw/verifications/` and
-`raw/verify/`), `llms.txt`, `openapi.json`. Re-run `python build_data.py` after touching `_reviewers/` or `_verifications/`, and
-before the first local Jekyll build.
-
-Dates are derived from discussion timestamps, never declared in front matter. Domain is derived from
-the source repository via the explicit map in `build_data.py`.
-
-The verification guide joins the two sources with explicit tables in `build_data.py`:
-`TOOL_PROFILES` (tool -> check kind, languages), `CHECK_KINDS` (kind -> method), `LANGUAGES`
-(playbook languages, front-matter languages, file extensions) and `CHANGES` (what a change touches
--> check kinds + prompt topics; the first entry is the every-change baseline). Every corpus topic
-must appear in exactly one `CHANGES` entry and every scanned tool needs a `TOOL_PROFILES` entry —
-tests enforce both. Usage shares are counted from the scans, never declared.
+Nothing else is derived or committed. Dates, counts and filter values come from the front matter.
 
 ## Site layer
 
-- `_layouts/base.html` — chrome for every page.
-- `_layouts/language.html` — one playbook page per language, from `_data/verify.json`.
-- `methods.html` — the catalog matrix; `leaderboard.html` — repositories ranked by catalog coverage.
-- `_layouts/method.html` — one page per tactic, its techniques (old `#<check-kind>` anchors still land).
-- `_layouts/technique.html` — one page per technique: sub-techniques, craft, reverse engineer,
-  packages, tools seen, procedure examples.
-- `_layouts/source.html` — one page per source repository: its checks and its prompts.
-- `_includes/check.html` — one recommended check (kind, tool, share, command, exit codes).
-- `_layouts/domain.html` — one page per domain, renders all its instructions from `_data/entries.json`.
-- `_layouts/reviewer.html` — instruction detail page, metadata from `_data/meta.json[page.slug]`.
-- `_includes/row.html` — the one row component shared by the homepage, search results and domain pages.
-- `assets/css/site.scss` — the only stylesheet. No webfonts, no CSS framework.
-- `assets/js/site.js` — the only script. No dependencies.
-
-## Machine interface
-
-- `openapi.json` (OpenAPI 3.1), `llms.txt`, `/raw/site.md` and `robots.txt` all describe the same
-  endpoints. There is no human API page. `DEV_RESOURCES` in `build_data.py` is the single source of truth;
-  add an endpoint there rather than in five places.
-- Errors follow RFC 9457 problem details. `PROBLEM_TYPES` in `build_data.py` defines them; every
-  `type` URI must resolve to an `#error-<code>` anchor on the 404 page (`/404.html`).
-- `404.html` is what GitHub Pages serves for every missing path. It carries the recovery links, a
-  markdown recovery block and the same problem details in a `<script type="application/problem+json">`,
-  because a static host cannot return a JSON body with a 404 status.
-- `edge/` is an optional CDN worker that adds `Accept` negotiation and real JSON errors. It is
-  excluded from the Jekyll build and the site does not depend on it.
-- Tests: `python -m unittest discover -s tests -t .` and `node --test tests/worker.test.mjs`. Both
-  run in CI before `jekyll build`.
+- `index.html` — the directory: hero, search, type tabs, category/language/sort filters, one ranked list.
+- `_includes/row.html` — the one row component. Keep its `data-*` attributes to what filtering needs.
+- `_layouts/reviewer.html` — one reviewer page: instruction with copy button, metadata.
+- `_layouts/technique.html` — one verification page: sub-techniques, how to build it, signals, packages.
+- `assets/js/site.js` — filters and sorts the rendered rows; reads and writes the query string.
+- `assets/css/site.scss` — the only stylesheet. Colours are tokens on `:root`, with dark mode.
 
 ## Conventions
 
-- **Copy in place.** Instructions expand inline and copy from wherever they are listed; the detail
-  page is for provenance, not for copying.
-- **Raw endpoints are part of the product.** `/raw/<slug>.md`, `/raw/bundles/<domain>.md` and
-  `/raw/index.json` are the machine interface. Raw markdown files must not carry YAML front matter,
-  or Jekyll renders them as pages instead of serving them verbatim.
-- **Keep pages light.** `row.html` is rendered thousands of times per domain page; adding markup or
-  data attributes there is expensive. Filtering builds its haystack from rendered text at runtime for
-  the same reason.
-- **Show time.** Anything listing instructions shows when its source discussion was last active, via
-  `<time data-date="YYYY-MM-DD">`, which the script turns into a relative label.
-- **No marketing copy.** Describe what something is and what it does.
+- **Escape author text.** Jekyll does not HTML-escape Liquid output. Every front-matter value printed in a
+  layout or include goes through `| escape`; a `<` in a title otherwise corrupts the list.
+- **Keep the list light.** It renders every entry so search works without a server. Do not add markup or
+  data attributes per row without a reason.
+- **No marketing copy.** Describe what an entry is and what it does.
+
+## Validation
+
+`python -m unittest discover -s tests -t .` checks front matter in both collections: required fields,
+integer counts, unique technique ids, sub-technique ids under their parent. CI runs it before
+`jekyll build`. Jekyll itself fails the build on bad YAML.
 
 ## Watch out for
 
-- Do not add `include: _reviewers` back to `_config.yml`: the discussion JSON is already copied to
-  `/<slug>.json` as collection static files, and the include duplicates 157 MB.
-- `github-pages` pulls in `jekyll-github-metadata`, which calls the GitHub API at build time. Where
-  that is blocked, build with `JEKYLL_NO_BUNDLER_REQUIRE=true`.
-- A full build renders 5k+ pages and takes about a minute; expect that locally and in CI.
+- Do not add `include: _reviewers` to `_config.yml`: the discussion JSON is excluded on purpose.
+- Local builds need a UTF-8 locale (`LANG=C.UTF-8`) or the Sass step fails on a theme file.
+- `github-pages` calls the GitHub API at build time; where that is blocked, build with
+  `JEKYLL_NO_BUNDLER_REQUIRE=true`.

@@ -1,0 +1,38 @@
+---
+title: "Data and control flow analysis"
+id: "V1014"
+slug: "data-and-control-flow-analysis"
+tactic: "Static analysis"
+tactic_id: "VA02"
+description: "Builds a code property graph or interprocedural model to answer reachability questions: can this null reach that dereference, which callers reach this function."
+subtechniques:
+  - id: "V1014.001"
+    name: "Interprocedural null and resource analysis"
+    description: "Report null dereferences and leaks along concrete paths."
+  - id: "V1014.002"
+    name: "Code property graph queries"
+    description: "Query syntax, control flow and data flow together to find custom bug patterns."
+  - id: "V1014.003"
+    name: "Call graph impact"
+    description: "List every caller and downstream consumer of a changed symbol."
+packages:
+  - id: "infer"
+    name: "Infer"
+    url: "https://github.com/meta/infer"
+  - id: "joern"
+    name: "Joern"
+    url: "https://github.com/joernio/joern"
+  - id: "spotbugs"
+    name: "SpotBugs"
+    url: "https://github.com/spotbugs/spotbugs"
+  - id: "scip"
+    name: "SCIP"
+    url: "https://github.com/scip-code/scip"
+craft:
+  - "Run the analyzer on the default branch to establish a baseline."
+  - "Run it on the change and report only new paths."
+  - "Save the queries that found real bugs as regression rules."
+reverse:
+  - "infer or spotbugs tasks in the build, or Joern scripts in the repository."
+  - "SCIP or LSIF index uploads in CI for code navigation."
+---

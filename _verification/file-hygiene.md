@@ -1,0 +1,36 @@
+---
+title: "File hygiene"
+id: "V1002"
+slug: "file-hygiene"
+tactic: "Hygiene"
+tactic_id: "VA01"
+description: "Cheap checks on files as files: valid syntax for config formats, no merge markers, no trailing whitespace, no oversized or binary blobs."
+subtechniques:
+  - id: "V1002.001"
+    name: "Config syntax validation"
+    description: "Parse every JSON, YAML and TOML file, and validate the important ones against a schema."
+  - id: "V1002.002"
+    name: "Merge marker and whitespace checks"
+    description: "Reject conflict markers, trailing whitespace and missing final newlines."
+  - id: "V1002.003"
+    name: "Large file guard"
+    description: "Refuse files above a size limit so binaries go to LFS or object storage."
+packages:
+  - id: "pre-commit-hooks"
+    name: "pre-commit-hooks"
+    url: "https://github.com/pre-commit/pre-commit-hooks"
+  - id: "check-jsonschema"
+    name: "check-jsonschema"
+    url: "https://github.com/python-jsonschema/check-jsonschema"
+  - id: "yamllint"
+    name: "yamllint"
+    url: "https://github.com/adrienverge/yamllint"
+craft:
+  - "Add pre-commit-hooks with check-yaml, check-json, check-toml, check-merge-conflict and check-added-large-files."
+  - "Validate CI and app config against published JSON schemas with check-jsonschema."
+  - "Run pre-commit run --all-files in CI so the hooks are not optional."
+reverse:
+  - "A .pre-commit-config.yaml listing pre-commit-hooks ids."
+  - "A CI job that runs pre-commit run --all-files."
+  - "A .yamllint or schema files referenced from hooks."
+---

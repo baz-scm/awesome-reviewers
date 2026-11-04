@@ -1,0 +1,37 @@
+---
+title: "Review context retrieval"
+id: "V1033"
+slug: "review-context-retrieval"
+tactic: "Code review"
+tactic_id: "VA06"
+description: "Collects what a reviewer needs beyond the diff: callers, definitions, related tests, docs and repository rules."
+subtechniques:
+  - id: "V1033.001"
+    name: "Repository map"
+    description: "A ranked map of symbols and files built from syntax trees."
+  - id: "V1033.002"
+    name: "Precise code navigation"
+    description: "Definitions and references from a compiler-grade index."
+  - id: "V1033.003"
+    name: "Cross-repository context"
+    description: "Look up how other services call or are called by the changed code."
+packages:
+  - id: "tree-sitter"
+    name: "tree-sitter"
+    url: "https://github.com/tree-sitter/tree-sitter"
+  - id: "aider"
+    name: "Aider"
+    url: "https://github.com/Aider-AI/aider"
+  - id: "scip"
+    name: "SCIP"
+    url: "https://github.com/scip-code/scip"
+  - id: "llamaindex"
+    name: "LlamaIndex"
+    url: "https://github.com/run-llama/llama_index"
+craft:
+  - "Index the repository with tree-sitter or SCIP on the default branch."
+  - "For each changed symbol, retrieve definitions, callers and tests."
+  - "Cap context by relevance, not file order."
+reverse:
+  - "SCIP index uploads, tree-sitter grammars or a repo-map cache in tooling."
+---

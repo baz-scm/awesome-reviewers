@@ -1,5 +1,5 @@
 ---
-title: " Consistent descriptive naming"
+title: "Consistent descriptive naming"
 description: "Use precise, consistent, and descriptive naming conventions throughout your code to enhance readability and maintainability. This includes using past participle forms for variables storing processed data, choosing function names that clearly describe their purpose, using consistent naming patterns for related parameters, and naming properties to clearly indicate their relationships."
 repository: "fastify/fastify"
 label: "Naming Conventions"

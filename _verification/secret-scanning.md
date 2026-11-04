@@ -1,0 +1,35 @@
+---
+title: "Secret scanning"
+id: "V1008"
+slug: "secret-scanning"
+tactic: "Static analysis"
+tactic_id: "VA02"
+description: "Finds credentials and tokens in the working tree and in history before they are pushed or published."
+subtechniques:
+  - id: "V1008.001"
+    name: "Pre-commit secret scan"
+    description: "Block the commit locally, before the secret reaches a remote."
+  - id: "V1008.002"
+    name: "History scan"
+    description: "Scan full git history, since deleting a secret in a later commit does not remove it."
+  - id: "V1008.003"
+    name: "Live verification"
+    description: "Test whether a found credential is still valid to prioritise rotation."
+packages:
+  - id: "gitleaks"
+    name: "Gitleaks"
+    url: "https://github.com/gitleaks/gitleaks"
+  - id: "trufflehog"
+    name: "TruffleHog"
+    url: "https://github.com/trufflesecurity/trufflehog"
+  - id: "detect-secrets"
+    name: "detect-secrets"
+    url: "https://github.com/Yelp/detect-secrets"
+craft:
+  - "Add a pre-commit hook and a CI job running the same scanner and config."
+  - "Keep a baseline or allow-list for test fixtures, reviewed like code."
+  - "Scan full history once and rotate anything found."
+reverse:
+  - ".gitleaks.toml, .secrets.baseline or a trufflehog step in CI."
+  - "A gitleaks or detect-secrets hook in .pre-commit-config.yaml."
+---

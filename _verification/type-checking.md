@@ -1,0 +1,35 @@
+---
+title: "Type checking"
+id: "V1006"
+slug: "type-checking"
+tactic: "Static analysis"
+tactic_id: "VA02"
+description: "Proves call sites and data shapes agree across modules: wrong types, unhandled null or None, signatures broken by a change."
+subtechniques:
+  - id: "V1006.001"
+    name: "Gradual typing"
+    description: "Type-check annotated code first and tighten strictness per module."
+  - id: "V1006.002"
+    name: "Strict mode"
+    description: "Disallow implicit any, untyped definitions and unchecked optional access."
+  - id: "V1006.003"
+    name: "Compiler as checker"
+    description: "In compiled languages the build is the type check; a failing build is this check failing."
+packages:
+  - id: "mypy"
+    name: "mypy"
+    url: "https://github.com/python/mypy"
+  - id: "pyright"
+    name: "Pyright"
+    url: "https://github.com/microsoft/pyright"
+  - id: "typescript"
+    name: "TypeScript (tsc)"
+    url: "https://github.com/microsoft/TypeScript"
+craft:
+  - "Run the checker in non-strict mode on the whole repository to get a baseline."
+  - "Turn on strict flags for new and frequently changed modules first."
+  - "Run it in CI as its own job so type errors are not hidden in test failures."
+reverse:
+  - "[tool.mypy] or pyrightconfig.json, tsconfig.json with strict flags."
+  - "A tsc --noEmit, mypy or pyright step in CI or a typecheck script."
+---

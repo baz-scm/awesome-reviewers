@@ -1,0 +1,38 @@
+---
+title: "Visual regression testing"
+id: "V1025"
+slug: "visual-regression-testing"
+tactic: "Testing"
+tactic_id: "VA04"
+description: "Compares screenshots of rendered pages or components with approved baselines and reports pixel differences."
+subtechniques:
+  - id: "V1025.001"
+    name: "Component snapshots"
+    description: "Screenshot each component state in isolation."
+  - id: "V1025.002"
+    name: "Page snapshots"
+    description: "Screenshot full pages at fixed viewports."
+packages:
+  - id: "pixelmatch"
+    name: "pixelmatch"
+    url: "https://github.com/mapbox/pixelmatch"
+  - id: "backstopjs"
+    name: "BackstopJS"
+    url: "https://github.com/garris/BackstopJS"
+  - id: "lost-pixel"
+    name: "Lost Pixel"
+    url: "https://github.com/lost-pixel/lost-pixel"
+  - id: "reg-suit"
+    name: "reg-suit"
+    url: "https://github.com/reg-viz/reg-suit"
+  - id: "playwright"
+    name: "Playwright"
+    url: "https://github.com/microsoft/playwright"
+craft:
+  - "Render in a pinned browser and font environment to avoid noise."
+  - "Store baselines per branch and approve changes in the PR."
+  - "Set per-component diff thresholds rather than one global value."
+reverse:
+  - "__screenshots__ or backstop_data directories."
+  - "toHaveScreenshot assertions or a visual testing step in CI."
+---

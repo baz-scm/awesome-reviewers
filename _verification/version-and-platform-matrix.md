@@ -1,0 +1,35 @@
+---
+title: "Version and platform matrix"
+id: "V1024"
+slug: "version-and-platform-matrix"
+tactic: "Testing"
+tactic_id: "VA04"
+description: "Runs the suite across runtime versions, operating systems and feature combinations you do not run locally."
+subtechniques:
+  - id: "V1024.001"
+    name: "Runtime matrix"
+    description: "Every supported language runtime version."
+  - id: "V1024.002"
+    name: "Feature powerset"
+    description: "Build and test each combination of optional features or extras."
+  - id: "V1024.003"
+    name: "Minimum versions"
+    description: "Test with the lowest declared dependency versions."
+packages:
+  - id: "tox"
+    name: "tox"
+    url: "https://github.com/tox-dev/tox"
+  - id: "nox"
+    name: "nox"
+    url: "https://github.com/wntrblm/nox"
+  - id: "cargo-hack"
+    name: "cargo-hack"
+    url: "https://github.com/taiki-e/cargo-hack"
+craft:
+  - "Declare supported versions once and generate the matrix from that list."
+  - "Test the oldest and newest on PRs, the full matrix on main."
+  - "Add a minimum-versions job so lower bounds are true."
+reverse:
+  - "strategy.matrix in workflows, tox.ini or noxfile.py."
+  - "cargo hack --feature-powerset or -Z minimal-versions steps."
+---

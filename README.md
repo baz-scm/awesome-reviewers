@@ -1,13 +1,20 @@
 # Awesome Reviewers
 
-Expert engineering instructions for AI and infrastructure domains, distilled from code review
-discussions in production open-source repositories.
+Which checks to run on the code you are writing, and the review prompts for what those checks miss.
 
 **[awesomereviewers.com](https://awesomereviewers.com)**
 
-Each entry is a self-contained instruction — a rule, why it exists, and usually an example — written
-from recurring reviewer feedback in one repository. They are plain markdown, so they drop into an
-agent, a review harness, a context broker, or a prompt you are assembling by hand.
+Two sources of truth, both taken from production open-source repositories:
+
+- **Checks** (`_verifications/`): the linters, type checkers, test runners, scanners and proofs each
+  repository runs, found in its CI workflows, pre-commit hooks and task runners — with commands and
+  documented exit codes.
+- **Prompts** (`_reviewers/`): self-contained review instructions — a rule, why it exists, usually an
+  example — distilled from recurring reviewer feedback in each repository.
+
+The site joins them per language. A playbook names, for each kind of check, the tool most repositories
+in that language run, then the extra checks and the prompts for each kind of change (security,
+concurrency, algorithms, CI config, …). Agents map a changed file to a language and load one file.
 
 ## Awesome Reviewers API
 
@@ -16,6 +23,12 @@ Reference: **[awesomereviewers.com/api/](https://awesomereviewers.com/api/)** ·
 description: **[/openapi.json](https://awesomereviewers.com/openapi.json)** (OpenAPI 3.1).
 
 ```bash
+# start here: file extension -> language -> playbook URL
+curl https://awesomereviewers.com/raw/verify/index.json
+
+# the checks and prompts for one language
+curl https://awesomereviewers.com/raw/verify/python.md
+
 # one instruction
 curl https://awesomereviewers.com/raw/<slug>.md
 
@@ -36,6 +49,9 @@ curl https://awesomereviewers.com/openapi.json
 | --- | --- | --- |
 | OpenAPI description | `/openapi.json` | `application/vnd.oai.openapi+json;version=3.1` |
 | API documentation | `/api/` | `text/html` |
+| Verification playbooks index | `/raw/verify/index.json` | `application/json` |
+| Verification playbook | `/raw/verify/<language>.md` | `text/markdown` |
+| Verification playbook (JSON) | `/raw/verify/<language>.json` | `application/json` |
 | Corpus index | `/raw/index.json` | `application/json` |
 | Single instruction | `/raw/<slug>.md` | `text/markdown` |
 | Domain bundle | `/raw/bundles/<domain>.md` | `text/markdown` |
@@ -49,8 +65,9 @@ curl https://awesomereviewers.com/openapi.json
 Every instruction carries the date of the most recent review comment behind it, so a scheduled job
 can diff `/raw/index.json` against its last run instead of refetching everything.
 
-An instruction page at `/reviewers/<slug>/` is the same content as `/raw/<slug>.md`, and a domain
-page at `/domains/<domain>/` as `/raw/bundles/<domain>.md`; each page links its markdown with
+An instruction page at `/reviewers/<slug>/` is the same content as `/raw/<slug>.md`, a domain
+page at `/domains/<domain>/` as `/raw/bundles/<domain>.md`, and a playbook page at
+`/verify/<language>/` as `/raw/verify/<language>.md`; each page links its markdown with
 `<link rel="alternate" type="text/markdown">`, and every page links `/openapi.json` as
 `rel="service-desc"`. Errors follow [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem
 details — see [/api/#errors](https://awesomereviewers.com/api/#errors).
@@ -79,14 +96,17 @@ are filterable on every domain page.
 ## Repository layout
 
 ```
-_reviewers/            source of truth — <slug>.md instruction + <slug>.json source discussions
-build_data.py          derives everything else from _reviewers/
-_layouts/, _includes/  base, domain and instruction layouts
+_reviewers/            source of truth — <slug>.md prompt + <slug>.json source discussions
+_verifications/        source of truth — <owner>-<name>.json checks one repository runs
+build_data.py          derives everything else from those two directories
+_layouts/, _includes/  base, language, method, source, domain and instruction layouts
 assets/css/site.scss   the site's only stylesheet
 assets/js/site.js      the site's only script
-index.html             search, domains, recently updated
-domains.html           domain overview          -> /domains/
-sources.html           source repositories      -> /sources/
+index.html             changed-file finder, languages, change kinds, prompt search
+verify.html            playbooks by language    -> /verify/   (one page per language under it)
+methods.html           verification methods     -> /methods/  (one page per method under it)
+domains.html           prompts by domain        -> /domains/
+sources.html           source repositories      -> /sources/  (one page per repository under it)
 api.html               API reference            -> /api/
 methodology.html       how entries are derived  -> /methodology/
 404.html               recovery page, with markdown and problem+json bodies
@@ -94,9 +114,11 @@ tests/                 machine-interface tests
 edge/                  optional CDN worker for Accept negotiation (not part of the site)
 ```
 
-Nothing outside `_reviewers/` and `_verifications/` is a source of truth. Domain stats, dates, indexes, raw endpoints,
-bundles, domain pages, `llms.txt` and `openapi.json` are all generated and are not committed — see
-`.gitignore`.
+Nothing outside `_reviewers/` and `_verifications/` is a source of truth. Playbooks, method and
+source pages, domain stats, dates, indexes, raw endpoints, bundles, domain pages, `llms.txt` and
+`openapi.json` are all generated and are not committed — see `.gitignore`. What each tool is for,
+which languages it covers and which checks a kind of change calls for are explicit tables in
+`build_data.py` (`TOOL_PROFILES`, `CHECK_KINDS`, `LANGUAGES`, `CHANGES`); usage shares are counted.
 
 ## Local development
 
@@ -106,7 +128,8 @@ bundle install
 bundle exec jekyll serve
 ```
 
-`build_data.py` needs only the standard library. Re-run it after changing anything in `_reviewers/`.
+`build_data.py` needs only the standard library. Re-run it after changing anything in `_reviewers/`
+or `_verifications/`.
 
 ```bash
 python -m unittest discover -s tests -t .   # OpenAPI, error format, llms.txt, 404, discovery links
@@ -121,6 +144,8 @@ test skips, so the deploy pipeline never depends on a package index.
 
 - **Fix an instruction:** open a pull request against its file in `_reviewers/`.
 - **Fix a domain assignment:** repositories are mapped explicitly in `build_data.py`.
+- **Fix a recommendation:** tool profiles and the change-to-check mapping are tables in `build_data.py`;
+  a scan is regenerated by bazai's verification scanner, not edited by hand.
 
 ## Disclaimer
 

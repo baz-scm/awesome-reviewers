@@ -2,9 +2,11 @@
 
 ## What this project is
 
-A library of expert engineering instructions for AI and infrastructure domains, distilled from code
-review discussions in production open-source repositories. Consumers are people and agents that need
-raw, copy-ready expertise: agents, review harnesses, context brokers.
+Tells people and agents which checks to run on the code they are writing, and which review prompts
+cover what those checks miss. Checks come from the CI workflows, hooks and task runners of production
+open-source repositories; prompts are distilled from their code review discussions. The primary flow
+is: changed file -> language -> playbook (`/verify/<language>/`, `/raw/verify/<language>.md`) ->
+checks per kind, then prompts per kind of change. Domains remain the way to browse prompts.
 
 It is a Jekyll site on GitHub Pages. Keep it that way — static, dependency-light, no build step
 beyond Jekyll and one Python script.
@@ -30,16 +32,28 @@ beyond Jekyll and one Python script.
 
 Everything else is derived by `build_data.py` and is **not committed**: `_data/api.json`,
 `_data/domains.json`, `_data/entries.json`, `_data/meta.json`, `_data/sources.json`,
-`assets/data/search.json`, `domains/*.html`, `raw/**` (including `raw/verifications/`), `llms.txt`,
-`openapi.json`. Re-run `python build_data.py` after touching `_reviewers/` or `_verifications/`, and
+`_data/verify.json`, `_data/source_pages.json`, `assets/data/search.json`, `domains/*.html`,
+`verify/*.html`, `methods/*.html`, `sources/*.html`, `raw/**` (including `raw/verifications/` and
+`raw/verify/`), `llms.txt`, `openapi.json`. Re-run `python build_data.py` after touching `_reviewers/` or `_verifications/`, and
 before the first local Jekyll build.
 
 Dates are derived from discussion timestamps, never declared in front matter. Domain is derived from
 the source repository via the explicit map in `build_data.py`.
 
+The verification guide joins the two sources with explicit tables in `build_data.py`:
+`TOOL_PROFILES` (tool -> check kind, languages), `CHECK_KINDS` (kind -> method), `LANGUAGES`
+(playbook languages, front-matter languages, file extensions) and `CHANGES` (what a change touches
+-> check kinds + prompt topics; the first entry is the every-change baseline). Every corpus topic
+must appear in exactly one `CHANGES` entry and every scanned tool needs a `TOOL_PROFILES` entry —
+tests enforce both. Usage shares are counted from the scans, never declared.
+
 ## Site layer
 
 - `_layouts/base.html` — chrome for every page.
+- `_layouts/language.html` — one playbook page per language, from `_data/verify.json`.
+- `_layouts/method.html` — one page per verification method, its check kinds and tools.
+- `_layouts/source.html` — one page per source repository: its checks and its prompts.
+- `_includes/check.html` — one recommended check (kind, tool, share, command, exit codes).
 - `_layouts/domain.html` — one page per domain, renders all its instructions from `_data/entries.json`.
 - `_layouts/reviewer.html` — instruction detail page, metadata from `_data/meta.json[page.slug]`.
 - `_includes/row.html` — the one row component shared by the homepage, search results and domain pages.

@@ -139,6 +139,7 @@ export function appendVaryAccept(headers) {
  *
  *   /reviewers/<slug>/  -> /raw/<slug>.md
  *   /domains/<domain>/  -> /raw/bundles/<domain>.md
+ *   /verify/<language>/ -> /raw/verify/<language>.md
  *   /                   -> /raw/site.md
  */
 export function markdownTwin(pathname) {
@@ -148,6 +149,8 @@ export function markdownTwin(pathname) {
   if (reviewer) return `/raw/${reviewer[1]}.md`;
   const domain = clean.match(/^\/domains\/([a-z0-9-]+)$/);
   if (domain) return `/raw/bundles/${domain[1]}.md`;
+  const language = clean.match(/^\/verify\/([a-z0-9-]+)$/);
+  if (language) return `/raw/verify/${language[1]}.md`;
   return null;
 }
 

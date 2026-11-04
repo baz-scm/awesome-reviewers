@@ -156,6 +156,7 @@ describe('markdown mapping', () => {
     assert.equal(markdownTwin('/reviewers/example-instruction/'), '/raw/example-instruction.md');
     assert.equal(markdownTwin('/reviewers/example-instruction'), '/raw/example-instruction.md');
     assert.equal(markdownTwin('/domains/ai-agents/'), '/raw/bundles/ai-agents.md');
+    assert.equal(markdownTwin('/verify/python/'), '/raw/verify/python.md');
     assert.equal(markdownTwin('/'), '/raw/site.md');
   });
 
@@ -163,6 +164,8 @@ describe('markdown mapping', () => {
     assert.equal(markdownTwin('/methodology/'), null);
     assert.equal(markdownTwin('/reviewers/'), null);
     assert.equal(markdownTwin('/domains/ai-agents/extra/'), null);
+    assert.equal(markdownTwin('/verify/'), null);
+    assert.equal(markdownTwin('/methods/testing/'), null);
   });
 
   test('passes files and assets straight through', () => {

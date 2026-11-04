@@ -126,6 +126,25 @@
       return;
     }
 
+    var copyUrl = event.target.closest('[data-copy-url]');
+    if (copyUrl) {
+      fetch(copyUrl.dataset.copyUrl)
+        .then(function (res) {
+          if (!res.ok) throw new Error(res.status);
+          return res.text();
+        })
+        .then(copyText)
+        .then(function () { flash(copyUrl, 'copied'); })
+        .catch(function () { flash(copyUrl, 'failed'); });
+      return;
+    }
+
+    var copyInline = event.target.closest('[data-copy-text]');
+    if (copyInline) {
+      copyText(copyInline.dataset.copyText).then(function () { flash(copyInline, 'copied'); });
+      return;
+    }
+
     var share = event.target.closest('[data-share]');
     if (share) {
       copyText(location.origin + share.dataset.share).then(function () {
@@ -374,7 +393,53 @@
 
     input.addEventListener('focus', load, { once: true });
     input.addEventListener('input', run);
+    var preset = new URLSearchParams(location.search).get('q');
+    if (preset) input.value = preset;
     if (input.value) run();
+  }
+
+  /* ------------------------------------------------------------- finder -- */
+
+  /* Changed file -> playbook. The map comes from /raw/verify/index.json's
+     `extensions`, inlined by the page so this needs no request. */
+  function initFinder() {
+    var input = document.querySelector('[data-finder]');
+    if (!input) return;
+    var result = document.querySelector('[data-finder-result]');
+    var map = JSON.parse(document.querySelector('[data-finder-map]').textContent);
+    var titles = {};
+    document.querySelectorAll('[data-language]').forEach(function (card) {
+      titles[card.dataset.language] = card.querySelector('h3').textContent;
+    });
+
+    function languageFor(path) {
+      var name = path.split('/').pop();
+      if (map[name]) return map[name];
+      var dot = name.lastIndexOf('.');
+      return dot === -1 ? null : map[name.slice(dot).toLowerCase()] || null;
+    }
+
+    function run() {
+      var paths = input.value.split(/[\s,]+/).filter(Boolean);
+      var seen = {};
+      var links = [];
+      var unknown = [];
+      paths.forEach(function (path) {
+        var slug = languageFor(path);
+        if (!slug) { unknown.push(path); return; }
+        if (seen[slug]) return;
+        seen[slug] = true;
+        links.push('<a href="/verify/' + slug + '/">' + escapeHtml(titles[slug] || slug) + ' playbook</a>');
+      });
+      result.innerHTML = links.join(' · ') +
+        (unknown.length ? (links.length ? ' · ' : '') + 'no playbook for ' + escapeHtml(unknown.join(', ')) : '');
+    }
+
+    input.addEventListener('input', run);
+    input.addEventListener('keydown', function (event) {
+      var first = result.querySelector('a');
+      if (event.key === 'Enter' && first) location.href = first.href;
+    });
   }
 
   /* ---------------------------------------------------------------- init -- */
@@ -383,6 +448,7 @@
     stampDates(document);
     document.querySelectorAll('[data-filters]').forEach(initFilters);
     initSearch();
+    initFinder();
     initThreads();
   }
 

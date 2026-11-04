@@ -24,6 +24,7 @@ Only pages that have a markdown twin, because only those have markdown to serve:
 | --- | --- |
 | `/reviewers/<slug>/` | `/raw/<slug>.md` |
 | `/domains/<domain>/` | `/raw/bundles/<domain>.md` |
+| `/verify/<language>/` | `/raw/verify/<language>.md` |
 | `/` | `/llms.txt` |
 
 Accept parsing follows RFC 9110 §12.5.1: q-values are honoured, `q=0` is an explicit rejection, a

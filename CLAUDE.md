@@ -13,7 +13,7 @@ beyond Jekyll and one Python script.
 
 ## Source of truth
 
-`_reviewers/` and `_verifications/` only.
+`_reviewers/`, `_verifications/` and `_catalog/` only.
 
 `_reviewers/`:
 
@@ -30,10 +30,22 @@ beyond Jekyll and one Python script.
   the method and trigger enums in `VERIFICATION_METHODS` / `VERIFICATION_TRIGGERS` mirror the
   scanner's `VerificationMethod` and `Trigger`, so change both together.
 
+`_catalog/` is the verification catalog, an ATT&CK-style matrix:
+
+- `techniques.json` — `tactics` (columns, `VA01`...; the five with a `method` mirror `METHOD_GUIDE`
+  and keep its slugs) and `techniques` (`V1001`..., sub-techniques `V1001.001`...), each with
+  description, `kinds` (the `CHECK_KINDS` it is detected as), package ids, `craft` steps and `reverse`
+  signals. Every check kind belongs to exactly one technique; `read_catalog` fails the build otherwise.
+- `packages.json` — package id -> name and upstream URL.
+- Usage, tools, configuration signals and procedure examples are counted from the scans, never declared.
+- The leaderboard (`build_leaderboard`) adapts VerifyBench (arXiv:2505.15801): accuracy per method over
+  applicable check kinds, unweighted average, and a hard split of kinds under `HARD_ADOPTION`.
+  Declared-only tools never score.
+
 Everything else is derived by `build_data.py` and is **not committed**: `_data/api.json`,
 `_data/domains.json`, `_data/entries.json`, `_data/meta.json`, `_data/sources.json`,
-`_data/verify.json`, `_data/source_pages.json`, `assets/data/search.json`, `domains/*.html`,
-`verify/*.html`, `methods/*.html`, `sources/*.html`, `raw/**` (including `raw/verifications/` and
+`_data/verify.json`, `_data/source_pages.json`, `_data/catalog.json`, `_data/leaderboard.json`, `assets/data/search.json`, `domains/*.html`,
+`verify/*.html`, `methods/*.html`, `techniques/*.html`, `sources/*.html`, `raw/**` (including `raw/verifications/` and
 `raw/verify/`), `llms.txt`, `openapi.json`. Re-run `python build_data.py` after touching `_reviewers/` or `_verifications/`, and
 before the first local Jekyll build.
 
@@ -51,7 +63,10 @@ tests enforce both. Usage shares are counted from the scans, never declared.
 
 - `_layouts/base.html` — chrome for every page.
 - `_layouts/language.html` — one playbook page per language, from `_data/verify.json`.
-- `_layouts/method.html` — one page per verification method, its check kinds and tools.
+- `methods.html` — the catalog matrix; `leaderboard.html` — repositories ranked by catalog coverage.
+- `_layouts/method.html` — one page per tactic, its techniques (old `#<check-kind>` anchors still land).
+- `_layouts/technique.html` — one page per technique: sub-techniques, craft, reverse engineer,
+  packages, tools seen, procedure examples.
 - `_layouts/source.html` — one page per source repository: its checks and its prompts.
 - `_includes/check.html` — one recommended check (kind, tool, share, command, exit codes).
 - `_layouts/domain.html` — one page per domain, renders all its instructions from `_data/entries.json`.

@@ -442,11 +442,55 @@
     });
   }
 
+  /* ---------------------------------------------------------- catalog -- */
+
+  function initMatrix(scope) {
+    var cells = Array.prototype.slice.call(scope.querySelectorAll('.cell'));
+    var text = scope.querySelector('[data-matrix-filter]');
+    var layer = scope.querySelector('[data-matrix-layer]');
+    var count = scope.querySelector('[data-matrix-count]');
+    cells.forEach(function (cell) { cell._hay = cell.textContent.toLowerCase(); });
+    function apply() {
+      var terms = text.value.toLowerCase().split(/\s+/).filter(Boolean);
+      var shown = 0;
+      cells.forEach(function (cell) {
+        var ok = terms.every(function (term) { return cell._hay.indexOf(term) !== -1; }) &&
+          (layer.value === 'all' || (layer.value === 'detected') === (cell.dataset.detected === 'true'));
+        cell.classList.toggle('cell--dim', !ok);
+        if (ok) shown++;
+      });
+      count.textContent = shown + ' of ' + cells.length;
+    }
+    text.addEventListener('input', apply);
+    layer.addEventListener('change', apply);
+    apply();
+  }
+
+  function initTableFilter(scope) {
+    var rows = Array.prototype.slice.call(scope.querySelectorAll('tbody tr'));
+    var text = scope.querySelector('[data-table-filter]');
+    var count = scope.querySelector('[data-table-count]');
+    function apply() {
+      var term = text.value.toLowerCase().trim();
+      var shown = 0;
+      rows.forEach(function (row) {
+        var ok = !term || row.textContent.toLowerCase().indexOf(term) !== -1;
+        row.hidden = !ok;
+        if (ok) shown++;
+      });
+      count.textContent = shown + ' of ' + rows.length;
+    }
+    text.addEventListener('input', apply);
+    apply();
+  }
+
   /* ---------------------------------------------------------------- init -- */
 
   function ready() {
     stampDates(document);
     document.querySelectorAll('[data-filters]').forEach(initFilters);
+    document.querySelectorAll('[data-matrix]').forEach(initMatrix);
+    document.querySelectorAll('[data-table]').forEach(initTableFilter);
     initSearch();
     initFinder();
     initThreads();

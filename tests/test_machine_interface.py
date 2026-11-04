@@ -338,7 +338,10 @@ class BuildHygiene(unittest.TestCase):
             "llms.txt",
             "verify/*.html",
             "methods/*.html",
+            "techniques/*.html",
             "sources/*.html",
+            "_data/catalog.json",
+            "_data/leaderboard.json",
         ):
             with self.subTest(path=path):
                 self.assertIn(path, ignored)
@@ -593,6 +596,88 @@ class VerificationGuide(unittest.TestCase):
                 self.assertFalse(text.startswith("---"))
                 self.assertTrue(text.startswith("# Verifying "))
                 self.assertEqual(index["extensions"][language["extensions"][0]], language["slug"])
+
+
+
+class VerificationCatalog(unittest.TestCase):
+    """`_catalog/`: the tactic and technique matrix, and the leaderboard built from it."""
+
+    FIXTURE = VerificationGuide.FIXTURE
+    scans = VerificationGuide.scans
+    entries = VerificationGuide.entries
+
+    def write_catalog(self, directory: Path, mutate) -> None:
+        source = build_data.CATALOG_DIR
+        (directory / "packages.json").write_text((source / "packages.json").read_text(encoding="utf-8"), encoding="utf-8")
+        techniques = json.loads((source / "techniques.json").read_text(encoding="utf-8"))
+        mutate(techniques)
+        (directory / "techniques.json").write_text(json.dumps(techniques), encoding="utf-8")
+
+    def test_committed_catalog_is_consistent(self):
+        catalog = build_data.read_catalog()
+        kinds = [kind for t in catalog["techniques"] for kind in t["kinds"]]
+        self.assertEqual(sorted(kinds), sorted(build_data.CHECK_KIND_SLUGS))
+        self.assertEqual(
+            sorted(t["method"] for t in catalog["tactics"] if t.get("method")), sorted(build_data.GUIDE_METHODS)
+        )
+
+    def test_refuses_an_unknown_package_or_a_duplicate_kind(self):
+        import tempfile
+
+        def unknown_package(data):
+            data["techniques"][0]["packages"].append("no-such-package")
+
+        def duplicate_kind(data):
+            data["techniques"][1]["kinds"].append(data["techniques"][0]["kinds"][0])
+
+        for mutate in (unknown_package, duplicate_kind):
+            with self.subTest(mutate=mutate.__name__), tempfile.TemporaryDirectory() as tmp:
+                self.write_catalog(Path(tmp), mutate)
+                with self.assertRaises(SystemExit):
+                    build_data.read_catalog(Path(tmp))
+
+    def test_procedures_come_from_the_scans(self):
+        catalog = build_data.build_catalog(self.entries(), self.scans(), build_data.read_catalog())
+        techniques = {t["id"]: t for tactic in catalog["tactics"] for t in tactic["techniques"]}
+        unit = next(t for t in techniques.values() if any(k["slug"] == "unit-tests" for k in t["kinds"]))
+        self.assertEqual(unit["repos"], 1)
+        self.assertEqual(unit["procedures"][0]["slug"], "pallets-flask")
+        self.assertIn("pytest", unit["procedures"][0]["tools"])
+        self.assertTrue(unit["signals"])
+        review = next(t for t in techniques.values() if not t["kinds"])
+        self.assertIsNone(review["share"])
+        self.assertEqual(catalog["kind_technique"]["unit-tests"], unit["id"])
+
+    def test_leaderboard_averages_method_accuracy(self):
+        board = build_data.build_leaderboard(self.entries(), self.scans())
+        self.assertEqual(board["count"], 1)
+        row = board["rows"][0]
+        self.assertEqual(row["rank"], 1)
+        scored = [v for v in row["methods"].values() if v is not None]
+        self.assertAlmostEqual(row["avg"], round(sum(scored) / len(scored), 1))
+        self.assertIn("unit-tests", row["kinds"])
+        self.assertLessEqual(row["correct"], row["items"])
+
+    def test_declared_only_tools_do_not_score(self):
+        scans = self.scans()
+        for check in scans["pallets/flask"]["verifications"]:
+            check["declared_only"] = True
+        row = build_data.build_leaderboard(self.entries(), scans)["rows"][0]
+        self.assertEqual(row["correct"], 0)
+        self.assertEqual(row["avg"], 0.0)
+
+    def test_published_catalog_and_leaderboard_agree(self):
+        text = (build_data.RAW_DIR / "catalog.md").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("# Verification catalog\n"))
+        catalog = json.loads((build_data.RAW_DIR / "catalog.json").read_text(encoding="utf-8"))
+        for tactic in catalog["tactics"]:
+            for technique in tactic["techniques"]:
+                self.assertIn(f"### {technique['id']} {technique['name']}", text)
+                self.assertTrue((ROOT / "techniques" / f"{technique['id']}.html").exists())
+        board = json.loads((build_data.RAW_DIR / "leaderboard.json").read_text(encoding="utf-8"))
+        ranks = [row["rank"] for row in board["rows"]]
+        self.assertEqual(ranks, sorted(ranks))
+        self.assertEqual(board["count"], len(board["rows"]))
 
 
 if __name__ == "__main__":

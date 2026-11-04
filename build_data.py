@@ -32,7 +32,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REVIEWERS_DIR = Path("_reviewers")
-VERIFICATIONS_DIR = Path("_verifications")
 DATA_DIR = Path("_data")
 RAW_DIR = Path("raw")
 SEARCH_PATH = Path("assets/data/search.json")
@@ -421,155 +420,6 @@ def read_corpus() -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
-# Verifications: the checks each source repository runs, one scan per repository
-# --------------------------------------------------------------------------- #
-
-# Mirrors `VerificationMethod` and `Trigger` in bazai's
-# `modes/awesome_reviewers/verifications/models.py`, which writes these files.
-VERIFICATION_METHODS: list[dict] = [
-    {"slug": "formal", "title": "Formal verification and model checking"},
-    {"slug": "static_analysis", "title": "Static analysis"},
-    {"slug": "testing", "title": "Testing"},
-    {"slug": "formatting", "title": "Formatting and hygiene"},
-    {"slug": "supply_chain", "title": "Supply chain"},
-    {"slug": "unclassified", "title": "Unclassified"},
-]
-VERIFICATION_METHOD_SLUGS = [m["slug"] for m in VERIFICATION_METHODS]
-VERIFICATION_TRIGGERS = ["pre_commit", "ci", "local"]
-URL_PATTERN = re.compile(r"https://[^\s\"'<>]+")
-
-
-def repository_slug(repo: str) -> str:
-    """`owner/name` as a file name: `pallets/flask` -> `pallets-flask`."""
-    return re.sub(r"[^a-z0-9.]+", "-", repo.lower()).strip("-.")
-
-
-def _text_list(value: object, field: str, problems: list[str]) -> list[str]:
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        problems.append(f"{field} must be a list of strings")
-        return []
-    return value
-
-
-def _url(value: object, field: str, problems: list[str]) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str) or not URL_PATTERN.fullmatch(value):
-        problems.append(f"{field} must be an https URL")
-        return None
-    return value
-
-
-def normalize_verification(raw: object, where: str, problems: list[str]) -> dict | None:
-    if not isinstance(raw, dict):
-        problems.append(f"{where}: not an object")
-        return None
-    local: list[str] = []
-    tool = raw.get("tool")
-    method = raw.get("method")
-    if tool is not None and not (isinstance(tool, str) and SLUG_PATTERN.fullmatch(tool)):
-        local.append("tool must be null or a lowercase slug")
-    if method not in VERIFICATION_METHOD_SLUGS:
-        local.append(f"method {method!r} is not one of {VERIFICATION_METHOD_SLUGS}")
-    triggers = _text_list(raw.get("triggers", []), "triggers", local)
-    if any(trigger not in VERIFICATION_TRIGGERS for trigger in triggers):
-        local.append(f"triggers must be drawn from {VERIFICATION_TRIGGERS}")
-    evidence = raw.get("evidence", [])
-    if not isinstance(evidence, list) or not all(
-        isinstance(item, dict) and isinstance(item.get("path"), str) and isinstance(item.get("locator"), str)
-        for item in evidence
-    ):
-        local.append("evidence must be a list of {path, locator}")
-        evidence = []
-    exit_codes = raw.get("exit_codes", {})
-    if not isinstance(exit_codes, dict) or not all(
-        str(code).lstrip("-").isdigit() and isinstance(meaning, str) for code, meaning in exit_codes.items()
-    ):
-        local.append("exit_codes must map integer codes to strings")
-        exit_codes = {}
-    for flag in ("autofix", "declared_only"):
-        if not isinstance(raw.get(flag, False), bool):
-            local.append(f"{flag} must be a boolean")
-    verification = {
-        "tool": tool,
-        "method": method,
-        "commands": _text_list(raw.get("commands", []), "commands", local),
-        "triggers": triggers,
-        "evidence": [{"path": item["path"], "locator": item["locator"]} for item in evidence],
-        "upstream": _url(raw.get("upstream"), "upstream", local),
-        "docs": _url(raw.get("docs"), "docs", local),
-        "exit_codes": {str(code): meaning for code, meaning in exit_codes.items()},
-        "autofix": raw.get("autofix", False) is True,
-        "declared_only": raw.get("declared_only", False) is True,
-    }
-    problems.extend(f"{where}: {problem}" for problem in local)
-    return None if local else verification
-
-
-def read_verifications(directory: Path = VERIFICATIONS_DIR) -> dict[str, dict]:
-    """Read every scan in `directory`, keyed by repository. Fail the build on a malformed one."""
-    if not directory.is_dir():
-        return {}
-    scans: dict[str, dict] = {}
-    problems: list[str] = []
-    for path in sorted(directory.iterdir()):
-        if path.suffix != ".json":
-            problems.append(f"{path.name!r}: not a .json file")
-            continue
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as error:
-            problems.append(f"{path.name!r}: invalid JSON ({error})")
-            continue
-        repo = raw.get("repo_full_name") if isinstance(raw, dict) else None
-        if not isinstance(repo, str) or not REPOSITORY_PATTERN.fullmatch(repo):
-            problems.append(f"{path.name!r}: repo_full_name {repo!r} is not 'owner/name'")
-            continue
-        if reason := slug_problem(path.stem):
-            problems.append(f"{path.name!r}: {reason}")
-            continue
-        if path.stem != repository_slug(repo):
-            problems.append(f"{path.name!r}: must be named {repository_slug(repo)}.json for {repo}")
-            continue
-        ref = raw.get("ref")
-        if not isinstance(ref, str) or not re.fullmatch(r"[0-9a-f]{7,40}", ref):
-            problems.append(f"{path.name!r}: ref must be a commit sha")
-            continue
-        items = raw.get("verifications")
-        if not isinstance(items, list):
-            problems.append(f"{path.name!r}: verifications must be a list")
-            continue
-        verifications = [
-            verification
-            for index, item in enumerate(items)
-            if (verification := normalize_verification(item, f"{path.name!r} verifications[{index}]", problems))
-        ]
-        scans[repo] = {
-            "repository": repo,
-            "slug": path.stem,
-            "ref": ref,
-            "verifications": verifications,
-        }
-    if problems:
-        shown = "\n  ".join(problems[:50])
-        more = f"\n  ... and {len(problems) - 50} more" if len(problems) > 50 else ""
-        raise SystemExit(f"invalid verification scans in {directory}/:\n  {shown}{more}")
-    return scans
-
-
-def verification_summary(scan: dict) -> dict:
-    counts = Counter(v["method"] for v in scan["verifications"])
-    return {
-        "repository": scan["repository"],
-        "ref": scan["ref"],
-        "count": len(scan["verifications"]),
-        "methods": {slug: counts[slug] for slug in VERIFICATION_METHOD_SLUGS if counts[slug]},
-        "tools": sorted({v["tool"] for v in scan["verifications"] if v["tool"]}),
-        "url": f"{SITE_URL}/raw/verifications/{scan['slug']}.json",
-    }
-
-
-# --------------------------------------------------------------------------- #
 # Writers
 # --------------------------------------------------------------------------- #
 
@@ -615,8 +465,7 @@ def build_domains(entries: list[dict]) -> list[dict]:
     return domains
 
 
-def build_sources(entries: list[dict], verifications: dict[str, dict] | None = None) -> list[dict]:
-    verifications = verifications or {}
+def build_sources(entries: list[dict]) -> list[dict]:
     grouped: dict[str, list[dict]] = defaultdict(list)
     for entry in entries:
         if entry["repository"]:
@@ -630,8 +479,6 @@ def build_sources(entries: list[dict], verifications: dict[str, dict] | None = N
             "domain": Counter(e["domain"] for e in group).most_common(1)[0][0],
             "updated": max((e["updated"] for e in group), default=""),
             "reviewers": len({author for e in group for author in e["authors"]}),
-            "checks": len(verifications[repo]["verifications"]) if repo in verifications else None,
-            "checks_url": f"/raw/verifications/{verifications[repo]['slug']}.json" if repo in verifications else None,
         }
         for repo, group in grouped.items()
     ]
@@ -814,38 +661,6 @@ def write_raw(entries: list[dict], domains: list[dict]) -> None:
     print(f"  wrote {len(entries)} raw endpoints and {len(domains)} bundles")
 
 
-def write_verifications(scans: dict[str, dict]) -> None:
-    """`/raw/verifications/<repository>.json` per scan, plus an index of all of them."""
-    directory = RAW_DIR / "verifications"
-    directory.mkdir(parents=True, exist_ok=True)
-    for scan in scans.values():
-        (directory / f"{scan['slug']}.json").write_text(
-            json.dumps(
-                {
-                    "repository": scan["repository"],
-                    "ref": scan["ref"],
-                    "methods": VERIFICATION_METHODS,
-                    "verifications": scan["verifications"],
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-    summaries = sorted((verification_summary(scan) for scan in scans.values()), key=lambda s: s["repository"])
-    write_json(
-        directory / "index.json",
-        {
-            "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "count": len(summaries),
-            "methods": VERIFICATION_METHODS,
-            "repositories": summaries,
-        },
-    )
-    print(f"  wrote {len(scans)} verification scans")
-
-
 def write_search(entries: list[dict]) -> None:
     """Compact column-oriented index, fetched on the first keystroke.
 
@@ -948,21 +763,6 @@ DEV_RESOURCES: list[dict] = [
         "path": "/raw/bundles/<domain>.md",
         "media_type": "text/markdown",
         "description": "Every instruction in one domain, concatenated into a single markdown file.",
-    },
-    {
-        "name": "Verifications index",
-        "path": "/raw/verifications/index.json",
-        "media_type": "application/json",
-        "description": "Every scanned source repository: commit, check count per verification method, tools, scan URL.",
-    },
-    {
-        "name": "Repository verifications",
-        "path": "/raw/verifications/<repository>.json",
-        "media_type": "application/json",
-        "description": (
-            "The checks one source repository runs: tool, method, commands, where it runs, "
-            "evidence, upstream, documented exit codes."
-        ),
     },
     {
         "name": "Source discussions",
@@ -1108,10 +908,6 @@ def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dic
             {"name": "instructions", "description": "Single instructions and domain bundles."},
             {"name": "indexes", "description": "Machine-readable indexes of the whole corpus."},
             {"name": "discovery", "description": "Descriptions of the site itself."},
-            {
-                "name": "verifications",
-                "description": "The checks each source repository runs: linters, type checkers, tests, proofs.",
-            },
         ],
         "paths": {
             "/raw/index.json": {
@@ -1192,66 +988,6 @@ def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dic
                         "200": markdown_response("The domain bundle"),
                         "404": error_response(404),
                         "406": error_response(406),
-                    },
-                }
-            },
-            "/raw/verifications/index.json": {
-                "get": {
-                    "operationId": "getVerificationsIndex",
-                    "summary": "Every scanned source repository and its verification counts",
-                    "description": (
-                        "One row per source repository that has a verification scan: the commit it "
-                        "was scanned at, the number of checks per method, the tools found and the "
-                        "URL of the full scan."
-                    ),
-                    "tags": ["verifications", "indexes"],
-                    "responses": {
-                        "200": {
-                            "description": "The verifications index",
-                            "content": {
-                                "application/json": {
-                                    "schema": {"$ref": "#/components/schemas/VerificationsIndex"}
-                                }
-                            },
-                        },
-                        "404": error_response(404),
-                    },
-                }
-            },
-            "/raw/verifications/{repository}.json": {
-                "get": {
-                    "operationId": "getRepositoryVerifications",
-                    "summary": "The checks one source repository runs",
-                    "description": (
-                        "Every verification found in the repository's CI workflows, pre-commit hooks, "
-                        "task runners and manifests: the tool, its method, the commands that run it, "
-                        "where it runs, the files it was found in, its upstream project and its "
-                        "documented exit codes."
-                    ),
-                    "tags": ["verifications"],
-                    "parameters": [
-                        {
-                            "name": "repository",
-                            "in": "path",
-                            "required": True,
-                            "description": (
-                                "Source repository as owner-name, lowercase, other characters replaced "
-                                "by '-'. Listed in /raw/verifications/index.json."
-                            ),
-                            "schema": {"type": "string", "pattern": "^[a-z0-9.-]+$"},
-                            "example": "pallets-flask",
-                        }
-                    ],
-                    "responses": {
-                        "200": {
-                            "description": "The repository's verifications",
-                            "content": {
-                                "application/json": {
-                                    "schema": {"$ref": "#/components/schemas/RepositoryVerifications"}
-                                }
-                            },
-                        },
-                        "404": error_response(404),
                     },
                 }
             },
@@ -1451,103 +1187,6 @@ def build_openapi(entries: list[dict], domains: list[dict], version: str) -> dic
                         },
                     },
                 },
-                "VerificationMethod": {
-                    "type": "object",
-                    "required": ["slug", "title"],
-                    "properties": {
-                        "slug": {"type": "string", "enum": VERIFICATION_METHOD_SLUGS},
-                        "title": {"type": "string"},
-                    },
-                },
-                "Verification": {
-                    "type": "object",
-                    "description": "One check a repository runs, merged across every place it is invoked.",
-                    "required": ["tool", "method", "commands", "triggers", "evidence"],
-                    "properties": {
-                        "tool": {
-                            "type": ["string", "null"],
-                            "description": "Catalog id of the tool; null when the command is unclassified.",
-                        },
-                        "method": {"type": "string", "enum": VERIFICATION_METHOD_SLUGS},
-                        "commands": {"type": "array", "items": {"type": "string"}},
-                        "triggers": {
-                            "type": "array",
-                            "items": {"type": "string", "enum": VERIFICATION_TRIGGERS},
-                            "description": "Where it runs: pre-commit hooks, CI, or local task runners.",
-                        },
-                        "evidence": {
-                            "type": "array",
-                            "description": "Files and locations the check was found in, in the order followed.",
-                            "items": {
-                                "type": "object",
-                                "required": ["path", "locator"],
-                                "properties": {
-                                    "path": {"type": "string"},
-                                    "locator": {"type": "string"},
-                                },
-                            },
-                        },
-                        "upstream": {"type": ["string", "null"], "format": "uri"},
-                        "docs": {"type": ["string", "null"], "format": "uri"},
-                        "exit_codes": {
-                            "type": "object",
-                            "description": "Documented exit codes, keyed by code.",
-                            "additionalProperties": {"type": "string"},
-                        },
-                        "autofix": {"type": "boolean", "description": "The tool can rewrite files to fix findings."},
-                        "declared_only": {
-                            "type": "boolean",
-                            "description": "Configured or installed, but nothing found that runs it.",
-                        },
-                    },
-                },
-                "RepositoryVerifications": {
-                    "type": "object",
-                    "required": ["repository", "ref", "methods", "verifications"],
-                    "properties": {
-                        "repository": {"type": "string", "description": "owner/name"},
-                        "ref": {"type": "string", "description": "Commit sha the scan read."},
-                        "methods": {
-                            "type": "array",
-                            "items": {"$ref": "#/components/schemas/VerificationMethod"},
-                        },
-                        "verifications": {
-                            "type": "array",
-                            "items": {"$ref": "#/components/schemas/Verification"},
-                        },
-                    },
-                },
-                "VerificationsIndex": {
-                    "type": "object",
-                    "required": ["generated", "count", "methods", "repositories"],
-                    "properties": {
-                        "generated": {"type": "string", "format": "date-time"},
-                        "count": {"type": "integer", "minimum": 0},
-                        "methods": {
-                            "type": "array",
-                            "items": {"$ref": "#/components/schemas/VerificationMethod"},
-                        },
-                        "repositories": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "required": ["repository", "ref", "count", "methods", "url"],
-                                "properties": {
-                                    "repository": {"type": "string"},
-                                    "ref": {"type": "string"},
-                                    "count": {"type": "integer", "minimum": 0},
-                                    "methods": {
-                                        "type": "object",
-                                        "description": "Check count per method slug; methods with none are omitted.",
-                                        "additionalProperties": {"type": "integer"},
-                                    },
-                                    "tools": {"type": "array", "items": {"type": "string"}},
-                                    "url": {"type": "string", "format": "uri"},
-                                },
-                            },
-                        },
-                    },
-                },
                 "Discussion": {
                     "type": "object",
                     "description": "One review thread an instruction was derived from.",
@@ -1703,7 +1342,6 @@ def main() -> None:
     if not entries:
         raise SystemExit("no corpus entries found in _reviewers/")
 
-    verifications = read_verifications()
     entries.sort(key=lambda e: (e["updated"], e["comments"]), reverse=True)
     domains = build_domains(entries)
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1738,14 +1376,13 @@ def main() -> None:
         DATA_DIR / "sources.json",
         {
             "generated": generated,
-            "sources": build_sources(entries, verifications),
+            "sources": build_sources(entries),
             "people": build_people(entries),
         },
     )
     write_search(entries)
     write_domain_pages(domains)
     write_raw(entries, domains)
-    write_verifications(verifications)
     write_llms(entries, domains)
     # The corpus date, not the build date: the description only changes when the
     # thing it describes does.

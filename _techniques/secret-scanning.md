@@ -1,0 +1,21 @@
+---
+title: "Secret scanning"
+code: "V1008"
+slug: "secret-scanning"
+tactic: "Static analysis"
+tactic_id: "VA02"
+description: "Finds credentials and tokens in the working tree and in history before they are pushed or published."
+subtechniques:
+  - id: "V1008.001"
+    name: "Pre-commit secret scan"
+    slug: "pre-commit-secret-scan"
+    description: "Block the commit locally, before the secret reaches a remote."
+  - id: "V1008.002"
+    name: "History scan"
+    slug: "history-scan"
+    description: "Scan full git history, since deleting a secret in a later commit does not remove it."
+  - id: "V1008.003"
+    name: "Live verification"
+    slug: "live-verification"
+    description: "Test whether a found credential is still valid to prioritise rotation."
+---

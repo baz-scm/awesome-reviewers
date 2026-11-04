@@ -1,0 +1,21 @@
+---
+title: "Reviewer routing"
+code: "V1041"
+slug: "reviewer-routing"
+tactic: "Code review"
+tactic_id: "VA06"
+description: "Chooses which specialist reviewers, human or automated, apply to a change based on its files, topics and history."
+subtechniques:
+  - id: "V1041.001"
+    name: "Path ownership"
+    slug: "path-ownership"
+    description: "Route by file path ownership rules."
+  - id: "V1041.002"
+    name: "Semantic matching"
+    slug: "semantic-matching"
+    description: "Match the change to reviewer descriptions by embedding similarity and reranking."
+  - id: "V1041.003"
+    name: "Reviewer merging"
+    slug: "reviewer-merging"
+    description: "Combine overlapping reviewers so one concern is not reviewed twice."
+---

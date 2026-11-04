@@ -1,0 +1,21 @@
+---
+title: "Agentic exploration"
+code: "V1034"
+slug: "agentic-exploration"
+tactic: "Code review"
+tactic_id: "VA06"
+description: "An agent with read, search and run tools investigates a change: follows a suspicion across files, runs code, and returns findings with evidence."
+subtechniques:
+  - id: "V1034.001"
+    name: "Breadth survey"
+    slug: "breadth-survey"
+    description: "A first pass that lists concerns across the whole diff."
+  - id: "V1034.002"
+    name: "Deep exploration"
+    slug: "deep-exploration"
+    description: "Focused sub-agents that investigate one concern each."
+  - id: "V1034.003"
+    name: "Tiered depth"
+    slug: "tiered-depth"
+    description: "Route small or low-risk changes to a shallow pass and risky ones to deep exploration."
+---

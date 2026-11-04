@@ -1,0 +1,21 @@
+---
+title: "Review context retrieval"
+code: "V1033"
+slug: "review-context-retrieval"
+tactic: "Code review"
+tactic_id: "VA06"
+description: "Collects what a reviewer needs beyond the diff: callers, definitions, related tests, docs and repository rules."
+subtechniques:
+  - id: "V1033.001"
+    name: "Repository map"
+    slug: "repository-map"
+    description: "A ranked map of symbols and files built from syntax trees."
+  - id: "V1033.002"
+    name: "Precise code navigation"
+    slug: "precise-code-navigation"
+    description: "Definitions and references from a compiler-grade index."
+  - id: "V1033.003"
+    name: "Cross-repository context"
+    slug: "cross-repository-context"
+    description: "Look up how other services call or are called by the changed code."
+---

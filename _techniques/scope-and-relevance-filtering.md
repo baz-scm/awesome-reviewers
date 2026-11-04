@@ -1,0 +1,21 @@
+---
+title: "Scope and relevance filtering"
+code: "V1047"
+slug: "scope-and-relevance-filtering"
+tactic: "Finding validation"
+tactic_id: "VA07"
+description: "Keeps only findings that belong to this change: on changed lines, within the PR's intent, and fixable without reworking unchanged code."
+subtechniques:
+  - id: "V1047.001"
+    name: "Diff scoping"
+    slug: "diff-scoping"
+    description: "Report only on changed lines or their immediate context."
+  - id: "V1047.002"
+    name: "Intent scoping"
+    slug: "intent-scoping"
+    description: "Move findings outside the PR's intent to follow-up work."
+  - id: "V1047.003"
+    name: "Remediation scope"
+    slug: "remediation-scope"
+    description: "Check whether the fix stays inside the diff or reaches unchanged code."
+---

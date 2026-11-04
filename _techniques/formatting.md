@@ -1,0 +1,21 @@
+---
+title: "Formatting"
+code: "V1001"
+slug: "formatting"
+tactic: "Hygiene"
+tactic_id: "VA01"
+description: "A formatter rewrites code to one layout so diffs show only real changes; in CI it runs in check mode and fails on drift."
+subtechniques:
+  - id: "V1001.001"
+    name: "Code formatter"
+    slug: "code-formatter"
+    description: "One opinionated formatter per language, run on save and in CI."
+  - id: "V1001.002"
+    name: "Import ordering"
+    slug: "import-ordering"
+    description: "Sort and group imports so they never cause conflicts or noise."
+  - id: "V1001.003"
+    name: "Check mode gate"
+    slug: "check-mode-gate"
+    description: "Run the formatter with --check or --diff in CI so unformatted code fails instead of being rewritten."
+---

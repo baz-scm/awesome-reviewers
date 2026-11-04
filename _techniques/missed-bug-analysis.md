@@ -1,0 +1,21 @@
+---
+title: "Missed bug analysis"
+code: "V1066"
+slug: "missed-bug-analysis"
+tactic: "Feedback and evaluation"
+tactic_id: "VA10"
+description: "For each bug that escaped review, finds which technique should have caught it and why it did not, then clusters the causes."
+subtechniques:
+  - id: "V1066.001"
+    name: "Root cause trace"
+    slug: "root-cause-trace"
+    description: "Replay the review trace for the PR that introduced the bug."
+  - id: "V1066.002"
+    name: "Cause clustering"
+    slug: "cause-clustering"
+    description: "Cluster root causes to find the systematic gaps."
+  - id: "V1066.003"
+    name: "Eval set growth"
+    slug: "eval-set-growth"
+    description: "Add each missed bug to an evaluation set for the reviewers."
+---

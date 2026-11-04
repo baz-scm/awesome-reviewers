@@ -1,0 +1,21 @@
+---
+title: "API compatibility checking"
+code: "V1013"
+slug: "api-compatibility-checking"
+tactic: "Static analysis"
+tactic_id: "VA02"
+description: "Diffs a public interface between the base and the change and reports breaking changes: removed endpoints, changed types, narrowed inputs."
+subtechniques:
+  - id: "V1013.001"
+    name: "HTTP API diff"
+    slug: "http-api-diff"
+    description: "Compare OpenAPI documents for breaking changes, and lint them for style."
+  - id: "V1013.002"
+    name: "Schema and protobuf compatibility"
+    slug: "schema-and-protobuf-compatibility"
+    description: "Wire-compatibility rules for protobuf, Avro or JSON Schema."
+  - id: "V1013.003"
+    name: "Library API diff"
+    slug: "library-api-diff"
+    description: "Compare the exported symbols and signatures of a package against its last release."
+---

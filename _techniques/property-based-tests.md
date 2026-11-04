@@ -1,0 +1,21 @@
+---
+title: "Property-based tests"
+code: "V1021"
+slug: "property-based-tests"
+tactic: "Testing"
+tactic_id: "VA04"
+description: "Generates inputs and checks invariants that must hold for all of them, then shrinks failures to a minimal case."
+subtechniques:
+  - id: "V1021.001"
+    name: "Round-trip properties"
+    slug: "round-trip-properties"
+    description: "decode(encode(x)) == x for serializers and parsers."
+  - id: "V1021.002"
+    name: "Model-based properties"
+    slug: "model-based-properties"
+    description: "Compare the implementation against a simple reference model."
+  - id: "V1021.003"
+    name: "Stateful testing"
+    slug: "stateful-testing"
+    description: "Generate sequences of operations and check invariants after each."
+---

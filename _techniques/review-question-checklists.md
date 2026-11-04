@@ -1,0 +1,21 @@
+---
+title: "Review question checklists"
+code: "V1040"
+slug: "review-question-checklists"
+tactic: "Code review"
+tactic_id: "VA06"
+description: "A fixed bank of questions a reviewer must answer for a kind of change, ranked so the most relevant ones are asked first."
+subtechniques:
+  - id: "V1040.001"
+    name: "Universal questions"
+    slug: "universal-questions"
+    description: "Questions that apply to any change: error handling, tests, naming."
+  - id: "V1040.002"
+    name: "Behavioural questions"
+    slug: "behavioural-questions"
+    description: "Questions about what changes for users and callers."
+  - id: "V1040.003"
+    name: "Security requirement checklists"
+    slug: "security-requirement-checklists"
+    description: "Verification requirements per area from a standard such as OWASP ASVS."
+---

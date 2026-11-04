@@ -1,0 +1,21 @@
+---
+title: "File hygiene"
+code: "V1002"
+slug: "file-hygiene"
+tactic: "Hygiene"
+tactic_id: "VA01"
+description: "Cheap checks on files as files: valid syntax for config formats, no merge markers, no trailing whitespace, no oversized or binary blobs."
+subtechniques:
+  - id: "V1002.001"
+    name: "Config syntax validation"
+    slug: "config-syntax-validation"
+    description: "Parse every JSON, YAML and TOML file, and validate the important ones against a schema."
+  - id: "V1002.002"
+    name: "Merge marker and whitespace checks"
+    slug: "merge-marker-and-whitespace-checks"
+    description: "Reject conflict markers, trailing whitespace and missing final newlines."
+  - id: "V1002.003"
+    name: "Large file guard"
+    slug: "large-file-guard"
+    description: "Refuse files above a size limit so binaries go to LFS or object storage."
+---

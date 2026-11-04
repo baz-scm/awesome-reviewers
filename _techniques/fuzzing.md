@@ -1,0 +1,21 @@
+---
+title: "Fuzzing"
+code: "V1022"
+slug: "fuzzing"
+tactic: "Testing"
+tactic_id: "VA04"
+description: "Feeds coverage-guided random input to parsers and decoders to find crashes, panics and hangs."
+subtechniques:
+  - id: "V1022.001"
+    name: "Coverage-guided fuzzing"
+    slug: "coverage-guided-fuzzing"
+    description: "libFuzzer or AFL style harnesses per entry point."
+  - id: "V1022.002"
+    name: "Continuous fuzzing"
+    slug: "continuous-fuzzing"
+    description: "Run fuzzers continuously (for example OSS-Fuzz) and file crashes as issues."
+  - id: "V1022.003"
+    name: "Corpus regression"
+    slug: "corpus-regression"
+    description: "Replay the saved corpus and crash cases in normal CI."
+---

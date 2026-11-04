@@ -1,0 +1,21 @@
+---
+title: "Proofs and specifications"
+code: "V1030"
+slug: "proofs-and-specifications"
+tactic: "Formal"
+tactic_id: "VA05"
+description: "Specifies a protocol or algorithm and checks it exhaustively or proves it, catching design bugs before code exists."
+subtechniques:
+  - id: "V1030.001"
+    name: "Model checking a design"
+    slug: "model-checking-a-design"
+    description: "Write a TLA+ spec and check invariants over all reachable states."
+  - id: "V1030.002"
+    name: "Verified code"
+    slug: "verified-code"
+    description: "Write code with pre- and post-conditions that a verifier proves (Dafny, Lean, Rocq)."
+  - id: "V1030.003"
+    name: "Proof harnesses on real code"
+    slug: "proof-harnesses-on-real-code"
+    description: "Bounded proofs over the production code itself (Kani)."
+---

@@ -1,0 +1,37 @@
+---
+title: "Security-focused review"
+id: "V1038"
+slug: "security-focused-review"
+tactic: "Code review"
+tactic_id: "VA06"
+description: "A reviewer that reads for exploitable behaviour across files: authorization gaps, injection through helpers, unsafe trust between services."
+subtechniques:
+  - id: "V1038.001"
+    name: "Should-review gate"
+    description: "Decide from the diff whether a deeper security pass is warranted."
+  - id: "V1038.002"
+    name: "Call-chain investigation"
+    description: "Follow user input from entry point to sink with a model, file by file."
+  - id: "V1038.003"
+    name: "OWASP classification"
+    description: "Tag each finding with an OWASP Top 10 category for routing and reporting."
+packages:
+  - id: "vulnhuntr"
+    name: "Vulnhuntr"
+    url: "https://github.com/protectai/vulnhuntr"
+  - id: "semgrep"
+    name: "Semgrep CE"
+    url: "https://github.com/semgrep/semgrep"
+  - id: "joern"
+    name: "Joern"
+    url: "https://github.com/joernio/joern"
+  - id: "setfit"
+    name: "SetFit"
+    url: "https://github.com/huggingface/setfit"
+craft:
+  - "Gate on diff signals: new routes, auth code, deserialization, subprocess, SQL."
+  - "Investigate from the entry point to the sink, not file by file."
+  - "Require a concrete input that reaches the sink."
+reverse:
+  - "SECURITY.md, threat model docs, or a security review workflow on paths like auth/ or api/."
+---

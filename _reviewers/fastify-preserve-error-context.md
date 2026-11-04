@@ -1,5 +1,5 @@
 ---
-title: " Preserve error context"
+title: "Preserve error context"
 description: "When handling errors, always ensure the original error context is preserved and properly surfaced. Error information should never be silently swallowed in try/catch blocks, as this makes debugging extremely difficult and can lead to unexpected system behavior."
 repository: "fastify/fastify"
 label: "Error Handling"

@@ -1,0 +1,37 @@
+---
+title: "Agentic exploration"
+id: "V1034"
+slug: "agentic-exploration"
+tactic: "Code review"
+tactic_id: "VA06"
+description: "An agent with read, search and run tools investigates a change: follows a suspicion across files, runs code, and returns findings with evidence."
+subtechniques:
+  - id: "V1034.001"
+    name: "Breadth survey"
+    description: "A first pass that lists concerns across the whole diff."
+  - id: "V1034.002"
+    name: "Deep exploration"
+    description: "Focused sub-agents that investigate one concern each."
+  - id: "V1034.003"
+    name: "Tiered depth"
+    description: "Route small or low-risk changes to a shallow pass and risky ones to deep exploration."
+packages:
+  - id: "openhands"
+    name: "OpenHands"
+    url: "https://github.com/OpenHands/OpenHands"
+  - id: "swe-agent"
+    name: "SWE-agent"
+    url: "https://github.com/SWE-agent/SWE-agent"
+  - id: "langgraph"
+    name: "LangGraph"
+    url: "https://github.com/langchain-ai/langgraph"
+  - id: "routellm"
+    name: "RouteLLM"
+    url: "https://github.com/lm-sys/RouteLLM"
+craft:
+  - "Give the agent read-only tools first: read file, grep, list directory."
+  - "Split into a survey step and per-concern investigation steps."
+  - "Require each finding to cite file, line and the evidence that supports it."
+reverse:
+  - "Agent configuration files (AGENTS.md, CLAUDE.md) and review bot comments that cite multiple files."
+---

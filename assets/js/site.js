@@ -14,10 +14,11 @@
     });
   });
 
-  // Directory: filter and sort the rows that the page already renders.
+  // Directory: filter, sort and page the rows that the page already renders.
   var list = document.getElementById("entries");
   if (!list) return;
 
+  var PAGE = 100;
   var rows = Array.prototype.slice.call(list.querySelectorAll(".row"));
   var search = document.getElementById("q");
   var category = document.getElementById("category");
@@ -27,24 +28,33 @@
   var status = document.getElementById("status");
   var empty = document.getElementById("empty");
   var reset = document.getElementById("reset");
+  var more = document.getElementById("more");
 
-  var state = { q: "", kind: "", category: "", language: "", sort: "featured" };
+  var state = { q: "", kind: "", category: "", language: "", sort: "usage", limit: PAGE };
 
   rows.forEach(function (row, index) {
     row.dataset.index = String(index);
     row.dataset.hay = row.textContent.replace(/\s+/g, " ").toLowerCase();
   });
 
-  function unique(attribute) {
-    var seen = {};
-    rows.forEach(function (row) {
-      var value = row.dataset[attribute];
-      if (value) seen[value] = true;
-    });
-    return Object.keys(seen).sort(function (a, b) { return a.localeCompare(b); });
-  }
+  function count(n) { return n.toLocaleString("en-US"); }
 
-  function fill(select, values) {
+  // Tab labels show totals per type.
+  tabs.forEach(function (tab) {
+    var kind = tab.dataset.kind;
+    var total = rows.filter(function (row) { return !kind || row.dataset.kind === kind; }).length;
+    var label = tab.querySelector(".count");
+    if (label) label.textContent = count(total);
+  });
+
+  // Categories and languages offered depend on the type selected: a reviewer label
+  // never matches a verification entry, and verification entries have no language.
+  function fillSelect(select, values, emptyLabel) {
+    select.innerHTML = "";
+    var first = document.createElement("option");
+    first.value = "";
+    first.textContent = emptyLabel;
+    select.appendChild(first);
     values.forEach(function (value) {
       var option = document.createElement("option");
       option.value = value;
@@ -53,16 +63,23 @@
     });
   }
 
-  fill(category, unique("category"));
-  fill(language, unique("language"));
+  function valuesFor(attribute, kind) {
+    var seen = {};
+    rows.forEach(function (row) {
+      if (kind && row.dataset.kind !== kind) return;
+      var value = row.dataset[attribute];
+      if (value) seen[value] = true;
+    });
+    return Object.keys(seen).sort(function (a, b) { return a.localeCompare(b); });
+  }
 
-  // Totals per type for the tab labels.
-  tabs.forEach(function (tab) {
-    var kind = tab.dataset.kind;
-    var total = rows.filter(function (row) { return !kind || row.dataset.kind === kind; }).length;
-    var count = tab.querySelector(".count");
-    if (count) count.textContent = total.toLocaleString("en-US");
-  });
+  function refreshOptions() {
+    fillSelect(category, valuesFor("category", state.kind), "All categories");
+    fillSelect(language, valuesFor("language", state.kind === "verification" ? "reviewer" : state.kind), "All languages");
+    language.disabled = state.kind === "verification";
+    if (language.disabled) state.language = "";
+    if (state.category && !category.querySelector('option[value="' + CSS.escape(state.category) + '"]')) state.category = "";
+  }
 
   function readUrl() {
     var params = new URLSearchParams(window.location.search);
@@ -70,14 +87,17 @@
     state.kind = params.get("kind") || "";
     state.category = params.get("category") || "";
     state.language = params.get("language") || "";
-    state.sort = params.get("sort") || "featured";
+    var sortValue = params.get("sort") || "usage";
+    state.sort = sortValue === "name" ? "name" : "usage";
   }
 
   function writeUrl() {
     var params = new URLSearchParams();
-    Object.keys(state).forEach(function (key) {
-      if (state[key] && !(key === "sort" && state[key] === "featured")) params.set(key, state[key]);
-    });
+    if (state.q) params.set("q", state.q);
+    if (state.kind) params.set("kind", state.kind);
+    if (state.category) params.set("category", state.category);
+    if (state.language) params.set("language", state.language);
+    if (state.sort !== "usage") params.set("sort", state.sort);
     var query = params.toString();
     history.replaceState(null, "", window.location.pathname + (query ? "?" + query : "") + window.location.hash);
   }
@@ -93,29 +113,22 @@
     return true;
   }
 
+  // Usage: discussions for reviewers, repos for verification. Ties fall back to name.
   function compare(a, b) {
-    var byIndex = Number(a.dataset.index) - Number(b.dataset.index);
-    if (state.sort === "discussed") {
-      var diff = Number(b.dataset.count) - Number(a.dataset.count);
-      return diff || byIndex;
-    }
-    if (state.sort === "name") {
-      var names = a.querySelector(".row__title").textContent.localeCompare(b.querySelector(".row__title").textContent);
-      return names || byIndex;
-    }
-    return byIndex;
+    var names = a.querySelector(".row__title").textContent.localeCompare(b.querySelector(".row__title").textContent);
+    if (state.sort === "name") return names || Number(a.dataset.index) - Number(b.dataset.index);
+    var usage = Number(b.dataset.count) - Number(a.dataset.count);
+    return usage || names || Number(a.dataset.index) - Number(b.dataset.index);
   }
 
   function render() {
     rows.sort(compare).forEach(function (row) { list.appendChild(row); });
-    var shown = 0;
-    rows.forEach(function (row) {
-      var visible = matches(row);
-      row.hidden = !visible;
-      if (visible) {
-        shown += 1;
-        row.querySelector(".row__rank").textContent = String(shown);
-      }
+    var matched = rows.filter(matches);
+    var shown = matched.slice(0, state.limit);
+    rows.forEach(function (row) { row.hidden = true; });
+    shown.forEach(function (row, index) {
+      row.hidden = false;
+      row.querySelector(".row__rank").textContent = String(index + 1);
     });
     tabs.forEach(function (tab) {
       tab.setAttribute("aria-selected", String(tab.dataset.kind === state.kind));
@@ -124,15 +137,21 @@
     category.value = state.category;
     language.value = state.language;
     sort.value = state.sort;
-    status.textContent = shown === rows.length
-      ? rows.length.toLocaleString("en-US") + " entries"
-      : shown.toLocaleString("en-US") + " of " + rows.length.toLocaleString("en-US") + " entries";
-    empty.hidden = shown > 0;
+    status.textContent = matched.length === rows.length
+      ? count(rows.length) + " entries, " + Math.min(state.limit, matched.length) + " shown"
+      : count(matched.length) + " matching of " + count(rows.length) + ", " + shown.length + " shown";
+    var remaining = matched.length - shown.length;
+    more.hidden = remaining <= 0;
+    more.textContent = "Show " + Math.min(PAGE, remaining) + " more";
+    empty.hidden = matched.length > 0;
     writeUrl();
   }
 
+  // Changing a filter or sort starts again from the first page.
   function update(changes) {
     Object.keys(changes).forEach(function (key) { state[key] = changes[key]; });
+    state.limit = PAGE;
+    if ("kind" in changes) refreshOptions();
     render();
   }
 
@@ -148,7 +167,11 @@
     tab.addEventListener("click", function () { update({ kind: tab.dataset.kind }); });
   });
   reset.addEventListener("click", function () {
-    update({ q: "", kind: "", category: "", language: "", sort: "featured" });
+    update({ q: "", kind: "", category: "", language: "", sort: "usage" });
+  });
+  more.addEventListener("click", function () {
+    state.limit += PAGE;
+    render();
   });
 
   document.addEventListener("keydown", function (event) {
@@ -160,5 +183,6 @@
   });
 
   readUrl();
+  refreshOptions();
   render();
 })();

@@ -377,37 +377,6 @@
     if (input.value) run();
   }
 
-  /* ---------------------------------------------------------- add a repo -- */
-
-  function initRepoForm() {
-    var form = document.querySelector('[data-repo-form]');
-    if (!form) return;
-    var feedback = form.parentNode.querySelector('[data-repo-feedback]');
-    var input = form.querySelector('input');
-    var button = form.querySelector('button');
-
-    form.addEventListener('submit', function (event) {
-      event.preventDefault();
-      var match = input.value.trim().match(/github\.com\/([^/\s]+\/[^/\s]+?)(?:\.git|\/|$)/);
-      if (!match) {
-        feedback.textContent = 'Enter a full GitHub repository URL.';
-        return;
-      }
-
-      button.disabled = true;
-      feedback.textContent = 'Submitting…';
-      fetch('https://awesome.baz.co/request?repo_name=' + encodeURIComponent(match[1]))
-        .then(function (res) {
-          return res.json().catch(function () { return {}; }).then(function (body) {
-            feedback.textContent = body.message ||
-              (res.status === 202 ? 'Request accepted — the repository is queued.' : 'Request submitted.');
-          });
-        })
-        .catch(function () { feedback.textContent = 'Request failed. Try again later.'; })
-        .finally(function () { button.disabled = false; });
-    });
-  }
-
   /* ---------------------------------------------------------------- init -- */
 
   function ready() {
@@ -415,7 +384,6 @@
     document.querySelectorAll('[data-filters]').forEach(initFilters);
     initSearch();
     initThreads();
-    initRepoForm();
   }
 
   if (document.readyState === 'loading') {

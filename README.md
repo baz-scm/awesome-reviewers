@@ -39,8 +39,6 @@ curl https://awesomereviewers.com/openapi.json
 | Corpus index | `/raw/index.json` | `application/json` |
 | Single instruction | `/raw/<slug>.md` | `text/markdown` |
 | Domain bundle | `/raw/bundles/<domain>.md` | `text/markdown` |
-| Verifications index | `/raw/verifications/index.json` | `application/json` |
-| Repository verifications | `/raw/verifications/<repository>.json` | `application/json` |
 | Source discussions | `/<slug>.json` | `application/json` |
 | Search index | `/assets/data/search.json` | `application/json` |
 | LLM index | `/llms.txt` | `text/plain` |
@@ -94,7 +92,7 @@ tests/                 machine-interface tests
 edge/                  optional CDN worker for Accept negotiation (not part of the site)
 ```
 
-Nothing outside `_reviewers/` and `_verifications/` is a source of truth. Domain stats, dates, indexes, raw endpoints,
+Nothing outside `_reviewers/` is a source of truth. Domain stats, dates, indexes, raw endpoints,
 bundles, domain pages, `llms.txt` and `openapi.json` are all generated and are not committed — see
 `.gitignore`.
 
@@ -119,8 +117,6 @@ test skips, so the deploy pipeline never depends on a package index.
 
 ## Contributing
 
-- **Add a repository:** submit it from the [homepage](https://awesomereviewers.com/) and
-  it is queued for extraction. Private repositories go through [Baz](https://baz.co/agents).
 - **Fix an instruction:** open a pull request against its file in `_reviewers/`.
 - **Fix a domain assignment:** repositories are mapped explicitly in `build_data.py`.
 

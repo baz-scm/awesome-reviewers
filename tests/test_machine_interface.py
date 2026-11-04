@@ -131,6 +131,7 @@ class OpenAPIDocument(unittest.TestCase):
             "/raw/<slug>.md": "/raw/{slug}.md",
             "/raw/bundles/<domain>.md": "/raw/bundles/{domain}.md",
             "/<slug>.json": "/{slug}.json",
+            "/raw/verifications/<repository>.json": "/raw/verifications/{repository}.json",
         }
         self.assertIn("/raw/site.md", described)
         for resource in build_data.DEV_RESOURCES:
@@ -314,7 +315,7 @@ class DiscoveryLinks(unittest.TestCase):
     def test_robots_lists_the_developer_resources(self):
         robots = (ROOT / "robots.txt").read_text(encoding="utf-8")
         self.assertIn("Sitemap: https://awesomereviewers.com/sitemap.xml", robots)
-        for path in ("/openapi.json", "/api/", "/llms.txt", "/raw/index.json"):
+        for path in ("/openapi.json", "/api/", "/llms.txt", "/raw/index.json", "/raw/verifications/index.json"):
             with self.subTest(path=path):
                 self.assertIn(path, robots)
 
@@ -401,6 +402,85 @@ class CorpusNames(unittest.TestCase):
             (directory / "ok-slug.md").write_text("---\ntitle: Ok\nrepository: cline/cline?x\n---\nbody\n")
             with self.assertRaises(SystemExit):
                 build_data.validate_corpus_names(directory)
+
+
+class VerificationScans(unittest.TestCase):
+    """`_verifications/<repository>.json`, as written by bazai's verification scanner."""
+
+    FIXTURE = ROOT / "tests" / "data" / "pallets-flask.json"
+
+    def write_scan(self, directory: Path, name: str, scan: object) -> None:
+        (directory / name).write_text(json.dumps(scan), encoding="utf-8")
+
+    def scan(self) -> dict:
+        return json.loads(self.FIXTURE.read_text(encoding="utf-8"))
+
+    def read(self, name: str, scan: object) -> dict:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            self.write_scan(directory, name, scan)
+            return build_data.read_verifications(directory)
+
+    def test_repository_slug(self):
+        self.assertEqual(build_data.repository_slug("pallets/flask"), "pallets-flask")
+        self.assertEqual(build_data.repository_slug("Azure/azure-sdk-for-net"), "azure-azure-sdk-for-net")
+        self.assertEqual(build_data.repository_slug("ggml-org/llama.cpp"), "ggml-org-llama.cpp")
+        self.assertEqual(build_data.repository_slug("a_b/c_d"), "a-b-c-d")
+
+    def test_reads_a_scanner_output(self):
+        scans = self.read("pallets-flask.json", self.scan())
+        scan = scans["pallets/flask"]
+        self.assertEqual(scan["slug"], "pallets-flask")
+        self.assertEqual(len(scan["verifications"]), len(self.scan()["verifications"]))
+        mypy = next(v for v in scan["verifications"] if v["tool"] == "mypy")
+        self.assertEqual(mypy["method"], "static_analysis")
+        self.assertEqual(mypy["exit_codes"]["1"], "type errors found")
+        pyright = next(v for v in scan["verifications"] if v["tool"] == "pyright")
+        self.assertTrue(pyright["declared_only"])
+        self.assertEqual(pyright["triggers"], [])
+        self.assertTrue(any(v["tool"] is None and v["method"] == "unclassified" for v in scan["verifications"]))
+
+    def test_missing_directory_is_empty(self):
+        self.assertEqual(build_data.read_verifications(ROOT / "tests" / "no-such-directory"), {})
+
+    def test_method_enum_matches_the_scanner(self):
+        methods = {v["method"] for v in self.scan()["verifications"]}
+        self.assertLessEqual(methods, set(build_data.VERIFICATION_METHOD_SLUGS))
+
+    def test_refuses_malformed_scans(self):
+        def with_first(**changes):
+            scan = self.scan()
+            scan["verifications"][0].update(changes)
+            return scan
+
+        cases = {
+            "unknown method": ("pallets-flask.json", with_first(method="vibes")),
+            "unknown trigger": ("pallets-flask.json", with_first(triggers=["nightly"])),
+            "script upstream": ("pallets-flask.json", with_first(upstream="javascript:alert(1)")),
+            "http docs": ("pallets-flask.json", with_first(docs="http://example.com")),
+            "injected tool": ("pallets-flask.json", with_first(tool='mypy"><img src=x>')),
+            "non-integer exit code": ("pallets-flask.json", with_first(exit_codes={"x": "y"})),
+            "wrong file name": ("flask.json", self.scan()),
+            "invalid repository": ("pallets-flask.json", {**self.scan(), "repo_full_name": "pallets/flask?x"}),
+            "ref is not a sha": ("pallets-flask.json", {**self.scan(), "ref": "local"}),
+            "not an object": ("pallets-flask.json", []),
+        }
+        for label, (name, scan) in cases.items():
+            with self.subTest(label), self.assertRaises(SystemExit):
+                self.read(name, scan)
+
+    def test_summary_counts_by_method(self):
+        scan = self.read("pallets-flask.json", self.scan())["pallets/flask"]
+        summary = build_data.verification_summary(scan)
+        self.assertEqual(summary["count"], len(scan["verifications"]))
+        self.assertEqual(sum(summary["methods"].values()), summary["count"])
+        self.assertEqual(summary["url"], f"{build_data.SITE_URL}/raw/verifications/pallets-flask.json")
+        self.assertIn("pytest", summary["tools"])
+
+    def test_every_committed_scan_is_valid(self):
+        build_data.read_verifications()
 
 
 if __name__ == "__main__":

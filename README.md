@@ -117,8 +117,6 @@ test skips, so the deploy pipeline never depends on a package index.
 
 ## Contributing
 
-- **Add a repository:** submit it from the [homepage](https://awesomereviewers.com/) and
-  it is queued for extraction. Private repositories go through [Baz](https://baz.co/agents).
 - **Fix an instruction:** open a pull request against its file in `_reviewers/`.
 - **Fix a domain assignment:** repositories are mapped explicitly in `build_data.py`.
 
